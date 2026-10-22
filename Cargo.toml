@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# `spike/` holds throwaway prototypes and is deliberately outside the product workspace.
+exclude = ["spike"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+repository = "https://github.com/qux-bbb/ReCraft"
+homepage = "https://github.com/qux-bbb/ReCraft"
+authors = ["qux-bbb"]
+
+[workspace.dependencies]
+# Internal crates. The dependency direction is enforced by review, see docs/DESIGN.md §1.1.
+recraft-common = { path = "crates/recraft-common" }
+recraft-storage = { path = "crates/recraft-storage" }
+recraft-format = { path = "crates/recraft-format" }
+recraft-decode = { path = "crates/recraft-decode" }
+recraft-core = { path = "crates/recraft-core" }
+recraft-analysis = { path = "crates/recraft-analysis" }
+recraft-ir = { path = "crates/recraft-ir" }
+recraft-decompile = { path = "crates/recraft-decompile" }
+recraft-app = { path = "crates/recraft-app" }
+recraft-ai = { path = "crates/recraft-ai" }
+recraft-mcp = { path = "crates/recraft-mcp" }
+recraft-cli = { path = "crates/recraft-cli" }
+recraft-ui = { path = "crates/recraft-ui" }
+
+# Third-party crates are added here when the first consumer lands, e.g.:
+#   iced-x86, goblin, rusqlite (bundled SQLite), egui/eframe/egui_dock,
+#   clap, rayon, serde, tracing, thiserror, rmcp, fluent.
+# Every dependency must pass `deny.toml` (permissive licenses only: the code must
+# remain usable in the commercial edition of ReCraft).
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+# Debug builds of the analysis/decompiler crates are painfully slow; keep some optimization.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

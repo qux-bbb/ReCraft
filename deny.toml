@@ -1,0 +1,40 @@
+# cargo-deny configuration.
+#
+# Rule of thumb: every dependency must be compatible with BOTH
+#   * the AGPL-3.0-only open-source edition, and
+#   * the commercial (proprietary) edition of ReCraft.
+# That rules out GPL-2.0-only (incompatible with AGPL-3.0) and GPL-3.0
+# (would force the commercial edition to be GPL as well).
+
+[graph]
+targets = [{ triple = "x86_64-pc-windows-msvc" }]
+
+[advisories]
+yanked = "warn"
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+
+[bans]
+multiple-versions = "warn"
+deny = [
+    { name = "openssl" },
+    { name = "openssl-sys" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

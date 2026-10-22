@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 ReCraft contributors
+
+[package]
+name = "recraft-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+recraft-common = { workspace = true }
+recraft-core = { workspace = true }
+recraft-decode = { workspace = true }

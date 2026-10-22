@@ -1,0 +1,32 @@
+# Rust build artifacts
+/target/
+/spike/**/target/
+**/*.rs.bk
+
+# ReCraft project files (user data, never commit)
+*.rcraft
+*.rcraft-*
+*.idb
+*.i64
+
+# Malware samples / binaries under test are NEVER committed.
+/samples/
+/testdata/binaries/
+*.exe
+*.dll
+*.sys
+*.pdb
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+/.idea/
+/.vscode/*
+!/.vscode/extensions.json
+*.swp
+*~
+
+# Local artifacts
+/artifacts/
+/dist/
