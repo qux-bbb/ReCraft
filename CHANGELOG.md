@@ -15,5 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - M0 implementation plan (`docs/M0.md`).
 - ADR-002: egui is viable for the native UI (spike passed: 200k-row grid p95 0.62 ms,
   500-node CFG p95 2.43 ms on CPU layout + tessellation).
+- `recraft-storage`: single-file SQLite project container (schema v1), 256 KiB chunked
+  image import with progress/cancel and SHA-256, undo journal (append/undo/redo/truncate),
+  query-only reader connections. 1 GiB import measured at 4.6 s; reopen at 3.1 ms.
 
 [Unreleased]: https://github.com/qux-bbb/ReCraft/commits/main

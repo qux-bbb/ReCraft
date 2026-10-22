@@ -12,3 +12,8 @@ publish = false
 
 [dependencies]
 recraft-common = { workspace = true }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.11.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"

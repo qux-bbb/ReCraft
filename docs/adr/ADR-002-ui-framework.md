@@ -20,7 +20,17 @@ ReCraft 的 UI 需要同时满足：
 
 ## 决策
 
-使用 **egui 0.36 + eframe + egui_dock**，自绘反汇编网格与 CFG。
+使用 **egui 0.36.2 + eframe 0.36.2 + egui_dock 0.21.1**，自绘反汇编网格与 CFG。
+
+### 版本与渲染后端（重要）
+
+- egui 0.37 已发布，但 **egui_dock 0.21.1 只接受 egui ^0.36**，因此整套栈锁在 0.36.2，
+  直到 dock 跟进。升级前先确认兼容组合，不要单独升 egui。
+- **默认渲染后端用 Glow（OpenGL）**：eframe 默认的 wgpu/DX12 在本机（Intel UHD 750，
+  驱动 30.0.100.9805 + 虚拟显示适配器）启动即 0xC0000005 崩溃，发生在业务代码之前。
+  Glow 正常；保留 `SPIKE_RENDERER=wgpu` 可切换，产品里应做成配置项并对崩溃做降级提示。
+- egui_dock 0.21 依赖 egui 0.36 的 root-Ui/panel 重构，说明 egui 面板 API 仍在演进，
+  升级需要回归网格、停靠布局与快捷键。
 
 ## 证据（headless spike，2026-10-22）
 
