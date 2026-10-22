@@ -18,5 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `recraft-storage`: single-file SQLite project container (schema v1), 256 KiB chunked
   image import with progress/cancel and SHA-256, undo journal (append/undo/redo/truncate),
   query-only reader connections. 1 GiB import measured at 4.6 s; reopen at 3.1 ms.
+- `recraft-format`: PE32/PE32+ loader — headers, sections, imports (incl. delay imports),
+  exports (incl. forwarders), TLS callbacks, x64 `.pdata`, overlay, RVA mapping, `Loader`
+  trait. Malformed import/export data degrades to warnings instead of failing the load.
+  Smoke: `notepad.exe` (8 sections, 340 imports, 386 `.pdata`) and `kernel32.dll`
+  (1,292 imports, 1,697 exports, 1,530 `.pdata`) parse cleanly.
 
 [Unreleased]: https://github.com/qux-bbb/ReCraft/commits/main

@@ -231,6 +231,9 @@ v1 支持范围（全部容错，坏数据不 panic）：
 - SEH/C++ EH 结构识别（尽量）、vftable/RTTI（MSVC 布局）
 - overlay/stub 识别、Checksum 忽略
 
+容错策略：**结构性问题（头/节表）返回错误；导入/导出/TLS/`.pdata` 的畸形数据降级**——
+保留已解析部分并记录 `warnings`，绝不因为一张坏表就拒绝加载恶意样本。未知目录先忽略。
+
 接口：
 
 ```rust
