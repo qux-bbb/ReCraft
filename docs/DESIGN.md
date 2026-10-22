@@ -374,7 +374,10 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 - 键盘流：`Space` 切换视图、`N` 改名、`;` 注释、`X` xref、`G` 跳转、`Esc` 返回、`Ctrl+Z/Y`
 - 性能：20 万行滚动 60 fps；单帧布局 < 4 ms
 
-**门禁**：M0 第 1–3 天 spike，5 条验收（20 万行 60fps、多列对齐+命中+选区、内联编辑+IME+CJK、500 节点 CFG 拖拽、egui_dock 多面板）。不达标转 Tauri 方案（需重开 ADR）。
+**门禁**：已于 2026-10-22 执行并通过（前置 spike `spike/egui-grid`，数据见 ADR-002）。
+不达标时转 Tauri 的备选路径仍然保留。产品化时的注意事项：焦点必须使用
+`response.id`（自造 id 会被 egui 清掉，Ctrl+C 失效）、无头测试需显式发
+`Event::ModifiersChanged`。
 
 ### 8.3 图视图
 
@@ -519,7 +522,7 @@ CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质�
 | ADR | 决策 | 状态 |
 |---|---|---|
 | ADR-001 | headless core + 命令总线 + UI 客户端 | 已定 |
-| ADR-002 | egui 原生 UI（含 3 天 spike 门禁） | 已定，待 spike 验证 |
+| ADR-002 | egui 原生 UI（spike 通过：20 万行网格 p95 0.62 ms、500 节点图 p95 2.43 ms） | 已定 |
 | ADR-003 | 单文件 SQLite 容器 + 分块镜像 + 分页 flags；xref 表方案留退路 | 已定 |
 | ADR-004 | 用户数据（journal）与派生数据（可重建）分离 | 已定 |
 | ADR-005 | 自研 L1 反编译器（LIR→MIR→HIR），不集成外部实现 | 已定 |
