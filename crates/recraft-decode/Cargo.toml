@@ -11,4 +11,5 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+iced-x86 = "1.21.0"
 recraft-common = { workspace = true }

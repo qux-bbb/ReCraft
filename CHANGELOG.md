@@ -23,5 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trait. Malformed import/export data degrades to warnings instead of failing the load.
   Smoke: `notepad.exe` (8 sections, 340 imports, 386 `.pdata`) and `kernel32.dll`
   (1,292 imports, 1,697 exports, 1,530 `.pdata`) parse cleanly.
+- `recraft-decode`: stateless x86/x64 decoding on iced-x86 1.21 — `Insn` wrapper with
+  `FlowKind` classification, direct branch targets, memory-operand detection, Intel
+  formatter (mnemonic/operands split for UIs) and a bounded decode cache. 10 unit tests;
+  stateless throughput measured at ~46 M instructions/s.
 
 [Unreleased]: https://github.com/qux-bbb/ReCraft/commits/main
