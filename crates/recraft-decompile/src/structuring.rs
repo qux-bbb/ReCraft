@@ -1015,6 +1015,16 @@ mod tests {
     }
 
     #[test]
+    fn l2_pointer_parameters_show_pointer_types() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "str_probe").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("int32 str_probe(char* arg1)"), "{text}");
+    }
+
+    #[test]
     fn output_is_deterministic() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

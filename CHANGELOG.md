@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pointer parameter types: a register argument used as a direct memory base is typed
+  from the unique access width (`char*` for 1-byte, `wchar_t*` for 2, `int32*`/`int64*`
+  for 4/8, `void*` for mixed, `int64` when never used as a base). New corpus probes
+  (`str_probe`, `wide_probe`) validate `char*`/`wchar_t*`; L2 renders
+  `int32 str_probe(char* arg1)`. Golden snapshot filenames are now symbol-based instead
+  of index-prefixed, so inserting corpus functions no longer renames existing files.
+
 - SSA-lite argument tracking: a may-write forward dataflow over the CFG (entry set
   empty, join = union of predecessor out-sets) seeds a second lifting pass, so `argN`
   is only printed for incoming values that are intact on every path; clobbered values

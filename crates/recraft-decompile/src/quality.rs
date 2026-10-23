@@ -159,12 +159,11 @@ impl GoldenReport {
 /// Write one normalised L1 snapshot per function into `dir`.
 pub fn write_golden(session: &mut Session, dir: &Path) -> Result<usize> {
     std::fs::create_dir_all(dir)?;
-    let mut functions = session.functions()?;
-    functions.sort_by_key(|function| function.start);
+    let functions = sorted_functions(session)?;
+    let names = golden_file_names(session, &functions)?;
     let mut written = 0usize;
     for (index, function) in functions.iter().enumerate() {
-        let name = session.name_at(function.start)?;
-        let file = dir.join(golden_file_name(index, name.as_deref(), function.start));
+        let file = dir.join(&names[index]);
         let text = golden_text(session, function.start)?;
         std::fs::write(file, text)?;
         written += 1;
@@ -174,17 +173,16 @@ pub fn write_golden(session: &mut Session, dir: &Path) -> Result<usize> {
 
 /// Compare the project against snapshots in `dir`.
 pub fn check_golden(session: &mut Session, dir: &Path) -> Result<GoldenReport> {
-    let mut functions = session.functions()?;
-    functions.sort_by_key(|function| function.start);
+    let functions = sorted_functions(session)?;
     let mut report = GoldenReport::default();
     if functions.is_empty() {
         return Err(Error::internal(
             "no functions: run `analyze` before checking golden snapshots",
         ));
     }
+    let names = golden_file_names(session, &functions)?;
     for (index, function) in functions.iter().enumerate() {
-        let name = session.name_at(function.start)?;
-        let file_name = golden_file_name(index, name.as_deref(), function.start);
+        let file_name = names[index].clone();
         let path = dir.join(&file_name);
         let actual = golden_text(session, function.start)?;
         report.checked += 1;
@@ -200,18 +198,40 @@ pub fn check_golden(session: &mut Session, dir: &Path) -> Result<GoldenReport> {
     Ok(report)
 }
 
-/// Normalised L1 text for one function.
-pub fn golden_text(session: &mut Session, start: Address) -> Result<String> {
-    let code = pseudocode_l1(session, start)?;
-    let mut text = String::new();
-    for line in &code.lines {
-        text.push_str(&normalise_line(&line.text));
-        text.push('\n');
-    }
-    Ok(text)
+fn sorted_functions(session: &Session) -> Result<Vec<recraft_core::FunctionInfo>> {
+    let mut functions = session.functions()?;
+    functions.sort_by_key(|function| function.start);
+    Ok(functions)
 }
 
-fn golden_file_name(index: usize, name: Option<&str>, start: Address) -> String {
+/// Snapshot file names keyed by symbol name so inserting functions does not renumber
+/// existing files; duplicate names get an address suffix.
+fn golden_file_names(
+    session: &Session,
+    functions: &[recraft_core::FunctionInfo],
+) -> Result<Vec<String>> {
+    let mut stems = Vec::with_capacity(functions.len());
+    let mut counts = std::collections::BTreeMap::new();
+    for function in functions {
+        let name = session.name_at(function.start)?;
+        let stem = sanitise_stem(name.as_deref(), function.start);
+        *counts.entry(stem.clone()).or_insert(0usize) += 1;
+        stems.push(stem);
+    }
+    Ok(stems
+        .into_iter()
+        .zip(functions)
+        .map(|(stem, function)| {
+            if counts.get(&stem).copied().unwrap_or(0) > 1 {
+                format!("{stem}_{:x}.c", function.start.get())
+            } else {
+                format!("{stem}.c")
+            }
+        })
+        .collect())
+}
+
+fn sanitise_stem(name: Option<&str>, start: Address) -> String {
     let stem: String = name
         .unwrap_or("")
         .chars()
@@ -223,12 +243,22 @@ fn golden_file_name(index: usize, name: Option<&str>, start: Address) -> String 
             }
         })
         .collect();
-    let stem = if stem.is_empty() {
+    if stem.is_empty() {
         format!("sub_{:x}", start.get())
     } else {
         stem
-    };
-    format!("{index:04}_{stem}.c")
+    }
+}
+
+/// Normalised L1 text for one function.
+pub fn golden_text(session: &mut Session, start: Address) -> Result<String> {
+    let code = pseudocode_l1(session, start)?;
+    let mut text = String::new();
+    for line in &code.lines {
+        text.push_str(&normalise_line(&line.text));
+        text.push('\n');
+    }
+    Ok(text)
 }
 
 /// Replace concrete addresses (`0x140001234`, `loc_140001234`) with placeholders so the

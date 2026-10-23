@@ -34,10 +34,10 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 ## 当前基线（2026-10-24，MSVC VS2022，corpus x64）
 
 ```
-functions:              24
-structured:             21 (87.5%)
-instructions:           346
-intrinsic instructions: 13 (coverage 96.2%)
+functions:              26
+structured:             23 (88.5%)
+instructions:           358
+intrinsic instructions: 13 (coverage 96.4%)
 goto fallback functions: 3
 ```
 
@@ -53,7 +53,8 @@ goto fallback functions: 3
 
 ## golden 快照
 
-- 目录：`tests/golden/corpus/`，每个函数一个 `.c` 文件（按函数起点排序编号）。
+- 目录：`tests/golden/corpus/`，每个函数一个 `.c` 文件，**按符号名命名**（插入新函数不会
+  重排已有文件；重名函数追加地址后缀）。
 - 内容：**归一化后的 L1 文本**——`0x...` 地址与 `loc_...` 标签替换为 `0xADDR` /
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
 - 更新流程：改动反编译器后运行 `recraft golden <corpus-project> --dir tests/golden/corpus`，

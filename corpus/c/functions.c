@@ -29,6 +29,16 @@ __declspec(dllexport) int __stdcall stdcall_add(int a, int b) {
     return a + b;
 }
 
+/* Pointer-type probe: a byte access through the argument implies `char*`. */
+__declspec(dllexport) int str_probe(const char* s) {
+    return s != 0 ? (int)(unsigned char)s[0] : -1;
+}
+
+/* Pointer-type probe: a 2-byte access implies `wchar_t*`. */
+__declspec(dllexport) int wide_probe(const wchar_t* s) {
+    return s != 0 ? (int)s[0] : -1;
+}
+
 __declspec(dllexport) int branchy(int x) {
     if (x > 10) {
         return x * 2;

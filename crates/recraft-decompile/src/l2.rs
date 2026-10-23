@@ -28,6 +28,35 @@ pub struct ArgNames {
     names: BTreeMap<Reg, String>,
     /// x86 stack arguments keyed by `(base register, byte offset)`.
     stack: BTreeMap<(Reg, i64), String>,
+    /// Inferred parameter types for register arguments (defaults to `int64`).
+    types: BTreeMap<Reg, ArgType>,
+}
+
+/// Parameter type inferred from how the argument is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgType {
+    Int64,
+    /// Byte-sized memory access through the argument.
+    CharPtr,
+    /// 2-byte access (`wchar_t*`).
+    WCharPtr,
+    Int32Ptr,
+    Int64Ptr,
+    /// Mixed or unknown access widths behind a pointer.
+    VoidPtr,
+}
+
+impl ArgType {
+    pub const fn c_name(self) -> &'static str {
+        match self {
+            ArgType::Int64 => "int64",
+            ArgType::CharPtr => "char*",
+            ArgType::WCharPtr => "wchar_t*",
+            ArgType::Int32Ptr => "int32*",
+            ArgType::Int64Ptr => "int64*",
+            ArgType::VoidPtr => "void*",
+        }
+    }
 }
 
 impl ArgNames {
@@ -45,13 +74,16 @@ impl ArgNames {
 
     /// Register arguments in calling-convention order.
     pub fn ordered(&self) -> Vec<(&'static str, &str)> {
+        self.ordered_regs()
+            .into_iter()
+            .map(|(reg, name)| (reg.name64(), name))
+            .collect()
+    }
+
+    fn ordered_regs(&self) -> Vec<(Reg, &str)> {
         X64_ARG_REGS
             .iter()
-            .filter_map(|reg| {
-                self.names
-                    .get(reg)
-                    .map(|name| (reg.name64(), name.as_str()))
-            })
+            .filter_map(|reg| self.names.get(reg).map(|name| (*reg, name.as_str())))
             .collect()
     }
 
@@ -66,12 +98,15 @@ impl ArgNames {
             .collect()
     }
 
-    /// C parameter list (`int64 arg1, int64 arg2`) or `void`.
+    /// C parameter list (`int64 arg1, char* arg2`) or `void`.
     pub fn signature(&self) -> String {
         let mut params: Vec<String> = self
-            .ordered()
-            .iter()
-            .map(|(_, name)| format!("int64 {name}"))
+            .ordered_regs()
+            .into_iter()
+            .map(|(reg, name)| {
+                let ty = self.types.get(&reg).copied().unwrap_or(ArgType::Int64);
+                format!("{} {name}", ty.c_name())
+            })
             .collect();
         params.extend(
             self.stack_ordered()
@@ -278,9 +313,78 @@ fn recover_x64(session: &mut Session, start: Address, end: Address) -> Result<Ar
             names.insert(*reg, format!("arg{}", index + 1));
         }
     }
+    let types = infer_pointer_types(session, start, end, &names)?;
     Ok(ArgNames {
         names,
         stack: BTreeMap::new(),
+        types,
+    })
+}
+
+/// Infer pointer parameter types from accesses through the argument register.
+///
+/// A single size dominates: 1 -> `char*`, 2 -> `wchar_t*`, 4 -> `int32*`, 8 ->
+/// `int64*`; mixed widths become `void*`. Arguments never used as a memory base keep
+/// the default `int64`.
+fn infer_pointer_types(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    names: &BTreeMap<Reg, String>,
+) -> Result<BTreeMap<Reg, ArgType>> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut sizes: BTreeMap<Reg, BTreeSet<u8>> = BTreeMap::new();
+    let mut addr = start;
+    while addr < end {
+        let Some(insn) = session.insn_at(addr)? else {
+            break;
+        };
+        if insn.is_invalid() {
+            break;
+        }
+        if insn.has_memory_operand() && insn.memory_index() == iced_x86::Register::None {
+            let base = insn.memory_base();
+            if let Some(view) = recraft_ir::from_iced(base)
+                && names.contains_key(&view.base)
+                && let Some(size) = access_size(insn.memory_size())
+            {
+                sizes.entry(view.base).or_default().insert(size);
+            }
+        }
+        let next = insn.next_addr();
+        if next <= addr || next >= end {
+            break;
+        }
+        addr = next;
+    }
+    let mut types = BTreeMap::new();
+    for (reg, observed) in sizes {
+        let ty = if observed.len() != 1 {
+            ArgType::VoidPtr
+        } else {
+            match observed.iter().next().copied().unwrap_or(8) {
+                1 => ArgType::CharPtr,
+                2 => ArgType::WCharPtr,
+                4 => ArgType::Int32Ptr,
+                _ => ArgType::Int64Ptr,
+            }
+        };
+        types.insert(reg, ty);
+    }
+    Ok(types)
+}
+
+/// Byte width of a memory operand (SIMD/FPU sizes are not pointer candidates).
+fn access_size(size: iced_x86::MemorySize) -> Option<u8> {
+    use iced_x86::MemorySize as S;
+    Some(match size {
+        S::UInt8 | S::Int8 => 1,
+        S::UInt16 | S::Int16 => 2,
+        S::UInt32 | S::Int32 => 4,
+        S::UInt64 | S::Int64 => 8,
+        _ => return None,
     })
 }
 
@@ -347,6 +451,7 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
     Ok(ArgNames {
         names: BTreeMap::new(),
         stack,
+        types: BTreeMap::new(),
     })
 }
 
@@ -540,6 +645,37 @@ mod tests {
         let stdcall = recover_l2(&mut session, start, end).unwrap();
         assert_eq!(stdcall.abi, CallingConvention::Stdcall);
         assert_eq!(stdcall.ret, ReturnKind::Int32);
+    }
+
+    #[test]
+    fn pointer_arguments_are_typed_from_memory_access_width() {
+        let Some((mut session, _dir)) = corpus_session("x64") else {
+            return;
+        };
+        let (start, end) = bounds(&session, "str_probe");
+        let args = recover_args(&mut session, start, end).unwrap();
+        assert!(
+            args.signature().contains("char* arg1"),
+            "{}",
+            args.signature()
+        );
+
+        let (start, end) = bounds(&session, "wide_probe");
+        let args = recover_args(&mut session, start, end).unwrap();
+        assert!(
+            args.signature().contains("wchar_t* arg1"),
+            "{}",
+            args.signature()
+        );
+
+        // Pure arithmetic arguments stay int64.
+        let (start, end) = bounds(&session, "add_leaf");
+        let args = recover_args(&mut session, start, end).unwrap();
+        assert!(
+            args.signature().contains("int64 arg1"),
+            "{}",
+            args.signature()
+        );
     }
 
     #[test]
