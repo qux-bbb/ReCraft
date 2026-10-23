@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Function-range and structuring fixes for real samples: (1) analysis now clamps
+  overlapping function ranges to the next known start (a merged `sub_*` range spanned
+  dozens of real functions and made decompilation pick the wrong one), and (2) the
+  structurer re-emits already-emitted *leaf* epilogues (≤12 statements ending in
+  `return` or a tail call) inside the branch that reaches them instead of printing a
+  `goto` to a shared epilogue. notepad: 502 non-overlapping functions, structured
+  **81.5%** (409/502, up from 407), coverage **98.5%** (561/37522 intrinsics), residual
+  `goto` count down to 1181; corpus stays 100% structured / 97.4% coverage with golden
+  snapshots unchanged. docs/QUALITY, docs/M2, docs/M4 updated.
+
 - Release rebuild after the CFG/semantic work: `package.ps1` (zip 10.2 MiB, 23 entries)
   → `verify-package.ps1` PACKAGE PASS (hash, required entries, packaged exe pipeline)
   → `demo.ps1` DEMO PASS on the staged binary. The packaged exe reproduces the source

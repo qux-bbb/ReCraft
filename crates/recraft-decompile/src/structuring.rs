@@ -648,6 +648,9 @@ impl Structurer {
                         return;
                     }
                     if self.emitted[target] {
+                        if self.duplicate_leaf(lines, target, level) {
+                            return;
+                        }
                         self.emit_raw_flow(lines, current, level);
                         return;
                     }
@@ -725,10 +728,14 @@ impl Structurer {
                         let mut then_lines = Vec::new();
                         if !self.emitted[taken] {
                             self.emit_linear(&mut then_lines, taken, level + 1, &arm_stop);
+                        } else {
+                            self.duplicate_leaf(&mut then_lines, taken, level + 1);
                         }
                         let mut else_lines = Vec::new();
                         if !self.emitted[not_taken] {
                             self.emit_linear(&mut else_lines, not_taken, level + 1, &arm_stop);
+                        } else {
+                            self.duplicate_leaf(&mut else_lines, not_taken, level + 1);
                         }
                         let entry = self.blocks[current].entry;
                         match (then_lines.is_empty(), else_lines.is_empty()) {
@@ -789,6 +796,22 @@ impl Structurer {
                         });
                         current = not_taken;
                         continue;
+                    }
+                    if self.emitted[taken] && taken != not_taken {
+                        let mut arm_lines = Vec::new();
+                        if self.duplicate_leaf(&mut arm_lines, taken, level + 1) {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}if ({condition}) {{", indent(level)),
+                            });
+                            lines.extend(arm_lines);
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}}}", indent(level)),
+                            });
+                            current = not_taken;
+                            continue;
+                        }
                     }
                     self.emit_raw_flow(lines, current, level);
                     return;
@@ -1168,6 +1191,39 @@ impl Structurer {
             }
         }
         true
+    }
+
+    /// Re-emit an already-emitted leaf block (epilogue: `return` or tail call) instead of
+    /// emitting a `goto`. Safe because the duplicated block is only reached on one of the
+    /// mutually exclusive paths; this removes most shared-epilogue `goto`s.
+    fn duplicate_leaf(&mut self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) -> bool {
+        if block >= self.blocks.len() {
+            return false;
+        }
+        if self.blocks[block].has_table
+            || self.loop_headers.contains(&block)
+            || self.bodies[block].statements.len() > 12
+        {
+            return false;
+        }
+        match self.blocks[block].flow {
+            Flow::Return => {
+                self.emit_simple(lines, block, level);
+                lines.push(PseudoLine {
+                    addr: self.blocks[block].entry,
+                    text: format!("{}return;", indent(level)),
+                });
+                true
+            }
+            // Tail call: `goto_target` is `None` and `emit_raw_flow` prints
+            // `/* tail call -> ... */ return;`.
+            Flow::Goto(_) if self.blocks[block].goto_target.is_none() => {
+                self.emit_simple(lines, block, level);
+                self.emit_raw_flow(lines, block, level);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {

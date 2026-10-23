@@ -371,6 +371,16 @@ pub fn analyze_with_options(
         .collect();
     functions.sort_by_key(|function| function.start);
 
+    // Function ranges must not overlap: a scan can follow a tail jump or fallthrough into
+    // the next function's code, producing a bogus multi-function range. Clamp each end to
+    // the next known start (IDA-style non-overlapping ranges) and drop empty results.
+    for index in 0..functions.len().saturating_sub(1) {
+        if functions[index].end > functions[index + 1].start {
+            functions[index].end = functions[index + 1].start;
+        }
+    }
+    functions.retain(|function| function.end > function.start);
+
     // Recovered ranges often include the alignment padding that follows the last real
     // instruction (MSVC pads with `int3`, occasionally `nop`). Trim it so decompilation,
     // metrics and xrefs never treat padding as code. Keep at least one byte per function.
