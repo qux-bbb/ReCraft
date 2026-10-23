@@ -11,11 +11,14 @@
 use std::fmt;
 use std::ops::{Add, AddAssign, Sub};
 
+use serde::{Deserialize, Serialize};
+
 /// A virtual address inside a program being analysed.
 ///
 /// Addresses are intentionally a distinct type: mixing them with file offsets or
 /// sizes is the most common class of bug in disassemblers.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Address(pub u64);
 
 impl Address {
@@ -115,7 +118,7 @@ impl Sub<Address> for Address {
 }
 
 /// A half-open address range: `[start, end)`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct AddressRange {
     pub start: Address,
     pub end: Address,
@@ -192,11 +195,11 @@ impl fmt::Display for AddressRange {
 }
 
 /// Stable identifier of a function record in the project database.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct FuncId(pub u32);
 
 /// Stable identifier of a type record in the project database.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct TypeId(pub u32);
 
 /// Error type shared by all ReCraft library crates.

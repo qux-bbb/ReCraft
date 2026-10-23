@@ -15,3 +15,9 @@ recraft-common = { workspace = true }
 recraft-storage = { workspace = true }
 recraft-format = { workspace = true }
 recraft-decode = { workspace = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

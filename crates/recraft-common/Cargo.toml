@@ -11,4 +11,5 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
 thiserror.workspace = true

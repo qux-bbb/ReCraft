@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 
 use recraft_common::{Error, Result};
+use serde::{Deserialize, Serialize};
 
 pub use recraft_common::Address;
 
@@ -52,7 +53,7 @@ const DIRECTORY_TLS: usize = 9;
 const DIRECTORY_DELAY_IMPORT: usize = 13;
 
 /// A loaded PE image.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PeImage {
     pub is_64: bool,
     pub image_base: Address,
@@ -91,7 +92,7 @@ impl PeImage {
 }
 
 /// One PE section.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Section {
     pub name: String,
     pub va: Address,
@@ -100,7 +101,7 @@ pub struct Section {
     pub raw_size: u32,
     pub characteristics: u32,
     /// Original RVA (needed by [`Section::contains_rva`]).
-    rva: u32,
+    pub rva: u32,
 }
 
 impl Section {
@@ -133,7 +134,7 @@ impl Section {
 }
 
 /// One imported module.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImportModule {
     pub name: String,
     pub iat_va: Address,
@@ -142,7 +143,7 @@ pub struct ImportModule {
 }
 
 /// One imported function.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImportFunction {
     pub name: Option<String>,
     pub ordinal: Option<u16>,
@@ -151,7 +152,7 @@ pub struct ImportFunction {
 }
 
 /// One exported symbol.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Export {
     pub name: Option<String>,
     pub ordinal: u32,
@@ -160,7 +161,7 @@ pub struct Export {
 }
 
 /// A half-open virtual-address range from `.pdata`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionRange {
     pub start: Address,
     pub end: Address,

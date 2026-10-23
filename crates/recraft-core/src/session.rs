@@ -1,0 +1,752 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 ReCraft contributors
+
+//! A `Session` is the in-memory analysis view over one project database.
+//!
+//! Responsibilities (M0):
+//! - own the writer `Project`, the parsed PE metadata and the segment table;
+//! - page-cache the original image bytes so decoding does not hit SQLite per instruction;
+//! - keep per-byte flags (code/data/head) with a page cache;
+//! - apply user [`Command`]s atomically together with their journal record, and undo/redo;
+//! - expose read-only views (linear disassembly) to the CLI/UI.
+//!
+//! Threading: the session is single-threaded (the writer thread). UI/MCP readers use a
+//! separate `ReadOnlyProject` connection.
+
+use std::collections::{HashMap, VecDeque};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use recraft_common::{Address, AddressRange, Error, Result};
+use recraft_decode::{DecodeCache, Formatter, Insn, Mode, decode};
+use recraft_format::PeImage;
+use recraft_storage::Project;
+use rusqlite::{Connection, OptionalExtension, params};
+
+use crate::command::{self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_LOADER};
+use crate::flags::{Flags, FlagsStore};
+use crate::segments::{self, Segment};
+use crate::view::DisasmLine;
+
+const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
+const IMAGE_CACHE_PAGES: usize = 512;
+const FLAGS_CACHE_PAGES: usize = 1024;
+const DECODE_CACHE_ENTRIES: usize = 65_536;
+
+/// Page cache over the project's original image bytes.
+struct ImageCache {
+    pages: HashMap<u64, Vec<u8>>,
+    order: VecDeque<u64>,
+    capacity: usize,
+}
+
+impl ImageCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            pages: HashMap::new(),
+            order: VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn page(&mut self, project: &Project, page_no: u64) -> Result<&[u8]> {
+        if self.pages.contains_key(&page_no) {
+            touch(&mut self.order, page_no);
+        } else {
+            let data = project.read_image(page_no * IMAGE_PAGE_BYTES, IMAGE_PAGE_BYTES as usize)?;
+            while self.order.len() >= self.capacity {
+                if let Some(evicted) = self.order.pop_front() {
+                    self.pages.remove(&evicted);
+                } else {
+                    break;
+                }
+            }
+            self.pages.insert(page_no, data);
+            self.order.push_back(page_no);
+        }
+        self.pages
+            .get(&page_no)
+            .map(Vec::as_slice)
+            .ok_or_else(|| Error::internal("image page vanished from cache"))
+    }
+
+    /// Read at a *file* offset (the cache is keyed by file offset, not VA).
+    fn read_file_at(&mut self, project: &Project, offset: u64, out: &mut [u8]) -> Result<usize> {
+        let mut filled = 0usize;
+        while filled < out.len() {
+            let cursor = offset.saturating_add(filled as u64);
+            let page_no = cursor / IMAGE_PAGE_BYTES;
+            let page = self.page(project, page_no)?;
+            let inner = (cursor % IMAGE_PAGE_BYTES) as usize;
+            if inner >= page.len() {
+                break;
+            }
+            let take = (page.len() - inner).min(out.len() - filled);
+            out[filled..filled + take].copy_from_slice(&page[inner..inner + take]);
+            filled += take;
+        }
+        Ok(filled)
+    }
+}
+
+fn touch(order: &mut VecDeque<u64>, key: u64) {
+    if let Some(position) = order.iter().position(|&value| value == key)
+        && position + 1 != order.len()
+    {
+        order.remove(position);
+        order.push_back(key);
+    }
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Open/create one ReCraft project and provide the analysis-facing API.
+pub struct Session {
+    project: Project,
+    image: PeImage,
+    mode: Mode,
+    segments: Vec<Segment>,
+    image_cache: ImageCache,
+    flags: FlagsStore,
+    decoders: DecodeCache,
+}
+
+impl Session {
+    /// Import a PE file into a new project at `path`.
+    pub fn create(
+        path: &Path,
+        bytes: &[u8],
+        progress: &mut dyn FnMut(u64, u64),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        let image = recraft_format::load(bytes)?;
+        let segments = segments::from_pe(&image);
+        let format_name = if image.is_64 { "pe32+" } else { "pe32" };
+        let original_name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("program")
+            .to_owned();
+        let project = Project::create(
+            path,
+            bytes,
+            &original_name,
+            format_name,
+            progress,
+            cancelled,
+        )?;
+
+        let json = serde_json::to_string(&image)
+            .map_err(|error| Error::internal(format!("serialize PE metadata: {error}")))?;
+        project.set_meta_string("pe_meta", &json)?;
+        write_segments(project.conn(), &segments)?;
+        install_initial_names(project.conn(), &image)?;
+
+        Ok(Self {
+            mode: Mode::from_is_64(image.is_64),
+            image,
+            segments,
+            project,
+            image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
+            flags: FlagsStore::new(FLAGS_CACHE_PAGES),
+            decoders: DecodeCache::new(DECODE_CACHE_ENTRIES),
+        })
+    }
+
+    /// Re-open an existing project (no image bytes are re-read up front).
+    pub fn open(path: &Path) -> Result<Self> {
+        let project = Project::open(path)?;
+        let json = project.meta_string("pe_meta")?.ok_or_else(|| {
+            Error::storage("project is missing PE metadata (re-import the binary)")
+        })?;
+        let image: PeImage = serde_json::from_str(&json)
+            .map_err(|error| Error::internal(format!("corrupt PE metadata: {error}")))?;
+        let segments = segments::from_pe(&image);
+        Ok(Self {
+            mode: Mode::from_is_64(image.is_64),
+            image,
+            segments,
+            project,
+            image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
+            flags: FlagsStore::new(FLAGS_CACHE_PAGES),
+            decoders: DecodeCache::new(DECODE_CACHE_ENTRIES),
+        })
+    }
+
+    // ------------------------------------------------------------- accessors --
+
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
+    pub fn project_mut(&mut self) -> &mut Project {
+        &mut self.project
+    }
+
+    pub fn path(&self) -> &Path {
+        self.project.path()
+    }
+
+    pub fn image(&self) -> &PeImage {
+        &self.image
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn segments(&self) -> &[Segment] {
+        &self.segments
+    }
+
+    pub fn entry_point(&self) -> Address {
+        self.image.entry_point
+    }
+
+    pub fn image_len(&self) -> u64 {
+        self.image.file_size
+    }
+
+    pub fn segment_containing(&self, addr: Address) -> Option<&Segment> {
+        self.segments.iter().find(|segment| segment.contains(addr))
+    }
+
+    // ------------------------------------------------------------ read paths --
+
+    /// Copy up to `out.len()` image bytes starting at virtual address `addr`;
+    /// returns the number of bytes copied. Reads stop at segment boundaries and
+    /// never run into file bytes that are not mapped at `addr`.
+    pub fn read_at(&mut self, addr: Address, out: &mut [u8]) -> Result<usize> {
+        let mut filled = 0usize;
+        while filled < out.len() {
+            let cursor = addr.get().saturating_add(filled as u64);
+            let Some(segment) = self
+                .segments
+                .iter()
+                .find(|segment| segment.contains(Address::new(cursor)))
+                .cloned()
+            else {
+                break;
+            };
+            let delta = cursor - segment.range.start.get();
+            if delta >= segment.file_size {
+                break;
+            }
+            let remaining_in_file = segment.file_size - delta;
+            let remaining_in_segment = segment.range.end.get() - cursor;
+            let want = (out.len() - filled) as u64;
+            let take = want.min(remaining_in_file).min(remaining_in_segment) as usize;
+            if take == 0 {
+                break;
+            }
+            let file_offset = segment.file_offset + delta;
+            let Session {
+                project,
+                image_cache,
+                ..
+            } = self;
+            let read =
+                image_cache.read_file_at(project, file_offset, &mut out[filled..filled + take])?;
+            filled += read;
+            if read < take {
+                break;
+            }
+        }
+        Ok(filled)
+    }
+
+    pub fn read_bytes(&mut self, addr: Address, len: usize) -> Result<Vec<u8>> {
+        let mut buffer = vec![0u8; len];
+        let read = self.read_at(addr, &mut buffer)?;
+        buffer.truncate(read);
+        Ok(buffer)
+    }
+
+    /// Decode the instruction at `addr` (cached).
+    pub fn insn_at(&mut self, addr: Address) -> Result<Option<Insn>> {
+        if let Some(insn) = self.decoders.get(addr) {
+            return Ok(Some(insn));
+        }
+        let mut raw = [0u8; 15];
+        let read = self.read_at(addr, &mut raw)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        let Some(insn) = decode(&raw[..read], addr, self.mode) else {
+            return Ok(None);
+        };
+        self.decoders.insert(insn);
+        Ok(Some(insn))
+    }
+
+    pub fn flags_at(&mut self, addr: Address) -> Result<Flags> {
+        let Session { project, flags, .. } = self;
+        flags.get(project.conn(), addr)
+    }
+
+    pub fn snapshot_flags(&mut self, range: AddressRange) -> Result<Vec<Flags>> {
+        let Session { project, flags, .. } = self;
+        flags.snapshot(project.conn(), range)
+    }
+
+    pub fn name_at(&self, addr: Address) -> Result<Option<String>> {
+        self.project
+            .conn()
+            .query_row(
+                "SELECT text FROM name WHERE addr = ?1",
+                [addr.get() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)
+    }
+
+    pub fn comment_at(&self, addr: Address, kind: CommentKind) -> Result<Option<String>> {
+        self.project
+            .conn()
+            .query_row(
+                "SELECT text FROM comment WHERE addr = ?1 AND kind = ?2",
+                params![addr.get() as i64, kind.as_i64()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)
+    }
+
+    /// End address of the function defined at `start`, if any.
+    pub fn func_at(&self, start: Address) -> Result<Option<Address>> {
+        let end: Option<i64> = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT end FROM func WHERE start = ?1",
+                [start.get() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)?;
+        Ok(end.map(|value| Address::new(value as u64)))
+    }
+
+    // ----------------------------------------------------------- commands ----
+
+    /// Apply a user command, journal it, and invalidate the redo stack.
+    pub fn execute(&mut self, cmd: Command) -> Result<Effect> {
+        let inverse = cmd.inverse(self)?;
+        let record = JournalRecord {
+            command: cmd.clone(),
+            inverse,
+        };
+        let payload = serde_json::to_vec(&record)
+            .map_err(|error| Error::internal(format!("serialize journal: {error}")))?;
+        let effect = cmd.effect();
+
+        {
+            let Session {
+                project,
+                segments,
+                flags,
+                ..
+            } = self;
+            let tx = project.conn_mut().transaction().map_err(command::db_err)?;
+            // A new command invalidates everything that could be redone.
+            tx.execute("DELETE FROM journal WHERE undone = 1", [])
+                .map_err(command::db_err)?;
+            command::apply(&tx, segments, flags, &cmd)?;
+            tx.execute(
+                "INSERT INTO journal(ts, cmd, payload) VALUES (?1, ?2, ?3)",
+                params![unix_now(), cmd.name(), payload],
+            )
+            .map_err(command::db_err)?;
+            tx.commit().map_err(command::db_err)?;
+        }
+
+        self.decoders.clear();
+        Ok(effect)
+    }
+
+    /// Undo the newest applied command.
+    pub fn undo(&mut self) -> Result<Option<Effect>> {
+        let last = {
+            let Session { project, .. } = self;
+            command::last_active_record(project.conn())?
+        };
+        let Some((seq, payload)) = last else {
+            return Ok(None);
+        };
+        let record: JournalRecord = serde_json::from_slice(&payload)
+            .map_err(|error| Error::internal(format!("corrupt journal: {error}")))?;
+        let effect = record.inverse.effect();
+
+        {
+            let Session {
+                project,
+                segments,
+                flags,
+                ..
+            } = self;
+            let tx = project.conn_mut().transaction().map_err(command::db_err)?;
+            tx.execute("UPDATE journal SET undone = 1 WHERE seq = ?1", [seq])
+                .map_err(command::db_err)?;
+            command::apply(&tx, segments, flags, &record.inverse)?;
+            tx.commit().map_err(command::db_err)?;
+        }
+
+        self.decoders.clear();
+        Ok(Some(effect))
+    }
+
+    /// Redo the oldest undone command.
+    pub fn redo(&mut self) -> Result<Option<Effect>> {
+        let first = {
+            let Session { project, .. } = self;
+            command::first_undone_record(project.conn())?
+        };
+        let Some((seq, payload)) = first else {
+            return Ok(None);
+        };
+        let record: JournalRecord = serde_json::from_slice(&payload)
+            .map_err(|error| Error::internal(format!("corrupt journal: {error}")))?;
+        let effect = record.command.effect();
+
+        {
+            let Session {
+                project,
+                segments,
+                flags,
+                ..
+            } = self;
+            let tx = project.conn_mut().transaction().map_err(command::db_err)?;
+            tx.execute("UPDATE journal SET undone = 0 WHERE seq = ?1", [seq])
+                .map_err(command::db_err)?;
+            command::apply(&tx, segments, flags, &record.command)?;
+            tx.commit().map_err(command::db_err)?;
+        }
+
+        self.decoders.clear();
+        Ok(Some(effect))
+    }
+
+    pub fn can_undo(&self) -> Result<bool> {
+        let count: i64 = self
+            .project
+            .conn()
+            .query_row("SELECT COUNT(*) FROM journal WHERE undone = 0", [], |row| {
+                row.get(0)
+            })
+            .map_err(command::db_err)?;
+        Ok(count > 0)
+    }
+
+    pub fn can_redo(&self) -> Result<bool> {
+        let count: i64 = self
+            .project
+            .conn()
+            .query_row("SELECT COUNT(*) FROM journal WHERE undone = 1", [], |row| {
+                row.get(0)
+            })
+            .map_err(command::db_err)?;
+        Ok(count > 0)
+    }
+
+    // --------------------------------------------------------------- views ---
+
+    /// Linear disassembly starting at `start`.
+    pub fn disasm(&mut self, start: Address, count: usize) -> Result<Vec<DisasmLine>> {
+        let mut lines = Vec::with_capacity(count.min(4096));
+        let mut formatter = Formatter::new();
+        let mut addr = start;
+        for _ in 0..count {
+            if self.segment_containing(addr).is_none() {
+                break;
+            }
+            let Some(insn) = self.insn_at(addr)? else {
+                break;
+            };
+            let mut raw = [0u8; 15];
+            let read = self.read_at(addr, &mut raw)?;
+            if read == 0 {
+                break;
+            }
+            let (mnemonic, operands) = {
+                let (mnemonic, operands) = formatter.format_parts(&insn);
+                (mnemonic.to_owned(), operands.to_owned())
+            };
+            let name = self.name_at(addr)?;
+            let comment = self.comment_at(addr, CommentKind::Regular)?;
+            let flags = self.flags_at(addr)?;
+            lines.push(DisasmLine {
+                addr,
+                len: insn.len(),
+                raw,
+                mnemonic,
+                operands,
+                name,
+                comment,
+                flags,
+            });
+            addr = insn.next_addr();
+        }
+        Ok(lines)
+    }
+}
+
+fn write_segments(conn: &Connection, segments: &[Segment]) -> Result<()> {
+    conn.execute("DELETE FROM segment", [])
+        .map_err(command::db_err)?;
+    for segment in segments {
+        conn.execute(
+            "INSERT INTO segment(name, start, end, file_off, kind, perm, bitness)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            params![
+                segment.name,
+                segment.range.start.get() as i64,
+                segment.range.end.get() as i64,
+                segment.file_offset as i64,
+                segment_kind_id(segment.kind),
+                perm_id(segment.perm),
+            ],
+        )
+        .map_err(command::db_err)?;
+    }
+    Ok(())
+}
+
+fn segment_kind_id(kind: segments::SegmentKind) -> i64 {
+    match kind {
+        segments::SegmentKind::Headers => 0,
+        segments::SegmentKind::Code => 1,
+        segments::SegmentKind::Data => 2,
+        segments::SegmentKind::Bss => 3,
+    }
+}
+
+fn perm_id(perm: segments::Perm) -> i64 {
+    match perm {
+        segments::Perm::None => 0,
+        segments::Perm::Read => 1,
+        segments::Perm::ReadWrite => 2,
+        segments::Perm::ReadExecute => 3,
+        segments::Perm::ReadWriteExecute => 4,
+    }
+}
+
+fn install_initial_names(conn: &Connection, image: &PeImage) -> Result<()> {
+    let mut statement = conn
+        .prepare("INSERT OR IGNORE INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)")
+        .map_err(command::db_err)?;
+    statement
+        .execute(params![
+            image.entry_point.get() as i64,
+            "start",
+            NAME_KIND_LOADER
+        ])
+        .map_err(command::db_err)?;
+    for export in &image.exports {
+        let Some(name) = export.name.as_deref() else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let va = image.image_base.get().saturating_add(u64::from(export.rva));
+        statement
+            .execute(params![va as i64, name, NAME_KIND_LOADER])
+            .map_err(command::db_err)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flags::CodeData;
+    use tempfile::TempDir;
+
+    /// Use a system PE if present (Windows dev/CI); skip the test otherwise.
+    fn sample_pe() -> Option<Vec<u8>> {
+        for path in [
+            "C:/Windows/System32/notepad.exe",
+            "C:/Windows/System32/kernel32.dll",
+        ] {
+            if let Ok(bytes) = std::fs::read(path)
+                && !bytes.is_empty()
+            {
+                return Some(bytes);
+            }
+        }
+        None
+    }
+
+    fn fixture(dir: &TempDir) -> Option<Session> {
+        let bytes = sample_pe()?;
+        let path = dir.path().join("test.rcraft");
+        Some(Session::create(&path, &bytes, &mut |_, _| {}, &|| false).expect("create session"))
+    }
+
+    #[test]
+    fn create_opens_with_entry_name_and_disassembly() {
+        let dir = TempDir::new().unwrap();
+        let Some(session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        assert_ne!(entry.get(), 0);
+        assert_eq!(session.mode(), Mode::X64);
+        assert!(!session.segments().is_empty());
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("start"));
+
+        let path = session.path().to_path_buf();
+        drop(session);
+
+        let mut reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.entry_point(), entry);
+        let lines = reopened.disasm(entry, 8).unwrap();
+        assert!(!lines.is_empty());
+        assert_eq!(lines[0].addr, entry);
+        assert!(!lines[0].mnemonic.is_empty());
+        assert_ne!(lines[0].len, 0);
+    }
+
+    #[test]
+    fn rename_comment_undo_redo_and_persistence() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+
+        session
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("my_main".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("my_main"));
+        assert!(session.can_undo().unwrap());
+
+        session
+            .execute(Command::SetComment {
+                addr: entry,
+                kind: CommentKind::Regular,
+                text: Some("网络回调初始化".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(
+            session
+                .comment_at(entry, CommentKind::Regular)
+                .unwrap()
+                .as_deref(),
+            Some("网络回调初始化")
+        );
+
+        session.undo().unwrap();
+        assert!(
+            session
+                .comment_at(entry, CommentKind::Regular)
+                .unwrap()
+                .is_none()
+        );
+        session.undo().unwrap();
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("start"));
+        assert!(session.can_redo().unwrap());
+
+        session.redo().unwrap();
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("my_main"));
+
+        let path = session.path().to_path_buf();
+        drop(session);
+
+        let mut reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.name_at(entry).unwrap().as_deref(), Some("my_main"));
+        // The journal survives reopening: undo still works on the loaded project.
+        assert!(reopened.can_undo().unwrap());
+        reopened.undo().unwrap();
+        assert_eq!(reopened.name_at(entry).unwrap().as_deref(), Some("start"));
+        assert!(reopened.can_redo().unwrap());
+
+        // A new command after undo discards the redo stack.
+        reopened
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("final_name".to_owned()),
+            })
+            .unwrap();
+        assert!(!reopened.can_redo().unwrap());
+    }
+
+    #[test]
+    fn code_data_flags_roundtrip_with_undo() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        assert_eq!(session.flags_at(entry).unwrap(), Flags::UNKNOWN);
+
+        let range = AddressRange::new(entry, Address::new(entry.get() + 4));
+        session
+            .execute(Command::SetCodeData {
+                range,
+                kind: CodeData::Code,
+            })
+            .unwrap();
+        let flags = session.flags_at(entry).unwrap();
+        assert!(flags.is_code() && flags.head);
+        let tail = session.flags_at(Address::new(entry.get() + 1)).unwrap();
+        assert!(tail.is_code() && !tail.head);
+
+        session.undo().unwrap();
+        assert_eq!(session.flags_at(entry).unwrap(), Flags::UNKNOWN);
+        session.redo().unwrap();
+        assert!(session.flags_at(entry).unwrap().is_code());
+    }
+
+    #[test]
+    fn define_and_undefine_function() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let end = Address::new(entry.get() + 0x10);
+        session
+            .execute(Command::DefineFunc { start: entry, end })
+            .unwrap();
+        assert_eq!(session.func_at(entry).unwrap(), Some(end));
+        session.undo().unwrap();
+        assert_eq!(session.func_at(entry).unwrap(), None);
+        session.redo().unwrap();
+        assert_eq!(session.func_at(entry).unwrap(), Some(end));
+    }
+
+    #[test]
+    fn disasm_reflects_rename_and_comment() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        session
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("entry_renamed".to_owned()),
+            })
+            .unwrap();
+        session
+            .execute(Command::SetComment {
+                addr: entry,
+                kind: CommentKind::Regular,
+                text: Some("hello".to_owned()),
+            })
+            .unwrap();
+        let lines = session.disasm(entry, 1).unwrap();
+        assert_eq!(lines[0].name.as_deref(), Some("entry_renamed"));
+        assert_eq!(lines[0].comment.as_deref(), Some("hello"));
+    }
+}

@@ -27,5 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FlowKind` classification, direct branch targets, memory-operand detection, Intel
   formatter (mnemonic/operands split for UIs) and a bounded decode cache. 10 unit tests;
   stateless throughput measured at ~46 M instructions/s.
+- `recraft-core`: session over the project database — segment map from the PE loader,
+  4-bit-per-byte flags with a 64 KiB page cache, names/comments/functions, page-cached
+  image reads (VA → file offset), linear disassembly view, and the command bus with
+  journaled inverse operations (undo/redo, redo-stack invalidation, atomic apply).
+  PE metadata is persisted as JSON in the project so reopening does not re-read the
+  image. 10 unit tests (rename/comment/code-data/function undo-redo persistence).
 
 [Unreleased]: https://github.com/qux-bbb/ReCraft/commits/main
