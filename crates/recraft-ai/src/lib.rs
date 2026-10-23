@@ -19,6 +19,13 @@
 
 #![forbid(unsafe_code)]
 
+mod provider;
+
+pub use provider::{
+    AuditEntry, AuditLog, HeuristicProvider, PromptCache, PromptRequest, Provider, ProviderKind,
+    ProviderSettings, TokenBudget, build_explain_prompt, build_rename_prompt, redact,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use recraft_common::{Address, Error, Result};

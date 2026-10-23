@@ -141,6 +141,10 @@ try {
     Assert-Contains (Get-Content -Raw -LiteralPath $proposalFile) 'confidence' 'AI proposals JSON'
     $aiApplied = Invoke-Recraft @('ai', 'apply', $project, $proposalFile, '--yes')
     Assert-Contains $aiApplied 'applied' 'AI proposal apply'
+    $provider = Invoke-Recraft @('ai', 'provider')
+    Assert-Contains $provider 'state=disabled' 'AI provider defaults offline'
+    $aiPrompt = Invoke-Recraft @('ai', 'prompt', $project, '--addr', 'entry', '--json')
+    Assert-Contains $aiPrompt 'estimated_tokens' 'AI prompt budget'
 
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"

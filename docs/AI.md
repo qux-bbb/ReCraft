@@ -77,11 +77,35 @@ recraft ai apply notepad.rcraft proposals.json --yes
 
 无项目/未分析时会提示先 Analyze。UI 不会在后台自动应用任何提案。
 
+## Provider 抽象与 prompt 安全（M3 地基）
+
+网络传输尚未实现，但 contract 已固定并可离线验证：
+
+```powershell
+recraft ai provider          # 解析后的配置（不打印密钥）
+recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
+```
+
+- **默认离线**：`ProviderSettings` 默认 `heuristic`/`disabled`；启用 HTTP provider 必须同时
+  设置 `RECRAFT_AI_PROVIDER=openai|ollama`、`RECRAFT_AI_ENDPOINT`，且
+  `RECRAFT_AI_API_KEY`（变量名可配）非空，否则 `enabled=false`。
+- **配置项**：`RECRAFT_AI_PROVIDER`、`RECRAFT_AI_ENDPOINT`、`RECRAFT_AI_MODEL`、
+  `RECRAFT_AI_API_KEY_ENV`、`RECRAFT_AI_MAX_TOKENS`。
+- **prompt 组装**：`build_explain_prompt`（函数摘要 + API 标签 + 引用字符串 + L2 伪代码）与
+  `build_rename_prompt`（候选函数列表），都经过：
+  - **脱敏**：URL → `<url>`、IPv4 → `<ip>`、邮箱 → `<email>`（`redact`，保留行结构）；
+  - **token 预算**：约 4 字符/token，超限截断并标注 `…[truncated]`；
+  - **缓存**：`PromptCache`（prompt hash → response）；**审计**：`AuditLog`
+    （provider/函数/prompt tokens/response tokens/cached）。
+- 传输层（OpenAI 兼容 / Ollama HTTP）与 provider 响应解析是下一步工作；`Provider` trait
+  与 `HeuristicProvider`（明确拒绝假装是模型）已就位。
+
 ## 限制与后续
 
 - **单条选择**：UI 当前一次应用一条 proposal；批量勾选/全选与 diff 预览（before/after
   名称对比）在后续版本补全。
-- **尚无 LLM provider**：当前全部是确定性启发式；provider 只负责产出同形状 Proposal。
+- **尚无 LLM 传输层**：provider 配置/prompt/脱敏/预算/缓存/审计已就绪；OpenAI 兼容与
+  Ollama 的 HTTP 调用、响应解析、prompt 模板库与结果评测未实现。
 - 命名质量有限（类别前缀 + 地址）；接入 LLM 后应结合字符串/调用关系生成更自然的名字。
 - 写工具仅 `rename`/`comment`；`set_prototype` / `define_function` / `apply_type` 尚未实现。
 - 自然语言查询（"找所有引用 URL 的函数"）与伪代码润色未实现。

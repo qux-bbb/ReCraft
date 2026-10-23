@@ -2787,6 +2787,7 @@ dependencies = [
  "recraft-analysis",
  "recraft-common",
  "recraft-core",
+ "recraft-decompile",
  "serde_json",
  "tempfile",
 ]

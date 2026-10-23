@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- LLM provider contract + prompt safety layer (no network I/O yet): `ProviderSettings` is
+  offline by default and only enables an HTTP provider when kind, endpoint and the API
+  key env var are all present; `redact` masks URLs/IPs/e-mails; `TokenBudget` enforces a
+  ~4-chars/token budget with truncation; `PromptCache` and `AuditLog` provide cache/audit
+  bookkeeping; `build_explain_prompt`/`build_rename_prompt` assemble minimal context from
+  the explanation (APIs, strings, L2 pseudo-code). New CLI: `recraft ai provider` shows
+  resolved settings (never the key) and `recraft ai prompt` prints the redacted,
+  budget-fitted prompt for review.
+
 - 1 GiB performance gate: `scripts/bench-large.ps1` builds a 1 GiB overlay sample,
   measures import/analyze wall time and peak working set (polling the child process every
   20 ms, since PowerShell's Start-Process loses the values we need), and fails on

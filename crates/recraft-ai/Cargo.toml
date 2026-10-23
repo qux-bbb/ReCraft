@@ -13,6 +13,7 @@ publish = false
 [dependencies]
 recraft-common = { workspace = true }
 recraft-core = { workspace = true }
+recraft-decompile = { version = "0.1.0", path = "../recraft-decompile" }
 serde_json = "1.0.154"
 
 [dev-dependencies]

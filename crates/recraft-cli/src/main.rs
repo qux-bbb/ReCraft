@@ -70,6 +70,19 @@ enum AiCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Print the redacted provider prompt for one function (no network I/O).
+    Prompt {
+        project: PathBuf,
+        #[arg(long)]
+        addr: Option<String>,
+        /// Token budget used for truncation.
+        #[arg(long, default_value_t = 1024)]
+        max_tokens: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the resolved LLM provider settings (never prints secrets).
+    Provider,
 }
 
 #[derive(Subcommand)]
@@ -859,7 +872,49 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
         } => cmd_ai_suggest(&project, json, limit, out.as_deref()),
         AiCommand::Triage { project, json } => cmd_ai_triage(&project, json),
         AiCommand::Apply { project, file, yes } => cmd_ai_apply(&project, &file, yes),
+        AiCommand::Prompt {
+            project,
+            addr,
+            max_tokens,
+            json,
+        } => cmd_ai_prompt(&project, addr.as_deref(), max_tokens, json),
+        AiCommand::Provider => {
+            let settings = recraft_ai::ProviderSettings::from_env();
+            println!("{}", settings.describe());
+            Ok(())
+        }
     }
+}
+
+fn cmd_ai_prompt(
+    project: &Path,
+    addr: Option<&str>,
+    max_tokens: usize,
+    as_json: bool,
+) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let addr = match addr {
+        Some(raw) => resolve_address(&session, raw)?,
+        None => session.entry_point(),
+    };
+    let mut settings = recraft_ai::ProviderSettings::from_env();
+    settings.max_tokens = max_tokens;
+    let prompt = recraft_ai::build_explain_prompt(&mut session, addr, &settings)?;
+    if as_json {
+        return json_result(&json!({
+            "system": prompt.system,
+            "user": prompt.user,
+            "estimated_tokens": prompt.estimated_tokens,
+            "provider": settings.describe(),
+        }));
+    }
+    println!("# {}", settings.describe());
+    println!("# estimated tokens: {}", prompt.estimated_tokens);
+    println!("--- system ---");
+    println!("{}", prompt.system);
+    println!("--- user ---");
+    println!("{}", prompt.user);
+    Ok(())
 }
 
 fn cmd_ai_explain(project: &Path, addr: Option<&str>, as_json: bool) -> Result<()> {
