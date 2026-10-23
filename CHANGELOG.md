@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP HTTP transport in E2E: `scripts/e2e.ps1` now starts the real server in the
+  background on a random port with a generated token, waits for `/health`, asserts a
+  token-bearing `initialize` returns `serverInfo`, verifies a request without the token
+  is rejected with 401, and always stops the process in a `finally` block. docs/MCP.md
+  and docs/QUALITY.md record the coverage; complements the existing stdio step.
+
 - Deterministic malformed-input regression for the PE loader (DESIGN §11 offline
   fuzz substitute): `crates/recraft-format/tests/malformed.rs` feeds 500 random blobs,
   400 truncations of notepad.exe plus DOS/NT boundary cuts, and 400 header/section-table

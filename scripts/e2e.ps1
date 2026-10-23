@@ -182,6 +182,47 @@ try {
     Assert-Contains $mcp 'recraft' 'MCP server name'
     Assert-Contains $mcp 'recraft://project/sample/functions' 'MCP functions resource'
 
+    Write-Host '[+] MCP HTTP transport (bearer token)'
+    $port = Get-Random -Minimum 20000 -Maximum 40000
+    $mcpToken = 'e2e-token'
+    $mcpOut = Join-Path $work 'mcp-http.out.log'
+    $mcpErr = Join-Path $work 'mcp-http.err.log'
+    $mcpProc = Start-Process -FilePath $Recraft `
+        -ArgumentList @('serve-mcp', $project, '--http', '--bind', "127.0.0.1:$port", '--token', $mcpToken) `
+        -RedirectStandardOutput $mcpOut -RedirectStandardError $mcpErr -PassThru -WindowStyle Hidden
+    try {
+        $ready = $false
+        for ($attempt = 0; $attempt -lt 50; $attempt++) {
+            Start-Sleep -Milliseconds 100
+            try {
+                $null = Invoke-WebRequest -Uri "http://127.0.0.1:$port/health" -UseBasicParsing -TimeoutSec 1
+                $ready = $true
+                break
+            } catch {
+                if ($mcpProc.HasExited) { break }
+            }
+        }
+        if (-not $ready) {
+            $log = Get-Content $mcpErr -Raw -ErrorAction SilentlyContinue
+            throw "MCP HTTP server did not start: $log"
+        }
+        $initBody = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+        $httpResp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/mcp" -Method Post -Body $initBody `
+            -ContentType 'application/json' -Headers @{ Authorization = "Bearer $mcpToken" } -UseBasicParsing
+        Assert-Contains $httpResp.Content '"serverInfo"' 'MCP HTTP initialize'
+        $unauthorized = $false
+        try {
+            $null = Invoke-WebRequest -Uri "http://127.0.0.1:$port/mcp" -Method Post -Body $initBody -ContentType 'application/json' -UseBasicParsing
+        } catch {
+            $unauthorized = ([int]$_.Exception.Response.StatusCode -eq 401)
+        }
+        if (-not $unauthorized) { throw 'MCP HTTP accepted a request without a bearer token' }
+    } finally {
+        if (-not $mcpProc.HasExited) {
+            Stop-Process -Id $mcpProc.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     Write-Host '[+] AI assist (offline explain/suggest/triage + propose-apply)'
     $aiTriage = Invoke-Recraft @('ai', 'triage', $project, '--json')
     Assert-Contains $aiTriage 'apis_by_category' 'AI triage categories'

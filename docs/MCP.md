@@ -32,6 +32,9 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 - `GET /health`：`{"status":"ok"}`，无需 token（只用于存活探测）。
 - 读取上限：请求头 64 KiB、请求体 4 MiB；`Connection: close` 简化实现（v1）。
 - 单连接串行处理，服务只会读取项目、不修改。
+- 回归覆盖：`crates/recraft-mcp` 单测覆盖 token 拒绝/initialize/tools/call/health/404；
+  `scripts/e2e.ps1` 会后台启动真实 HTTP 服务（随机端口 + token），断言 `/health`、携带
+  token 的 `initialize` 返回 `serverInfo`、无 token 请求返回 401，然后强制结束进程。
 
 客户端配置示例（Claude Desktop 风格）：
 
