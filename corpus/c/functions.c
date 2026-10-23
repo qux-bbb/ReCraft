@@ -44,6 +44,11 @@ __declspec(dllexport) int field_probe(const int* p) {
     return p != 0 ? p[4] : -1;
 }
 
+/* Array-index probe: p[i] compiles to scaled addressing [rcx+rdx*4]. */
+__declspec(dllexport) int array_probe(const int* p, int i) {
+    return p != 0 ? p[i] : -1;
+}
+
 __declspec(dllexport) int branchy(int x) {
     if (x > 10) {
         return x * 2;

@@ -1174,6 +1174,21 @@ mod tests {
     }
 
     #[test]
+    fn scaled_index_addressing_renders_array_subscript() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "array_probe").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(
+            text.contains("int32 array_probe(int32* arg1, int64 arg2)"),
+            "{text}"
+        );
+        assert!(text.contains("arg1["), "{text}");
+        assert!(!text.contains("*(u32*)((arg1 +"), "{text}");
+    }
+
+    #[test]
     fn output_is_deterministic() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

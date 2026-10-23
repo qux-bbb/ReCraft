@@ -87,6 +87,17 @@ impl ArgNames {
         self.types.get(&reg).is_some_and(|ty| ty.is_pointer())
     }
 
+    /// Element size in bytes for a pointer-typed argument (`None` for `void*`/scalars).
+    pub fn pointer_elem_size(&self, reg: Reg) -> Option<u64> {
+        self.types.get(&reg).and_then(|ty| match ty {
+            ArgType::CharPtr => Some(1),
+            ArgType::WCharPtr => Some(2),
+            ArgType::Int32Ptr => Some(4),
+            ArgType::Int64Ptr => Some(8),
+            _ => None,
+        })
+    }
+
     /// Calling-convention slot (0-based) of a register argument: `argN` -> `N - 1`.
     pub fn slot_of(&self, reg: Reg) -> Option<u8> {
         X64_ARG_REGS
@@ -388,7 +399,9 @@ fn infer_pointer_types(
         if insn.is_invalid() {
             break;
         }
-        if insn.has_memory_operand() && insn.memory_index() == iced_x86::Register::None {
+        if insn.has_memory_operand() {
+            // Indexed (base + index*scale) accesses are pointer evidence too: the base
+            // register still points at the array/data the element is loaded from.
             let base = insn.memory_base();
             if let Some(view) = recraft_ir::from_iced(base)
                 && names.contains_key(&view.base)

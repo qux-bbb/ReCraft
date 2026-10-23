@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Array-subscript rendering: scaled addressing through pointer-typed arguments
+  (`[rcx+rax*4]`, `[rcx+rax<<2]`, byte offsets on `char*`) prints as `arg1[index]`
+  instead of raw pointer arithmetic; pointer inference now also learns element width
+  from indexed accesses. New corpus probe `array_probe` (`p[i]` on `const int*`), new
+  L2 test, golden snapshot (28 functions), metrics (89.3% structured, 96.5% coverage)
+  and docs updated.
+
 - Prototype declarations are now parsed and drive the decompiler signature: return
   type, `__cdecl`/`__stdcall`, parameter types (`int32`/`int64`/`char*`/`wchar_t*`/
   `int32*`/`int64*`/`void*`) and parameter names replace the inferred values on x64

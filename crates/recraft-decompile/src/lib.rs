@@ -455,6 +455,61 @@ impl Printer<'_> {
         Some(format!("{name}->{field}"))
     }
 
+    /// `argN[index]` for `base + index*scale` addressing through a typed pointer.
+    fn array_access(&self, expr: ExprId) -> Option<String> {
+        let Expr::Bin { op, lhs, rhs } = &self.exprs[expr as usize] else {
+            return None;
+        };
+        if *op != BinOp::Add {
+            return None;
+        }
+        let (lhs, rhs) = (*lhs, *rhs);
+        let view = match &self.exprs[lhs as usize] {
+            Expr::Reg(view) => *view,
+            _ => return None,
+        };
+        if self.written.contains(&view.base) {
+            return None;
+        }
+        let args = self.args?;
+        let size = args.pointer_elem_size(view.base)?;
+        let index = self.index_expr(rhs, size)?;
+        let name = args.name_for(view.base)?;
+        Some(format!("{name}[{index}]"))
+    }
+
+    /// Render the index of a scaled access (`idx * size`, `idx << log2(size)`); unscaled
+    /// indices are only plausible for byte-sized pointers.
+    fn index_expr(&self, expr: ExprId, size: u64) -> Option<String> {
+        match &self.exprs[expr as usize] {
+            Expr::Const(_) => None,
+            Expr::Bin { op, lhs, rhs } if *op == BinOp::Mul => {
+                if let Expr::Const(value) = &self.exprs[*lhs as usize]
+                    && *value == size
+                {
+                    return Some(self.expr(*rhs));
+                }
+                if let Expr::Const(value) = &self.exprs[*rhs as usize]
+                    && *value == size
+                {
+                    return Some(self.expr(*lhs));
+                }
+                None
+            }
+            Expr::Bin { op, lhs, rhs } if *op == BinOp::Shl => {
+                if let Expr::Const(value) = &self.exprs[*rhs as usize]
+                    && *value >= 1
+                    && (1u64 << (*value as u32).min(63)) == size
+                {
+                    return Some(self.expr(*lhs));
+                }
+                None
+            }
+            _ if size == 1 => Some(self.expr(expr)),
+            _ => None,
+        }
+    }
+
     fn stmt(&self, stmt: &Stmt) -> String {
         match stmt {
             Stmt::WriteReg { reg, value } => {
@@ -469,6 +524,8 @@ impl Printer<'_> {
                     && (base == Reg::Rsp || offset < 0)
                 {
                     format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                } else if let Some(index) = self.array_access(*addr) {
+                    format!("{index} = {}", self.expr(*value))
                 } else if let Some(field) = self.field_access(*addr) {
                     format!("{field} = {}", self.expr(*value))
                 } else {
@@ -485,6 +542,8 @@ impl Printer<'_> {
                     && (base == Reg::Rsp || offset < 0)
                 {
                     format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                } else if let Some(index) = self.array_access(*addr) {
+                    format!("{index} = {}", self.expr(*value))
                 } else if let Some(field) = self.field_access(*addr) {
                     format!("{field} = {}", self.expr(*value))
                 } else {
@@ -522,6 +581,8 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     name
+                } else if let Some(index) = self.array_access(*addr) {
+                    index
                 } else if let Some(field) = self.field_access(*addr) {
                     field
                 } else {
@@ -529,7 +590,9 @@ impl Printer<'_> {
                 }
             }
             Expr::LoadFloat { addr, size } => {
-                if let Some(field) = self.field_access(*addr) {
+                if let Some(index) = self.array_access(*addr) {
+                    index
+                } else if let Some(field) = self.field_access(*addr) {
                     field
                 } else {
                     format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))
