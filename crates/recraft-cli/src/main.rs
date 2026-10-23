@@ -200,6 +200,9 @@ enum Commands {
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
         project: PathBuf,
+        /// When `project` is a PE file, create/overwrite this project and analyze it.
+        #[arg(long)]
+        out: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -451,21 +454,39 @@ fn run(cli: Cli) -> Result<()> {
             addr,
             count,
             json,
-        } => cmd_disasm(&project, addr.as_deref(), count, json),
-        Commands::Funcs { project, json } => cmd_funcs(&project, json),
-        Commands::Analyze { project, json } => cmd_analyze(&project, json),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_disasm(&materialized.path, addr.as_deref(), count, json)
+        }
+        Commands::Funcs { project, json } => {
+            let materialized = materialize_project(&project)?;
+            cmd_funcs(&materialized.path, json)
+        }
+        Commands::Analyze { project, out, json } => cmd_analyze(&project, out.as_deref(), json),
         Commands::Metrics {
             project,
             json,
             max_functions,
             min_structured,
             min_coverage,
-        } => cmd_metrics(&project, json, max_functions, min_structured, min_coverage),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_metrics(
+                &materialized.path,
+                json,
+                max_functions,
+                min_structured,
+                min_coverage,
+            )
+        }
         Commands::Golden {
             project,
             dir,
             check,
-        } => cmd_golden(&project, dir.as_deref(), check),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_golden(&materialized.path, dir.as_deref(), check)
+        }
         Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
             match demangle(&name) {
@@ -478,32 +499,56 @@ fn run(cli: Cli) -> Result<()> {
             project,
             max_text,
             json,
-        } => cmd_strings(&project, max_text, json),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_strings(&materialized.path, max_text, json)
+        }
         Commands::Search {
             project,
             bytes,
             string,
             limit,
             json,
-        } => cmd_search(&project, bytes.as_deref(), string.as_deref(), limit, json),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_search(
+                &materialized.path,
+                bytes.as_deref(),
+                string.as_deref(),
+                limit,
+                json,
+            )
+        }
         Commands::Callgraph {
             project,
             addr,
             limit,
             json,
-        } => cmd_callgraph(&project, addr.as_deref(), limit, json),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_callgraph(&materialized.path, addr.as_deref(), limit, json)
+        }
         Commands::Xrefs {
             project,
             addr,
             direction,
             json,
-        } => cmd_xrefs(&project, &addr, direction, json),
-        Commands::Imports { project, json } => cmd_imports(&project, json),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_xrefs(&materialized.path, &addr, direction, json)
+        }
+        Commands::Imports { project, json } => {
+            let materialized = materialize_project(&project)?;
+            cmd_imports(&materialized.path, json)
+        }
         Commands::Cfg {
             project,
             addr,
             json,
-        } => cmd_cfg(&project, addr.as_deref(), json),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_cfg(&materialized.path, addr.as_deref(), json)
+        }
         Commands::Decompile {
             project,
             addr,
@@ -512,15 +557,18 @@ fn run(cli: Cli) -> Result<()> {
             addresses,
             structured,
             l2,
-        } => cmd_decompile(
-            &project,
-            addr.as_deref(),
-            max_insns,
-            json,
-            addresses,
-            structured,
-            l2,
-        ),
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_decompile(
+                &materialized.path,
+                addr.as_deref(),
+                max_insns,
+                json,
+                addresses,
+                structured,
+                l2,
+            )
+        }
         Commands::Rename {
             project,
             addr,
@@ -572,6 +620,84 @@ fn json_result(value: &Value) -> Result<()> {
             .map_err(|error| Error::internal(format!("serialize JSON: {error}")))?
     );
     Ok(())
+}
+
+fn is_project_file(path: &Path) -> bool {
+    let mut magic = [0u8; 16];
+    use std::io::Read;
+    match std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut magic)) {
+        Ok(()) => magic.starts_with(b"SQLite format 3\0"),
+        Err(_) => false,
+    }
+}
+
+/// Create a project from a PE file and run the full analysis pass (functions, xrefs,
+/// strings) — the one-shot form used by `analyze <pe> --out`.
+fn import_and_analyze_pe(pe: &Path, out: &Path) -> Result<()> {
+    let bytes = std::fs::read(pe)
+        .map_err(|error| Error::internal(format!("cannot read {}: {error}", pe.display())))?;
+    let mut session = Session::create(out, &bytes, &mut |_, _| {}, &|| false)?;
+    let result = analyze(&mut session)?;
+    persist(&mut session, &result)?;
+    let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
+    recraft_analysis::persist_strings(&mut session, &strings)?;
+    Ok(())
+}
+
+/// A project path, plus the temporary directory backing an auto-created project when the
+/// user pointed the command at a PE file instead of an existing `.rcraft` project.
+struct MaterializedProject {
+    path: PathBuf,
+    _temp: Option<tempfile::TempDir>,
+}
+
+/// DESIGN §10 lets read-only commands take a PE file directly. When the argument is not
+/// an existing SQLite project but is a valid PE, import + analyze it into a temporary
+/// project (strings included) so every read command works without a manual `import`.
+fn materialize_project(input: &Path) -> Result<MaterializedProject> {
+    if !input.is_file() {
+        return Ok(MaterializedProject {
+            path: input.to_path_buf(),
+            _temp: None,
+        });
+    }
+    let mut magic = [0u8; 16];
+    let is_sqlite = {
+        use std::io::Read;
+        match std::fs::File::open(input).and_then(|mut file| file.read_exact(&mut magic)) {
+            Ok(()) => magic.starts_with(b"SQLite format 3\0"),
+            Err(_) => false,
+        }
+    };
+    if is_sqlite {
+        return Ok(MaterializedProject {
+            path: input.to_path_buf(),
+            _temp: None,
+        });
+    }
+    let bytes = std::fs::read(input)
+        .map_err(|error| Error::internal(format!("cannot read {}: {error}", input.display())))?;
+    if recraft_format::load(&bytes).is_err() {
+        // Let the normal project-open path produce the error message.
+        return Ok(MaterializedProject {
+            path: input.to_path_buf(),
+            _temp: None,
+        });
+    }
+    let dir = tempfile::tempdir()
+        .map_err(|error| Error::internal(format!("cannot create temp project: {error}")))?;
+    let project = dir.path().join("adhoc.rcraft");
+    {
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false)?;
+        let result = analyze(&mut session)?;
+        persist(&mut session, &result)?;
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 4_000_000)?;
+        recraft_analysis::persist_strings(&mut session, &strings)?;
+    }
+    Ok(MaterializedProject {
+        path: project,
+        _temp: Some(dir),
+    })
 }
 
 fn resolve_address(session: &Session, raw: &str) -> Result<Address> {
@@ -840,7 +966,19 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
 
 // ---------------------------------------------------------------- analysis ----
 
-fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
+fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool) -> Result<()> {
+    // DESIGN §10: `analyze <file> --out project.rcraft` imports and analyses in one step.
+    let owned_project;
+    let project = if project.is_file() && !is_project_file(project) {
+        let out = out.ok_or_else(|| {
+            Error::unsupported("analyze <pe> needs --out <project.rcraft> (or import first)")
+        })?;
+        import_and_analyze_pe(project, out)?;
+        owned_project = out.to_path_buf();
+        owned_project.as_path()
+    } else {
+        project
+    };
     let mut session = Session::open(project)?;
     let started = Instant::now();
     let result = analyze(&mut session)?;

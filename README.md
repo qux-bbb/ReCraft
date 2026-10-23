@@ -101,9 +101,12 @@ Run the desktop app against a project (or drag a PE file onto its window):
 cargo run -p recraft-ui -- path\to\sample.rcraft
 ```
 
-First import a binary from the command line:
+First import a binary from the command line (read-only commands such as `strings`,
+`funcs`, `decompile`, `search` or `callgraph` also accept a PE path directly and
+auto-analyze it into a temporary project):
 
 ```powershell
+cargo run -p recraft-cli -- analyze C:\Windows\System32\notepad.exe --out notepad.rcraft
 cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
 cargo run -p recraft-cli -- disasm notepad.rcraft --count 40
 cargo run -p recraft-cli -- decompile notepad.rcraft --addr entry

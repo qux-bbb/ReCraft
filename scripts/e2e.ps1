@@ -122,6 +122,15 @@ try {
     Assert-Contains $funcs '0x' 'function list after analysis'
     $strings = Invoke-Recraft @('strings', $project)
     Assert-Contains $strings 'strings' 'string table'
+
+    Write-Host '[+] PE file directly (read-only commands + analyze --out)'
+    $directStrings = Invoke-Recraft @('strings', $PEFile)
+    Assert-Contains $directStrings 'strings' 'read-only command accepts a PE path'
+    $autoProject = Join-Path $work 'auto.rcraft'
+    $autoSummary = Invoke-Recraft @('analyze', $PEFile, '--out', $autoProject)
+    Assert-Contains $autoSummary 'functions:' 'analyze <pe> --out summary'
+    $autoFuncs = Invoke-Recraft @('funcs', $autoProject)
+    Assert-Contains $autoFuncs '0x' 'created project is usable'
     $xrefs = Invoke-Recraft @('xrefs', $project, '--addr', 'entry')
     Assert-Contains $xrefs 'xrefs at' 'xref query'
     $imports = Invoke-Recraft @('imports', $project)

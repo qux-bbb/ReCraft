@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DESIGN §10 CLI convenience: read-only commands (`strings`, `imports`, `funcs`,
+  `disasm`, `decompile`, `xrefs`, `cfg`, `metrics`, `golden`, `search`, `callgraph`)
+  now accept a PE file path directly and auto-import+analyze it into a temporary
+  project (SQLite projects are detected by their header and used as before);
+  `recraft analyze <pe> --out project.rcraft` performs the one-shot import+analysis
+  form from the design. E2E covers both paths; README documents them.
+
 - UI keyboard flow completes DESIGN §8.2: `X` now opens the cross-reference panel for the
   current instruction (side tab `Xrefs` + refreshed xref list), joining the existing
   `Space` (view switch), `N` (rename), `;` (comment), `G` (goto), `Esc` (back) and
