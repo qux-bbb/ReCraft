@@ -40,7 +40,22 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-The UI binary lands at `target/debug/recraft-ui.exe` once M0 ships.
+Run the desktop app against a project (or drag a PE file onto its window):
+
+```powershell
+cargo run -p recraft-ui -- path\to\sample.rcraft
+```
+
+First import a binary from the command line:
+
+```powershell
+cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
+cargo run -p recraft-cli -- disasm notepad.rcraft --count 40
+cargo run -p recraft-cli -- decompile notepad.rcraft --addr entry
+```
+
+The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
+during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
 
 ## Contributing
 

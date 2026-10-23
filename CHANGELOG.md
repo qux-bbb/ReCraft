@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FlowKind` classification, direct branch targets, memory-operand detection, Intel
   formatter (mnemonic/operands split for UIs) and a bounded decode cache. 10 unit tests;
   stateless throughput measured at ~46 M instructions/s.
+- `recraft-ui`: native egui 0.36 desktop shell on the **Glow** renderer (wgpu/DX12
+  crashed on Intel drivers during the spike) — virtualized disassembly Grid with
+  address/bytes/mnemonic/operands/name/comment columns, L0 pseudo-C pane with
+  click-to-jump, segment/function sidebar, goto dialog, rename/comment dialogs,
+  undo/redo, keyboard-first navigation (G/N/;/Space/Esc/Ctrl+Z), CJK font fallback and
+  English/简体中文 switching. Includes a headless egui layout test that renders the real
+  400-row grid without a window.
 - `recraft-cli`: `recraft` command line — `info` (PE inspect without a project),
   `import`, `disasm`, `decompile`, `funcs`, `rename`/`unname`, `comment`/`uncomment`,
   `mark`, `undo`, `redo`, with `--json` output and symbol/`entry` address resolution.
