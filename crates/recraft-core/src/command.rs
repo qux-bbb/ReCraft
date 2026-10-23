@@ -15,10 +15,12 @@ use crate::flags::{CodeData, Flags, FlagsStore};
 use crate::segments::Segment;
 use crate::session::Session;
 
-/// Name records created by the loader (entry point, exports, ...) — not user edits.
+/// Name records created by the loader (entry point, exports, imports, ...) — not user edits.
 pub const NAME_KIND_LOADER: i64 = 0;
 /// Name records created by the user through [`Command::Rename`].
 pub const NAME_KIND_USER: i64 = 1;
+/// Name records produced by automatic analysis (e.g. `sub_140001000`); derived data.
+pub const NAME_KIND_AUTO: i64 = 2;
 
 /// Which comment slot to address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

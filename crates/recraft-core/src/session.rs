@@ -18,12 +18,14 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use recraft_common::{Address, AddressRange, Error, Result};
-use recraft_decode::{DecodeCache, Formatter, Insn, Mode, decode};
+use recraft_decode::{DecodeCache, FlowKind, Formatter, Insn, Mode, decode};
 use recraft_format::PeImage;
 use recraft_storage::Project;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::command::{self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_LOADER};
+use crate::command::{
+    self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER,
+};
 use crate::flags::{Flags, FlagsStore};
 use crate::segments::{self, Segment};
 use crate::view::{DisasmLine, FunctionInfo, StringEntry, XrefEntry};
@@ -419,6 +421,75 @@ impl Session {
         Ok(())
     }
 
+    /// Replace analysis-produced names (`sub_...`). Loader and user names win.
+    pub fn replace_auto_names(&mut self, names: &[(Address, String)]) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute("DELETE FROM name WHERE kind = ?1", [NAME_KIND_AUTO])
+            .map_err(command::db_err)?;
+        for (addr, text) in names {
+            tx.execute(
+                "INSERT OR IGNORE INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)",
+                params![addr.get() as i64, text, NAME_KIND_AUTO],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// Replace API tags produced by analysis.
+    pub fn replace_auto_api_tags(&mut self, tags: &[(Address, String, String)]) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute("DELETE FROM api_tag", [])
+            .map_err(command::db_err)?;
+        for (addr, rule_id, category) in tags {
+            tx.execute(
+                "INSERT OR IGNORE INTO api_tag(addr, rule_id, category) VALUES (?1, ?2, ?3)",
+                params![addr.get() as i64, rule_id, category],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// API tags attached to one address (call sites referencing an import).
+    pub fn api_tags_at(&self, addr: Address) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare("SELECT rule_id, category FROM api_tag WHERE addr = ?1")
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([addr.get() as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
+    /// Number of analysis-produced names currently stored.
+    pub fn auto_name_count(&self) -> Result<u64> {
+        let count: i64 = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM name WHERE kind = ?1",
+                [NAME_KIND_AUTO],
+                |row| row.get(0),
+            )
+            .map_err(command::db_err)?;
+        Ok(count as u64)
+    }
+
     /// Replace all extracted strings (analysis output).
     pub fn replace_auto_strings(&mut self, strings: &[(Address, u32, i64, i64)]) -> Result<()> {
         let tx = self
@@ -641,10 +712,25 @@ impl Session {
             if read == 0 {
                 break;
             }
-            let (mnemonic, operands) = {
+            let (mnemonic, mut operands) = {
                 let (mnemonic, operands) = formatter.format_parts(&insn);
                 (mnemonic.to_owned(), operands.to_owned())
             };
+            // Resolve names for direct memory operands (IAT slots, globals) and direct
+            // call/jump targets (auto `sub_...`, exports) so disassembly is readable.
+            let referenced = if insn.memory_is_direct() {
+                Some(Address::new(insn.memory_displacement64()))
+            } else if matches!(insn.flow(), FlowKind::Call | FlowKind::UnconditionalBranch) {
+                insn.branch_target()
+            } else {
+                None
+            };
+            if let Some(target) = referenced
+                && let Some(target_name) = self.name_at(target)?
+            {
+                operands.push_str("  ; ");
+                operands.push_str(&target_name);
+            }
             let name = self.name_at(addr)?;
             let comment = self.comment_at(addr, CommentKind::Regular)?;
             let flags = self.flags_at(addr)?;
@@ -726,6 +812,26 @@ fn install_initial_names(conn: &Connection, image: &PeImage) -> Result<()> {
         statement
             .execute(params![va as i64, name, NAME_KIND_LOADER])
             .map_err(command::db_err)?;
+    }
+    // Name IAT slots `MODULE.dll!Api` so disassembly and xrefs resolve imports.
+    for module in &image.imports {
+        for function in &module.functions {
+            if function.iat_va.get() == 0 {
+                continue;
+            }
+            let text = match (&function.name, function.ordinal) {
+                (Some(name), _) if !name.is_empty() => format!("{}!{name}", module.name),
+                (_, Some(ordinal)) => format!("{}!#{ordinal}", module.name),
+                _ => continue,
+            };
+            statement
+                .execute(params![
+                    function.iat_va.get() as i64,
+                    text,
+                    NAME_KIND_LOADER
+                ])
+                .map_err(command::db_err)?;
+        }
     }
     Ok(())
 }

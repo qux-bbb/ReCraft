@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 import naming + API tagging: IAT slots are named `MODULE.dll!Api` at load time,
+  disassembly annotates direct memory operands and call targets with resolved names
+  (`jmp qword ptr [IAT] ; COMCTL32.dll!#413`), and analysis writes `sub_<hex>` names for
+  unnamed functions (auto kind, never overriding loader/user names). Ordered substring
+  rules categorize imports (network/file/registry/process/thread/crypto/service/
+  anti-analysis/ui/memory) into derived `api_tag` rows. New `recraft imports` command
+  lists 340 imported APIs for `notepad.exe` with categories and reference counts; analyze
+  emits 422 API tags and 442 auto names in 37 ms.
+
 - M1 strings + xrefs: ASCII/UTF-16LE string extraction (chunked, cross-chunk run
   continuation, ASCII-tail false-positive guard) and xref building for direct calls,
   branches and data references (absolute / RIP-relative). Persisted as derived data into

@@ -107,6 +107,12 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// List imported APIs with categories and reference counts.
+    Imports {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// List defined functions.
     Funcs {
         project: PathBuf,
@@ -213,6 +219,7 @@ fn run(cli: Cli) -> Result<()> {
             direction,
             json,
         } => cmd_xrefs(&project, &addr, direction, json),
+        Commands::Imports { project, json } => cmd_imports(&project, json),
         Commands::Decompile {
             project,
             addr,
@@ -530,15 +537,18 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
     let xref_count = result.calls.len() + result.jumps.len() + result.data_refs.len();
+    let auto_names = session.auto_name_count()?;
     if as_json {
         return json_result(&json!({
             "functions": result.functions.len(),
+            "auto_names": auto_names,
             "instructions": result.instructions,
             "seeds": result.seeds,
             "discovered_by_call": result.discovered_by_call,
             "call_edges": result.calls.len(),
             "jump_edges": result.jumps.len(),
             "data_refs": result.data_refs.len(),
+            "api_tags": result.api_refs.len(),
             "xrefs": xref_count,
             "strings": strings.len(),
             "elapsed_ms": elapsed_ms,
@@ -579,9 +589,66 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
     println!("direct call edges:    {}", result.calls.len());
     println!("branch edges:         {}", result.jumps.len());
     println!("data references:      {}", result.data_refs.len());
+    println!("api tags:             {}", result.api_refs.len());
+    println!("auto names:           {auto_names}");
     println!("strings:              {}", strings.len());
     println!("elapsed:              {elapsed_ms:.1} ms");
     println!("saved to project:     {}", project.display());
+    Ok(())
+}
+
+fn cmd_imports(project: &Path, as_json: bool) -> Result<()> {
+    let session = Session::open(project)?;
+    let image = session.image().clone();
+    let mut rows: Vec<(String, String, &'static str, u64, Address)> = Vec::new();
+    for module in &image.imports {
+        for function in &module.functions {
+            let api = match (&function.name, function.ordinal) {
+                (Some(name), _) if !name.is_empty() => name.clone(),
+                (_, Some(ordinal)) => format!("#{ordinal}"),
+                _ => continue,
+            };
+            let category = recraft_analysis::categorize(&api);
+            let refs = if function.iat_va.get() != 0 {
+                session.xrefs_to(function.iat_va)?.len() as u64
+            } else {
+                0
+            };
+            rows.push((module.name.clone(), api, category, refs, function.iat_va));
+        }
+    }
+    rows.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+
+    if as_json {
+        let values: Vec<Value> = rows
+            .iter()
+            .map(|(module, api, category, refs, iat)| {
+                json!({
+                    "module": module,
+                    "api": api,
+                    "category": category,
+                    "refs": refs,
+                    "iat": format!("{:#x}", iat.get()),
+                })
+            })
+            .collect();
+        return json_result(&Value::Array(values));
+    }
+
+    println!("{} imported APIs", rows.len());
+    let mut roles = std::collections::BTreeMap::new();
+    for (_, _, category, _, _) in &rows {
+        *roles.entry(*category).or_insert(0usize) += 1;
+    }
+    for (category, count) in &roles {
+        println!("  {category:<15} {count}");
+    }
+    for (module, api, category, refs, iat) in &rows {
+        println!(
+            "  {:#012x} {module:<20} {api:<32} {category:<15} refs {refs}",
+            iat.get()
+        );
+    }
     Ok(())
 }
 

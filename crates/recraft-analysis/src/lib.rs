@@ -15,14 +15,16 @@
 
 #![forbid(unsafe_code)]
 
+mod api;
 mod strings;
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use recraft_common::{Address, Result};
 use recraft_core::Session;
 use recraft_decode::FlowKind;
 
+pub use api::categorize;
 pub use strings::{
     ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, extract_strings,
     persist_strings,
@@ -63,6 +65,8 @@ pub struct AnalysisResult {
     pub jumps: Vec<(Address, Address)>,
     /// Data references (absolute / RIP-relative memory operands into the image).
     pub data_refs: Vec<(Address, Address)>,
+    /// API tags: (instruction address, qualified import name, category).
+    pub api_refs: Vec<(Address, String, String)>,
     pub instructions: u64,
     pub seeds: u64,
     pub discovered_by_call: u64,
@@ -79,6 +83,7 @@ struct ScanOutput {
     calls: Vec<(Address, Address)>,
     jumps: Vec<(Address, Address)>,
     data_refs: Vec<(Address, Address)>,
+    api_refs: Vec<(Address, String, String)>,
     leaving: Vec<Address>,
 }
 
@@ -141,9 +146,30 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
 
     let initial_seeds = known.len() as u64;
 
+    // Imported APIs by IAT slot: address -> (qualified name, category).
+    let mut iat: HashMap<u64, (String, String)> = HashMap::new();
+    for module in &image.imports {
+        for function in &module.functions {
+            if function.iat_va.get() == 0 {
+                continue;
+            }
+            let api = match (&function.name, function.ordinal) {
+                (Some(name), _) if !name.is_empty() => name.clone(),
+                (_, Some(ordinal)) => format!("#{ordinal}"),
+                _ => continue,
+            };
+            let qualified = format!("{}!{api}", module.name);
+            iat.insert(
+                function.iat_va.get(),
+                (qualified, categorize(&api).to_owned()),
+            );
+        }
+    }
+
     let mut calls: Vec<(Address, Address)> = Vec::new();
     let mut jumps: Vec<(Address, Address)> = Vec::new();
     let mut data_refs: Vec<(Address, Address)> = Vec::new();
+    let mut api_refs: Vec<(Address, String, String)> = Vec::new();
     let mut instruction_total: u64 = 0;
     let mut discovered_by_call: u64 = 0;
 
@@ -159,11 +185,19 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
             record.scanned = true;
         }
 
-        let output = scan_function(session, start, limit, &segments, &mut instruction_total)?;
+        let output = scan_function(
+            session,
+            start,
+            limit,
+            &segments,
+            &iat,
+            &mut instruction_total,
+        )?;
 
         calls.extend(output.calls);
         jumps.extend(output.jumps);
         data_refs.extend(output.data_refs);
+        api_refs.extend(output.api_refs);
 
         if let Some(record) = known.get_mut(&start.get())
             && record.end.is_none()
@@ -228,6 +262,7 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
         calls,
         jumps,
         data_refs,
+        api_refs,
         instructions: instruction_total,
         seeds: initial_seeds,
         discovered_by_call,
@@ -294,6 +329,7 @@ fn scan_function(
     start: Address,
     limit: Option<Address>,
     segments: &[recraft_core::Segment],
+    iat: &HashMap<u64, (String, String)>,
     instruction_total: &mut u64,
 ) -> Result<ScanOutput> {
     let mut visited: BTreeSet<u64> = BTreeSet::new();
@@ -302,6 +338,7 @@ fn scan_function(
     let mut calls = Vec::new();
     let mut jumps = Vec::new();
     let mut data_refs = Vec::new();
+    let mut api_refs = Vec::new();
     let mut leaving: BTreeSet<u64> = BTreeSet::new();
     let mut local_instructions = 0usize;
 
@@ -333,6 +370,9 @@ fn scan_function(
             let target = Address::new(insn.memory_displacement64());
             if target.get() != 0 && is_mapped(segments, target) {
                 data_refs.push((addr, target));
+            }
+            if let Some((qualified, category)) = iat.get(&target.get()) {
+                api_refs.push((addr, qualified.clone(), category.clone()));
             }
         }
 
@@ -384,6 +424,7 @@ fn scan_function(
         calls,
         jumps,
         data_refs,
+        api_refs,
         leaving: leaving.into_iter().map(Address::new).collect(),
     })
 }
@@ -395,7 +436,8 @@ fn is_inside(limit: Option<Address>, start: Address, target: Address) -> bool {
     }
 }
 
-/// Persist discovered functions and xrefs into the session (derived data).
+/// Persist discovered functions, names, xrefs and API tags into the session
+/// (all derived data).
 pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
     let ranges: Vec<(Address, Address)> = result
         .functions
@@ -403,6 +445,15 @@ pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
         .map(|function| (function.start, function.end))
         .collect();
     session.replace_auto_functions(&ranges)?;
+
+    // Give every unnamed function an IDA-style `sub_...` label. Loader/user names win
+    // because insertion uses INSERT OR IGNORE.
+    let names: Vec<(Address, String)> = result
+        .functions
+        .iter()
+        .map(|function| (function.start, format!("sub_{:x}", function.start.get())))
+        .collect();
+    session.replace_auto_names(&names)?;
 
     let mut xrefs: Vec<(Address, Address, i64)> =
         Vec::with_capacity(result.calls.len() + result.jumps.len() + result.data_refs.len());
@@ -424,7 +475,8 @@ pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
             .iter()
             .map(|(from, to)| (*from, *to, XREF_DATA)),
     );
-    session.replace_auto_xrefs(&xrefs)
+    session.replace_auto_xrefs(&xrefs)?;
+    session.replace_auto_api_tags(&result.api_refs)
 }
 
 #[cfg(test)]
@@ -522,6 +574,49 @@ mod tests {
         assert!(
             !result.data_refs.is_empty(),
             "expected data references, got none"
+        );
+    }
+
+    #[test]
+    fn notepad_api_tags_and_auto_names() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("notepad-analyze.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+
+        assert!(
+            result.api_refs.len() > 20,
+            "only {} API references",
+            result.api_refs.len()
+        );
+        let categories: BTreeSet<&str> = result
+            .api_refs
+            .iter()
+            .map(|(_, _, category)| category.as_str())
+            .collect();
+        assert!(
+            categories.contains("file")
+                || categories.contains("process")
+                || categories.contains("ui"),
+            "unexpected categories: {categories:?}"
+        );
+
+        persist(&mut session, &result).unwrap();
+        assert!(
+            session.auto_name_count().unwrap() > 100,
+            "auto names were not persisted"
+        );
+
+        let (site, rule, category) = &result.api_refs[0];
+        let tags = session.api_tags_at(*site).unwrap();
+        assert!(
+            tags.iter()
+                .any(|(tag_rule, tag_category)| tag_rule == rule && tag_category == category),
+            "api tag missing at {:#x}",
+            site.get()
         );
     }
 }

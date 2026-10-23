@@ -14,7 +14,9 @@ mod segments;
 mod session;
 mod view;
 
-pub use command::{Command, CommentKind, Effect, JournalRecord, NAME_KIND_LOADER, NAME_KIND_USER};
+pub use command::{
+    Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER, NAME_KIND_USER,
+};
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
 pub use segments::{Perm, Segment, SegmentKind};
 pub use session::{FUNC_FLAG_AUTO, Session};

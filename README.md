@@ -60,6 +60,7 @@ cargo run -p recraft-cli -- decompile notepad.rcraft --addr entry
 cargo run -p recraft-cli -- analyze notepad.rcraft
 cargo run -p recraft-cli -- strings notepad.rcraft
 cargo run -p recraft-cli -- xrefs notepad.rcraft --addr entry
+cargo run -p recraft-cli -- imports notepad.rcraft
 cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
 ```
 
