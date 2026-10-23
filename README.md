@@ -1,7 +1,10 @@
 # ReCraft
 
-> **Status: pre-alpha.** Design v0.1 is approved; M0 (walking skeleton) is in progress.
-> Nothing is usable yet — watch this space.
+> **Status: M0 complete (walking skeleton).** You can import a PE, browse the disassembly
+> and L0 pseudo-C, rename/comment with undo/redo, and reopen projects — from both the CLI and
+> the native UI. Automatic analysis (functions, xrefs, strings) and MCP/AI land in M1.
+>
+> See [`docs/M0-REPORT.md`](docs/M0-REPORT.md) for metrics and known limitations.
 
 ReCraft is an AI-native reverse-engineering platform: a native desktop disassembler and
 decompiler for Windows binaries, with an MCP server and LLM assistance built in from day one.

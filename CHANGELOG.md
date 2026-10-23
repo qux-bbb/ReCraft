@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M0 complete: end-to-end acceptance (`scripts/e2e.ps1`) covering import → info/disasm →
+  rename + CJK comment → L0 decompile → undo/redo → JSON → code/data marks, plus an
+  optional 1 GiB overlay smoke (4.44 s import). Wired into CI.
+- `docs/M0-REPORT.md`: delivered capabilities, measured metrics, known limitations and
+  the M1 plan. README now marks M0 complete.
 - Project design document v0.1 (`docs/DESIGN.md`).
 - Cargo workspace skeleton with the planned crate graph.
 - `recraft-common`: addresses, ranges, ids and the shared error type.

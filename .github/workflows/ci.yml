@@ -24,6 +24,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
         run: cargo test --workspace
+      - name: build binaries
+        run: cargo build --workspace
+      - name: end-to-end CLI smoke
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/e2e.ps1
 
   licenses:
     name: license / ban / source policy
