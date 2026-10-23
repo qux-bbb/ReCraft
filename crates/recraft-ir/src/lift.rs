@@ -763,7 +763,17 @@ impl Lifter {
 
 /// Only equality/zero-ish predicates survive non-arithmetic flag producers.
 fn uses_zero_only(kind: CondKind) -> bool {
-    matches!(kind, CondKind::Eq | CondKind::Ne)
+    // `test a, b` sets SF/ZF from `a & b`, clears OF and CF. Equality is exact, and
+    // signed comparisons are valid too because OF=0: jle means `(a&b) <= 0`, etc.
+    matches!(
+        kind,
+        CondKind::Eq
+            | CondKind::Ne
+            | CondKind::SignedGt
+            | CondKind::SignedGe
+            | CondKind::SignedLt
+            | CondKind::SignedLe
+    )
 }
 
 fn condition_of(mnemonic: iced_x86::Mnemonic) -> Option<CondKind> {
@@ -874,6 +884,33 @@ fn lift_one(bytes: &[u8], ip: u64) -> (Lifter, LiftedInsn) {
 mod tests {
     use super::*;
     use recraft_common::Address;
+
+    #[test]
+    fn test_flags_support_signed_conditional_jumps() {
+        // test ecx, ecx ; jle rel8
+        let test = recraft_decode::decode(
+            &[0x85, 0xc9],
+            Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("test decoded");
+        let jle = recraft_decode::decode(
+            &[0x7e, 0x05],
+            Address::new(0x1002),
+            recraft_decode::Mode::X64,
+        )
+        .expect("jle decoded");
+        let mut lifter = Lifter::new();
+        lifter.lift(&test);
+        let item = lifter.lift(&jle);
+        match item.flow {
+            Flow::CondGoto { cond, .. } => match lifter.expr(cond) {
+                Expr::Cmp { kind, .. } => assert_eq!(*kind, CondKind::SignedLe),
+                other => panic!("expected signed comparison, got {other:?}"),
+            },
+            other => panic!("expected a conditional branch, got {other:?}"),
+        }
+    }
 
     #[test]
     fn mov_reg_reg() {

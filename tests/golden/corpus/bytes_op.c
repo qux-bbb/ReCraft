@@ -6,37 +6,38 @@ void bytes_op_l1(void) {
     r10 = rcx;
     r9d = r8d;
     ecx = r8d;
-    __asm("if (jle short 0xADDR /* unmodelled flags */) goto 0xADDR");
-    if (!(r11d < 8)) {
-        r9 = r11;
-        xmm3 = (xmm3 ^ xmm3);
-        r9 = (r9 & 0xADDR);
-        xmm2 = (xmm2 ^ xmm2);
-        rdx = r10;
-        while (1) {
-            xmm1 = *(u32*)(rdx);
-            xmm0 = (xmm0 ^ xmm0);
-            __asm("punpcklbw xmm1, xmm0");
-            ecx = (ecx + 8);
-            __asm("punpcklwd xmm1, xmm0");
-            xmm3 = (xmm3 + xmm1);
-            xmm1 = *(u32*)((rdx + 4));
-            rdx = (rdx + 8);
-            __asm("punpcklbw xmm1, xmm0");
-            rax = rdx;
-            __asm("punpcklwd xmm1, xmm0");
-            rax = (rax - r10);
-            xmm2 = (xmm2 + xmm1);
-            if ((rax >= r9 /* signed */)) break;
+    if (!((edx & edx) <= 0 /* signed */)) {
+        if (!(r11d < 8)) {
+            r9 = r11;
+            xmm3 = (xmm3 ^ xmm3);
+            r9 = (r9 & 0xADDR);
+            xmm2 = (xmm2 ^ xmm2);
+            rdx = r10;
+            while (1) {
+                xmm1 = *(u32*)(rdx);
+                xmm0 = (xmm0 ^ xmm0);
+                __asm("punpcklbw xmm1, xmm0");
+                ecx = (ecx + 8);
+                __asm("punpcklwd xmm1, xmm0");
+                xmm3 = (xmm3 + xmm1);
+                xmm1 = *(u32*)((rdx + 4));
+                rdx = (rdx + 8);
+                __asm("punpcklbw xmm1, xmm0");
+                rax = rdx;
+                __asm("punpcklwd xmm1, xmm0");
+                rax = (rax - r10);
+                xmm2 = (xmm2 + xmm1);
+                if ((rax >= r9 /* signed */)) break;
+            }
+            xmm2 = (xmm2 + xmm3);
+            xmm0 = xmm2;
+            xmm0 = (xmm0 >> 8);
+            xmm2 = (xmm2 + xmm0);
+            xmm0 = xmm2;
+            xmm0 = (xmm0 >> 4);
+            xmm2 = (xmm2 + xmm0);
+            r9d = xmm2;
         }
-        xmm2 = (xmm2 + xmm3);
-        xmm0 = xmm2;
-        xmm0 = (xmm0 >> 8);
-        xmm2 = (xmm2 + xmm0);
-        xmm0 = xmm2;
-        xmm0 = (xmm0 >> 4);
-        xmm2 = (xmm2 + xmm0);
-        r9d = xmm2;
     }
     rax = (int64*)(ecx);
     edx = r8d;
@@ -62,7 +63,6 @@ void bytes_op_l1(void) {
             if ((rax >= rbx /* signed */)) break;
         }
         rbx = *(u64*)(rsp);
-        if ((rax >= r11 /* signed */)) goto loc_ADDR;
     }
     eax = (rdx + (r8 * 1));
     eax = (eax + r9d);

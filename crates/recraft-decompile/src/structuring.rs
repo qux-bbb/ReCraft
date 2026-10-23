@@ -624,53 +624,65 @@ impl Structurer {
                     }
                     let join = self.ipdom[current];
                     if let Some(join) = join {
-                        if join >= self.blocks.len() || stop.contains(&join) || self.emitted[join] {
+                        // A join inside the enclosing region's stop set is fine: the arms
+                        // stop at it and the region ends there (early-exit chains).
+                        if join >= self.blocks.len() || self.emitted[join] {
                             self.emit_raw_flow(lines, current, level);
                             return;
                         }
-                        let then_empty = taken == join;
-                        let else_empty = not_taken == join;
                         let mut arm_stop = stop.clone();
                         arm_stop.insert(join);
-                        if then_empty {
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}if (!{condition}) {{", indent(level)),
-                            });
-                            self.emit_linear(lines, not_taken, level + 1, &arm_stop);
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}}}", indent(level)),
-                            });
-                        } else if else_empty {
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}if ({condition}) {{", indent(level)),
-                            });
-                            self.emit_linear(lines, taken, level + 1, &arm_stop);
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}}}", indent(level)),
-                            });
-                        } else {
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}if ({condition}) {{", indent(level)),
-                            });
-                            if !self.emitted[taken] {
-                                self.emit_linear(lines, taken, level + 1, &arm_stop);
+                        // Emit both arms into buffers so empty arms do not produce empty
+                        // `if` blocks (common for early-exit joins).
+                        let mut then_lines = Vec::new();
+                        if !self.emitted[taken] {
+                            self.emit_linear(&mut then_lines, taken, level + 1, &arm_stop);
+                        }
+                        let mut else_lines = Vec::new();
+                        if !self.emitted[not_taken] {
+                            self.emit_linear(&mut else_lines, not_taken, level + 1, &arm_stop);
+                        }
+                        let entry = self.blocks[current].entry;
+                        match (then_lines.is_empty(), else_lines.is_empty()) {
+                            (true, true) => {}
+                            (true, false) => {
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}if (!{condition}) {{", indent(level)),
+                                });
+                                lines.extend(else_lines);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
                             }
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}}} else {{", indent(level)),
-                            });
-                            if !self.emitted[not_taken] {
-                                self.emit_linear(lines, not_taken, level + 1, &arm_stop);
+                            (false, true) => {
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}if ({condition}) {{", indent(level)),
+                                });
+                                lines.extend(then_lines);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
                             }
-                            lines.push(PseudoLine {
-                                addr: self.blocks[current].entry,
-                                text: format!("{}}}", indent(level)),
-                            });
+                            (false, false) => {
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}if ({condition}) {{", indent(level)),
+                                });
+                                lines.extend(then_lines);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}} else {{", indent(level)),
+                                });
+                                lines.extend(else_lines);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
+                            }
                         }
                         current = join;
                         continue;
@@ -1221,6 +1233,24 @@ mod tests {
         );
         assert!(text.contains("eax = a;"), "{text}");
         assert!(text.contains("(eax + b)"), "{text}");
+    }
+
+    #[test]
+    fn early_exit_chains_and_guard_then_loop_are_structured() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        for name in ["early_chain", "bytes_op"] {
+            let start = function_start(&session, name).unwrap();
+            let text = pseudocode_l1(&mut session, start).unwrap().text();
+            assert!(
+                !text.contains("goto loc_"),
+                "{name} still has a goto: {text}"
+            );
+        }
+        let start = function_start(&session, "bytes_op").unwrap();
+        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        assert!(text.contains("while (1)"), "{text}");
     }
 
     #[test]

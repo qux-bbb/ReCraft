@@ -7,7 +7,14 @@ void nested_loops_l1(void) {
     esi = (esi ^ esi);
     r11d = (r11d ^ r11d);
     ebx = ecx;
-    __asm("if (jle 0xADDR /* unmodelled flags */) goto 0xADDR");
+    if (((ecx & ecx) <= 0 /* signed */)) {
+        eax = esi;
+        rsi = *(u64*)(rsp);
+        rsp = (rsp + 8);
+        rbx = *(u64*)(rsp);
+        rsp = (rsp + 8);
+        return;
+    }
     __asm("movdqa xmm3, [0xADDR]");
     xmm4 = (xmm4 ^ xmm4);
     var_28 = rbp;
@@ -87,13 +94,6 @@ void nested_loops_l1(void) {
     xmm2 = (xmm2 + xmm0);
     eax = xmm2;
     eax = (eax + esi);
-    rsi = *(u64*)(rsp);
-    rsp = (rsp + 8);
-    rbx = *(u64*)(rsp);
-    rsp = (rsp + 8);
-    return;
-    loc_ADDR:
-    eax = esi;
     rsi = *(u64*)(rsp);
     rsp = (rsp + 8);
     rbx = *(u64*)(rsp);

@@ -49,6 +49,17 @@ __declspec(dllexport) int array_probe(const int* p, int i) {
     return p != 0 ? p[i] : -1;
 }
 
+/* Early-exit chain: multiple guarded returns converge on the epilogue. */
+__declspec(dllexport) int early_chain(int a, int b) {
+    if (a > 0) {
+        return a;
+    }
+    if (b > 0) {
+        return b;
+    }
+    return a + b;
+}
+
 __declspec(dllexport) int branchy(int x) {
     if (x > 10) {
         return x * 2;

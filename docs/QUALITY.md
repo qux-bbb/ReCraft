@@ -34,11 +34,11 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 ## 当前基线（2026-10-24，MSVC VS2022，corpus x64）
 
 ```
-functions:              28
-structured:             25 (89.3%)
-instructions:           371
-intrinsic instructions: 13 (coverage 96.5%)
-goto fallback functions: 3
+functions:              29
+structured:             27 (93.1%)
+instructions:           379
+intrinsic instructions: 11 (coverage 97.1%)
+goto fallback functions: 2
 ```
 
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
@@ -48,8 +48,9 @@ goto fallback functions: 3
 **间接跳转**（`jmp rcx/rax/r9`）和 **SSE 比较后的未建模标志分支**——语义不可用标量
 表达式直译，保留 `__asm` 是设计允许的降级路径。
 
-真实样本 notepad：443 函数、覆盖率 90.8%、结构化 49.2%（体积小、CRT 紧凑函数多，
-回退分支多）；不作为门禁，仅作为观察指标。
+真实样本 notepad（重新分析后 502 个函数）：覆盖率 84.9%、结构化 **62.4%**（313/502；
+此前旧分析状态为 443 函数 / 49.2%，本轮结构器修复后显著提升，但仍低于 corpus）；
+不作为门禁，仅作为观察指标。
 
 ## golden 快照
 

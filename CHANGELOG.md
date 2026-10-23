@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Structurer quality: `test`/`cmp`-based signed conditional jumps (`jle/jg/jl/jge` and
+  the matching `cmov`) are now modelled from the zero-only flag state, and if/else
+  packaging accepts a join that already lies in the enclosing region's stop set, so
+  multi-target early-exit chains and "guard then loop" shapes structure without `goto`;
+  empty arms no longer emit empty `if` blocks. New corpus probe `early_chain`, golden
+  snapshots regenerated (29 functions), corpus structured rate 93.1% / coverage 97.1%,
+  and the notepad observation rose from 49.2% to 62.4% structured. Tests: lift-level
+  signed-jcc, structure-level no-goto checks.
+
 - Persistent AI response cache + audit log: `ai explain --llm` now consults
   `%LOCALAPPDATA%\ReCraft\ai-cache.json` (key = template + provider + model + prompt) and
   serves repeat explanations without network I/O (`cached=yes`; `--no-cache` bypasses
