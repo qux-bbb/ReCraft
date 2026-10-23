@@ -19,12 +19,15 @@
 
 #![forbid(unsafe_code)]
 
+mod eval;
 mod provider;
 mod transport;
 
+pub use eval::{CORPUS_CASES, EVAL_VERSION, EvalCase, EvalReport, ensure_eval, evaluate_explain};
 pub use provider::{
-    AuditEntry, AuditLog, HeuristicProvider, OllamaProvider, OpenAiCompatibleProvider, PromptCache,
-    PromptRequest, Provider, ProviderKind, ProviderSettings, TokenBudget, build_explain_prompt,
+    AuditEntry, AuditLog, EXPLAIN_SYSTEM, HeuristicProvider, OllamaProvider,
+    OpenAiCompatibleProvider, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest, Provider,
+    ProviderKind, ProviderSettings, RENAME_SYSTEM, TokenBudget, build_explain_prompt,
     build_rename_prompt, provider_from_settings, redact,
 };
 pub use transport::{

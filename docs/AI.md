@@ -111,6 +111,22 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   脱敏 prompt 发送出去，并打印模型回答（`--json` 含 provider/tokens/response）；默认配置
   下会明确报 "no LLM provider configured"。
 
+## Prompt 模板与评测基座（M3）
+
+- **模板版本**：`PROMPT_TEMPLATE_VERSION = "rc-ai-2026-10-v1"`；`EXPLAIN_SYSTEM` /
+  `RENAME_SYSTEM` 是导出的模板常量，改文案需同步 bump 版本与评测期望。
+- **离线评测**（无需模型/网络）：`crates/recraft-ai/src/eval.rs`
+  - `EVAL_VERSION = "prompt-eval-2026-10-v1"`，内置 corpus 用例（`field_probe`、
+    `array_probe`、`str_probe`、`float_math`、`branchy`）；
+  - 检查点：prompt 必须包含函数证据（API/字符串/伪代码片段）、**不含裸 URL**（脱敏生效）、
+    token 估算不超过预算；
+  - 运行方式：
+    ```powershell
+    cargo test -p recraft-ai --test prompt_eval
+    recraft ai eval corpus-project.rcraft [--json]     # 5/5 passed，失败时非 0 退出
+    ```
+- 这只保证 **prompt 输入质量**；LLM 回答的准确率/命名质量仍需模型评测集（后续版本）。
+
 ## 限制与后续
 
 - **单条选择**：UI 当前一次应用一条 proposal；批量勾选/全选与 diff 预览（before/after

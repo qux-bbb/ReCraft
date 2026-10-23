@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Prompt template versioning + offline prompt-quality baseline: `PROMPT_TEMPLATE_VERSION`
+  (`rc-ai-2026-10-v1`) tags the exported system templates, and `eval.rs` defines
+  `EVAL_VERSION` (`prompt-eval-2026-10-v1`) with five corpus cases that assemble real
+  explanation prompts and assert they contain the function evidence (API/strings/
+  pseudo-code), stay redacted (no raw URLs) and fit the token budget. Runs as
+  `cargo test -p recraft-ai --test prompt_eval` and `recraft ai eval <project> [--json]`
+  (5/5 passed; non-zero on failure). Model-answer quality scoring remains future work.
+
 - HTTPS LLM transport: `UreqTransport` (ureq + rustls) serves `https://` endpoints while
   `TcpHttpTransport` keeps plain `http://` for local Ollama; `transport_for` picks by
   scheme and providers now use it. `TransportKind`/`transport_kind` are unit-tested and

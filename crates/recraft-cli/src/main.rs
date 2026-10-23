@@ -86,6 +86,12 @@ enum AiCommand {
     },
     /// Show the resolved LLM provider settings (never prints secrets).
     Provider,
+    /// Run the offline prompt-quality baseline against a corpus project.
+    Eval {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -944,7 +950,34 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             println!("{}", settings.describe());
             Ok(())
         }
+        AiCommand::Eval { project, json } => cmd_ai_eval(&project, json),
     }
+}
+
+fn cmd_ai_eval(project: &Path, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let report = recraft_ai::evaluate_explain(&mut session, recraft_ai::CORPUS_CASES)?;
+    if as_json {
+        json_result(&json!({
+            "eval": recraft_ai::EVAL_VERSION,
+            "template": recraft_ai::PROMPT_TEMPLATE_VERSION,
+            "cases": report.cases,
+            "passed": report.passed,
+            "failures": report.failures,
+        }))?;
+    } else {
+        println!(
+            "prompt eval {} (template {}): {}/{} passed",
+            recraft_ai::EVAL_VERSION,
+            recraft_ai::PROMPT_TEMPLATE_VERSION,
+            report.passed,
+            report.cases
+        );
+        for failure in &report.failures {
+            println!("  FAIL {failure}");
+        }
+    }
+    recraft_ai::ensure_eval(&report)
 }
 
 fn cmd_ai_prompt(

@@ -179,11 +179,17 @@ impl PromptRequest {
     }
 }
 
-const EXPLAIN_SYSTEM: &str = "You are ReCraft's reverse-engineering assistant. \
+/// Version of the built-in prompt templates (bump whenever wording changes; the eval
+/// baseline and audit entries reference it).
+pub const PROMPT_TEMPLATE_VERSION: &str = "rc-ai-2026-10-v1";
+
+/// System prompt for function explanation (template `explain-v1`).
+pub const EXPLAIN_SYSTEM: &str = "You are ReCraft's reverse-engineering assistant. \
 Explain what the given function does in plain language. Use only the supplied evidence \
 (API calls, strings, pseudo-code); never invent behaviour. Mention uncertainty explicitly.";
 
-const RENAME_SYSTEM: &str = "You are ReCraft's symbol-naming assistant. Propose concise \
+/// System prompt for rename proposals (template `rename-v1`).
+pub const RENAME_SYSTEM: &str = "You are ReCraft's symbol-naming assistant. Propose concise \
 snake_case names for the listed functions. Base every suggestion on the supplied API \
 calls, strings and pseudo-code, and keep the evidence addresses in your rationale.";
 
