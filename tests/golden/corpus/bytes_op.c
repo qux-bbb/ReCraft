@@ -61,6 +61,14 @@ void bytes_op_l1(void) {
             rax = (rax + 2);
         } while ((rax < rbx /* signed */));
         rbx = *(u64*)(rsp);
+        if (!(rax >= r11 /* signed */)) {
+            ecx = (uint32*)(*(u8*)((rax + (r10 * 1))));
+            r9d = (r9d + ecx);
+            eax = (rdx + (r8 * 1));
+            eax = (eax + r9d);
+            rsp = (rsp + 8);
+            return;
+        }
     }
     eax = (rdx + (r8 * 1));
     eax = (eax + r9d);

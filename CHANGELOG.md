@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Shared tail-chain duplication: when a branch targets an already-emitted straight-line
+  chain (≤24 statements ending in `return`/tail call, no loop headers or switch
+  dispatch), the structurer re-emits that chain inside the reaching arm instead of
+  printing a `goto` to code emitted earlier. notepad structured rate rises from 81.5%
+  to **84.7%** (425/502), residual `goto` lines drop from 1181 to 1088 and fallback
+  functions from 93 to 77; coverage stays 98.5% (561/37522). corpus bytes_op golden
+  snapshot now shows the duplicated early-return epilogue (semantics unchanged, reviewed);
+  corpus remains 100% structured / 97.4% coverage. docs/QUALITY, docs/M2, docs/M4 updated.
+
 - Function-range and structuring fixes for real samples: (1) analysis now clamps
   overlapping function ranges to the next known start (a merged `sub_*` range spanned
   dozens of real functions and made decompilation pick the wrong one), and (2) the

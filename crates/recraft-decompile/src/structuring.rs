@@ -1193,37 +1193,76 @@ impl Structurer {
         true
     }
 
-    /// Re-emit an already-emitted leaf block (epilogue: `return` or tail call) instead of
-    /// emitting a `goto`. Safe because the duplicated block is only reached on one of the
-    /// mutually exclusive paths; this removes most shared-epilogue `goto`s.
+    /// Re-emit an already-emitted straight-line chain that ends in `return`/tail call
+    /// instead of emitting a `goto` to it. The chain is duplicated only inside the one
+    /// branch that reaches it, so extra copies never both execute; this removes most
+    /// shared-epilogue and shared-tail `goto`s.
     fn duplicate_leaf(&mut self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) -> bool {
-        if block >= self.blocks.len() {
+        let mut chain: Vec<usize> = Vec::new();
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut current = block;
+        let mut budget = 24usize;
+        while budget > 0 {
+            if current >= self.blocks.len() || !seen.insert(current) {
+                return false;
+            }
+            if self.blocks[current].has_table || self.loop_headers.contains(&current) {
+                return false;
+            }
+            chain.push(current);
+            budget -= 1;
+            match self.blocks[current].flow {
+                Flow::Return => break,
+                Flow::Goto(_) if self.blocks[current].goto_target.is_none() => break,
+                Flow::Goto(_) => {
+                    let Some(target) = self.blocks[current].goto_target else {
+                        return false;
+                    };
+                    current = target;
+                }
+                Flow::Fallthrough => {
+                    let Some(next) = self.blocks[current].not_taken else {
+                        return false;
+                    };
+                    if next == current {
+                        return false;
+                    }
+                    current = next;
+                }
+                Flow::CondGoto { .. } => return false,
+            }
+        }
+        if budget == 0 {
             return false;
         }
-        if self.blocks[block].has_table
-            || self.loop_headers.contains(&block)
-            || self.bodies[block].statements.len() > 12
-        {
+        let Some(&last) = chain.last() else {
+            return false;
+        };
+        let ends_leaf = matches!(self.blocks[last].flow, Flow::Return)
+            || (self.blocks[last].goto_target.is_none()
+                && matches!(self.blocks[last].flow, Flow::Goto(_)));
+        if !ends_leaf {
             return false;
         }
-        match self.blocks[block].flow {
-            Flow::Return => {
-                self.emit_simple(lines, block, level);
-                lines.push(PseudoLine {
-                    addr: self.blocks[block].entry,
-                    text: format!("{}return;", indent(level)),
-                });
-                true
-            }
-            // Tail call: `goto_target` is `None` and `emit_raw_flow` prints
-            // `/* tail call -> ... */ return;`.
-            Flow::Goto(_) if self.blocks[block].goto_target.is_none() => {
-                self.emit_simple(lines, block, level);
-                self.emit_raw_flow(lines, block, level);
-                true
-            }
-            _ => false,
+        let statements: usize = chain
+            .iter()
+            .map(|index| self.bodies[*index].statements.len())
+            .sum();
+        if statements > 24 {
+            return false;
         }
+        for &index in &chain {
+            self.emit_simple(lines, index, level);
+        }
+        if matches!(self.blocks[last].flow, Flow::Return) {
+            lines.push(PseudoLine {
+                addr: self.blocks[last].entry,
+                text: format!("{}return;", indent(level)),
+            });
+        } else {
+            self.emit_raw_flow(lines, last, level);
+        }
+        true
     }
 
     fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
