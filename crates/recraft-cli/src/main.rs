@@ -984,6 +984,7 @@ fn edge_kind_name(kind: recraft_analysis::EdgeKind) -> &'static str {
         recraft_analysis::EdgeKind::Taken => "taken",
         recraft_analysis::EdgeKind::NotTaken => "not-taken",
         recraft_analysis::EdgeKind::Unconditional => "jump",
+        recraft_analysis::EdgeKind::JumpTable => "table",
     }
 }
 

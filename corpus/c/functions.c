@@ -52,6 +52,33 @@ __declspec(dllexport) int switcher(int x) {
     }
 }
 
+/* Large enough that MSVC emits a jump table instead of a comparison chain. */
+__declspec(dllexport) int switcher_big(int x) {
+    switch (x) {
+        case 0: return 100;
+        case 1: return 101;
+        case 2: return 102;
+        case 3: return 103;
+        case 4: return 104;
+        case 5: return 105;
+        case 6: return 106;
+        case 7: return 107;
+        case 8: return 108;
+        case 9: return 109;
+        case 10: return 110;
+        case 11: return 111;
+        case 12: return 112;
+        case 13: return 113;
+        case 14: return 114;
+        case 15: return 115;
+        case 16: return 116;
+        case 17: return 117;
+        case 18: return 118;
+        case 19: return 119;
+        default: return -1;
+    }
+}
+
 __declspec(dllexport) int caller(int x) {
     return add_leaf(x, branchy(x));
 }

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 jump tables: CFG recognizes absolute pointer tables (`jmp [index*scale+table]`) and
+  MSVC x64 image-relative tables (`lea base,[image_base]; mov dst32,[base+index*4+disp];
+  add dst,base; jmp dst`), validating at least two in-function targets. Table targets
+  become leaders and edges of a new `JumpTable` kind (purple in the Graph tab). Corpus
+  gains `switcher_big` (23 blocks, 20 table edges).
+
 - M1 control-flow graphs: `recraft-analysis::build_cfg` splits a function into basic
   blocks (leaders = entry, branch targets, post-branch instructions) and connects them
   with fallthrough/taken/not-taken/jump edges, tracking external tail-call branches;

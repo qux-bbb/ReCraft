@@ -783,6 +783,7 @@ impl ReCraftApp {
                 ("taken", Color32::from_rgb(0x6a, 0xb0, 0x6a)),
                 ("not taken", Color32::from_rgb(0xd0, 0x7a, 0x7a)),
                 ("jump", Color32::from_rgb(0x6a, 0x8f, 0xb5)),
+                ("jump table", Color32::from_rgb(0xb0, 0x8a, 0xd0)),
             ] {
                 ui.colored_label(color, label);
             }
@@ -815,6 +816,9 @@ impl ReCraftApp {
                             }
                             recraft_analysis::EdgeKind::Unconditional => {
                                 Color32::from_rgb(0x6a, 0x8f, 0xb5)
+                            }
+                            recraft_analysis::EdgeKind::JumpTable => {
+                                Color32::from_rgb(0xb0, 0x8a, 0xd0)
                             }
                         };
                         let bend = ((to.x - from.x).abs() * 0.4).max(40.0);

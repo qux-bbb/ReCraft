@@ -4,16 +4,18 @@
 //! Basic-block / control-flow graph construction (M1).
 //!
 //! Linear decode inside a known function range, split at branch targets and after
-//! branch terminators, then connect blocks with typed edges. Deliberately simple:
-//! no jump-table expansion yet, indirect branches terminate a block without edges.
+//! branch terminators, then connect blocks with typed edges. Jump tables (absolute
+//! pointer tables and MSVC's 32-bit image-relative tables) are expanded into edges.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iced_x86::Register;
 use recraft_common::{Address, Result};
 use recraft_core::Session;
-use recraft_decode::FlowKind;
+use recraft_decode::{FlowKind, Insn};
 
 const MAX_FUNCTION_INSTRUCTIONS: usize = 20_000;
+const MAX_TABLE_ENTRIES: usize = 256;
 
 /// One instruction inside a basic block, with rendered text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +42,7 @@ pub enum EdgeKind {
     Taken,
     NotTaken,
     Unconditional,
+    JumpTable,
 }
 
 /// Control-flow graph for one function.
@@ -57,6 +60,7 @@ struct RawInsn {
     next: Address,
     flow: FlowKind,
     target: Option<Address>,
+    insn: Insn,
 }
 
 /// Build the CFG for `[start, end)`.
@@ -76,6 +80,7 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
             next,
             flow: insn.flow(),
             target: insn.branch_target(),
+            insn,
         });
         addr = next;
     }
@@ -88,8 +93,20 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
         });
     }
 
-    // Leaders: function entry, branch targets inside the range, and the instruction
-    // after a branch (fallthrough of a conditional, or the next block).
+    // Jump tables: recognize indirect jumps fed by an indexed table load.
+    let image_base = session.image().image_base.get();
+    let mut tables: BTreeMap<u64, Vec<Address>> = BTreeMap::new();
+    for index in 0..raw.len() {
+        if raw[index].flow != FlowKind::IndirectBranch {
+            continue;
+        }
+        if let Some(targets) = detect_jump_table(session, &raw, index, start, end, image_base) {
+            tables.insert(raw[index].addr.get(), targets);
+        }
+    }
+
+    // Leaders: function entry, branch targets inside the range, the instruction after
+    // a branch, and every jump-table target.
     let mut leaders: BTreeSet<u64> = BTreeSet::new();
     leaders.insert(start.get());
     for insn in &raw {
@@ -105,6 +122,13 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
             }
             if insn.next >= start && insn.next < end {
                 leaders.insert(insn.next.get());
+            }
+        }
+    }
+    for targets in tables.values() {
+        for target in targets {
+            if *target >= start && *target < end {
+                leaders.insert(target.get());
             }
         }
     }
@@ -213,11 +237,18 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
                         }
                     }
                 }
-                FlowKind::IndirectBranch
-                | FlowKind::Return
-                | FlowKind::Interrupt
-                | FlowKind::Trap
-                | FlowKind::Invalid => {}
+                FlowKind::IndirectBranch => {
+                    if let Some(targets) = tables.get(&last.addr.get()) {
+                        for target in targets {
+                            if let Some(&index) = by_start.get(&target.get()) {
+                                edges.push((index, EdgeKind::JumpTable));
+                            } else {
+                                external.push((last.addr, *target));
+                            }
+                        }
+                    }
+                }
+                FlowKind::Return | FlowKind::Interrupt | FlowKind::Trap | FlowKind::Invalid => {}
                 _ => {
                     if let Some(&index) = by_start.get(&last.next.get()) {
                         edges.push((index, EdgeKind::Fallthrough));
@@ -247,6 +278,116 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
         blocks,
         external,
     })
+}
+
+fn detect_jump_table(
+    session: &mut Session,
+    raw: &[RawInsn],
+    jmp_index: usize,
+    start: Address,
+    end: Address,
+    image_base: u64,
+) -> Option<Vec<Address>> {
+    let jmp = raw[jmp_index].insn;
+
+    // Pattern A: `jmp qword ptr [index*scale + table]` with absolute pointers.
+    if let Some((table, _scale)) = jmp.memory_indexed_table()
+        && table != 0
+    {
+        let entry_size = if session.mode().is_64() { 8 } else { 4 };
+        if let Some(targets) = read_table(session, Address::new(table), entry_size, 0, start, end) {
+            return Some(targets);
+        }
+    }
+
+    // Pattern B: MSVC x64 image-relative table.
+    //   lea base, [image_base]
+    //   mov dst32, [base + index*4 + disp]
+    //   add dst, base
+    //   jmp dst
+    let lookback_start = jmp_index.saturating_sub(10);
+    for index in (lookback_start..jmp_index).rev() {
+        let candidate = raw[index].insn;
+        if !candidate.has_memory_operand() {
+            continue;
+        }
+        let base = candidate.memory_base();
+        if base == Register::None || base == Register::RIP {
+            continue;
+        }
+        if candidate.memory_index() == Register::None {
+            continue;
+        }
+        let scale = candidate.memory_index_scale();
+        if scale != 4 && scale != 8 {
+            continue;
+        }
+        for earlier in (jmp_index.saturating_sub(14)..index).rev() {
+            let lea = raw[earlier].insn;
+            if !lea.memory_is_direct() || lea.op_register(0) != base {
+                continue;
+            }
+            let base_value = lea.memory_displacement64();
+            if base_value != image_base {
+                continue;
+            }
+            let table = base_value.wrapping_add(candidate.memory_displacement64());
+            let (entry_size, relative_base) = if scale == 4 {
+                (4usize, base_value)
+            } else {
+                (8usize, 0u64)
+            };
+            if let Some(targets) = read_table(
+                session,
+                Address::new(table),
+                entry_size,
+                relative_base,
+                start,
+                end,
+            ) {
+                return Some(targets);
+            }
+        }
+    }
+    None
+}
+
+/// Read consecutive table entries that stay inside `[start, end)`; at least two valid
+/// entries are required so a stray indirect jump is not mistaken for a table.
+fn read_table(
+    session: &mut Session,
+    table: Address,
+    entry_size: usize,
+    relative_base: u64,
+    start: Address,
+    end: Address,
+) -> Option<Vec<Address>> {
+    let mut targets = Vec::new();
+    for index in 0..MAX_TABLE_ENTRIES {
+        let addr = Address::new(table.get() + (index * entry_size) as u64);
+        let mut buffer = [0u8; 8];
+        let read = session.read_at(addr, &mut buffer[..entry_size]).ok()?;
+        if read < entry_size {
+            break;
+        }
+        let raw_value = u64::from_le_bytes(buffer);
+        let target = if relative_base != 0 {
+            let value = if entry_size == 4 {
+                i64::from(raw_value as u32 as i32)
+            } else {
+                raw_value as i64
+            };
+            relative_base.wrapping_add_signed(value)
+        } else {
+            raw_value
+        };
+        let target = Address::new(target);
+        if target < start || target >= end {
+            break;
+        }
+        targets.push(target);
+    }
+    (targets.len() >= 2).then_some(targets)
 }
 
 /// Assign each block a layer using breadth-first distance from the entry.
@@ -355,6 +496,33 @@ mod tests {
         assert!(has_back_edge, "loop should produce a back edge");
         let layer = layers(&cfg);
         assert!(layer.iter().any(|&value| value > 0));
+    }
+
+    #[test]
+    fn switcher_big_expands_jump_table() {
+        let Some(path) = corpus_path() else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let (mut session, _dir) = open(&bytes);
+        let (start, end) = function_bounds(&mut session, "switcher_big");
+        let cfg = build_cfg(&mut session, start, end).unwrap();
+        let table_edges: usize = cfg
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .edges
+                    .iter()
+                    .filter(|(_, kind)| *kind == EdgeKind::JumpTable)
+                    .count()
+            })
+            .sum();
+        assert!(
+            table_edges >= 5,
+            "expected jump-table edges, got {table_edges} (blocks: {})",
+            cfg.blocks.len()
+        );
     }
 
     #[test]

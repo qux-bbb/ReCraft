@@ -255,6 +255,28 @@ impl Insn {
             && self.instruction.memory_index() == iced_x86::Register::None
     }
 
+    /// Indexed absolute/RIP-relative memory, i.e. `[table + index*scale]`.
+    ///
+    /// Returns `(table_address, scale)`. Used for jump-table recognition:
+    /// `jmp qword ptr [rax*8 + table]` / `[table + rcx*4]`.
+    #[inline]
+    pub fn memory_indexed_table(&self) -> Option<(u64, u32)> {
+        if !self.has_memory_operand() {
+            return None;
+        }
+        let base = self.instruction.memory_base();
+        if base != iced_x86::Register::None && base != iced_x86::Register::RIP {
+            return None;
+        }
+        if self.instruction.memory_index() == iced_x86::Register::None {
+            return None;
+        }
+        Some((
+            self.instruction.memory_displacement64(),
+            self.instruction.memory_index_scale(),
+        ))
+    }
+
     #[inline]
     pub fn memory_size(&self) -> iced_x86::MemorySize {
         self.instruction.memory_size()

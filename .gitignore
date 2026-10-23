@@ -34,3 +34,6 @@ desktop.ini
 # Local artifacts
 /artifacts/
 /dist/
+
+# Harness session state (never commit)
+/.dsh/
