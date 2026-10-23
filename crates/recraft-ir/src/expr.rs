@@ -33,6 +33,9 @@ pub enum BinOp {
     Shl,
     Shr,
     Sar,
+    /// Rotate right / left (x86 `ror`/`rol`).
+    Ror,
+    Rol,
 }
 
 impl BinOp {
@@ -48,6 +51,8 @@ impl BinOp {
             BinOp::Shl => "<<",
             BinOp::Shr => ">>",
             BinOp::Sar => ">>",
+            BinOp::Ror => "ror",
+            BinOp::Rol => "rol",
         }
     }
 

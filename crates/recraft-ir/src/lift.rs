@@ -112,7 +112,7 @@ impl Lifter {
                 self.lift_unary(insn, &mut stmts);
                 Flow::Fallthrough
             }
-            M::Shl | M::Shr | M::Sar => {
+            M::Shl | M::Shr | M::Sar | M::Ror | M::Rol => {
                 self.lift_shift(insn, &mut stmts);
                 Flow::Fallthrough
             }
@@ -509,6 +509,8 @@ impl Lifter {
         let op = match insn.mnemonic() {
             M::Shl => BinOp::Shl,
             M::Shr => BinOp::Shr,
+            M::Ror => BinOp::Ror,
+            M::Rol => BinOp::Rol,
             _ => BinOp::Sar,
         };
         let (Some(lhs), Some(rhs)) = (self.read_operand(insn, 0), self.read_operand(insn, 1))
@@ -935,15 +937,11 @@ fn float_operand_size(insn: &Insn) -> u8 {
 }
 
 fn memory_size_bytes(insn: &Insn) -> Option<u8> {
-    use iced_x86::MemorySize as S;
-    Some(match insn.memory_size() {
-        S::UInt8 | S::Int8 => 1,
-        S::UInt16 | S::Int16 => 2,
-        S::UInt32 | S::Int32 | S::Float32 => 4,
-        S::UInt64 | S::Int64 | S::Float64 => 8,
-        S::UInt128 | S::Int128 => 16,
-        _ => return None,
-    })
+    let size = insn.memory_size().size();
+    match size {
+        1 | 2 | 4 | 8 | 16 => Some(size as u8),
+        _ => None,
+    }
 }
 
 fn immediate_value(insn: &Insn, index: u32) -> Option<u64> {
@@ -1196,6 +1194,38 @@ mod tests {
             }
             other => panic!("unexpected stmt {other:?}"),
         }
+    }
+
+    #[test]
+    fn unaligned_simd_moves_are_lifted() {
+        let insn = recraft_decode::decode(
+            &[0x0f, 0x11, 0x02],
+            recraft_common::Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .unwrap();
+        eprintln!(
+            "debug: mnemonic={:?} size={:?} seg={:?} base={:?} mem_size_bytes={:?}",
+            insn.mnemonic(),
+            insn.memory_size(),
+            insn.memory_segment(),
+            insn.memory_base(),
+            memory_size_bytes(&insn)
+        );
+        // movups [rdx], xmm0
+        let (_, store) = lift_one(&[0x0f, 0x11, 0x02], 0x1000);
+        assert!(
+            matches!(store.stmts[0], Stmt::Store { size: 16, .. }),
+            "unexpected: {:?}",
+            store.stmts
+        );
+        // movups xmm0, [rdx]
+        let (_, load) = lift_one(&[0x0f, 0x10, 0x02], 0x1000);
+        assert!(
+            matches!(load.stmts[0], Stmt::WriteReg { ref reg, .. } if reg.name() == "xmm0"),
+            "unexpected: {:?}",
+            load.stmts
+        );
     }
 
     #[test]

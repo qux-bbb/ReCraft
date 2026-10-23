@@ -285,6 +285,43 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
         .position(|block| block.start == start)
         .unwrap_or(0);
 
+    // The builder sweeps the whole `[start, end)` range linearly, so gaps that are not
+    // reachable from the entry (alignment padding, jump tables, data between blocks)
+    // show up as blocks too. Drop everything unreachable and renumber so the CFG only
+    // contains real code (this also keeps metrics/pseudocode from counting `int3`).
+    let mut reachable = vec![false; blocks.len()];
+    reachable[entry] = true;
+    let mut queue = vec![entry];
+    while let Some(index) = queue.pop() {
+        for (target, _) in &blocks[index].edges {
+            if !reachable[*target] {
+                reachable[*target] = true;
+                queue.push(*target);
+            }
+        }
+    }
+    let mut remap = vec![usize::MAX; blocks.len()];
+    let mut kept: Vec<BasicBlock> = Vec::new();
+    for (old, block) in blocks.iter().enumerate() {
+        if reachable[old] {
+            remap[old] = kept.len();
+            kept.push(block.clone());
+        }
+    }
+    for block in &mut kept {
+        block.index = remap[block.index];
+        let mut edges = Vec::with_capacity(block.edges.len());
+        for (target, kind) in &block.edges {
+            let target = remap[*target];
+            if target != usize::MAX {
+                edges.push((target, *kind));
+            }
+        }
+        block.edges = edges;
+    }
+    blocks = kept;
+    let entry = remap[entry];
+
     Ok(Cfg {
         function: start,
         entry,

@@ -41,6 +41,8 @@ pub struct QualityReport {
     pub functions: Vec<FunctionQuality>,
     /// Functions beyond the requested limit (not measured).
     pub skipped: usize,
+    /// How often each intrinsic mnemonic was hit (diagnostic for coverage work).
+    pub intrinsics: std::collections::BTreeMap<String, u64>,
 }
 
 impl QualityReport {
@@ -79,6 +81,18 @@ impl QualityReport {
             1.0 - self.intrinsic_instructions() as f64 / instructions as f64
         }
     }
+
+    /// The `count` most frequent intrinsic mnemonics, most frequent first.
+    pub fn top_intrinsics(&self, count: usize) -> Vec<(String, u64)> {
+        let mut entries: Vec<(String, u64)> = self
+            .intrinsics
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect();
+        entries.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        entries.truncate(count);
+        entries
+    }
 }
 
 /// Measure structural quality and semantic coverage for up to `limit` functions.
@@ -89,33 +103,43 @@ pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
     functions.truncate(limit);
 
     let mut measured = Vec::with_capacity(functions.len());
+    let mut intrinsic_histogram: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
     for function in functions {
         let name = session.name_at(function.start)?;
         let mut lifter = Lifter::new();
         let mut instructions = 0u64;
         let mut intrinsics = 0u64;
-        let mut addr = function.start;
-        while addr < function.end {
-            let Some(insn) = session.insn_at(addr)? else {
-                break;
-            };
-            if insn.is_invalid() {
-                break;
+        // Measure only instructions that analysis actually reached (CFG blocks). A linear
+        // sweep of the function range would wrongly count alignment padding (`int3`),
+        // jump tables and unvisited gaps as code.
+        let cfg = recraft_analysis::build_cfg(session, function.start, function.end)?;
+        for block in &cfg.blocks {
+            for cfg_insn in &block.insns {
+                let Some(insn) = session.insn_at(cfg_insn.addr)? else {
+                    continue;
+                };
+                if insn.is_invalid() {
+                    continue;
+                }
+                let item = lifter.lift(&insn);
+                instructions += 1;
+                let mut hit_intrinsic = false;
+                for stmt in &item.stmts {
+                    if let Stmt::Intrinsic { text } = stmt {
+                        let mnemonic = text
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or(text.as_str())
+                            .to_owned();
+                        *intrinsic_histogram.entry(mnemonic).or_default() += 1;
+                        hit_intrinsic = true;
+                    }
+                }
+                if hit_intrinsic {
+                    intrinsics += 1;
+                }
             }
-            let item = lifter.lift(&insn);
-            instructions += 1;
-            if item
-                .stmts
-                .iter()
-                .any(|stmt| matches!(stmt, Stmt::Intrinsic { .. }))
-            {
-                intrinsics += 1;
-            }
-            let next = insn.next_addr();
-            if next <= addr {
-                break;
-            }
-            addr = next;
         }
 
         let code = pseudocode_l1(session, function.start)?;
@@ -137,6 +161,7 @@ pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
     Ok(QualityReport {
         functions: measured,
         skipped,
+        intrinsics: intrinsic_histogram,
     })
 }
 

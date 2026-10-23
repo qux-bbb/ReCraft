@@ -912,6 +912,11 @@ fn cmd_metrics(
     let mut session = Session::open(project)?;
     let report = recraft_decompile::measure(&mut session, max_functions)?;
     if as_json {
+        let top: Vec<Value> = report
+            .top_intrinsics(10)
+            .into_iter()
+            .map(|(mnemonic, count)| json!({"mnemonic": mnemonic, "count": count}))
+            .collect();
         return json_result(&json!({
             "functions": report.total(),
             "structured": report.structured(),
@@ -920,6 +925,7 @@ fn cmd_metrics(
             "intrinsic_instructions": report.intrinsic_instructions(),
             "coverage": report.coverage(),
             "skipped": report.skipped,
+            "intrinsic_top": top,
         }));
     }
     println!("functions:              {}", report.total());

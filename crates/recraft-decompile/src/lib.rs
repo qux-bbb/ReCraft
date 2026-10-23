@@ -639,9 +639,12 @@ impl Printer<'_> {
                     format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))
                 }
             }
-            Expr::Bin { op, lhs, rhs } => {
-                format!("({} {} {})", self.expr(*lhs), op.symbol(), self.expr(*rhs))
-            }
+            Expr::Bin { op, lhs, rhs } => match op {
+                // Rotates have no C operator; print them as intrinsic-style calls.
+                BinOp::Ror => format!("ror({}, {})", self.expr(*lhs), self.expr(*rhs)),
+                BinOp::Rol => format!("rol({}, {})", self.expr(*lhs), self.expr(*rhs)),
+                _ => format!("({} {} {})", self.expr(*lhs), op.symbol(), self.expr(*rhs)),
+            },
             Expr::Un { op, arg } => {
                 let symbol = match op {
                     UnOp::Not => "~",

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Semantic coverage + honest metrics: unaligned/SSE moves (`movups`/`movdqu`/`movaps`/
+  `movdqa` memory operands) now decode through `MemorySize::size()` (previously
+  `Packed128_*` was unmapped and fell back to `__asm`), x86 rotates (`ror`/`rol`) are
+  lifted and printed as `ror(a, b)`, and `metrics --json` gained an `intrinsic_top`
+  histogram. `build_cfg` now drops blocks unreachable from the entry (alignment `int3`,
+  jump-table bytes, gaps), and `measure` counts only CFG-reachable instructions: on
+  notepad the reachable instruction count is 37602 with 2183 intrinsics, so semantic
+  coverage is **94.2%** (was reported 84.9% with a linear sweep) and structured rate
+  **81.1%** (407/502); `int3` intrinsics fell from 8547 to 33. corpus coverage is 97.4%
+  (10/391) with golden `nested_loops` updated for the now-modeled `movdqa` load;
+  docs/QUALITY, docs/M2, docs/M4 record the corrected metric definition.
+
 - MCP HTTP transport in E2E: `scripts/e2e.ps1` now starts the real server in the
   background on a random port with a generated token, waits for `/health`, asserts a
   token-bearing `initialize` returns `serverInfo`, verifies a request without the token

@@ -15,7 +15,7 @@ void nested_loops_l1(void) {
         rsp = (rsp + 8);
         return;
     }
-    __asm("movdqa xmm3, [0xADDR]");
+    xmm3 = *(__m128*)(0xADDR);
     xmm4 = (xmm4 ^ xmm4);
     var_28 = rbp;
     xmm2 = (xmm2 ^ xmm2);

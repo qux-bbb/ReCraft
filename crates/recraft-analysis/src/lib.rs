@@ -371,6 +371,23 @@ pub fn analyze_with_options(
         .collect();
     functions.sort_by_key(|function| function.start);
 
+    // Recovered ranges often include the alignment padding that follows the last real
+    // instruction (MSVC pads with `int3`, occasionally `nop`). Trim it so decompilation,
+    // metrics and xrefs never treat padding as code. Keep at least one byte per function.
+    for function in &mut functions {
+        let mut end = function.end;
+        while end.get() > function.start.get() + 1 {
+            let Ok(byte) = session.read_bytes(Address::new(end.get() - 1), 1) else {
+                break;
+            };
+            match byte[0] {
+                0xCC | 0x90 => end = Address::new(end.get() - 1),
+                _ => break,
+            }
+        }
+        function.end = end;
+    }
+
     Ok(AnalysisResult {
         functions,
         calls,
