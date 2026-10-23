@@ -49,7 +49,7 @@ makensis /DVERSION=0.1.0 /DSTAGE="dist\ReCraft-0.1.0" /DOUT="dist\recraft-0.1.0-
 [verify] analyze/decompile/AI/metrics OK (functions=502)
 [verify] PACKAGE PASS
 [release demo] dist\ReCraft-0.1.0\recraft.exe → DEMO PASS
-[release metrics] notepad: 502 functions, coverage 98.5%, structured 407/502 (81.1%)
+[release metrics] notepad: 502 functions, coverage 99.4%, structured 432/502 (86.1%)
 ```
 
 zip 内 23 个条目（2 个 exe + 19 篇 docs/ADR + LICENSE/README/CHANGELOG/VERSION）；

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Release rebuild after the flag-semantics work: `package.ps1` (zip 10.2 MiB, 23
+  entries) → `verify-package.ps1` PACKAGE PASS → `demo.ps1` DEMO PASS on the staged
+  binary. The packaged exe reproduces the source metrics for notepad (502 functions,
+  99.4% coverage, 432/502 = 86.1% structured) with 239 intrinsic instructions left;
+  docs/RELEASE.md and docs/M4.md record the numbers.
+
 - Flag-consuming instruction semantics: `bt` now records CF (= the tested bit) and the
   consuming branch rebuilds it as `((value >> bit) & 1) != 0` (only jb/jae are defined
   afterwards); `js`/`jns` become exact signed comparisons of the producing result with
