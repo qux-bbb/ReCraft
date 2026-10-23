@@ -18,4 +18,4 @@ pub use command::{Command, CommentKind, Effect, JournalRecord, NAME_KIND_LOADER,
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
 pub use segments::{Perm, Segment, SegmentKind};
 pub use session::Session;
-pub use view::DisasmLine;
+pub use view::{DisasmLine, FunctionInfo};

@@ -26,7 +26,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::command::{self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_LOADER};
 use crate::flags::{Flags, FlagsStore};
 use crate::segments::{self, Segment};
-use crate::view::DisasmLine;
+use crate::view::{DisasmLine, FunctionInfo};
 
 const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
@@ -331,6 +331,41 @@ impl Session {
             .optional()
             .map_err(command::db_err)?;
         Ok(end.map(|value| Address::new(value as u64)))
+    }
+
+    /// All defined functions, ordered by start address.
+    pub fn functions(&self) -> Result<Vec<FunctionInfo>> {
+        let mut statement = self
+            .project
+            .conn()
+            .prepare("SELECT start, end FROM func ORDER BY start")
+            .map_err(command::db_err)?;
+        let rows = statement
+            .query_map([], |row| {
+                let start: i64 = row.get(0)?;
+                let end: i64 = row.get(1)?;
+                Ok(FunctionInfo {
+                    start: Address::new(start as u64),
+                    end: Address::new(end as u64),
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
+    /// Resolve a symbol name to its address (first match).
+    pub fn addr_of_name(&self, name: &str) -> Result<Option<Address>> {
+        let addr: Option<i64> = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT addr FROM name WHERE text = ?1 ORDER BY addr LIMIT 1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)?;
+        Ok(addr.map(|value| Address::new(value as u64)))
     }
 
     // ----------------------------------------------------------- commands ----

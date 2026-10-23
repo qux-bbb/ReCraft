@@ -28,3 +28,10 @@ impl DisasmLine {
         &self.raw[..usize::from(self.len.min(15))]
     }
 }
+
+/// A function record (start .. end, half-open).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionInfo {
+    pub start: Address,
+    pub end: Address,
+}
