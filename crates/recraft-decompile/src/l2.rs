@@ -465,33 +465,27 @@ fn access_size(size: iced_x86::MemorySize) -> Option<u8> {
 fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
     let (lifted, exprs) = lift_function(session, start, end)?;
     let mut frame_established = false;
-    let mut esp_shifted = false;
+    let mut esp_delta: i64 = 0;
+    let mut esp_unknown = false;
     let mut ebp_offsets: BTreeSet<i64> = BTreeSet::new();
-    let mut esp_offsets: BTreeSet<i64> = BTreeSet::new();
+    // adjusted argument offset -> observed `[esp+N]` offsets that produced it.
+    let mut esp_args: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
 
     for item in &lifted {
         for stmt in &item.stmts {
-            if let Stmt::Intrinsic { text } = stmt
-                && !frame_established
-                && (text.starts_with("push ")
-                    || text.starts_with("sub esp")
-                    || text.starts_with("sub rsp"))
-            {
-                // esp-relative argument offsets are only stable until the stack moves.
-                esp_shifted = true;
-            }
-            if let Stmt::WriteReg { reg, value } = stmt
-                && reg.base == Reg::Rbp
-                && matches!(&exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
-            {
-                frame_established = true;
-            }
-            if let Stmt::WriteReg { reg, .. } = stmt
-                && !frame_established
-                && reg.base == Reg::Rsp
-            {
-                // push/pop and `sub esp, N` are lifted as writes to the stack pointer.
-                esp_shifted = true;
+            if let Stmt::WriteReg { reg, value } = stmt {
+                if reg.base == Reg::Rbp
+                    && matches!(&exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
+                {
+                    frame_established = true;
+                } else if reg.base == Reg::Rsp && !frame_established {
+                    // Track the cumulative stack movement so `[esp+N]` reads after
+                    // prologue pushes still map to incoming arguments.
+                    match rsp_adjustment(&exprs, *value) {
+                        Some(delta) => esp_delta += delta,
+                        None => esp_unknown = true,
+                    }
+                }
             }
             walk_stmt_loads(stmt, &exprs, &mut |addr| {
                 let Some((base, offset)) = stack_add(&exprs, addr) else {
@@ -500,13 +494,15 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
                 if frame_established && base == Reg::Rbp && offset >= 8 && (offset - 8) % 4 == 0 {
                     ebp_offsets.insert(offset);
                 } else if !frame_established
-                    && !esp_shifted
+                    && !esp_unknown
                     && base == Reg::Rsp
                     && offset >= 4
                     && offset % 4 == 0
                 {
-                    // [esp+4] is the first argument (return address is at [esp]).
-                    esp_offsets.insert(offset);
+                    let adjusted = offset + esp_delta;
+                    if adjusted >= 4 && adjusted % 4 == 0 {
+                        esp_args.entry(adjusted).or_default().push(offset);
+                    }
                 }
             });
         }
@@ -517,9 +513,11 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
         for (index, offset) in ebp_offsets.iter().enumerate() {
             stack.insert((Reg::Rbp, *offset), format!("arg{}", index + 1));
         }
-    } else {
-        for (index, offset) in esp_offsets.iter().enumerate() {
-            stack.insert((Reg::Rsp, *offset), format!("arg{}", index + 1));
+    } else if !esp_unknown {
+        for (index, (_, observed)) in esp_args.iter().enumerate() {
+            for offset in observed {
+                stack.insert((Reg::Rsp, *offset), format!("arg{}", index + 1));
+            }
         }
     }
     Ok(ArgNames {
@@ -528,6 +526,26 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
         types: BTreeMap::new(),
         stack_types: BTreeMap::new(),
     })
+}
+
+/// Stack-pointer adjustment encoded in `rsp = rsp ± const` (push/pop/sub/add esp).
+fn rsp_adjustment(exprs: &[Expr], value: ExprId) -> Option<i64> {
+    let Expr::Bin { op, lhs, rhs } = &exprs[value as usize] else {
+        return None;
+    };
+    let lhs_is_rsp = matches!(&exprs[*lhs as usize], Expr::Reg(view) if view.base == Reg::Rsp);
+    if !lhs_is_rsp {
+        return None;
+    }
+    let amount = match &exprs[*rhs as usize] {
+        Expr::Const(value) => *value as i64,
+        _ => return None,
+    };
+    match op {
+        BinOp::Sub => Some(-amount),
+        BinOp::Add => Some(amount),
+        _ => None,
+    }
 }
 
 fn stack_add(exprs: &[Expr], id: ExprId) -> Option<(Reg, i64)> {
@@ -955,14 +973,18 @@ mod tests {
     }
 
     #[test]
-    fn x86_shifted_stack_falls_back_to_slots() {
+    fn x86_prologue_pushes_do_not_hide_arguments() {
         let Some((mut session, _dir)) = corpus_session("x86") else {
             return;
         };
-        // noinline_helper pushes onto the stack before touching its arguments, so the
-        // esp-relative heuristic stays conservative instead of mislabelling locals.
+        // noinline_helper pushes before touching its arguments; the cumulative esp
+        // adjustment still maps the observed [esp+N] reads back to incoming arguments.
         let (start, end) = bounds(&session, "noinline_helper");
         let args = recover_args(&mut session, start, end).unwrap();
-        assert!(args.is_empty(), "{:?}", args.stack_ordered());
+        let stack = args.stack_ordered();
+        assert_eq!(stack.len(), 2, "{stack:?}");
+        assert_eq!(stack[0].1, "arg1");
+        assert_eq!(stack[1].1, "arg2");
+        assert!(args.signature().contains("arg1"), "{}", args.signature());
     }
 }

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- x86 stack parameter recovery through prologue pushes: `recover_x86` now tracks the
+  cumulative `esp` adjustment (push/pop/sub/add) and maps observed `[esp+N]` reads back
+  to incoming argument offsets, inserting every observed offset for the same argument.
+  Functions that save registers before reading their arguments now get real parameter
+  names/types (e.g. `int32 __cdecl recursive(int32 n)`, `// L2 params: n=[esp+0x8]`)
+  instead of empty signatures; unknown stack-pointer rewrites keep the conservative
+  fallback. Test renamed/updated to assert two recovered arguments for a push-first
+  function.
+
 - x86 stack call arguments: the lifter records `push` values (newest push first) and
   appends them to `Stmt::Call` arguments, so cdecl/stdcall call sites render pushed
   arguments when the callee has a user prototype (`recursive(eax)` on Win32, x64
