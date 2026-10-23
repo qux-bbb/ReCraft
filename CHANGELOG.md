@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Release regression after the M2/MCP/CLI work: rebuilt `dist` (zip 10.2 MiB, 23 entries)
+  and re-ran the full chain — `package.ps1` PASS, `verify-package.ps1` PACKAGE PASS
+  (hash + entries + packaged exe info/import/analyze/decompile/AI/metrics, 502 functions),
+  and `demo.ps1` on the staged release binary → DEMO PASS. docs/RELEASE.md and docs/M4.md
+  record the run and the remaining installer blocker.
+
 - CLI `batch` (DESIGN §10): `recraft batch <project> --script <file.json>
   [--dry-run] [--json]` executes a JSON list of edit commands through the journaled
   Command bus, in order, stopping at the first failure with its index/type. Supported

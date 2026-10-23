@@ -37,22 +37,24 @@ makensis /DVERSION=0.1.0 /DSTAGE="dist\ReCraft-0.1.0" /DOUT="dist\recraft-0.1.0-
 `package` job（windows-latest）：`cargo build --release` → `scripts/package.ps1 -NoInstaller`
 → 上传 `recraft-windows-x64` artifact（zip + SHA256SUMS）。
 
-## 本机验证（2026-10-24）
+## 本机验证（2026-10-24，M2/MCP/CLI 功能收尾后重建）
 
 ```
-[package] zip: dist\recraft-v0.1.0-windows-x64.zip (10.1 MiB)
+[package] zip: dist\recraft-v0.1.0-windows-x64.zip (10.2 MiB)
+[package] staged: dist\ReCraft-0.1.0
 [package] SHA256: dist\SHA256SUMS.txt
 [package] PASS
 [verify] SHA256SUMS matches recraft-v0.1.0-windows-x64.zip
 [verify] package entries present (11 checked)
 [verify] analyze/decompile/AI/metrics OK (functions=502)
 [verify] PACKAGE PASS
+[release demo] dist\ReCraft-0.1.0\recraft.exe → DEMO PASS
 ```
 
 zip 内 23 个条目（2 个 exe + 19 篇 docs/ADR + LICENSE/README/CHANGELOG/VERSION）；
 `scripts/verify-package.ps1` 会校验 SHA256SUMS、解压后检查必需条目，并用**解压出来的
 exe** 跑 info/import/analyze/decompile/ai provider/metrics。CI 的 package job 在打包后
-自动执行该脚本。
+自动执行该脚本；`scripts/demo.ps1` 在 release 产物上复跑全部 9 步演示。
 
 ## 安装器验证状态（诚实记录）
 
