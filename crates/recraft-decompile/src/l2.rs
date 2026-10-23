@@ -381,7 +381,7 @@ fn stack_add(exprs: &[Expr], id: ExprId) -> Option<(Reg, i64)> {
 fn walk_stmt_reads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(&RegView)) {
     match stmt {
         Stmt::WriteReg { value, .. } => walk_expr(exprs, *value, visit),
-        Stmt::Store { addr, value, .. } => {
+        Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
             walk_expr(exprs, *addr, visit);
             walk_expr(exprs, *value, visit);
         }
@@ -392,7 +392,7 @@ fn walk_stmt_reads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(&RegView)
 fn walk_stmt_loads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(ExprId)) {
     match stmt {
         Stmt::WriteReg { value, .. } => walk_expr_loads(exprs, *value, visit),
-        Stmt::Store { addr, value, .. } => {
+        Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
             walk_expr_loads(exprs, *addr, visit);
             walk_expr_loads(exprs, *value, visit);
         }
@@ -403,7 +403,7 @@ fn walk_stmt_loads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(ExprId)) 
 /// Visits the address expression of every `Load` reachable from `id`.
 fn walk_expr_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId)) {
     match &exprs[id as usize] {
-        Expr::Load { addr, .. } => {
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => {
             visit(*addr);
             walk_expr_loads(exprs, *addr, visit);
         }
@@ -428,7 +428,7 @@ fn walk_expr_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId)) {
 fn walk_expr(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(&RegView)) {
     match &exprs[id as usize] {
         Expr::Reg(view) => visit(view),
-        Expr::Load { addr, .. } => walk_expr(exprs, *addr, visit),
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => walk_expr(exprs, *addr, visit),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             walk_expr(exprs, *lhs, visit);
             walk_expr(exprs, *rhs, visit);

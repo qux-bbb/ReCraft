@@ -377,6 +377,10 @@ impl Printer<'_> {
         }
     }
 
+    fn float_type(size: u8) -> &'static str {
+        if size == 8 { "f64" } else { "f32" }
+    }
+
     /// Render a stack reference: a recovered x86 argument name, otherwise `var_XX` for
     /// rsp slots and frame-pointer locals. Positive `[rbp+...]` without a stack-argument
     /// match stays a raw pointer (it may be the return address / caller frame).
@@ -413,6 +417,20 @@ impl Printer<'_> {
                     )
                 }
             }
+            Stmt::StoreFloat { addr, value, size } => {
+                if let Some((base, offset)) = self.stack_slot(*addr)
+                    && (base == Reg::Rsp || offset < 0)
+                {
+                    format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                } else {
+                    format!(
+                        "*({}*)({}) = {}",
+                        Self::float_type(*size),
+                        self.expr(*addr),
+                        self.expr(*value)
+                    )
+                }
+            }
             Stmt::Call { target } => format!("{}()", self.name(*target)),
             Stmt::Intrinsic { text } => {
                 // Unsupported instructions keep their assembly, but must stay inside
@@ -442,6 +460,9 @@ impl Printer<'_> {
                 } else {
                     format!("*({}*)({})", Self::scalar_type(*size), self.expr(*addr))
                 }
+            }
+            Expr::LoadFloat { addr, size } => {
+                format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))
             }
             Expr::Bin { op, lhs, rhs } => {
                 format!("({} {} {})", self.expr(*lhs), op.symbol(), self.expr(*rhs))

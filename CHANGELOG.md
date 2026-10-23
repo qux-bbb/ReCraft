@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Basic float typing: SSE scalar memory operands (`movss/movsd` and float arithmetic)
+  are typed loads/stores (`f32`/`f64`) instead of raw `u32`/`u64`, float arithmetic uses
+  dedicated `BinOp::FAdd/FSub/FMul/FDiv`, and int<->float conversions pick the typed
+  source operand. 16-byte vector accesses print as `__m128`. Golden snapshot for
+  `float_math` regenerated.
+
 - L2 signatures: return type inference (`int64` when the function writes full `rax`,
   `int32` for `eax`-width results, `int64` for value-forwarding calls/tail calls,
   otherwise `void`) and calling-convention detection (`ret imm16` -> `__stdcall`,

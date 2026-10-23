@@ -22,6 +22,11 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// Scalar float arithmetic (same C operators, distinct for type-aware printing).
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
     And,
     Or,
     Xor,
@@ -33,10 +38,10 @@ pub enum BinOp {
 impl BinOp {
     pub const fn symbol(self) -> &'static str {
         match self {
-            BinOp::Add => "+",
-            BinOp::Sub => "-",
-            BinOp::Mul => "*",
-            BinOp::Div => "/",
+            BinOp::Add | BinOp::FAdd => "+",
+            BinOp::Sub | BinOp::FSub => "-",
+            BinOp::Mul | BinOp::FMul => "*",
+            BinOp::Div | BinOp::FDiv => "/",
             BinOp::And => "&",
             BinOp::Or => "|",
             BinOp::Xor => "^",
@@ -44,6 +49,10 @@ impl BinOp {
             BinOp::Shr => ">>",
             BinOp::Sar => ">>",
         }
+    }
+
+    pub const fn is_float(self) -> bool {
+        matches!(self, BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv)
     }
 }
 
@@ -107,6 +116,12 @@ pub enum Expr {
         addr: ExprId,
         size: u8,
     },
+    /// Scalar float load (`movss`/`movsd`/float arithmetic with a memory operand).
+    LoadFloat {
+        addr: ExprId,
+        /// 4 = f32, 8 = f64.
+        size: u8,
+    },
     Bin {
         op: BinOp,
         lhs: ExprId,
@@ -144,6 +159,13 @@ pub enum Stmt {
     Store {
         addr: ExprId,
         value: ExprId,
+        size: u8,
+    },
+    /// Scalar float store (`movss`/`movsd`).
+    StoreFloat {
+        addr: ExprId,
+        value: ExprId,
+        /// 4 = f32, 8 = f64.
         size: u8,
     },
     /// Direct call to a known address.

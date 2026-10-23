@@ -83,15 +83,11 @@ impl Lifter {
         let mut stmts = Vec::new();
         let addr = insn.addr();
         let flow = match insn.mnemonic() {
-            M::Mov
-            | M::Movd
-            | M::Movq
-            | M::Movdqa
-            | M::Movdqu
-            | M::Movaps
-            | M::Movups
-            | M::Movss
-            | M::Movsd => self.lift_mov(insn, &mut stmts),
+            M::Mov | M::Movd | M::Movq | M::Movdqa | M::Movdqu | M::Movaps | M::Movups => {
+                self.lift_mov(insn, &mut stmts)
+            }
+            M::Movss => self.lift_mov_float(insn, 4, &mut stmts),
+            M::Movsd => self.lift_mov_float(insn, 8, &mut stmts),
             M::Movzx => self.lift_movx(insn, &mut stmts, false),
             M::Movsx | M::Movsxd => self.lift_movx(insn, &mut stmts, true),
             M::Lea => self.lift_lea(insn, &mut stmts),
@@ -157,19 +153,19 @@ impl Lifter {
             }
             // Scalar float arithmetic (single/double precision).
             M::Addss | M::Addsd => {
-                self.lift_binary_plain(insn, BinOp::Add, &mut stmts);
+                self.lift_binary_float(insn, BinOp::FAdd, float_operand_size(insn), &mut stmts);
                 Flow::Fallthrough
             }
             M::Subss | M::Subsd => {
-                self.lift_binary_plain(insn, BinOp::Sub, &mut stmts);
+                self.lift_binary_float(insn, BinOp::FSub, float_operand_size(insn), &mut stmts);
                 Flow::Fallthrough
             }
             M::Mulss | M::Mulsd => {
-                self.lift_binary_plain(insn, BinOp::Mul, &mut stmts);
+                self.lift_binary_float(insn, BinOp::FMul, float_operand_size(insn), &mut stmts);
                 Flow::Fallthrough
             }
             M::Divss | M::Divsd => {
-                self.lift_binary_plain(insn, BinOp::Div, &mut stmts);
+                self.lift_binary_float(insn, BinOp::FDiv, float_operand_size(insn), &mut stmts);
                 Flow::Fallthrough
             }
             M::Cvttss2si | M::Cvttsd2si | M::Cvtsi2ss | M::Cvtsi2sd => {
@@ -483,11 +479,93 @@ impl Lifter {
         }
     }
 
+    fn read_operand_float(&mut self, insn: &Insn, index: u32, float_size: u8) -> Option<ExprId> {
+        use iced_x86::OpKind;
+        match insn.op_kind(index) {
+            OpKind::Register => {
+                let view = from_iced(insn.op_register(index))?;
+                Some(self.reg(view))
+            }
+            OpKind::Memory => {
+                let addr = self.memory_address(insn)?;
+                Some(self.push(Expr::LoadFloat {
+                    addr,
+                    size: float_size,
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    fn write_operand_float(
+        &mut self,
+        insn: &Insn,
+        index: u32,
+        value: ExprId,
+        float_size: u8,
+        stmts: &mut Vec<Stmt>,
+    ) -> bool {
+        use iced_x86::OpKind;
+        match insn.op_kind(index) {
+            OpKind::Register => {
+                let Some(view) = from_iced(insn.op_register(index)) else {
+                    return false;
+                };
+                stmts.push(Stmt::WriteReg { reg: view, value });
+                true
+            }
+            OpKind::Memory => {
+                let Some(addr) = self.memory_address(insn) else {
+                    return false;
+                };
+                stmts.push(Stmt::StoreFloat {
+                    addr,
+                    value,
+                    size: float_size,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn lift_mov_float(&mut self, insn: &Insn, float_size: u8, stmts: &mut Vec<Stmt>) -> Flow {
+        let Some(value) = self.read_operand_float(insn, 1, float_size) else {
+            return self.intrinsic(insn, stmts);
+        };
+        if self.write_operand_float(insn, 0, value, float_size, stmts) {
+            Flow::Fallthrough
+        } else {
+            self.intrinsic(insn, stmts)
+        }
+    }
+
+    fn lift_binary_float(&mut self, insn: &Insn, op: BinOp, float_size: u8, stmts: &mut Vec<Stmt>) {
+        let (Some(lhs), Some(rhs)) = (
+            self.read_operand_float(insn, 0, float_size),
+            self.read_operand_float(insn, 1, float_size),
+        ) else {
+            stmts.push(Stmt::Intrinsic { text: insn.asm() });
+            return;
+        };
+        let result = self.push(Expr::Bin { op, lhs, rhs });
+        if !self.write_operand_float(insn, 0, result, float_size, stmts) {
+            stmts.push(Stmt::Intrinsic { text: insn.asm() });
+        }
+    }
+
     /// Float <-> integer conversions: modelled as a cast; flag state is dropped because
     /// these instructions do not update EFLAGS.
     fn lift_convert(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
         use iced_x86::Mnemonic as M;
-        let Some(source) = self.read_operand(insn, 1) else {
+        let float_size = float_operand_size(insn);
+        let source = match insn.mnemonic() {
+            // Float -> integer: source is a float operand.
+            M::Cvttss2si | M::Cvttsd2si => self.read_operand_float(insn, 1, float_size),
+            // Integer -> float: source is an integer operand, destination is float.
+            _ => self.read_operand(insn, 1),
+        };
+        let Some(source) = source else {
             return self.intrinsic(insn, stmts);
         };
         let width = match insn.mnemonic() {
@@ -499,7 +577,11 @@ impl Lifter {
             width,
             signed: true,
         });
-        if self.write_operand(insn, 0, cast, stmts) {
+        let written = match insn.mnemonic() {
+            M::Cvtsi2ss | M::Cvtsi2sd => self.write_operand_float(insn, 0, cast, float_size, stmts),
+            _ => self.write_operand(insn, 0, cast, stmts),
+        };
+        if written {
             self.last_cmp = None;
             Flow::Fallthrough
         } else {
@@ -736,6 +818,15 @@ fn destination_width(insn: &Insn) -> Option<u8> {
         return None;
     }
     from_iced(insn.op_register(0)).map(|view| view.width)
+}
+
+/// Scalar float operand width for an SSE instruction (4 = f32, 8 = f64).
+fn float_operand_size(insn: &Insn) -> u8 {
+    use iced_x86::Mnemonic as M;
+    match insn.mnemonic() {
+        M::Movsd | M::Addsd | M::Subsd | M::Mulsd | M::Divsd | M::Cvttsd2si | M::Cvtsi2sd => 8,
+        _ => 4,
+    }
 }
 
 fn memory_size_bytes(insn: &Insn) -> Option<u8> {
@@ -1015,8 +1106,36 @@ mod tests {
             Stmt::WriteReg { value, .. } => {
                 assert!(matches!(
                     lifter.expr(*value),
-                    Expr::Bin { op: BinOp::Add, .. }
+                    Expr::Bin {
+                        op: BinOp::FAdd,
+                        ..
+                    }
                 ))
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn float_memory_operands_are_typed() {
+        // movss xmm0, dword ptr [rax]
+        let (lifter, load) = lift_one(&[0xf3, 0x0f, 0x10, 0x00], 0x1000);
+        match &load.stmts[0] {
+            Stmt::WriteReg { value, .. } => assert!(matches!(
+                lifter.expr(*value),
+                Expr::LoadFloat { size: 4, .. }
+            )),
+            other => panic!("unexpected stmt {other:?}"),
+        }
+        // addss xmm0, dword ptr [rax]
+        let (lifter, add) = lift_one(&[0xf3, 0x0f, 0x58, 0x00], 0x1000);
+        match &add.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                let Expr::Bin { op, rhs, .. } = lifter.expr(*value) else {
+                    panic!("expected Bin");
+                };
+                assert_eq!(*op, BinOp::FAdd);
+                assert!(matches!(lifter.expr(*rhs), Expr::LoadFloat { size: 4, .. }));
             }
             other => panic!("unexpected stmt {other:?}"),
         }
