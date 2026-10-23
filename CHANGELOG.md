@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 Go runtime recovery: scans readable segments for the `pcHeader` magic (Go 1.16 /
+  1.18 / 1.20+ layouts, including Go 1.26 where `textStart` was removed), validates
+  candidates, then walks `functab` → `_func` → NUL-terminated `funcnametab` names.
+  Recovered functions become high-priority seeds and their real names (`main.main`,
+  `runtime.*`) are persisted as auto names. New Go corpus (built with `-gcflags=all=-l`):
+  2,997 pclntab functions, 3,088 discovered, 147k instructions in 295 ms; `recraft funcs`
+  now shows function names.
+
 - M1 jump tables: CFG recognizes absolute pointer tables (`jmp [index*scale+table]`) and
   MSVC x64 image-relative tables (`lea base,[image_base]; mov dst32,[base+index*4+disp];
   add dst,base; jmp dst`), validating at least two in-function targets. Table targets

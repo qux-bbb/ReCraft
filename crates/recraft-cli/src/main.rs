@@ -562,6 +562,7 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
             "jump_edges": result.jumps.len(),
             "data_refs": result.data_refs.len(),
             "api_tags": result.api_refs.len(),
+            "go_functions": result.go_functions,
             "xrefs": xref_count,
             "strings": strings.len(),
             "elapsed_ms": elapsed_ms,
@@ -604,6 +605,9 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
     println!("data references:      {}", result.data_refs.len());
     println!("api tags:             {}", result.api_refs.len());
     println!("auto names:           {auto_names}");
+    if result.go_functions > 0 {
+        println!("go pclntab functions: {}", result.go_functions);
+    }
     println!("strings:              {}", strings.len());
     println!("elapsed:              {elapsed_ms:.1} ms");
     println!("saved to project:     {}", project.display());
@@ -1000,21 +1004,28 @@ fn cmd_funcs(project: &Path, as_json: bool) -> Result<()> {
                 json!({
                     "start": format!("{:#x}", function.start.get()),
                     "end": format!("{:#x}", function.end.get()),
+                    "name": session.name_at(function.start).ok().flatten(),
                 })
             })
             .collect();
         return json_result(&json!({ "functions": functions }));
     }
     if functions.is_empty() {
-        println!("no functions defined (M1 will add automatic analysis)");
+        println!("no functions defined - run `recraft analyze` first");
         return Ok(());
     }
     for function in &functions {
+        let name = session
+            .name_at(function.start)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         println!(
-            "{:#012x} .. {:#012x}  ({} bytes)",
+            "{:#012x} .. {:#012x}  ({} bytes)  {}",
             function.start.get(),
             function.end.get(),
-            function.end.get().saturating_sub(function.start.get())
+            function.end.get().saturating_sub(function.start.get()),
+            name
         );
     }
     Ok(())

@@ -72,6 +72,15 @@ where exports + `.pdata` are ground truth:
 cargo run -p recraft-cli -- eval .\corpus\build\x64\corpus.exe
 ```
 
+A Go sample validates runtime symbol recovery (kept `pclntab`):
+
+```powershell
+.\corpus\build-go.ps1
+cargo run -p recraft-cli -- import .\corpus\build\go\corpus-go.exe -o go.rcraft
+cargo run -p recraft-cli -- analyze go.rcraft
+cargo run -p recraft-cli -- funcs go.rcraft    # main.main, runtime.*, ...
+```
+
 The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
 during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
 

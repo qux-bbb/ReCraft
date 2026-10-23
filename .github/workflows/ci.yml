@@ -21,6 +21,14 @@ jobs:
       - name: build analysis corpus (MSVC, CRT-free)
         shell: pwsh
         run: pwsh -NoProfile -File corpus/build.ps1
+      - name: build Go analysis corpus (skipped when Go is unavailable)
+        shell: pwsh
+        run: |
+          if (Get-Command go -ErrorAction SilentlyContinue) {
+            pwsh -NoProfile -File corpus/build-go.ps1
+          } else {
+            Write-Host 'go toolchain not installed; Go corpus tests will be skipped'
+          }
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy

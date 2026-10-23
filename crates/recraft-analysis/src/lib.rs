@@ -17,6 +17,7 @@
 
 mod api;
 mod cfg;
+mod golang;
 mod strings;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -27,6 +28,7 @@ use recraft_decode::FlowKind;
 
 pub use api::categorize;
 pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
+pub use golang::{GoFunction, parse_pclntab};
 pub use strings::{
     ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, extract_strings,
     persist_strings,
@@ -47,6 +49,8 @@ pub enum FunctionSource {
     Pdata,
     Tls,
     CallTarget,
+    /// Recovered from a Go `pclntab` (exact start and real name).
+    GoPclntab,
 }
 
 /// One function recovered by analysis.
@@ -69,6 +73,10 @@ pub struct AnalysisResult {
     pub data_refs: Vec<(Address, Address)>,
     /// API tags: (instruction address, qualified import name, category).
     pub api_refs: Vec<(Address, String, String)>,
+    /// Names recovered from a Go `pclntab` (function start -> name).
+    pub go_names: BTreeMap<u64, String>,
+    /// Number of functions recovered from the Go `pclntab`.
+    pub go_functions: usize,
     pub instructions: u64,
     pub seeds: u64,
     pub discovered_by_call: u64,
@@ -145,6 +153,26 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
             &mut queue,
         );
     }
+
+    // 4. Go runtime symbol table: exact function starts plus real names.
+    let mut go_names: BTreeMap<u64, String> = BTreeMap::new();
+    let go_functions = match parse_pclntab(session)? {
+        Some(functions) => {
+            for function in &functions {
+                go_names.insert(function.start.get(), function.name.clone());
+                seed(
+                    &segments,
+                    function.start,
+                    None,
+                    FunctionSource::GoPclntab,
+                    &mut known,
+                    &mut queue,
+                );
+            }
+            functions.len()
+        }
+        None => 0,
+    };
 
     let initial_seeds = known.len() as u64;
 
@@ -265,6 +293,8 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
         jumps,
         data_refs,
         api_refs,
+        go_names,
+        go_functions,
         instructions: instruction_total,
         seeds: initial_seeds,
         discovered_by_call,
@@ -307,7 +337,8 @@ fn seed(
 
 fn source_rank(source: FunctionSource) -> u8 {
     match source {
-        FunctionSource::Pdata => 4,
+        FunctionSource::Pdata => 5,
+        FunctionSource::GoPclntab => 4,
         FunctionSource::Entry => 3,
         FunctionSource::Export => 2,
         FunctionSource::Tls => 1,
@@ -448,12 +479,20 @@ pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
         .collect();
     session.replace_auto_functions(&ranges)?;
 
-    // Give every unnamed function an IDA-style `sub_...` label. Loader/user names win
-    // because insertion uses INSERT OR IGNORE.
+    // Give every unnamed function an IDA-style `sub_...` label, preferring names
+    // recovered from a Go pclntab. Loader/user names win because insertion uses
+    // INSERT OR IGNORE.
     let names: Vec<(Address, String)> = result
         .functions
         .iter()
-        .map(|function| (function.start, format!("sub_{:x}", function.start.get())))
+        .map(|function| {
+            let name = result
+                .go_names
+                .get(&function.start.get())
+                .cloned()
+                .unwrap_or_else(|| format!("sub_{:x}", function.start.get()));
+            (function.start, name)
+        })
         .collect();
     session.replace_auto_names(&names)?;
 
@@ -619,6 +658,49 @@ mod tests {
                 .any(|(tag_rule, tag_category)| tag_rule == rule && tag_category == category),
             "api tag missing at {:#x}",
             site.get()
+        );
+    }
+
+    #[test]
+    fn go_corpus_names_and_functions_are_recovered() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/build/go/corpus-go.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("go-analyze.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+
+        assert!(
+            result.go_functions > 20,
+            "only {} pclntab functions",
+            result.go_functions
+        );
+        assert!(
+            result.go_names.values().any(|name| name == "main.main"),
+            "main.main was not recovered"
+        );
+
+        let detected: BTreeSet<u64> = result.functions.iter().map(|f| f.start.get()).collect();
+        for start in result.go_names.keys() {
+            assert!(
+                detected.contains(start),
+                "pclntab function at {start:#x} missing from the analysis result"
+            );
+        }
+
+        persist(&mut session, &result).unwrap();
+        let main_start = result
+            .go_names
+            .iter()
+            .find(|(_, name)| *name == "main.main")
+            .map(|(start, _)| *start)
+            .unwrap();
+        assert_eq!(
+            session.addr_of_name("main.main").unwrap().map(|a| a.get()),
+            Some(main_start)
         );
     }
 }
