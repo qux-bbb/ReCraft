@@ -250,6 +250,8 @@ struct Structurer {
     loop_headers: BTreeSet<usize>,
     loop_of: Vec<Option<usize>>,
     loop_blocks: BTreeMap<usize, BTreeSet<usize>>,
+    /// Active loops while emitting bodies: `(header, exit)` for break/continue.
+    loop_stack: Vec<(usize, usize)>,
     emitted: Vec<bool>,
     bodies: Vec<BlockLift>,
     args: Option<ArgNames>,
@@ -337,6 +339,7 @@ impl Structurer {
             loop_headers: BTreeSet::new(),
             loop_of: vec![None; bodies.len()],
             loop_blocks: BTreeMap::new(),
+            loop_stack: Vec::new(),
             emitted: vec![false; bodies.len()],
             bodies,
             args,
@@ -603,7 +606,44 @@ impl Structurer {
                         self.emit_raw_flow(lines, current, level);
                         return;
                     };
-                    if target == current || stop.contains(&target) || self.emitted[target] {
+                    if let Some(&(loop_header, loop_exit)) = self.loop_stack.last() {
+                        if target == loop_exit {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}break;", indent(level)),
+                            });
+                            return;
+                        }
+                        if target == loop_header {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}continue;", indent(level)),
+                            });
+                            return;
+                        }
+                    }
+                    if target == current {
+                        self.emit_raw_flow(lines, current, level);
+                        return;
+                    }
+                    if stop.contains(&target) {
+                        // Leaving the current arm/region: the enclosing construct resumes
+                        // at the join, so no explicit jump is needed. Inside a loop body
+                        // only targets that stay in the body may fall out; anything else
+                        // that is not break/continue must stay an explicit jump.
+                        if let Some(&(loop_header, _)) = self.loop_stack.last() {
+                            let inside_body = self
+                                .loop_blocks
+                                .get(&loop_header)
+                                .is_some_and(|body| body.contains(&target));
+                            if !inside_body {
+                                self.emit_raw_flow(lines, current, level);
+                            }
+                            return;
+                        }
+                        return;
+                    }
+                    if self.emitted[target] {
                         self.emit_raw_flow(lines, current, level);
                         return;
                     }
@@ -621,6 +661,50 @@ impl Structurer {
                     if taken == not_taken {
                         current = taken;
                         continue;
+                    }
+                    // Inside a loop body: a branch to the loop exit is `break`, a branch
+                    // back to the header is `continue`.
+                    if let Some(&(loop_header, loop_exit)) = self.loop_stack.last() {
+                        if taken == loop_exit {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}if ({condition}) break;", indent(level)),
+                            });
+                            current = not_taken;
+                            continue;
+                        }
+                        if not_taken == loop_exit {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!(
+                                    "{}if ({}) break;",
+                                    indent(level),
+                                    negate(&condition)
+                                ),
+                            });
+                            current = taken;
+                            continue;
+                        }
+                        if taken == loop_header {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}if ({condition}) continue;", indent(level)),
+                            });
+                            current = not_taken;
+                            continue;
+                        }
+                        if not_taken == loop_header {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!(
+                                    "{}if ({}) continue;",
+                                    indent(level),
+                                    negate(&condition)
+                                ),
+                            });
+                            current = taken;
+                            continue;
+                        }
                     }
                     let join = self.ipdom[current];
                     if let Some(join) = join {
@@ -740,6 +824,7 @@ impl Structurer {
 
         // Header statements run once per iteration: keep them inside the loop and
         // break when the condition says to leave.
+        self.loop_stack.push((header, exit));
         lines.push(PseudoLine {
             addr: self.blocks[header].entry,
             text: format!("{}while (1) {{", indent(level)),
@@ -784,6 +869,7 @@ impl Structurer {
                 self.emit_raw_flow(lines, *block, level);
             }
         }
+        self.loop_stack.pop();
         Some(exit)
     }
 
@@ -1251,6 +1337,7 @@ mod tests {
         let start = function_start(&session, "bytes_op").unwrap();
         let text = pseudocode_l1(&mut session, start).unwrap().text();
         assert!(text.contains("while (1)"), "{text}");
+        assert!(text.contains("break;"), "{text}");
     }
 
     #[test]

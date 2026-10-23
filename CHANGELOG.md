@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Structurer break/continue: loop bodies now emit `break;` for branches that leave to
+  the loop exit and `continue;` for branches back to the loop header (tracked via a loop
+  context stack), and jumps to an enclosing region's join fall through instead of
+  printing `goto` (while keeping explicit gotos for targets outside the loop body that
+  are neither break nor continue). Notepad's structured rate rose from 62.4% to **77.3%**
+  (388/502, above the v1 70% target) with 75 functions fixed and zero regressions when
+  diffing the fallback set; corpus stays at 93.1% structured / 97.1% coverage. Golden
+  snapshots unchanged; tests assert `break;` emission.
+
 - M4 preview materials: README refreshed (current status, feature comparison, mermaid
   architecture, document index links), new docs/FAQ.md (ten questions incl. AI privacy,
   license and safety), docs/ROADMAP.md (milestone status + near-term priorities) and
