@@ -11,6 +11,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+recraft-analysis.workspace = true
 recraft-common = { workspace = true }
 recraft-core = { workspace = true }
 recraft-ir = { workspace = true }

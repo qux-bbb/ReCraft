@@ -19,6 +19,102 @@ use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_ir::{Expr, ExprId, Flow, LiftedInsn, Lifter, Stmt, UnOp, cond_name};
 
+mod structuring;
+
+pub use structuring::pseudocode_l1;
+
+/// One block's lifted statements plus its terminating flow (used by L1).
+pub(crate) struct BlockLift {
+    /// Statements without the trailing semicolon or indentation.
+    pub statements: Vec<PseudoLine>,
+    /// Condition text for a conditional branch terminating the block.
+    pub condition: Option<String>,
+    pub flow: Flow,
+}
+
+/// Lift one basic block (`[start, end)`) into statements + terminating flow.
+pub(crate) fn lift_block(session: &mut Session, start: Address, end: Address) -> Result<BlockLift> {
+    if end <= start {
+        return Ok(BlockLift {
+            statements: Vec::new(),
+            condition: None,
+            flow: Flow::Fallthrough,
+        });
+    }
+    let mut lifter = Lifter::new();
+    let mut lifted: Vec<LiftedInsn> = Vec::new();
+    let mut addr = start;
+    while addr < end {
+        let Some(insn) = session.insn_at(addr)? else {
+            break;
+        };
+        if insn.is_invalid() {
+            break;
+        }
+        let item = lifter.lift(&insn);
+        let next = insn.next_addr();
+        lifted.push(item);
+        if next >= end || next <= addr {
+            break;
+        }
+        addr = next;
+    }
+    if lifted.is_empty() {
+        return Ok(BlockLift {
+            statements: Vec::new(),
+            condition: None,
+            flow: Flow::Fallthrough,
+        });
+    }
+
+    let exprs = lifter.into_exprs();
+    let mut names: HashMap<u64, String> = HashMap::new();
+    for item in &lifted {
+        for stmt in &item.stmts {
+            if let Stmt::Call { target } = stmt {
+                names
+                    .entry(target.get())
+                    .or_insert(resolve_name(session, *target)?);
+            }
+        }
+        if let Flow::Goto(target) | Flow::CondGoto { target, .. } = item.flow {
+            names
+                .entry(target.get())
+                .or_insert(resolve_name(session, target)?);
+        }
+    }
+    let printer = Printer {
+        exprs: &exprs,
+        names: &names,
+        start,
+        end,
+        labels: &BTreeSet::new(),
+    };
+
+    let mut statements = Vec::new();
+    for item in &lifted {
+        for stmt in &item.stmts {
+            if printer.is_noop_write(stmt) {
+                continue;
+            }
+            statements.push(PseudoLine {
+                addr: item.addr,
+                text: format!("{};", printer.stmt(stmt)),
+            });
+        }
+    }
+    let last = lifted.last().unwrap();
+    let condition = match last.flow {
+        Flow::CondGoto { cond, .. } => Some(printer.expr(cond)),
+        _ => None,
+    };
+    Ok(BlockLift {
+        statements,
+        condition,
+        flow: last.flow,
+    })
+}
+
 /// One line of pseudo-C, with its source address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PseudoLine {

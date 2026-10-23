@@ -62,7 +62,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Render L0 pseudo-C for a function.
+    /// Render pseudo-C for a function (L0 by default; `--structured` emits L1).
     Decompile {
         project: PathBuf,
         /// Function start: `0x...`, decimal, a symbol name, or `entry`.
@@ -75,6 +75,9 @@ enum Commands {
         /// Prefix each line with its source address.
         #[arg(long)]
         addresses: bool,
+        /// Emit L1 structured pseudo-C (requires `analyze` first).
+        #[arg(long)]
+        structured: bool,
     },
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
@@ -253,7 +256,15 @@ fn run(cli: Cli) -> Result<()> {
             max_insns,
             json,
             addresses,
-        } => cmd_decompile(&project, addr.as_deref(), max_insns, json, addresses),
+            structured,
+        } => cmd_decompile(
+            &project,
+            addr.as_deref(),
+            max_insns,
+            json,
+            addresses,
+            structured,
+        ),
         Commands::Rename {
             project,
             addr,
@@ -1133,13 +1144,24 @@ fn cmd_decompile(
     max_insns: usize,
     as_json: bool,
     with_addresses: bool,
+    structured: bool,
 ) -> Result<()> {
     let mut session = Session::open(project)?;
     let start = match addr {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
-    let code = pseudocode_l0(&mut session, start, max_insns)?;
+    let code = if structured {
+        let function_start = session
+            .functions()?
+            .iter()
+            .find(|function| start >= function.start && start < function.end)
+            .map(|function| function.start)
+            .unwrap_or(start);
+        recraft_decompile::pseudocode_l1(&mut session, function_start)?
+    } else {
+        pseudocode_l0(&mut session, start, max_insns)?
+    };
 
     if as_json {
         let lines: Vec<Value> = code

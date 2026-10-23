@@ -57,6 +57,7 @@ First import a binary from the command line:
 cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
 cargo run -p recraft-cli -- disasm notepad.rcraft --count 40
 cargo run -p recraft-cli -- decompile notepad.rcraft --addr entry
+cargo run -p recraft-cli -- decompile notepad.rcraft --addr entry --structured
 cargo run -p recraft-cli -- analyze notepad.rcraft
 cargo run -p recraft-cli -- strings notepad.rcraft
 cargo run -p recraft-cli -- xrefs notepad.rcraft --addr entry

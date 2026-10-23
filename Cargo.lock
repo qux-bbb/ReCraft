@@ -2861,6 +2861,7 @@ dependencies = [
 name = "recraft-decompile"
 version = "0.1.0"
 dependencies = [
+ "recraft-analysis",
  "recraft-common",
  "recraft-core",
  "recraft-ir",

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M2 L1 structure recovery: a conservative structurer turns the CFG into `if`/`else`
+  diamonds, early-exit `if`s and natural `while` loops using dominators/post-dominators
+  and back-edge loop detection; unsupported shapes fall back to labelled `goto` regions
+  without dropping blocks. Exposed as `recraft decompile --structured` and an
+  "L1 (structured)" toggle in the UI pseudo-C tab. Docs: `docs/M2.md`.
+
 - M1 background analysis: the UI Analyze action runs on a worker thread with its own
   SQLite connection; the top bar shows elapsed time and a Cancel button. Cancellation is
   cooperative (`AnalysisOptions { cancel }`, checked between functions and every 1024

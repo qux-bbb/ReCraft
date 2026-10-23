@@ -122,6 +122,7 @@ pub struct ReCraftApp {
     pseudo_start: Address,
     pseudo: Option<Vec<PseudoLine>>,
     pseudo_dirty: bool,
+    pseudo_l1: bool,
     functions: Vec<FunctionInfo>,
     functions_dirty: bool,
     strings: Vec<(Address, String)>,
@@ -159,6 +160,7 @@ impl Default for ReCraftApp {
             pseudo_start: Address::ZERO,
             pseudo: None,
             pseudo_dirty: false,
+            pseudo_l1: false,
             functions: Vec::new(),
             functions_dirty: false,
             strings: Vec::new(),
@@ -424,7 +426,24 @@ impl ReCraftApp {
             self.pseudo_dirty = false;
             return;
         };
-        match pseudocode_l0(session, self.pseudo_start, 400) {
+        let code = if self.pseudo_l1 {
+            let function_start = session
+                .functions()
+                .ok()
+                .and_then(|functions| {
+                    functions
+                        .iter()
+                        .find(|function| {
+                            self.pseudo_start >= function.start && self.pseudo_start < function.end
+                        })
+                        .map(|function| function.start)
+                })
+                .unwrap_or(self.pseudo_start);
+            recraft_decompile::pseudocode_l1(session, function_start)
+        } else {
+            pseudocode_l0(session, self.pseudo_start, 400)
+        };
+        match code {
             Ok(code) => {
                 self.pseudo = Some(code.lines);
                 self.pseudo_dirty = false;
@@ -1058,6 +1077,17 @@ impl ReCraftApp {
 
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let mono = FontId::monospace(MONO_SIZE);
+        let l1_label = self.t("L1 (structured)", "L1（结构化）");
+        let mut l1 = self.pseudo_l1;
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut l1, l1_label).changed() {
+                self.pseudo_l1 = l1;
+                self.pseudo_dirty = true;
+            }
+        });
+        if self.pseudo_dirty {
+            return;
+        }
         let Some(lines) = self.pseudo.as_ref() else {
             ui.weak(self.t(
                 "No pseudo-C. Press Space after opening a project.",
@@ -1637,6 +1667,23 @@ mod tests {
             .as_ref()
             .expect("CFG not built for the selected function");
         assert!(!cfg.blocks.is_empty(), "CFG has no blocks");
+
+        // L1 structured pseudo-C for the selected function.
+        app.tab = Tab::Pseudo;
+        app.pseudo_l1 = true;
+        app.pseudo_dirty = true;
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        let pseudo = app.pseudo.as_ref().expect("L1 pseudo-C was not produced");
+        assert!(
+            pseudo
+                .iter()
+                .any(|line| line.text.contains("L1 structure recovery")),
+            "L1 header missing"
+        );
     }
 
     /// Runs the background worker function directly (no UI thread): it must persist

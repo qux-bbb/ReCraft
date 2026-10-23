@@ -1,0 +1,767 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 ReCraft contributors
+
+//! L1 structure recovery: basic blocks → `if`/`else` and `while` skeletons.
+//!
+//! Conservative by design. Dominators and post-dominators drive if/else diamonds and
+//! natural loops; anything the structurer cannot prove (switch tables, irreducible
+//! flow, indirect jumps) falls back to labelled `goto` output. Unvisited blocks are
+//! appended as labelled regions so no code is silently dropped.
+//!
+//! Known approximation: statements executed by a loop header before its condition are
+//! emitted once before the `while` (compilers normally put only a compare there).
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use recraft_analysis::{Cfg, EdgeKind, build_cfg};
+use recraft_common::{Address, Error, Result};
+use recraft_core::Session;
+use recraft_ir::Flow;
+
+use crate::{BlockLift, PseudoLine, Pseudocode, lift_block};
+
+/// Render structured pseudo-C (L1) for a function produced by automatic analysis.
+pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode> {
+    let functions = session.functions()?;
+    let Some(function) = functions.iter().find(|function| function.start == start) else {
+        let mut fallback = crate::pseudocode_l0(session, start, 512)?;
+        fallback.lines.insert(
+            0,
+            PseudoLine {
+                addr: start,
+                text: "// L1 unavailable: run analysis first".to_owned(),
+            },
+        );
+        return Ok(fallback);
+    };
+    let cfg = build_cfg(session, function.start, function.end)?;
+    if cfg.blocks.is_empty() {
+        return Err(Error::internal(format!(
+            "no basic blocks at {:#x}",
+            start.get()
+        )));
+    }
+
+    let mut bodies = Vec::with_capacity(cfg.blocks.len());
+    for block in &cfg.blocks {
+        bodies.push(lift_block(session, block.start, block.end)?);
+    }
+    let mut structurer = Structurer::new(&cfg, bodies);
+    structurer.compute_rpo();
+    structurer.compute_dominators();
+    structurer.compute_post_dominators();
+    structurer.compute_loops();
+
+    let name = session
+        .name_at(start)?
+        .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+    let mut lines = Vec::with_capacity(64);
+    lines.push(PseudoLine {
+        addr: start,
+        text: format!("// L1 structure recovery ({} blocks)", cfg.blocks.len()),
+    });
+    lines.push(PseudoLine {
+        addr: start,
+        text: format!("void {name}_l1(void) {{"),
+    });
+    structurer.emit_all(&mut lines);
+    lines.push(PseudoLine {
+        addr: start,
+        text: "}".to_owned(),
+    });
+    Ok(Pseudocode {
+        func_start: start,
+        lines,
+    })
+}
+
+struct Block {
+    entry: Address,
+    flow: Flow,
+    condition: Option<String>,
+    taken: Option<usize>,
+    not_taken: Option<usize>,
+    goto_target: Option<usize>,
+    has_table: bool,
+}
+
+struct Structurer {
+    blocks: Vec<Block>,
+    entry: usize,
+    successors: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    rpo: Vec<usize>,
+    idom: Vec<Option<usize>>,
+    ipdom: Vec<Option<usize>>,
+    loop_headers: BTreeSet<usize>,
+    loop_of: Vec<Option<usize>>,
+    loop_blocks: BTreeMap<usize, BTreeSet<usize>>,
+    emitted: Vec<bool>,
+    bodies: Vec<BlockLift>,
+}
+
+impl Structurer {
+    fn new(cfg: &Cfg, bodies: Vec<BlockLift>) -> Self {
+        let index_of =
+            |address: Address| cfg.blocks.iter().position(|block| block.start == address);
+        let mut blocks = Vec::with_capacity(cfg.blocks.len());
+        let mut successors = vec![Vec::new(); cfg.blocks.len()];
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            let mut taken = None;
+            let mut not_taken = None;
+            let mut goto_target = None;
+            let mut has_table = false;
+            for &(target, kind) in &block.edges {
+                match kind {
+                    EdgeKind::Taken => taken = Some(target),
+                    EdgeKind::NotTaken | EdgeKind::Fallthrough => not_taken = Some(target),
+                    EdgeKind::Unconditional => goto_target = Some(target),
+                    EdgeKind::JumpTable => has_table = true,
+                }
+                if !successors[index].contains(&target) {
+                    successors[index].push(target);
+                }
+            }
+            let lifted = &bodies[index];
+            blocks.push(Block {
+                entry: block.start,
+                flow: lifted.flow,
+                condition: lifted.condition.clone(),
+                taken,
+                not_taken,
+                goto_target: match lifted.flow {
+                    Flow::Goto(address) => index_of(address),
+                    _ => goto_target,
+                },
+                has_table,
+            });
+        }
+        let mut predecessors = vec![Vec::new(); cfg.blocks.len()];
+        for (index, nexts) in successors.iter().enumerate() {
+            for &next in nexts {
+                predecessors[next].push(index);
+            }
+        }
+        let entry = cfg.entry;
+        Structurer {
+            blocks,
+            entry,
+            successors,
+            predecessors,
+            rpo: Vec::new(),
+            idom: vec![None; bodies.len()],
+            ipdom: vec![None; bodies.len()],
+            loop_headers: BTreeSet::new(),
+            loop_of: vec![None; bodies.len()],
+            loop_blocks: BTreeMap::new(),
+            emitted: vec![false; bodies.len()],
+            bodies,
+        }
+    }
+
+    // ------------------------------------------------------------ graph math --
+
+    fn compute_rpo(&mut self) {
+        let count = self.blocks.len();
+        let mut visited = vec![false; count];
+        let mut postorder = Vec::with_capacity(count);
+        let mut stack = vec![(self.entry, 0usize)];
+        visited[self.entry] = true;
+        while let Some((node, next_index)) = stack.pop() {
+            if next_index < self.successors[node].len() {
+                stack.push((node, next_index + 1));
+                let next = self.successors[node][next_index];
+                if !visited[next] {
+                    visited[next] = true;
+                    stack.push((next, 0));
+                }
+            } else {
+                postorder.push(node);
+            }
+        }
+        self.rpo = postorder.into_iter().rev().collect();
+    }
+
+    fn compute_dominators(&mut self) {
+        let count = self.blocks.len();
+        let mut idom: Vec<Option<usize>> = vec![None; count];
+        idom[self.entry] = Some(self.entry);
+        let order: BTreeMap<usize, usize> = self
+            .rpo
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (*node, index))
+            .collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &node in self.rpo.iter().skip(1) {
+                let mut new_idom = None;
+                for &pred in &self.predecessors[node] {
+                    if idom[pred].is_some() {
+                        new_idom = Some(match new_idom {
+                            None => pred,
+                            Some(current) => intersect(&order, &idom, current, pred),
+                        });
+                    }
+                }
+                if let Some(new_idom) = new_idom
+                    && idom[node] != Some(new_idom)
+                {
+                    idom[node] = Some(new_idom);
+                    changed = true;
+                }
+            }
+        }
+        self.idom = idom;
+    }
+
+    /// Post-dominators with a virtual exit node; `None` means "can reach function end
+    /// without reconverging", which disables if/else packaging for that header.
+    fn compute_post_dominators(&mut self) {
+        let count = self.blocks.len();
+        let virtual_exit = count;
+        let mut predecessors = vec![Vec::new(); count + 1];
+        for node in 0..count {
+            if self.successors[node].is_empty() {
+                predecessors[virtual_exit].push(node);
+            }
+            for &next in &self.successors[node] {
+                predecessors[next].push(node);
+            }
+        }
+        let mut visited = vec![false; count + 1];
+        let mut postorder = Vec::new();
+        let mut stack = vec![(virtual_exit, 0usize)];
+        visited[virtual_exit] = true;
+        while let Some((node, next_index)) = stack.pop() {
+            if next_index < predecessors[node].len() {
+                stack.push((node, next_index + 1));
+                let next = predecessors[node][next_index];
+                if !visited[next] {
+                    visited[next] = true;
+                    stack.push((next, 0));
+                }
+            } else {
+                postorder.push(node);
+            }
+        }
+        let rpo: Vec<usize> = postorder.into_iter().rev().collect();
+        let order: BTreeMap<usize, usize> = rpo
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (*node, index))
+            .collect();
+        let mut ipdom: Vec<Option<usize>> = vec![None; count + 1];
+        ipdom[virtual_exit] = Some(virtual_exit);
+        // Exit blocks post-dominate directly from the virtual exit.
+        for (node, successors) in self.successors.iter().enumerate() {
+            if successors.is_empty() {
+                ipdom[node] = Some(virtual_exit);
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &node in rpo.iter().skip(1) {
+                if node == virtual_exit {
+                    continue;
+                }
+                let mut new_ipdom = None;
+                for &next in &self.successors[node] {
+                    if ipdom[next].is_some() {
+                        new_ipdom = Some(match new_ipdom {
+                            None => next,
+                            Some(current) => intersect(&order, &ipdom, current, next),
+                        });
+                    }
+                }
+                if let Some(new_ipdom) = new_ipdom
+                    && ipdom[node] != Some(new_ipdom)
+                {
+                    ipdom[node] = Some(new_ipdom);
+                    changed = true;
+                }
+            }
+        }
+        self.ipdom = (0..count)
+            .map(|node| ipdom[node].filter(|&value| value != virtual_exit))
+            .collect();
+    }
+
+    fn compute_loops(&mut self) {
+        let count = self.blocks.len();
+        let mut loops: Vec<(usize, BTreeSet<usize>)> = Vec::new();
+        for node in 0..count {
+            for &next in &self.successors[node] {
+                if self.dominates(next, node) {
+                    let mut body = BTreeSet::new();
+                    body.insert(next);
+                    // Natural loop: the back-edge source and everything reaching it
+                    // without passing through the header (a self-loop is just {header}).
+                    if node != next {
+                        let mut work = vec![node];
+                        while let Some(block) = work.pop() {
+                            if body.insert(block) {
+                                for &pred in &self.predecessors[block] {
+                                    if !body.contains(&pred) {
+                                        work.push(pred);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    loops.push((next, body));
+                }
+            }
+        }
+        // Innermost loop wins for shared blocks (sort by size, smallest first).
+        loops.sort_by_key(|(_, body)| body.len());
+        for (header, body) in loops {
+            self.loop_headers.insert(header);
+            self.loop_of[header] = Some(header);
+            for &block in &body {
+                if block != header && self.loop_of[block].is_none() {
+                    self.loop_of[block] = Some(header);
+                }
+            }
+            self.loop_blocks.entry(header).or_insert(body);
+        }
+    }
+
+    fn dominates(&self, candidate: usize, node: usize) -> bool {
+        let mut current = node;
+        for _ in 0..=self.blocks.len() {
+            if current == candidate {
+                return true;
+            }
+            match self.idom[current] {
+                Some(parent) if parent != current => current = parent,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    // -------------------------------------------------------------- emission --
+
+    fn emit_all(&mut self, lines: &mut Vec<PseudoLine>) {
+        self.emit_linear(lines, self.entry, 1, &BTreeSet::new());
+        for index in 0..self.blocks.len() {
+            if self.emitted[index] {
+                continue;
+            }
+            self.emitted[index] = true;
+            lines.push(PseudoLine {
+                addr: self.blocks[index].entry,
+                text: format!("{}loc_{:x}:", indent(1), self.blocks[index].entry.get()),
+            });
+            self.emit_simple(lines, index, 1);
+            self.emit_raw_flow(lines, index, 1);
+        }
+    }
+
+    fn emit_linear(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        start: usize,
+        level: usize,
+        stop: &BTreeSet<usize>,
+    ) {
+        let mut current = start;
+        let mut guard = 0usize;
+        while guard <= self.blocks.len() + 8 {
+            guard += 1;
+            if current >= self.blocks.len() || self.emitted[current] || stop.contains(&current) {
+                return;
+            }
+            if let Some(header) = self.loop_of[current]
+                && header != current
+                && !self.emitted[header]
+            {
+                // Entered a loop body without its header first: keep output safe.
+                self.emitted[current] = true;
+                self.emit_simple(lines, current, level);
+                self.emit_raw_flow(lines, current, level);
+                return;
+            }
+            if self.loop_headers.contains(&current) {
+                match self.emit_loop(lines, current, level) {
+                    Some(exit) => {
+                        current = exit;
+                        continue;
+                    }
+                    None => {
+                        self.emitted[current] = true;
+                        self.emit_simple(lines, current, level);
+                        self.emit_raw_flow(lines, current, level);
+                        return;
+                    }
+                }
+            }
+            self.emitted[current] = true;
+            self.emit_simple(lines, current, level);
+            if self.blocks[current].has_table {
+                self.emit_raw_flow(lines, current, level);
+                return;
+            }
+
+            match self.blocks[current].flow {
+                Flow::Return => {
+                    lines.push(PseudoLine {
+                        addr: self.blocks[current].entry,
+                        text: format!("{}return;", indent(level)),
+                    });
+                    return;
+                }
+                Flow::Goto(_) => {
+                    let Some(target) = self.blocks[current].goto_target else {
+                        self.emit_raw_flow(lines, current, level);
+                        return;
+                    };
+                    if target == current || stop.contains(&target) || self.emitted[target] {
+                        self.emit_raw_flow(lines, current, level);
+                        return;
+                    }
+                    current = target;
+                }
+                Flow::CondGoto { .. } => {
+                    let (Some(condition), Some(taken), Some(not_taken)) = (
+                        self.blocks[current].condition.clone(),
+                        self.blocks[current].taken,
+                        self.blocks[current].not_taken,
+                    ) else {
+                        self.emit_raw_flow(lines, current, level);
+                        return;
+                    };
+                    if taken == not_taken {
+                        current = taken;
+                        continue;
+                    }
+                    let join = self.ipdom[current];
+                    if let Some(join) = join {
+                        if join >= self.blocks.len() || stop.contains(&join) || self.emitted[join] {
+                            self.emit_raw_flow(lines, current, level);
+                            return;
+                        }
+                        let then_empty = taken == join;
+                        let else_empty = not_taken == join;
+                        let mut arm_stop = stop.clone();
+                        arm_stop.insert(join);
+                        if then_empty {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}if (!{condition}) {{", indent(level)),
+                            });
+                            self.emit_linear(lines, not_taken, level + 1, &arm_stop);
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}}}", indent(level)),
+                            });
+                        } else if else_empty {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}if ({condition}) {{", indent(level)),
+                            });
+                            self.emit_linear(lines, taken, level + 1, &arm_stop);
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}}}", indent(level)),
+                            });
+                        } else {
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}if ({condition}) {{", indent(level)),
+                            });
+                            if !self.emitted[taken] {
+                                self.emit_linear(lines, taken, level + 1, &arm_stop);
+                            }
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}}} else {{", indent(level)),
+                            });
+                            if !self.emitted[not_taken] {
+                                self.emit_linear(lines, not_taken, level + 1, &arm_stop);
+                            }
+                            lines.push(PseudoLine {
+                                addr: self.blocks[current].entry,
+                                text: format!("{}}}", indent(level)),
+                            });
+                        }
+                        current = join;
+                        continue;
+                    }
+                    // No reconvergence (both arms terminate): emit the taken arm as an
+                    // early-exit `if` and continue with the fallthrough path.
+                    if !self.emitted[taken] && taken != not_taken {
+                        lines.push(PseudoLine {
+                            addr: self.blocks[current].entry,
+                            text: format!("{}if ({condition}) {{", indent(level)),
+                        });
+                        self.emit_linear(lines, taken, level + 1, stop);
+                        lines.push(PseudoLine {
+                            addr: self.blocks[current].entry,
+                            text: format!("{}}}", indent(level)),
+                        });
+                        current = not_taken;
+                        continue;
+                    }
+                    self.emit_raw_flow(lines, current, level);
+                    return;
+                }
+                _ => {
+                    let Some(next) = self.blocks[current].not_taken else {
+                        return;
+                    };
+                    if next == current {
+                        return;
+                    }
+                    current = next;
+                }
+            }
+        }
+    }
+
+    fn emit_loop(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        header: usize,
+        level: usize,
+    ) -> Option<usize> {
+        let body = self.loop_blocks.get(&header)?.clone();
+        let condition = self.blocks[header].condition.clone()?;
+        let taken = self.blocks[header].taken?;
+        let not_taken = self.blocks[header].not_taken?;
+        // One successor stays in the loop, the other leaves it; otherwise this is not a
+        // structured pre-test loop and the caller falls back to gotos.
+        let (inside, exit, condition) = if body.contains(&taken) && !body.contains(&not_taken) {
+            (taken, not_taken, condition)
+        } else if body.contains(&not_taken) && !body.contains(&taken) {
+            (not_taken, taken, negate(&condition))
+        } else {
+            return None;
+        };
+
+        // Header statements run once per iteration: keep them inside the loop and
+        // break when the condition says to leave.
+        lines.push(PseudoLine {
+            addr: self.blocks[header].entry,
+            text: format!("{}while (1) {{", indent(level)),
+        });
+        self.emitted[header] = true;
+        self.emit_simple(lines, header, level + 1);
+        let break_condition = if exit == taken {
+            condition.clone()
+        } else {
+            negate(&condition)
+        };
+        lines.push(PseudoLine {
+            addr: self.blocks[header].entry,
+            text: format!("{}if ({break_condition}) break;", indent(level + 1)),
+        });
+
+        let mut stop = BTreeSet::new();
+        for block in 0..self.blocks.len() {
+            if !body.contains(&block) {
+                stop.insert(block);
+            }
+        }
+        if inside != header {
+            self.emit_linear(lines, inside, level + 1, &stop);
+        }
+        lines.push(PseudoLine {
+            addr: self.blocks[header].entry,
+            text: format!("{}}}", indent(level)),
+        });
+        for block in &body {
+            if !self.emitted[*block] {
+                self.emitted[*block] = true;
+                lines.push(PseudoLine {
+                    addr: self.blocks[*block].entry,
+                    text: format!(
+                        "{}loc_{:x}:",
+                        indent(level),
+                        self.blocks[*block].entry.get()
+                    ),
+                });
+                self.emit_simple(lines, *block, level);
+                self.emit_raw_flow(lines, *block, level);
+            }
+        }
+        Some(exit)
+    }
+
+    fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
+        for statement in &self.bodies[block].statements {
+            lines.push(PseudoLine {
+                addr: statement.addr,
+                text: format!("{}{}", indent(level), statement.text),
+            });
+        }
+    }
+
+    fn emit_raw_flow(&mut self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
+        let entry = self.blocks[block].entry;
+        match &self.blocks[block].flow {
+            Flow::Return => lines.push(PseudoLine {
+                addr: entry,
+                text: format!("{}return;", indent(level)),
+            }),
+            Flow::Goto(target) => {
+                if self.blocks[block].goto_target.is_some() {
+                    lines.push(PseudoLine {
+                        addr: entry,
+                        text: format!("{}goto loc_{:x};", indent(level), target.get()),
+                    });
+                } else {
+                    lines.push(PseudoLine {
+                        addr: entry,
+                        text: format!(
+                            "{}/* tail call -> {:#x} */ return;",
+                            indent(level),
+                            target.get()
+                        ),
+                    });
+                }
+            }
+            Flow::CondGoto { target, .. } => {
+                let condition = self.blocks[block]
+                    .condition
+                    .clone()
+                    .unwrap_or_else(|| "/* cond */".to_owned());
+                lines.push(PseudoLine {
+                    addr: entry,
+                    text: format!(
+                        "{}if ({condition}) goto loc_{:x};",
+                        indent(level),
+                        target.get()
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+fn indent(level: usize) -> String {
+    "    ".repeat(level)
+}
+
+fn intersect(
+    order: &BTreeMap<usize, usize>,
+    dom: &[Option<usize>],
+    mut left: usize,
+    mut right: usize,
+) -> usize {
+    while left != right {
+        while order.get(&left).copied().unwrap_or(0) > order.get(&right).copied().unwrap_or(0) {
+            left = dom[left].unwrap_or(left);
+        }
+        while order.get(&right).copied().unwrap_or(0) > order.get(&left).copied().unwrap_or(0) {
+            right = dom[right].unwrap_or(right);
+        }
+    }
+    left
+}
+
+fn negate(condition: &str) -> String {
+    let trimmed = condition.trim();
+    let flipped = trimmed
+        .replace(" == ", " != ")
+        .replace(" != ", " == ")
+        .replace(" <= ", " > ")
+        .replace(" >= ", " < ")
+        .replace(" < ", " >= ")
+        .replace(" > ", " <= ");
+    if flipped != trimmed {
+        flipped
+    } else {
+        format!("!({trimmed})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use recraft_analysis::{analyze, persist};
+    use tempfile::TempDir;
+
+    fn analyzed_corpus() -> Option<(Session, TempDir)> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let bytes = std::fs::read(path).ok()?;
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("l1.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        Some((session, dir))
+    }
+
+    fn function_start(session: &Session, name: &str) -> Option<Address> {
+        let address = session.addr_of_name(name).ok().flatten()?;
+        session
+            .functions()
+            .ok()?
+            .iter()
+            .find(|function| function.start == address)
+            .map(|function| function.start)
+    }
+
+    fn render(session: &mut Session, name: &str) -> String {
+        let start = function_start(session, name).unwrap_or_else(|| panic!("{name} missing"));
+        pseudocode_l1(session, start).unwrap().text()
+    }
+
+    #[test]
+    fn branchy_becomes_if() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let text = render(&mut session, "branchy");
+        assert!(text.contains("if ("), "{text}");
+        assert!(text.contains('{') && text.contains('}'), "{text}");
+    }
+
+    #[test]
+    fn loopy_becomes_while() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let text = render(&mut session, "loopy");
+        assert!(text.contains("while ("), "{text}");
+    }
+
+    #[test]
+    fn switch_falls_back_to_labelled_regions() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let text = render(&mut session, "switcher_big");
+        assert!(!text.is_empty(), "empty output");
+        // Table dispatch cannot be structured yet, so unreached case blocks appear as
+        // labelled regions instead of being dropped.
+        assert!(text.contains("loc_"), "{text}");
+    }
+
+    #[test]
+    fn recursive_has_if_and_self_reference() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let text = render(&mut session, "recursive");
+        assert!(text.contains("if ("), "{text}");
+        assert!(text.contains("recursive"), "{text}");
+    }
+
+    #[test]
+    fn output_is_deterministic() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "branchy").unwrap();
+        let first = pseudocode_l1(&mut session, start).unwrap().text();
+        let second = pseudocode_l1(&mut session, start).unwrap().text();
+        assert_eq!(first, second);
+    }
+}
