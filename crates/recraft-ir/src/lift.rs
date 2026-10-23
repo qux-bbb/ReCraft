@@ -11,10 +11,12 @@
 //! covers the overwhelming majority of real code (`cmp/test` immediately before a
 //! branch). Other flag consumers fall back to an intrinsic.
 
+use std::collections::BTreeMap;
+
 use recraft_decode::{Insn, iced_x86};
 
 use crate::expr::{BinOp, CondKind, Expr, ExprId, Flow, LiftedInsn, Stmt, UnOp};
-use crate::reg::{RegView, from_iced};
+use crate::reg::{Reg, RegView, from_iced};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CmpSource {
@@ -35,6 +37,8 @@ struct CmpState {
 pub struct Lifter {
     exprs: Vec<Expr>,
     last_cmp: Option<CmpState>,
+    /// Latest value written to each register (used to recover call arguments).
+    reg_env: BTreeMap<Reg, ExprId>,
 }
 
 impl Default for Lifter {
@@ -48,6 +52,7 @@ impl Lifter {
         Self {
             exprs: Vec::new(),
             last_cmp: None,
+            reg_env: BTreeMap::new(),
         }
     }
 
@@ -174,7 +179,38 @@ impl Lifter {
             M::Call => match insn.flow() {
                 recraft_decode::FlowKind::Call => match insn.branch_target() {
                     Some(target) => {
-                        stmts.push(Stmt::Call { target });
+                        let args = if insn.mode().is_64() {
+                            const ARG_REGS: [Reg; 4] = [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9];
+                            ARG_REGS
+                                .iter()
+                                .map(|reg| match self.reg_env.get(reg).copied() {
+                                    // A self-referential value (`dec ecx` -> `ecx - 1`) was
+                                    // computed from the pre-write value; by the call the
+                                    // register already holds the result, so print the
+                                    // register itself to stay semantically correct.
+                                    Some(value) if expr_reads_reg(&self.exprs, value, *reg) => {
+                                        self.reg(RegView::full(*reg))
+                                    }
+                                    Some(value) => value,
+                                    None => self.reg(RegView::full(*reg)),
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        stmts.push(Stmt::Call { target, args });
+                        // Caller-saved registers are clobbered by the call.
+                        for reg in [
+                            Reg::Rcx,
+                            Reg::Rdx,
+                            Reg::R8,
+                            Reg::R9,
+                            Reg::Rax,
+                            Reg::R10,
+                            Reg::R11,
+                        ] {
+                            self.reg_env.remove(&reg);
+                        }
                         Flow::Fallthrough
                     }
                     None => self.intrinsic(insn, &mut stmts),
@@ -250,6 +286,11 @@ impl Lifter {
                     return false;
                 };
                 stmts.push(Stmt::WriteReg { reg: view, value });
+                if view.offset == 0 {
+                    self.reg_env.insert(view.base, value);
+                } else {
+                    self.reg_env.remove(&view.base);
+                }
                 true
             }
             OpKind::Memory => {
@@ -512,6 +553,11 @@ impl Lifter {
                     return false;
                 };
                 stmts.push(Stmt::WriteReg { reg: view, value });
+                if view.offset == 0 {
+                    self.reg_env.insert(view.base, value);
+                } else {
+                    self.reg_env.remove(&view.base);
+                }
                 true
             }
             OpKind::Memory => {
@@ -776,6 +822,32 @@ fn uses_zero_only(kind: CondKind) -> bool {
     )
 }
 
+fn expr_reads_reg(exprs: &[Expr], expr: ExprId, reg: Reg) -> bool {
+    match &exprs[expr as usize] {
+        Expr::Reg(view) => view.base == reg,
+        Expr::Bin { lhs, rhs, .. } => {
+            expr_reads_reg(exprs, *lhs, reg) || expr_reads_reg(exprs, *rhs, reg)
+        }
+        Expr::Un { arg, .. }
+        | Expr::Cast { arg, .. }
+        | Expr::Load { addr: arg, .. }
+        | Expr::LoadFloat { addr: arg, .. } => expr_reads_reg(exprs, *arg, reg),
+        Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_reg(exprs, *lhs, reg) || expr_reads_reg(exprs, *rhs, reg)
+        }
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_reads_reg(exprs, *cond, reg)
+                || expr_reads_reg(exprs, *then, reg)
+                || expr_reads_reg(exprs, *otherwise, reg)
+        }
+        Expr::Const(_) | Expr::Temp(_) => false,
+    }
+}
+
 fn condition_of(mnemonic: iced_x86::Mnemonic) -> Option<CondKind> {
     use iced_x86::Mnemonic as M;
     Some(match mnemonic {
@@ -1012,12 +1084,14 @@ mod tests {
     #[test]
     fn call_and_ret() {
         let (_, call) = lift_one(&[0xe8, 0x10, 0x00, 0x00, 0x00], 0x1000);
-        assert_eq!(
-            call.stmts[0],
-            Stmt::Call {
-                target: Address::new(0x1015)
+        match &call.stmts[0] {
+            Stmt::Call { target, args } => {
+                assert_eq!(*target, Address::new(0x1015));
+                // No arguments were set up: the incoming argument registers are used.
+                assert_eq!(args.len(), 4);
             }
-        );
+            other => panic!("unexpected stmt {other:?}"),
+        }
         let (_, ret) = lift_one(&[0xc3], 0x1000);
         assert_eq!(ret.flow, Flow::Return);
     }

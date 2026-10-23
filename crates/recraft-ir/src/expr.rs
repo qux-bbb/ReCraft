@@ -168,8 +168,9 @@ pub enum Stmt {
         /// 4 = f32, 8 = f64.
         size: u8,
     },
-    /// Direct call to a known address.
-    Call { target: Address },
+    /// Direct call to a known address, with the argument expressions captured at the
+    /// call site (x64 register arguments; empty on x86 where arguments live on the stack).
+    Call { target: Address, args: Vec<ExprId> },
     /// Instruction we do not model yet; the original assembly text is kept.
     Intrinsic { text: String },
 }

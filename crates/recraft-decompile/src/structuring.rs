@@ -1629,6 +1629,25 @@ mod tests {
     }
 
     #[test]
+    fn call_sites_show_arguments_with_a_callee_prototype() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "recursive").unwrap();
+        let before = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(before.contains("recursive()"), "{before}");
+        session
+            .execute(recraft_core::Command::SetPrototype {
+                addr: start,
+                text: Some("int recursive(int n)".to_owned()),
+            })
+            .unwrap();
+        let after = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(after.contains("recursive(rcx)"), "{after}");
+        assert!(!after.contains("recursive()"), "{after}");
+    }
+
+    #[test]
     fn output_is_deterministic() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

@@ -96,7 +96,7 @@ pub(crate) fn lift_block(
     let mut names: HashMap<u64, String> = HashMap::new();
     for item in &lifted {
         for stmt in &item.stmts {
-            if let Stmt::Call { target } = stmt {
+            if let Stmt::Call { target, .. } = stmt {
                 names
                     .entry(target.get())
                     .or_insert(resolve_name(session, *target)?);
@@ -108,6 +108,17 @@ pub(crate) fn lift_block(
                 .or_insert(resolve_name(session, target)?);
         }
     }
+    let mut call_protos: HashMap<u64, crate::l2::ProtoSig> = HashMap::new();
+    for item in &lifted {
+        for stmt in &item.stmts {
+            if let Stmt::Call { target, .. } = stmt
+                && let Some(text) = session.prototype_at(*target)?
+                && let Some(proto) = crate::l2::parse_prototype(&text)
+            {
+                call_protos.insert(target.get(), proto);
+            }
+        }
+    }
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
@@ -116,6 +127,7 @@ pub(crate) fn lift_block(
         labels: &BTreeSet::new(),
         args,
         arg_structs,
+        call_protos: &call_protos,
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
@@ -200,7 +212,7 @@ pub fn pseudocode_l0(
         }
         let item = lifter.lift(&insn);
         for stmt in &item.stmts {
-            if let Stmt::Call { target } = stmt {
+            if let Stmt::Call { target, .. } = stmt {
                 calls.insert(target.get());
             }
         }
@@ -231,6 +243,7 @@ pub fn pseudocode_l0(
     }
 
     let no_structs: BTreeMap<Reg, StructDef> = BTreeMap::new();
+    let no_protos: HashMap<u64, crate::l2::ProtoSig> = HashMap::new();
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
@@ -239,6 +252,7 @@ pub fn pseudocode_l0(
         labels: &targets,
         args: None,
         arg_structs: &no_structs,
+        call_protos: &no_protos,
         written: HashSet::new(),
     };
     let lines = printer.render(&lifted);
@@ -264,6 +278,8 @@ struct Printer<'a> {
     args: Option<&'a ArgNames>,
     /// Struct layouts bound to argument registers (`apply_type`).
     arg_structs: &'a BTreeMap<Reg, StructDef>,
+    /// User prototypes of direct call targets (renders call arguments/types).
+    call_protos: &'a HashMap<u64, crate::l2::ProtoSig>,
     /// Registers written so far (for argument-register naming).
     written: HashSet<Reg>,
 }
@@ -555,7 +571,18 @@ impl Printer<'_> {
                     )
                 }
             }
-            Stmt::Call { target } => format!("{}()", self.name(*target)),
+            Stmt::Call { target, args } => {
+                let name = self.name(*target);
+                match self.call_protos.get(&target.get()) {
+                    Some(proto) => {
+                        let count = proto.params.len().min(args.len());
+                        let rendered: Vec<String> =
+                            args.iter().take(count).map(|arg| self.expr(*arg)).collect();
+                        format!("{name}({})", rendered.join(", "))
+                    }
+                    None => format!("{name}()"),
+                }
+            }
             Stmt::Intrinsic { text } => {
                 // Unsupported instructions keep their assembly, but must stay inside
                 // a string literal so the pseudo-C does not break.

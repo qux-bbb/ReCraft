@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Call-argument recovery + cross-function prototype propagation: the lifter tracks
+  register values per block (`reg_env`) and records x64 call arguments on
+  `Stmt::Call { args }`; when the callee has a user prototype, pseudocode renders the
+  declared number of arguments (e.g. `recursive(rcx)` for `int recursive(int n)`) while
+  calls without a prototype stay `name()` (golden snapshots unchanged). Self-referential
+  argument expressions (`dec ecx` right before the call) fall back to the register name
+  to keep semantics correct; x86 stack arguments are not rendered yet. Tests: IR call
+  capture, decompiler prototype/argument rendering.
+
 - Release artifact verification: `scripts/verify-package.ps1` checks the zip against
   SHA256SUMS.txt, asserts the required staged files (both exes, LICENSE, docs incl.
   FAQ/ROADMAP/M4/DEMO, VERSION.txt) and runs the **extracted** binaries through
