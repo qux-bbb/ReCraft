@@ -105,6 +105,7 @@ enum Action {
     GotoDialog,
     EditName,
     EditComment,
+    ShowXrefs,
     MoveSelection(i32),
     Page(i32),
     Back,
@@ -713,8 +714,8 @@ impl ReCraftApp {
                 }
                 ui.separator();
                 ui.weak(self.t(
-                    "G goto · N rename · ; comment · Space pseudo · Ctrl+Z undo · Esc back",
-                    "G 跳转 · N 改名 · ; 注释 · 空格切换伪代码 · Ctrl+Z 撤销 · Esc 后退",
+                    "G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
+                    "G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格切换伪代码 · Ctrl+Z 撤销 · Esc 后退",
                 ));
             });
         });
@@ -1370,6 +1371,8 @@ impl ReCraftApp {
                 action = Action::EditComment;
             } else if input.key_pressed(Key::Space) {
                 action = Action::ToggleTab;
+            } else if input.key_pressed(Key::X) {
+                action = Action::ShowXrefs;
             } else if input.key_pressed(Key::Escape) {
                 action = Action::Back;
             } else if input.key_pressed(Key::ArrowDown) {
@@ -1506,6 +1509,10 @@ impl ReCraftApp {
                 if self.session.is_some() {
                     self.goto = Some(String::new());
                 }
+            }
+            Action::ShowXrefs => {
+                self.side_tab = SideTab::Xrefs;
+                self.refresh_xrefs();
             }
             Action::EditName | Action::EditComment => {
                 let Some(line) = self.disasm_rows.get(self.selected) else {
@@ -1890,6 +1897,45 @@ mod tests {
             Some("ai_suggested_name")
         );
         assert!(app.ai_proposals.is_empty(), "applied proposal not removed");
+    }
+
+    #[test]
+    fn x_shortcut_opens_the_xrefs_panel() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-xrefs.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut first = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        first.textures_delta.clear();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::X,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut second = ctx.run_ui(input, |ui| app.update_inner(ui));
+        second.textures_delta.clear();
+        assert_eq!(
+            app.side_tab,
+            SideTab::Xrefs,
+            "X should open the xrefs panel"
+        );
     }
 
     /// Runs the background worker function directly (no UI thread): it must persist

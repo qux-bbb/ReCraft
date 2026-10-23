@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- UI keyboard flow completes DESIGN §8.2: `X` now opens the cross-reference panel for the
+  current instruction (side tab `Xrefs` + refreshed xref list), joining the existing
+  `Space` (view switch), `N` (rename), `;` (comment), `G` (goto), `Esc` (back) and
+  `Ctrl+Z/Y` (undo/redo); the status-bar hint lists the new shortcut in EN/zh-CN. New
+  headless egui test sends a real `Key::X` event and asserts the panel switch.
+
 - AI natural-language queries and pseudo-code polish (DESIGN §9.2 completion):
   `recraft ai query <project> "<question>" [--json]` recognises offline intents
   (`urls`, `api_callers`, `function_callers`, `text`), answers from local tables
