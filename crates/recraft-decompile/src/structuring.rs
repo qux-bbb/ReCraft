@@ -1015,6 +1015,46 @@ impl Structurer {
             addr: entry,
             text: format!("{}switch ({selector}) {{", indent(level)),
         });
+        let join = self.ipdom[block];
+        if self.switch_inline_safe(&targets, join) {
+            let mut previous = None;
+            for (case, &target) in targets.iter().enumerate() {
+                if previous == Some(target) {
+                    lines.push(PseudoLine {
+                        addr: entry,
+                        text: format!("{}case {case}:", indent(level + 1)),
+                    });
+                    continue;
+                }
+                previous = Some(target);
+                lines.push(PseudoLine {
+                    addr: self.blocks[target].entry,
+                    text: format!("{}case {case}: {{", indent(level + 1)),
+                });
+                self.emitted[target] = true;
+                self.emit_simple(lines, target, level + 2);
+                match &self.blocks[target].flow {
+                    Flow::Return => lines.push(PseudoLine {
+                        addr: self.blocks[target].entry,
+                        text: format!("{}return;", indent(level + 2)),
+                    }),
+                    Flow::Goto(_) => lines.push(PseudoLine {
+                        addr: self.blocks[target].entry,
+                        text: format!("{}break;", indent(level + 2)),
+                    }),
+                    _ => {}
+                }
+                lines.push(PseudoLine {
+                    addr: self.blocks[target].entry,
+                    text: format!("{}}}", indent(level + 1)),
+                });
+            }
+            lines.push(PseudoLine {
+                addr: entry,
+                text: format!("{}}}", indent(level)),
+            });
+            return;
+        }
         for (case, target) in targets.iter().enumerate() {
             lines.push(PseudoLine {
                 addr: self.blocks[*target].entry,
@@ -1030,6 +1070,37 @@ impl Structurer {
             text: format!("{}}}", indent(level)),
         });
         // Case bodies are emitted as labelled regions by the unvisited-block pass.
+    }
+
+    /// Inline a jump table only when every target is a distinct, already-unemitted leaf
+    /// that returns or jumps to the switch join; otherwise keep the label/goto form.
+    fn switch_inline_safe(&self, targets: &[usize], join: Option<usize>) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut previous = None;
+        for &target in targets {
+            if let Some(previous) = previous {
+                if previous == target {
+                    continue;
+                }
+                if seen.contains(&target) {
+                    return false; // non-adjacent duplicate case target
+                }
+            }
+            previous = Some(target);
+            if !seen.insert(target) {
+                continue;
+            }
+            if self.emitted[target] {
+                return false;
+            }
+            match &self.blocks[target].flow {
+                Flow::Return => {}
+                Flow::Goto(goto) if join.is_some_and(|index| self.blocks[index].entry == *goto) => {
+                }
+                _ => return false,
+            }
+        }
+        true
     }
 
     fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
@@ -1195,8 +1266,9 @@ mod tests {
         assert!(text.contains("switch (ecx)"), "{text}");
         assert!(text.contains("case 0:"), "{text}");
         assert!(text.contains("case 19:"), "{text}");
-        // Case bodies are still emitted as labelled regions.
-        assert!(text.contains("loc_"), "{text}");
+        // Simple leaf cases are inlined; no goto fallback remains.
+        assert!(text.contains("case 0: {"), "{text}");
+        assert!(!text.contains("goto loc_"), "{text}");
     }
 
     #[test]
@@ -1461,6 +1533,19 @@ mod tests {
         let text = pseudocode_l1(&mut session, start).unwrap().text();
         assert!(text.contains("do {"), "{text}");
         assert!(text.contains("} while ("), "{text}");
+        assert!(!text.contains("goto loc_"), "{text}");
+    }
+
+    #[test]
+    fn jump_table_cases_inline_simple_leaves() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "switcher_big").unwrap();
+        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        assert!(text.contains("switch ("), "{text}");
+        assert!(text.contains("case 0: {"), "{text}");
+        assert!(text.contains("return;"), "{text}");
         assert!(!text.contains("goto loc_"), "{text}");
     }
 

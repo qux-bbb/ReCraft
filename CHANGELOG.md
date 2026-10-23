@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Switch case inlining: jump tables whose targets are simple leaves (block ends in
+  `return` or jumps to the switch join) now render as `switch (sel) { case N: { ... } }`
+  instead of `case N: goto loc_X;` plus labelled bodies; grouped adjacent cases share one
+  body and complex/shared case bodies keep the previous label/goto form. corpus
+  `switcher_big` is now structured: 29/30 functions (96.7%) with coverage 97.2%; golden
+  regenerated (30 snapshots); test asserts the inlined `case` form and no goto.
+
 - do-while recognition: loops whose header is also the latch (single-block) now render
   as `do { ... } while (cond);` instead of `while (1) { ... if (cond) break; }`, and a
   latch-with-conditions-without-header-condition form is handled by a dedicated

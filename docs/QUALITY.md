@@ -35,10 +35,10 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 
 ```
 functions:              30
-structured:             28 (93.3%)
+structured:             29 (96.7%)
 instructions:           386
 intrinsic instructions: 11 (coverage 97.2%)
-goto fallback functions: 2
+goto fallback functions: 1
 ```
 
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集

@@ -11,85 +11,85 @@ void switcher_big_l1(void) {
     __asm("jmp rcx");
     /* jump table: 20 targets, selector=ecx */
     switch (ecx) {
-        case 0: goto loc_ADDR;
-        case 1: goto loc_ADDR;
-        case 2: goto loc_ADDR;
-        case 3: goto loc_ADDR;
-        case 4: goto loc_ADDR;
-        case 5: goto loc_ADDR;
-        case 6: goto loc_ADDR;
-        case 7: goto loc_ADDR;
-        case 8: goto loc_ADDR;
-        case 9: goto loc_ADDR;
-        case 10: goto loc_ADDR;
-        case 11: goto loc_ADDR;
-        case 12: goto loc_ADDR;
-        case 13: goto loc_ADDR;
-        case 14: goto loc_ADDR;
-        case 15: goto loc_ADDR;
-        case 16: goto loc_ADDR;
-        case 17: goto loc_ADDR;
-        case 18: goto loc_ADDR;
-        case 19: goto loc_ADDR;
+        case 0: {
+            eax = 0xADDR;
+            return;
+        }
+        case 1: {
+            eax = 0xADDR;
+            return;
+        }
+        case 2: {
+            eax = 0xADDR;
+            return;
+        }
+        case 3: {
+            eax = 0xADDR;
+            return;
+        }
+        case 4: {
+            eax = 0xADDR;
+            return;
+        }
+        case 5: {
+            eax = 0xADDR;
+            return;
+        }
+        case 6: {
+            eax = 0xADDR;
+            return;
+        }
+        case 7: {
+            eax = 0xADDR;
+            return;
+        }
+        case 8: {
+            eax = 0xADDR;
+            return;
+        }
+        case 9: {
+            eax = 0xADDR;
+            return;
+        }
+        case 10: {
+            eax = 0xADDR;
+            return;
+        }
+        case 11: {
+            eax = 0xADDR;
+            return;
+        }
+        case 12: {
+            eax = 0xADDR;
+            return;
+        }
+        case 13: {
+            eax = 0xADDR;
+            return;
+        }
+        case 14: {
+            eax = 0xADDR;
+            return;
+        }
+        case 15: {
+            eax = 0xADDR;
+            return;
+        }
+        case 16: {
+            eax = 0xADDR;
+            return;
+        }
+        case 17: {
+            eax = 0xADDR;
+            return;
+        }
+        case 18: {
+            eax = 0xADDR;
+            return;
+        }
+        case 19: {
+            eax = 0xADDR;
+            return;
+        }
     }
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
-    loc_ADDR:
-    eax = 0xADDR;
-    return;
 }
