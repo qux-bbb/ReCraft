@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 control-flow graphs: `recraft-analysis::build_cfg` splits a function into basic
+  blocks (leaders = entry, branch targets, post-branch instructions) and connects them
+  with fallthrough/taken/not-taken/jump edges, tracking external tail-call branches;
+  `layers()` gives a BFS depth layout. New Graph tab in the UI draws nodes and bezier
+  edges (click a node to jump), and `recraft cfg --addr` prints or emits the block table
+  as JSON. Tests cover branches, loops (back edge), notepad's entry CFG and a headless
+  graph render.
+
 - M1 UI side panels: Segments / Functions / Strings / Imports / Xrefs tabs. Strings has a
   live substring filter (first 2000 matches rendered) and click-to-navigate; Imports shows
   `module!api [category] ×refs` and jumps to the first call site; Xrefs lists references to

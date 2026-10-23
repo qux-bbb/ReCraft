@@ -33,6 +33,7 @@ const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0xb0, 0x6a);
 enum Tab {
     Disasm,
     Pseudo,
+    Graph,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -109,6 +110,9 @@ pub struct ReCraftApp {
     xrefs: Vec<(Address, &'static str)>,
     xrefs_for: Option<Address>,
     xrefs_dirty: bool,
+    cfg: Option<recraft_analysis::Cfg>,
+    cfg_for: Option<Address>,
+    cfg_dirty: bool,
     edit: Option<EditState>,
     goto: Option<String>,
     history: Vec<Address>,
@@ -142,6 +146,9 @@ impl Default for ReCraftApp {
             xrefs: Vec::new(),
             xrefs_for: None,
             xrefs_dirty: false,
+            cfg: None,
+            cfg_for: None,
+            cfg_dirty: false,
             edit: None,
             goto: None,
             history: Vec::new(),
@@ -239,6 +246,8 @@ impl ReCraftApp {
         self.strings_dirty = true;
         self.imports_dirty = true;
         self.xrefs_for = None;
+        self.cfg_dirty = true;
+        self.cfg_for = None;
         self.history.clear();
         self.history.push(entry);
         self.history_pos = 0;
@@ -318,6 +327,9 @@ impl ReCraftApp {
             self.refresh_imports();
         }
         self.refresh_xrefs();
+        if self.tab == Tab::Graph {
+            self.refresh_cfg();
+        }
     }
 
     fn refresh_disasm(&mut self) {
@@ -479,6 +491,43 @@ impl ReCraftApp {
                 self.xrefs.clear();
                 self.xrefs_for = Some(current);
                 self.xrefs_dirty = false;
+                self.set_error(error);
+            }
+        }
+    }
+
+    fn current_function(&self) -> Option<(Address, Address)> {
+        let addr = self.disasm_rows.get(self.selected).map(|line| line.addr)?;
+        self.functions
+            .iter()
+            .find(|function| addr >= function.start && addr < function.end)
+            .map(|function| (function.start, function.end))
+    }
+
+    fn refresh_cfg(&mut self) {
+        let Some((start, end)) = self.current_function() else {
+            self.cfg = None;
+            self.cfg_for = None;
+            self.cfg_dirty = false;
+            return;
+        };
+        if !self.cfg_dirty && self.cfg_for == Some(start) {
+            return;
+        }
+        let Some(session) = self.session.as_mut() else {
+            self.cfg = None;
+            return;
+        };
+        match recraft_analysis::build_cfg(session, start, end) {
+            Ok(cfg) => {
+                self.cfg = Some(cfg);
+                self.cfg_for = Some(start);
+                self.cfg_dirty = false;
+            }
+            Err(error) => {
+                self.cfg = None;
+                self.cfg_for = Some(start);
+                self.cfg_dirty = false;
                 self.set_error(error);
             }
         }
@@ -694,13 +743,154 @@ impl ReCraftApp {
             });
     }
 
+    fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let Some(cfg) = self.cfg.clone() else {
+            ui.weak(self.t(
+                "No control-flow graph — run Analyze (F5) and put the cursor inside a function.",
+                "没有控制流图——运行 Analyze（F5），把光标放到函数内。",
+            ));
+            return;
+        };
+        if cfg.blocks.is_empty() {
+            ui.weak(self.t("function has no decodable blocks", "函数没有可解码的基本块"));
+            return;
+        }
+        let layers = recraft_analysis::layers(&cfg);
+        const NODE_W: f32 = 250.0;
+        const GAP_X: f32 = 110.0;
+        const GAP_Y: f32 = 22.0;
+        let column_count = layers.iter().copied().max().unwrap_or(0) + 1;
+        let mut column_y = vec![20.0f32; column_count];
+        let mut local: Vec<egui::Rect> = Vec::with_capacity(cfg.blocks.len());
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            let layer = layers[index];
+            let height = 26.0 + block.insns.len().min(8) as f32 * 14.0;
+            let x = 20.0 + layer as f32 * (NODE_W + GAP_X);
+            let y = column_y[layer];
+            column_y[layer] = y + height + GAP_Y;
+            local.push(egui::Rect::from_min_size(
+                egui::pos2(x, y),
+                egui::vec2(NODE_W, height),
+            ));
+        }
+        let canvas_w = 20.0 + column_count as f32 * (NODE_W + GAP_X);
+        let canvas_h = column_y.iter().copied().fold(20.0f32, f32::max) + 20.0;
+
+        ui.horizontal(|ui| {
+            ui.weak(self.t("edges:", "边:"));
+            for (label, color) in [
+                ("fallthrough", Color32::GRAY),
+                ("taken", Color32::from_rgb(0x6a, 0xb0, 0x6a)),
+                ("not taken", Color32::from_rgb(0xd0, 0x7a, 0x7a)),
+                ("jump", Color32::from_rgb(0x6a, 0x8f, 0xb5)),
+            ] {
+                ui.colored_label(color, label);
+            }
+        });
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let (response, painter) = ui.allocate_painter(
+                    egui::vec2(
+                        canvas_w.max(ui.available_width()),
+                        canvas_h.max(ui.available_height()),
+                    ),
+                    Sense::hover(),
+                );
+                let origin = response.rect.min.to_vec2();
+                for block in &cfg.blocks {
+                    for &(target, kind) in &block.edges {
+                        let Some(target_rect) = local.get(target) else {
+                            continue;
+                        };
+                        let from = local[block.index].right_center() + origin;
+                        let to = target_rect.left_center() + origin;
+                        let color = match kind {
+                            recraft_analysis::EdgeKind::Fallthrough => Color32::GRAY,
+                            recraft_analysis::EdgeKind::Taken => {
+                                Color32::from_rgb(0x6a, 0xb0, 0x6a)
+                            }
+                            recraft_analysis::EdgeKind::NotTaken => {
+                                Color32::from_rgb(0xd0, 0x7a, 0x7a)
+                            }
+                            recraft_analysis::EdgeKind::Unconditional => {
+                                Color32::from_rgb(0x6a, 0x8f, 0xb5)
+                            }
+                        };
+                        let bend = ((to.x - from.x).abs() * 0.4).max(40.0);
+                        painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                            [
+                                from,
+                                egui::pos2(from.x + bend, from.y),
+                                egui::pos2(to.x - bend, to.y),
+                                to,
+                            ],
+                            false,
+                            Color32::TRANSPARENT,
+                            egui::Stroke::new(1.4, color),
+                        ));
+                        painter.circle_filled(to, 3.0, color);
+                    }
+                }
+                for (index, block) in cfg.blocks.iter().enumerate() {
+                    let rect = local[index].translate(origin);
+                    let is_entry = index == cfg.entry;
+                    painter.rect_filled(rect, 6.0, Color32::from_rgb(0x22, 0x27, 0x30));
+                    painter.rect_stroke(
+                        rect,
+                        6.0,
+                        egui::Stroke::new(
+                            1.0,
+                            if is_entry {
+                                Color32::from_rgb(0xd0, 0xa0, 0x60)
+                            } else {
+                                Color32::from_rgb(0x3a, 0x42, 0x50)
+                            },
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                    painter.text(
+                        rect.min + egui::vec2(8.0, 4.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{:#x}", block.start.get()),
+                        FontId::monospace(11.0),
+                        C_ADDR,
+                    );
+                    for (line_index, insn) in block.insns.iter().take(8).enumerate() {
+                        painter.text(
+                            rect.min + egui::vec2(8.0, 20.0 + line_index as f32 * 14.0),
+                            egui::Align2::LEFT_TOP,
+                            truncate_chars(&insn.text, 44),
+                            FontId::monospace(11.0),
+                            Color32::from_gray(0xcf),
+                        );
+                    }
+                    let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click());
+                    if response.clicked() {
+                        *action = Action::Navigate(block.start);
+                    }
+                    if response.hovered() {
+                        let tooltip = block
+                            .insns
+                            .iter()
+                            .map(|insn| insn.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        response.on_hover_text(tooltip);
+                    }
+                }
+            });
+    }
+
     fn central(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let disasm_label = self.t("Disassembly", "反汇编");
         let pseudo_label = self.t("Pseudo-C (L0)", "伪代码 (L0)");
+        let graph_label = self.t("Graph", "控制流图");
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Disasm, disasm_label);
                 ui.selectable_value(&mut self.tab, Tab::Pseudo, pseudo_label);
+                ui.selectable_value(&mut self.tab, Tab::Graph, graph_label);
                 ui.separator();
                 ui.weak(if let Some(session) = self.session.as_ref() {
                     format!(
@@ -721,6 +911,7 @@ impl ReCraftApp {
             match self.tab {
                 Tab::Disasm => self.disasm_view(ui, action),
                 Tab::Pseudo => self.pseudo_view(ui, action),
+                Tab::Graph => self.graph_view(ui, action),
             }
         });
     }
@@ -999,6 +1190,8 @@ impl ReCraftApp {
                         self.strings_dirty = true;
                         self.imports_dirty = true;
                         self.xrefs_for = None;
+                        self.cfg_dirty = true;
+                        self.cfg_for = None;
                         self.set_status(format!(
                             "{} functions, {} strings in {elapsed_ms:.0} ms",
                             result.functions.len(),
@@ -1044,7 +1237,8 @@ impl ReCraftApp {
             Action::ToggleTab => {
                 self.tab = match self.tab {
                     Tab::Disasm => Tab::Pseudo,
-                    Tab::Pseudo => Tab::Disasm,
+                    Tab::Pseudo => Tab::Graph,
+                    Tab::Graph => Tab::Disasm,
                 };
             }
             Action::GotoDialog => {
@@ -1153,6 +1347,15 @@ fn xref_kind_name(kind: i64) -> &'static str {
         recraft_analysis::XREF_DATA => "data",
         _ => "other",
     }
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    if chars.len() > max {
+        chars.truncate(max);
+        chars.push('…');
+    }
+    chars.into_iter().collect()
 }
 
 fn resolve_address(session: &Session, raw: &str) -> Result<Address, String> {
@@ -1320,5 +1523,20 @@ mod tests {
         }
         assert!(!app.strings.is_empty(), "strings panel data missing");
         assert!(!app.imports.is_empty(), "imports panel data missing");
+
+        // Graph tab: build and render the CFG for the entry function.
+        app.tab = Tab::Graph;
+        app.cfg_dirty = true;
+        app.cfg_for = None;
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        let cfg = app
+            .cfg
+            .as_ref()
+            .expect("CFG not built for the selected function");
+        assert!(!cfg.blocks.is_empty(), "CFG has no blocks");
     }
 }

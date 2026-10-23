@@ -113,6 +113,14 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Print the control-flow graph of the function containing an address.
+    Cfg {
+        project: PathBuf,
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// List defined functions.
     Funcs {
         project: PathBuf,
@@ -220,6 +228,11 @@ fn run(cli: Cli) -> Result<()> {
             json,
         } => cmd_xrefs(&project, &addr, direction, json),
         Commands::Imports { project, json } => cmd_imports(&project, json),
+        Commands::Cfg {
+            project,
+            addr,
+            json,
+        } => cmd_cfg(&project, addr.as_deref(), json),
         Commands::Decompile {
             project,
             addr,
@@ -895,6 +908,83 @@ fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {
 
     let _ = std::fs::remove_dir_all(&dir);
     outcome
+}
+
+fn cmd_cfg(project: &Path, addr: Option<&str>, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let target = match addr {
+        Some(raw) => resolve_address(&session, raw)?,
+        None => session.entry_point(),
+    };
+    let functions = session.functions()?;
+    let Some(function) = functions
+        .iter()
+        .find(|function| target >= function.start && target < function.end)
+    else {
+        return Err(Error::internal(
+            "address is not inside a known function - run `recraft analyze` first",
+        ));
+    };
+    let cfg = recraft_analysis::build_cfg(&mut session, function.start, function.end)?;
+
+    if as_json {
+        let blocks: Vec<Value> = cfg
+            .blocks
+            .iter()
+            .map(|block| {
+                json!({
+                    "index": block.index,
+                    "start": format!("{:#x}", block.start.get()),
+                    "end": format!("{:#x}", block.end.get()),
+                    "insns": block.insns.len(),
+                    "edges": block
+                        .edges
+                        .iter()
+                        .map(|(target, kind)| json!({"target": target, "kind": edge_kind_name(*kind)}))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        return json_result(&json!({
+            "function": format!("{:#x}", cfg.function.get()),
+            "entry": cfg.entry,
+            "blocks": blocks,
+            "external_branches": cfg.external.len(),
+        }));
+    }
+
+    println!(
+        "function {:#x}: {} blocks, {} external branches",
+        cfg.function.get(),
+        cfg.blocks.len(),
+        cfg.external.len()
+    );
+    for block in &cfg.blocks {
+        let edges = block
+            .edges
+            .iter()
+            .map(|(target, kind)| format!("{target}:{}", edge_kind_name(*kind)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  [{:>2}] {:#012x} .. {:#012x}  {:>3} insns  -> {}",
+            block.index,
+            block.start.get(),
+            block.end.get(),
+            block.insns.len(),
+            edges
+        );
+    }
+    Ok(())
+}
+
+fn edge_kind_name(kind: recraft_analysis::EdgeKind) -> &'static str {
+    match kind {
+        recraft_analysis::EdgeKind::Fallthrough => "fallthrough",
+        recraft_analysis::EdgeKind::Taken => "taken",
+        recraft_analysis::EdgeKind::NotTaken => "not-taken",
+        recraft_analysis::EdgeKind::Unconditional => "jump",
+    }
 }
 
 // ------------------------------------------------------------------ funcs ----

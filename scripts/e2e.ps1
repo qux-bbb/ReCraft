@@ -119,6 +119,8 @@ try {
     Assert-Contains $xrefs 'xrefs at' 'xref query'
     $imports = Invoke-Recraft @('imports', $project)
     Assert-Contains $imports 'imported APIs' 'import table with categories'
+    $cfg = Invoke-Recraft @('cfg', $project, '--addr', 'entry')
+    Assert-Contains $cfg 'blocks' 'control-flow graph'
 
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"

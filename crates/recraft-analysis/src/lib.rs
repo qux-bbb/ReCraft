@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod api;
+mod cfg;
 mod strings;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -25,6 +26,7 @@ use recraft_core::Session;
 use recraft_decode::FlowKind;
 
 pub use api::categorize;
+pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
 pub use strings::{
     ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, extract_strings,
     persist_strings,
