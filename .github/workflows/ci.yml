@@ -97,3 +97,6 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check licenses bans sources
+      - name: license headers / NOTICE
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/check-license.ps1

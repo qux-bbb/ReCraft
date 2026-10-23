@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- License/notice compliance (DESIGN §12): added `NOTICE.md` (direct dependencies, SQLite
+  public domain, Noto CJK OFL, sample policy), `scripts/check-license.ps1` (verifies
+  required legal files, SPDX headers on all hand-written source files outside generated
+  golden snapshots, and NOTICE coverage of direct dependencies) and wired it into the CI
+  `licenses` job next to cargo-deny. docs/M4.md gains a DESIGN §0–§16 acceptance table
+  with per-section evidence: v1 functionality is implemented; §6.4 function-level
+  incremental re-analysis and the §8.4 i18n implementation choice remain documented
+  deviations, while installer validation/code signing stay externally blocked.
+
 - UI command palette (DESIGN §8.1 "menu / command palette"): `Ctrl+P` or `F1` opens a
   fuzzy-filterable list (open/import/analyze/undo/redo/view switch/goto/rename/comment/
   xrefs/AI suggestions/language) with arrow-key selection and Enter execution; the
