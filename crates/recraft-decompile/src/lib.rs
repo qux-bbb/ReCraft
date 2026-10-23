@@ -3,27 +3,29 @@
 
 //! Decompiler front-end.
 //!
-//! M0 ships **L0**: a flat, instruction-faithful pseudo-C rendering of one function's
-//! straight-line code and branches. It is deliberately simple — the point is to prove
-//! the IR → printer → UI/CLI pipeline. L1 (SSA, structuring, variables, types) will
-//! replace the printer, not the IR.
+//! - **L0**: flat, instruction-faithful pseudo-C (straight-line + branches).
+//! - **L1**: control-structure recovery (`if`/`else`, `while`, `switch`).
+//! - **L2 (first cut)**: incoming argument registers (`arg1..arg4`) and named stack
+//!   slots (`var_XX`), still without types or SSA.
 //!
-//! Every output line keeps its source address so the UI can cross-highlight and the
-//! AI layer can cite evidence.
+//! Every output line keeps its source address so the UI can cross-highlight and the AI
+//! layer can cite evidence.
 
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
-use recraft_ir::{Expr, ExprId, Flow, LiftedInsn, Lifter, Stmt, UnOp, cond_name};
+use recraft_ir::{Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, Stmt, UnOp, cond_name};
 
+mod l2;
 mod structuring;
 
-pub use structuring::pseudocode_l1;
+pub use l2::{ArgNames, recover_args};
+pub use structuring::{pseudocode_l1, pseudocode_l2};
 
-/// One block's lifted statements plus its terminating flow (used by L1).
+/// One block's lifted statements plus its terminating flow (used by L1/L2).
 pub(crate) struct BlockLift {
     /// Statements without the trailing semicolon or indentation.
     pub statements: Vec<PseudoLine>,
@@ -33,7 +35,12 @@ pub(crate) struct BlockLift {
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
-pub(crate) fn lift_block(session: &mut Session, start: Address, end: Address) -> Result<BlockLift> {
+pub(crate) fn lift_block(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    args: Option<&ArgNames>,
+) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
             statements: Vec::new(),
@@ -83,12 +90,14 @@ pub(crate) fn lift_block(session: &mut Session, start: Address, end: Address) ->
                 .or_insert(resolve_name(session, target)?);
         }
     }
-    let printer = Printer {
+    let mut printer = Printer {
         exprs: &exprs,
         names: &names,
         start,
         end,
         labels: &BTreeSet::new(),
+        args,
+        written: HashSet::new(),
     };
 
     let mut statements = Vec::new();
@@ -97,10 +106,12 @@ pub(crate) fn lift_block(session: &mut Session, start: Address, end: Address) ->
             if printer.is_noop_write(stmt) {
                 continue;
             }
+            let text = printer.stmt(stmt);
             statements.push(PseudoLine {
                 addr: item.addr,
-                text: format!("{};", printer.stmt(stmt)),
+                text: format!("{text};"),
             });
+            printer.note_write(stmt);
         }
     }
     let last = lifted.last().unwrap();
@@ -167,11 +178,8 @@ pub fn pseudocode_l0(
                 calls.insert(target.get());
             }
         }
-        match item.flow {
-            Flow::Goto(target) | Flow::CondGoto { target, .. } => {
-                targets.insert(target.get());
-            }
-            _ => {}
+        if let Flow::Goto(target) | Flow::CondGoto { target, .. } = item.flow {
+            targets.insert(target.get());
         }
         let stop = matches!(item.flow, Flow::Return | Flow::Goto(_));
         end = insn.next_addr();
@@ -183,7 +191,10 @@ pub fn pseudocode_l0(
     }
 
     if lifted.is_empty() {
-        return Err(Error::internal(format!("nothing to decompile at {start}")));
+        return Err(Error::internal(format!(
+            "nothing to decompile at {:#x}",
+            start.get()
+        )));
     }
 
     let exprs = lifter.into_exprs();
@@ -193,12 +204,14 @@ pub fn pseudocode_l0(
         names.insert(target.get(), resolve_name(session, target)?);
     }
 
-    let printer = Printer {
+    let mut printer = Printer {
         exprs: &exprs,
         names: &names,
         start,
         end,
         labels: &targets,
+        args: None,
+        written: HashSet::new(),
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -220,10 +233,13 @@ struct Printer<'a> {
     start: Address,
     end: Address,
     labels: &'a BTreeSet<u64>,
+    args: Option<&'a ArgNames>,
+    /// Registers written so far (for argument-register naming).
+    written: HashSet<Reg>,
 }
 
 impl Printer<'_> {
-    fn render(self, lifted: &[LiftedInsn]) -> Vec<PseudoLine> {
+    fn render(&mut self, lifted: &[LiftedInsn]) -> Vec<PseudoLine> {
         let mut lines = Vec::new();
         for insn in lifted {
             if self.labels.contains(&insn.addr.get()) {
@@ -236,10 +252,12 @@ impl Printer<'_> {
                 if self.is_noop_write(stmt) {
                     continue;
                 }
+                let text = self.stmt(stmt);
                 lines.push(PseudoLine {
                     addr: insn.addr,
-                    text: format!("    {};", self.stmt(stmt)),
+                    text: format!("    {text};"),
                 });
+                self.note_write(stmt);
             }
             match insn.flow {
                 Flow::Fallthrough => {}
@@ -275,14 +293,18 @@ impl Printer<'_> {
         lines
     }
 
+    /// Records a register write so later reads no longer render as `argN`.
+    fn note_write(&mut self, stmt: &Stmt) {
+        if let Stmt::WriteReg { reg, .. } = stmt {
+            self.written.insert(reg.base);
+        }
+    }
+
     fn is_noop_write(&self, stmt: &Stmt) -> bool {
         let Stmt::WriteReg { reg, value } = stmt else {
             return false;
         };
-        match self.exprs[*value as usize] {
-            Expr::Reg(view) => view == *reg,
-            _ => false,
-        }
+        matches!(self.exprs[*value as usize], Expr::Reg(view) if view == *reg)
     }
 
     fn is_local(&self, target: Address) -> bool {
@@ -296,16 +318,67 @@ impl Printer<'_> {
             .unwrap_or_else(|| format!("sub_{:x}", target.get()))
     }
 
+    /// Register reads render as `argN` while the register still holds its incoming
+    /// argument value.
+    fn reg_name(&self, view: &recraft_ir::RegView) -> String {
+        if let Some(args) = self.args
+            && let Some(name) = args.name_for(view.base)
+            && !self.written.contains(&view.base)
+        {
+            return name.to_owned();
+        }
+        view.name().to_owned()
+    }
+
+    /// `[rsp + const]` / `[const + rsp]` -> named stack slot.
+    fn stack_slot(&self, expr: ExprId) -> Option<i64> {
+        let (op, lhs, rhs) = match &self.exprs[expr as usize] {
+            Expr::Bin { op, lhs, rhs } => (op, *lhs, *rhs),
+            _ => return None,
+        };
+        if *op != recraft_ir::BinOp::Add {
+            return None;
+        }
+        let is_rsp = |id: ExprId, exprs: &[Expr]| matches!(exprs[id as usize], Expr::Reg(view) if view.base == Reg::Rsp);
+        let const_of = |id: ExprId, exprs: &[Expr]| match exprs[id as usize] {
+            Expr::Const(value) => Some(value as i64),
+            _ => None,
+        };
+        if is_rsp(lhs, self.exprs) {
+            const_of(rhs, self.exprs)
+        } else if is_rsp(rhs, self.exprs) {
+            const_of(lhs, self.exprs)
+        } else {
+            None
+        }
+    }
+
+    fn stack_name(offset: i64) -> String {
+        if offset < 0 {
+            format!("var_n{:x}", -offset)
+        } else {
+            format!("var_{offset:x}")
+        }
+    }
+
     fn stmt(&self, stmt: &Stmt) -> String {
         match stmt {
-            Stmt::WriteReg { reg, value } => format!("{} = {}", reg.name(), self.expr(*value)),
+            Stmt::WriteReg { reg, value } => {
+                // Writes always use the concrete register view; argument names only
+                // re-label reads of the still-intact incoming value.
+                format!("{} = {}", reg.name(), self.expr(*value))
+            }
             Stmt::Store { addr, value, size } => {
-                format!(
-                    "*(u{}*)({}) = {}",
-                    u16::from(*size) * 8,
-                    self.expr(*addr),
-                    self.expr(*value)
-                )
+                if let Some(offset) = self.stack_slot(*addr) {
+                    format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                } else {
+                    format!(
+                        "*(u{}*)({}) = {}",
+                        u16::from(*size) * 8,
+                        self.expr(*addr),
+                        self.expr(*value)
+                    )
+                }
             }
             Stmt::Call { target } => format!("{}()", self.name(*target)),
             Stmt::Intrinsic { text } => {
@@ -326,10 +399,14 @@ impl Printer<'_> {
                     format!("{value:#x}")
                 }
             }
-            Expr::Reg(view) => view.name().to_owned(),
+            Expr::Reg(view) => self.reg_name(view),
             Expr::Temp(id) => format!("t{id}"),
             Expr::Load { addr, size } => {
-                format!("*(u{}*)({})", u16::from(*size) * 8, self.expr(*addr))
+                if let Some(offset) = self.stack_slot(*addr) {
+                    Self::stack_name(offset)
+                } else {
+                    format!("*(u{}*)({})", u16::from(*size) * 8, self.expr(*addr))
+                }
             }
             Expr::Bin { op, lhs, rhs } => {
                 format!("({} {} {})", self.expr(*lhs), op.symbol(), self.expr(*rhs))
@@ -349,8 +426,8 @@ impl Printer<'_> {
                 Some(symbol) => {
                     let lhs = self.expr(*lhs);
                     let rhs = self.expr(*rhs);
-                    // Signed comparisons need a cast; M0 keeps the raw predicate
-                    // comment instead of mis-typing the operands.
+                    // Signed comparisons need a cast; keep the raw predicate comment
+                    // instead of mis-typing the operands.
                     if kind.is_signed() {
                         format!("({lhs} {symbol} {rhs} /* signed */)")
                     } else {

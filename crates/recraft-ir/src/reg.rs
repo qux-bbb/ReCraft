@@ -10,7 +10,7 @@ use recraft_decode::iced_x86;
 use serde::{Deserialize, Serialize};
 
 /// One of the 16 general-purpose x86-64 registers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Reg {
     Rax,
     Rcx,

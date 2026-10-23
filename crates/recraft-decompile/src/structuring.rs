@@ -18,10 +18,24 @@ use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_ir::Flow;
 
-use crate::{BlockLift, PseudoLine, Pseudocode, lift_block};
+use crate::{ArgNames, BlockLift, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
 pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode> {
+    structure(session, start, None)
+}
+
+/// Render structured pseudo-C with L2 argument naming and `var_XX` stack slots.
+pub fn pseudocode_l2(session: &mut Session, start: Address) -> Result<Pseudocode> {
+    let functions = session.functions()?;
+    let Some(function) = functions.iter().find(|function| function.start == start) else {
+        return pseudocode_l1(session, start);
+    };
+    let args = crate::recover_args(session, function.start, function.end)?;
+    structure(session, start, Some(args))
+}
+
+fn structure(session: &mut Session, start: Address, args: Option<ArgNames>) -> Result<Pseudocode> {
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
         let mut fallback = crate::pseudocode_l0(session, start, 512)?;
@@ -44,7 +58,7 @@ pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode
 
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
     for block in &cfg.blocks {
-        bodies.push(lift_block(session, block.start, block.end)?);
+        bodies.push(lift_block(session, block.start, block.end, args.as_ref())?);
     }
     let mut structurer = Structurer::new(&cfg, bodies);
     structurer.compute_rpo();
@@ -60,10 +74,30 @@ pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode
         addr: start,
         text: format!("// L1 structure recovery ({} blocks)", cfg.blocks.len()),
     });
-    lines.push(PseudoLine {
-        addr: start,
-        text: format!("void {name}_l1(void) {{"),
-    });
+    match &args {
+        Some(args) if !args.is_empty() => {
+            lines.push(PseudoLine {
+                addr: start,
+                text: format!("// L2 params: {}", args.comment()),
+            });
+            lines.push(PseudoLine {
+                addr: start,
+                text: format!("void {name}({}) {{", args.signature()),
+            });
+        }
+        Some(_) => {
+            lines.push(PseudoLine {
+                addr: start,
+                text: format!("void {name}(void) {{"),
+            });
+        }
+        None => {
+            lines.push(PseudoLine {
+                addr: start,
+                text: format!("void {name}_l1(void) {{"),
+            });
+        }
+    }
     structurer.emit_all(&mut lines);
     lines.push(PseudoLine {
         addr: start,
@@ -800,6 +834,25 @@ mod tests {
         let text = render(&mut session, "recursive");
         assert!(text.contains("if ("), "{text}");
         assert!(text.contains("recursive"), "{text}");
+    }
+
+    #[test]
+    fn l2_names_arguments_and_stack_slots() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "add_leaf").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("int64 arg1"), "{text}");
+        assert!(text.contains("int64 arg2"), "{text}");
+        assert!(
+            text.contains("(arg1 +") && text.contains("arg2"),
+            "argument reads were not renamed:\n{text}"
+        );
+
+        let nested = function_start(&session, "nested_loops").unwrap();
+        let text = pseudocode_l2(&mut session, nested).unwrap().text();
+        assert!(text.contains("var_"), "stack slots were not named:\n{text}");
     }
 
     #[test]

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M2 L2 variable recovery (first cut): argument registers (Windows x64 rcx/rdx/r8/r9)
+  are detected by read-before-write and rendered as `arg1..arg4` while intact; stack
+  slots become `var_XX`; the signature lists the recovered parameters. Exposed as
+  `recraft decompile --l2` and an "L2 (vars)" toggle in the UI pseudo-C tab. No SSA yet
+  (cross-block clobber tracking and types are documented follow-ups).
+
 - M2 switch structuring: the CFG now carries its jump tables (dispatch address ->
   targets in table order), and the L1 structurer emits `switch (index) { case N: goto
   loc_...; }` with case bodies appended as labelled regions. The selector register is

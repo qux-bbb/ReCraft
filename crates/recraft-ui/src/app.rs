@@ -123,6 +123,7 @@ pub struct ReCraftApp {
     pseudo: Option<Vec<PseudoLine>>,
     pseudo_dirty: bool,
     pseudo_l1: bool,
+    pseudo_l2: bool,
     functions: Vec<FunctionInfo>,
     functions_dirty: bool,
     strings: Vec<(Address, String)>,
@@ -161,6 +162,7 @@ impl Default for ReCraftApp {
             pseudo: None,
             pseudo_dirty: false,
             pseudo_l1: false,
+            pseudo_l2: false,
             functions: Vec::new(),
             functions_dirty: false,
             strings: Vec::new(),
@@ -426,7 +428,7 @@ impl ReCraftApp {
             self.pseudo_dirty = false;
             return;
         };
-        let code = if self.pseudo_l1 {
+        let code = if self.pseudo_l1 || self.pseudo_l2 {
             let function_start = session
                 .functions()
                 .ok()
@@ -439,7 +441,11 @@ impl ReCraftApp {
                         .map(|function| function.start)
                 })
                 .unwrap_or(self.pseudo_start);
-            recraft_decompile::pseudocode_l1(session, function_start)
+            if self.pseudo_l2 {
+                recraft_decompile::pseudocode_l2(session, function_start)
+            } else {
+                recraft_decompile::pseudocode_l1(session, function_start)
+            }
         } else {
             pseudocode_l0(session, self.pseudo_start, 400)
         };
@@ -1078,10 +1084,22 @@ impl ReCraftApp {
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let mono = FontId::monospace(MONO_SIZE);
         let l1_label = self.t("L1 (structured)", "L1（结构化）");
+        let l2_label = self.t("L2 (vars)", "L2（变量）");
         let mut l1 = self.pseudo_l1;
+        let mut l2 = self.pseudo_l2;
         ui.horizontal(|ui| {
             if ui.checkbox(&mut l1, l1_label).changed() {
                 self.pseudo_l1 = l1;
+                if l1 {
+                    self.pseudo_l2 = false;
+                }
+                self.pseudo_dirty = true;
+            }
+            if ui.checkbox(&mut l2, l2_label).changed() {
+                self.pseudo_l2 = l2;
+                if l2 {
+                    self.pseudo_l1 = true;
+                }
                 self.pseudo_dirty = true;
             }
         });
@@ -1683,6 +1701,22 @@ mod tests {
                 .iter()
                 .any(|line| line.text.contains("L1 structure recovery")),
             "L1 header missing"
+        );
+
+        // L2 variant renders a real (non `_l1`) signature and argument names.
+        app.pseudo_l2 = true;
+        app.pseudo_dirty = true;
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        let pseudo = app.pseudo.as_ref().expect("L2 pseudo-C was not produced");
+        assert!(
+            pseudo
+                .iter()
+                .any(|line| line.text.starts_with("void ") && !line.text.contains("_l1")),
+            "L2 signature missing"
         );
     }
 

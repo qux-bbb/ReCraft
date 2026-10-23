@@ -62,7 +62,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Render pseudo-C for a function (L0 by default; `--structured` emits L1).
+    /// Render pseudo-C for a function (L0 default; `--structured` L1, `--l2` L2).
     Decompile {
         project: PathBuf,
         /// Function start: `0x...`, decimal, a symbol name, or `entry`.
@@ -78,6 +78,9 @@ enum Commands {
         /// Emit L1 structured pseudo-C (requires `analyze` first).
         #[arg(long)]
         structured: bool,
+        /// Emit L2 structured pseudo-C with argument/stack variable names.
+        #[arg(long)]
+        l2: bool,
     },
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
@@ -257,6 +260,7 @@ fn run(cli: Cli) -> Result<()> {
             json,
             addresses,
             structured,
+            l2,
         } => cmd_decompile(
             &project,
             addr.as_deref(),
@@ -264,6 +268,7 @@ fn run(cli: Cli) -> Result<()> {
             json,
             addresses,
             structured,
+            l2,
         ),
         Commands::Rename {
             project,
@@ -1145,19 +1150,22 @@ fn cmd_decompile(
     as_json: bool,
     with_addresses: bool,
     structured: bool,
+    l2: bool,
 ) -> Result<()> {
     let mut session = Session::open(project)?;
     let start = match addr {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
-    let code = if structured {
-        let function_start = session
-            .functions()?
-            .iter()
-            .find(|function| start >= function.start && start < function.end)
-            .map(|function| function.start)
-            .unwrap_or(start);
+    let function_start = session
+        .functions()?
+        .iter()
+        .find(|function| start >= function.start && start < function.end)
+        .map(|function| function.start)
+        .unwrap_or(start);
+    let code = if l2 {
+        recraft_decompile::pseudocode_l2(&mut session, function_start)?
+    } else if structured {
         recraft_decompile::pseudocode_l1(&mut session, function_start)?
     } else {
         pseudocode_l0(&mut session, start, max_insns)?
