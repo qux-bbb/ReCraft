@@ -1,0 +1,45 @@
+# 性能门禁（1 GiB，DESIGN §3.3 / §14 M3）
+
+## 测量方式
+
+`scripts/bench-large.ps1`：
+
+1. 把 `notepad.exe`（或 `-PEFile`）复制成临时样本，并在文件尾追加 `-OverlayMB`（默认
+   1024）MiB 零数据，得到一个 **1 GiB 样本**（overlay 不在任何映射段内，PE 结构不变）。
+2. 用 `recraft import` 测量导入墙钟时间，`recraft analyze` 测量分析墙钟时间。
+3. 直接使用 `System.Diagnostics.Process` 启动子进程，每 20 ms 采样 `WorkingSet64` 得到
+   **峰值工作集**（PowerShell 的 `Start-Process` 无 `-Wait` 时丢失 ExitCode、带 `-Wait`
+   时丢失 PeakWorkingSet64，所以脚本自己实现）。
+4. 超出阈值即非 0 退出；`-Json` 输出机器可读结果。
+
+默认阈值（DESIGN §3.3）：
+
+| 指标 | 阈值 |
+|---|---|
+| 导入 | < 60 s |
+| 分析（交互预算） | < 5 s |
+| 分析进程峰值工作集 | ≤ 512 MiB |
+
+## 当前结果（2026-10-24，debug 构建，本机）
+
+```
+[bench] sample: 1,024.3 MiB
+[bench] import: 4.03 s (limit 60.0 s)
+[bench] analyze: 0.32 s (limit 5.0 s), peak 5.6 MiB (limit 512 MiB)
+[bench] PASS
+```
+
+CI 在 `windows-latest` 上跑同一脚本（1 GiB overlay），作为性能回归门禁。
+
+## 解释与限制
+
+- **overlay 不参与分析**：1 GiB 样本的分析成本由**映射段中的代码量**决定（notepad 约
+  1.3 万条指令），因此 0.32 s 不代表"1 GiB 全是代码"的极端情况。真正的代码密集型大
+  二进制（如合并后的系统 DLL）会随指令数增长，`MAX_TOTAL_INSTRUCTIONS = 5,000,000`
+  上限提供保护。
+- 导入时间是**流式**的（256 KiB 分块写镜像），内存不随文件大小线性增长；峰值 5.6 MiB
+  是 CLI 进程（无 UI、SQLite 页缓存较小）的实测值。
+- debug 构建：release 构建的导入/分析会更快；门禁阈值按 debug 设定，留有余量。
+- 内存统计是 20 ms 采样的下界，峰值可能略低；如需精确峰值可换 ETW/Job Object
+  `PeakProcessMemoryUsed`，后续按需引入。
+- CI 的磁盘/时间成本约 10–20 s（写 1 GiB + 读回），可接受。

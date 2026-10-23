@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 1 GiB performance gate: `scripts/bench-large.ps1` builds a 1 GiB overlay sample,
+  measures import/analyze wall time and peak working set (polling the child process every
+  20 ms, since PowerShell's Start-Process loses the values we need), and fails on
+  DESIGN thresholds (import < 60 s, analyze < 5 s, peak <= 512 MiB). Wired into CI.
+  Measured (debug): import 4.03 s, analyze 0.32 s, peak 5.6 MiB. Docs: `docs/PERF.md`.
+
 - UI AI proposal panel: a new left-side "AI" tab lists rename proposals with confidence,
   rationale and evidence links; selecting one and pressing Apply sends it through the
   same journaled command bus (undoable), while nothing is ever applied implicitly.

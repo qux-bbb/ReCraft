@@ -57,6 +57,9 @@ jobs:
       - name: end-to-end CLI smoke
         shell: pwsh
         run: pwsh -NoProfile -File scripts/e2e.ps1
+      - name: 1 GiB performance gate
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/bench-large.ps1 -OverlayMB 1024
 
   licenses:
     name: license / ban / source policy
