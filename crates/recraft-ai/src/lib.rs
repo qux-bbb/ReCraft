@@ -19,10 +19,15 @@
 
 #![forbid(unsafe_code)]
 
+mod cache;
 mod eval;
 mod provider;
 mod transport;
 
+pub use cache::{
+    AUDIT_FILE, AiCache, AuditRecord, CACHE_FILE, CacheEntry, append_audit, append_default_audit,
+    default_dir,
+};
 pub use eval::{CORPUS_CASES, EVAL_VERSION, EvalCase, EvalReport, ensure_eval, evaluate_explain};
 pub use provider::{
     AuditEntry, AuditLog, EXPLAIN_SYSTEM, HeuristicProvider, OllamaProvider,

@@ -60,6 +60,9 @@ jobs:
       - name: 1 GiB performance gate
         shell: pwsh
         run: pwsh -NoProfile -File scripts/bench-large.ps1 -OverlayMB 1024
+      - name: AI cache/audit smoke (local mock provider)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/ai-cache-smoke.ps1
 
   package:
     name: windows package (zip)

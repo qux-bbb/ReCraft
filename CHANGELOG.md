@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Persistent AI response cache + audit log: `ai explain --llm` now consults
+  `%LOCALAPPDATA%\ReCraft\ai-cache.json` (key = template + provider + model + prompt) and
+  serves repeat explanations without network I/O (`cached=yes`; `--no-cache` bypasses
+  reads), saving new responses best-effort. Every provider interaction appends a JSONL
+  record to `ai-audit.jsonl` (ts/provider/model/template/function/tokens/cached).
+  New `scripts/ai-cache-smoke.ps1` spins up a local mock Ollama over TCP and asserts
+  miss → hit → two audit lines (wired into CI); unit tests cover cache roundtrip, key
+  composition and audit appends.
+
 - Prompt template versioning + offline prompt-quality baseline: `PROMPT_TEMPLATE_VERSION`
   (`rc-ai-2026-10-v1`) tags the exported system templates, and `eval.rs` defines
   `EVAL_VERSION` (`prompt-eval-2026-10-v1`) with five corpus cases that assemble real

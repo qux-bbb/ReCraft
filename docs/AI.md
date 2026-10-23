@@ -111,6 +111,17 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   脱敏 prompt 发送出去，并打印模型回答（`--json` 含 provider/tokens/response）；默认配置
   下会明确报 "no LLM provider configured"。
 
+## 结果缓存与审计（M3）
+
+- 路径：`%LOCALAPPDATA%\ReCraft\ai-cache.json`、`%LOCALAPPDATA%\ReCraft\ai-audit.jsonl`
+  （无 LOCALAPPDATA 时回退临时目录）。
+- **缓存 key** = 模板版本 + provider + model + system/user prompt 的哈希；命中时不再发起网络
+  请求（`ai explain --llm` 输出 `cached=yes`）。`--no-cache` 跳过读取但仍写回。
+- **审计**：每次 provider 交互追加一行 JSONL：`ts/provider/model/template/function/
+  prompt_tokens/response_tokens/cached`；写入失败只告警，不影响回答。
+- 回归：`scripts/ai-cache-smoke.ps1` 用本地 mock Ollama 服务验证「首次 miss → 二次 hit →
+  审计 2 行」，并已加入 CI；单测覆盖缓存落盘往返、key 组成、审计追加。
+
 ## Prompt 模板与评测基座（M3）
 
 - **模板版本**：`PROMPT_TEMPLATE_VERSION = "rc-ai-2026-10-v1"`；`EXPLAIN_SYSTEM` /

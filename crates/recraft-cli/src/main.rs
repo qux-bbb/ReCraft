@@ -46,6 +46,9 @@ enum AiCommand {
         /// Send the redacted prompt to the configured LLM provider (disabled by default).
         #[arg(long)]
         llm: bool,
+        /// Bypass the persistent response cache (cache lives in %LOCALAPPDATA%\ReCraft).
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Propose names for `sub_*` functions (evidence + confidence); never applies.
     Suggest {
@@ -930,7 +933,8 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             addr,
             json,
             llm,
-        } => cmd_ai_explain(&project, addr.as_deref(), json, llm),
+            no_cache,
+        } => cmd_ai_explain(&project, addr.as_deref(), json, llm, no_cache),
         AiCommand::Suggest {
             project,
             json,
@@ -1011,7 +1015,13 @@ fn cmd_ai_prompt(
     Ok(())
 }
 
-fn cmd_ai_explain(project: &Path, addr: Option<&str>, as_json: bool, llm: bool) -> Result<()> {
+fn cmd_ai_explain(
+    project: &Path,
+    addr: Option<&str>,
+    as_json: bool,
+    llm: bool,
+    no_cache: bool,
+) -> Result<()> {
     let mut session = Session::open(project)?;
     let addr = match addr {
         Some(raw) => resolve_address(&session, raw)?,
@@ -1021,17 +1031,77 @@ fn cmd_ai_explain(project: &Path, addr: Option<&str>, as_json: bool, llm: bool) 
         let settings = recraft_ai::ProviderSettings::from_env();
         let mut provider = recraft_ai::provider_from_settings(&settings);
         let prompt = recraft_ai::build_explain_prompt(&mut session, addr, &settings)?;
-        let response = provider.complete(&prompt)?;
+        let template = recraft_ai::PROMPT_TEMPLATE_VERSION;
+        let cache_key =
+            recraft_ai::AiCache::key(&prompt, provider.name(), &settings.model, template);
+        let mut cache = match recraft_ai::AiCache::open_default() {
+            Ok(cache) => Some(cache),
+            Err(error) => {
+                eprintln!("warning: ai cache unavailable: {error}");
+                None
+            }
+        };
+        let cached_entry = if no_cache {
+            None
+        } else {
+            cache
+                .as_ref()
+                .and_then(|cache| cache.get(&cache_key))
+                .cloned()
+        };
+        let (response, cached) = match cached_entry {
+            Some(entry) => (entry.response, true),
+            None => {
+                let response = provider.complete(&prompt)?;
+                if let Some(cache) = cache.as_mut() {
+                    cache.insert(
+                        cache_key,
+                        recraft_ai::CacheEntry {
+                            response: response.clone(),
+                            provider: provider.name().to_owned(),
+                            model: settings.model.clone(),
+                            template: template.to_owned(),
+                            created_unix: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|duration| duration.as_secs())
+                                .unwrap_or(0),
+                        },
+                    );
+                    if let Err(error) = cache.save() {
+                        eprintln!("warning: could not save ai cache: {error}");
+                    }
+                }
+                (response, false)
+            }
+        };
+        let audit = recraft_ai::AuditRecord {
+            provider: provider.name().to_owned(),
+            model: settings.model.clone(),
+            template: template.to_owned(),
+            function: Some(addr),
+            prompt_tokens: prompt.estimated_tokens,
+            response_tokens: recraft_ai::TokenBudget::estimate(&response),
+            cached,
+        };
+        if let Err(error) = recraft_ai::append_default_audit(&audit) {
+            eprintln!("warning: could not append ai audit: {error}");
+        }
         if as_json {
             return json_result(&json!({
                 "provider": provider.name(),
+                "model": settings.model,
+                "template": template,
                 "estimated_tokens": prompt.estimated_tokens,
+                "cached": cached,
                 "response": response,
             }));
         }
         println!(
-            "# provider={} tokens≈{}",
+            "# provider={} model={} template={} cached={} tokens≈{}",
             provider.name(),
+            settings.model,
+            template,
+            if cached { "yes" } else { "no" },
             prompt.estimated_tokens
         );
         println!("{response}");
