@@ -13,7 +13,7 @@ void bytes_op_l1(void) {
             r9 = (r9 & 0xADDR);
             xmm2 = (xmm2 ^ xmm2);
             rdx = r10;
-            while (1) {
+            do {
                 xmm1 = *(u32*)(rdx);
                 xmm0 = (xmm0 ^ xmm0);
                 __asm("punpcklbw xmm1, xmm0");
@@ -27,8 +27,7 @@ void bytes_op_l1(void) {
                 __asm("punpcklwd xmm1, xmm0");
                 rax = (rax - r10);
                 xmm2 = (xmm2 + xmm1);
-                if ((rax >= r9 /* signed */)) break;
-            }
+            } while ((rax < r9 /* signed */));
             xmm2 = (xmm2 + xmm3);
             xmm0 = xmm2;
             xmm0 = (xmm0 >> 8);
@@ -54,14 +53,13 @@ void bytes_op_l1(void) {
     } else {
         *(u64*)(rsp) = rbx;
         rbx = (r11 - 1);
-        while (1) {
+        do {
             ecx = (uint32*)(*(u8*)((r10 + (rax * 1))));
             r8d = (r8d + ecx);
             ecx = (uint32*)(*(u8*)(((r10 + (rax * 1)) + 1)));
             edx = (edx + ecx);
             rax = (rax + 2);
-            if ((rax >= rbx /* signed */)) break;
-        }
+        } while ((rax < rbx /* signed */));
         rbx = *(u64*)(rsp);
     }
     eax = (rdx + (r8 * 1));

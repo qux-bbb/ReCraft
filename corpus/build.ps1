@@ -27,7 +27,7 @@ $exports = @(
     'indirect', 'nested_loops', 'tailish', 'float_math', 'bitops', 'bytes_op',
     'noinline_helper', 'uses_helper', 'corpus_banner', 'corpus_wide_banner',
     'corpus_counter_bump', 'dispatch', 'str_probe', 'wide_probe', 'field_probe', 'array_probe',
-    'early_chain'
+    'early_chain', 'count_bits'
 ) | ForEach-Object { "/EXPORT:$_" }
 if ($Arch -eq 'x86') {
     # stdcall symbols are decorated `_name@N`; export the plain name as an alias.

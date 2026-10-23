@@ -6,13 +6,12 @@ void loopy_l1(void) {
     eax = r10d;
     if (!(ecx < 2 /* signed */)) {
         r9d = (rcx - 1);
-        while (1) {
+        do {
             r8d = (r8d + 1);
             edx = (edx + eax);
             r8d = (r8d + eax);
             eax = (eax + 2);
-            if ((eax >= r9d /* signed */)) break;
-        }
+        } while ((eax < r9d /* signed */));
     }
     eax = ((eax >= ecx /* signed */) ? r10d : eax);
     eax = (eax + r8d);

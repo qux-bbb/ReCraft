@@ -60,6 +60,16 @@ __declspec(dllexport) int early_chain(int a, int b) {
     return a + b;
 }
 
+/* do-while: the loop condition is tested at the bottom. */
+__declspec(dllexport) int count_bits(unsigned value) {
+    int count = 0;
+    do {
+        count += (int)(value & 1);
+        value >>= 1;
+    } while (value != 0);
+    return count;
+}
+
 __declspec(dllexport) int branchy(int x) {
     if (x > 10) {
         return x * 2;

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- do-while recognition: loops whose header is also the latch (single-block) now render
+  as `do { ... } while (cond);` instead of `while (1) { ... if (cond) break; }`, and a
+  latch-with-conditions-without-header-condition form is handled by a dedicated
+  do-while path. Semantics are preserved (`while (1)` + `break` and `do..while` are
+  equivalent here, verified in golden diffs). New corpus probe `count_bits`; corpus is
+  now 30 functions / 93.3% structured / 97.2% coverage, notepad observation 77.7%
+  (390/502). Golden snapshots regenerated (30); tests assert do-while output.
+
 - Structurer break/continue: loop bodies now emit `break;` for branches that leave to
   the loop exit and `continue;` for branches back to the loop header (tracked via a loop
   context stack), and jumps to an enclosing region's join fall through instead of

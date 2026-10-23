@@ -809,6 +809,11 @@ impl Structurer {
         level: usize,
     ) -> Option<usize> {
         let body = self.loop_blocks.get(&header)?.clone();
+        if self.blocks[header].condition.is_none() {
+            // No condition at the header: try a do-while whose latch tests the condition
+            // at the bottom of the body.
+            return self.emit_do_while(lines, header, level, &body);
+        }
         let condition = self.blocks[header].condition.clone()?;
         let taken = self.blocks[header].taken?;
         let not_taken = self.blocks[header].not_taken?;
@@ -821,6 +826,24 @@ impl Structurer {
         } else {
             return None;
         };
+
+        // A single-block loop whose header is also the latch is a do-while: emit the
+        // statements then test the condition at the bottom.
+        if body.len() == 1 {
+            self.loop_stack.push((header, exit));
+            lines.push(PseudoLine {
+                addr: self.blocks[header].entry,
+                text: format!("{}do {{", indent(level)),
+            });
+            self.emitted[header] = true;
+            self.emit_simple(lines, header, level + 1);
+            lines.push(PseudoLine {
+                addr: self.blocks[header].entry,
+                text: format!("{}}} while ({condition});", indent(level)),
+            });
+            self.loop_stack.pop();
+            return Some(exit);
+        }
 
         // Header statements run once per iteration: keep them inside the loop and
         // break when the condition says to leave.
@@ -867,6 +890,94 @@ impl Structurer {
                 });
                 self.emit_simple(lines, *block, level);
                 self.emit_raw_flow(lines, *block, level);
+            }
+        }
+        self.loop_stack.pop();
+        Some(exit)
+    }
+
+    /// Emit `do { ... } while (cond);` when the header has no condition and a latch block
+    /// inside the body branches back to the header (or leaves the loop).
+    fn emit_do_while(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        header: usize,
+        level: usize,
+        body: &BTreeSet<usize>,
+    ) -> Option<usize> {
+        let mut latch = None;
+        for &block in body {
+            if block == header {
+                continue;
+            }
+            let Some(condition) = self.blocks[block].condition.clone() else {
+                continue;
+            };
+            let (Some(taken), Some(not_taken)) =
+                (self.blocks[block].taken, self.blocks[block].not_taken)
+            else {
+                continue;
+            };
+            let (exit, continue_condition) = if taken == header && !body.contains(&not_taken) {
+                (not_taken, condition)
+            } else if not_taken == header && !body.contains(&taken) {
+                (taken, negate(&condition))
+            } else {
+                continue;
+            };
+            latch = Some((block, exit, continue_condition));
+            break;
+        }
+        let (latch, exit, continue_condition) = latch?;
+
+        let mut stop = BTreeSet::new();
+        for block in 0..self.blocks.len() {
+            if !body.contains(&block) {
+                stop.insert(block);
+            }
+        }
+        let mut body_stop = stop.clone();
+        body_stop.insert(latch);
+
+        lines.push(PseudoLine {
+            addr: self.blocks[header].entry,
+            text: format!("{}do {{", indent(level)),
+        });
+        self.emitted[header] = true;
+        self.loop_stack.push((header, exit));
+        self.emit_simple(lines, header, level + 1);
+        // Follow the header's flow into the body (stop before the latch).
+        if let Some(next) = self.blocks[header].not_taken
+            && next != latch
+        {
+            self.emit_linear(lines, next, level + 1, &body_stop);
+        } else if let Some(target) = self.blocks[header].goto_target
+            && target != latch
+        {
+            self.emit_linear(lines, target, level + 1, &body_stop);
+        }
+        if !self.emitted[latch] {
+            self.emitted[latch] = true;
+            self.emit_simple(lines, latch, level + 1);
+        }
+        lines.push(PseudoLine {
+            addr: self.blocks[latch].entry,
+            text: format!("{}}} while ({continue_condition});", indent(level)),
+        });
+        // Any body blocks that were not reached linearly stay as labelled leftovers.
+        for block in body {
+            if !self.emitted[*block] {
+                self.emitted[*block] = true;
+                lines.push(PseudoLine {
+                    addr: self.blocks[*block].entry,
+                    text: format!(
+                        "{}loc_{:x}:",
+                        indent(level + 1),
+                        self.blocks[*block].entry.get()
+                    ),
+                });
+                self.emit_simple(lines, *block, level + 1);
+                self.emit_raw_flow(lines, *block, level + 1);
             }
         }
         self.loop_stack.pop();
@@ -1336,8 +1447,21 @@ mod tests {
         }
         let start = function_start(&session, "bytes_op").unwrap();
         let text = pseudocode_l1(&mut session, start).unwrap().text();
-        assert!(text.contains("while (1)"), "{text}");
-        assert!(text.contains("break;"), "{text}");
+        // Single-block loops become do-while; no goto fallback remains.
+        assert!(text.contains("do {"), "{text}");
+        assert!(text.contains("while ("), "{text}");
+    }
+
+    #[test]
+    fn single_block_loops_emit_do_while() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "count_bits").unwrap();
+        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        assert!(text.contains("do {"), "{text}");
+        assert!(text.contains("} while ("), "{text}");
+        assert!(!text.contains("goto loc_"), "{text}");
     }
 
     #[test]
