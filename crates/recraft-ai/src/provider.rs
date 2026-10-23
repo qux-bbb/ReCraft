@@ -193,6 +193,12 @@ pub const RENAME_SYSTEM: &str = "You are ReCraft's symbol-naming assistant. Prop
 snake_case names for the listed functions. Base every suggestion on the supplied API \
 calls, strings and pseudo-code, and keep the evidence addresses in your rationale.";
 
+/// System prompt for pseudo-code polishing (DESIGN §9.2: post-processing, never stored).
+pub const POLISH_SYSTEM: &str = "You polish pseudo-C produced by a disassembler. Preserve \
+every operation, memory access and control-flow edge exactly; do not invent variables, \
+types, calls or semantics. You may improve names and formatting. Output only the polished \
+function, without markdown fences or commentary.";
+
 /// Redact URLs, IPv4 addresses and e-mail addresses before context leaves the process.
 /// Line structure is preserved so the prompt stays readable for review.
 pub fn redact(text: &str) -> String {
@@ -282,6 +288,24 @@ pub fn build_rename_prompt(
         }
     }
     Ok(PromptRequest::new(budget, RENAME_SYSTEM, &user))
+}
+
+/// Build a pseudo-code polishing prompt from the function's L1 output. The result is a
+/// suggestion only: it is never written back to the project (DESIGN §9.2 / §9.3).
+pub fn build_polish_prompt(
+    session: &mut Session,
+    addr: Address,
+    settings: &ProviderSettings,
+) -> Result<PromptRequest> {
+    let budget = TokenBudget::new(settings.max_tokens);
+    let pseudo = recraft_decompile::pseudocode_l1(session, addr)?;
+    let mut user = format!("function: {:#x}\npseudo-code:\n", addr.get());
+    for line in pseudo.lines.iter().take(120) {
+        user.push_str(&line.text);
+        user.push('\n');
+    }
+    let user = redact(&user);
+    Ok(PromptRequest::new(budget, POLISH_SYSTEM, &user))
 }
 
 /// In-memory prompt → response cache keyed by a stable hash of the request.

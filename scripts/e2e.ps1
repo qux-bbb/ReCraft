@@ -253,6 +253,10 @@ try {
     Assert-Contains $provider 'state=disabled' 'AI provider defaults offline'
     $aiPrompt = Invoke-Recraft @('ai', 'prompt', $project, '--addr', 'entry', '--json')
     Assert-Contains $aiPrompt 'estimated_tokens' 'AI prompt budget'
+    $aiQuery = Invoke-Recraft @('ai', 'query', $project, 'find every function that references a URL')
+    Assert-Contains $aiQuery 'intent: urls' 'AI natural-language query (URLs)'
+    $aiQueryJson = Invoke-Recraft @('ai', 'query', $project, 'which functions call CreateFileW', '--json')
+    Assert-Contains $aiQueryJson '"intent"' 'AI natural-language query JSON'
 
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"

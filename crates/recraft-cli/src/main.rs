@@ -77,6 +77,26 @@ enum AiCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Answer a natural-language question offline (DESIGN §9.2).
+    Query {
+        project: PathBuf,
+        /// Question, e.g. "find every function that references a URL".
+        text: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// AI-polish one function's L1 pseudo-code (suggestion only, never stored).
+    Polish {
+        project: PathBuf,
+        /// Function address/name (defaults to the entry point).
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long)]
+        json: bool,
+        /// Bypass the persistent response cache.
+        #[arg(long)]
+        no_cache: bool,
+    },
     /// Print the redacted provider prompt for one function (no network I/O).
     Prompt {
         project: PathBuf,
@@ -1021,6 +1041,17 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
         } => cmd_ai_suggest(&project, json, limit, out.as_deref()),
         AiCommand::Triage { project, json } => cmd_ai_triage(&project, json),
         AiCommand::Apply { project, file, yes } => cmd_ai_apply(&project, &file, yes),
+        AiCommand::Query {
+            project,
+            text,
+            json,
+        } => cmd_ai_query(&project, &text, json),
+        AiCommand::Polish {
+            project,
+            addr,
+            json,
+            no_cache,
+        } => cmd_ai_polish(&project, addr.as_deref(), json, no_cache),
         AiCommand::Prompt {
             project,
             addr,
@@ -1034,6 +1065,145 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
         }
         AiCommand::Eval { project, json } => cmd_ai_eval(&project, json),
     }
+}
+
+fn cmd_ai_query(project: &Path, text: &str, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let answer = recraft_ai::answer_query(&mut session, text)?;
+    if as_json {
+        let items: Vec<Value> = answer
+            .items
+            .iter()
+            .map(|item| {
+                json!({
+                    "kind": item.kind,
+                    "addr": item.addr,
+                    "text": item.text,
+                    "functions": item.functions,
+                })
+            })
+            .collect();
+        return json_result(&json!({
+            "query": answer.query,
+            "intent": answer.intent,
+            "items": items,
+            "count": items.len(),
+            "truncated": answer.truncated,
+        }));
+    }
+    println!(
+        "query '{}' -> {} match(es) [intent: {}]",
+        answer.query,
+        answer.items.len(),
+        answer.intent
+    );
+    for item in &answer.items {
+        if item.functions.is_empty() {
+            println!("  {:<8} {} {}", item.kind, item.addr, item.text);
+        } else {
+            println!(
+                "  {:<8} {} {}  <- {}",
+                item.kind,
+                item.addr,
+                item.text,
+                item.functions.join(", ")
+            );
+        }
+    }
+    if answer.truncated {
+        println!("  (truncated)");
+    }
+    Ok(())
+}
+
+fn cmd_ai_polish(project: &Path, addr: Option<&str>, as_json: bool, no_cache: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let addr = match addr {
+        Some(raw) => resolve_address(&session, raw)?,
+        None => session.entry_point(),
+    };
+    let settings = recraft_ai::ProviderSettings::from_env();
+    if !settings.enabled || settings.kind == recraft_ai::ProviderKind::Heuristic {
+        return Err(recraft_common::Error::unsupported(
+            "pseudo-code polish needs an LLM provider; set RECRAFT_AI_PROVIDER, \
+             RECRAFT_AI_ENDPOINT and the API key env var (see `recraft ai provider`)",
+        ));
+    }
+    let mut provider = recraft_ai::provider_from_settings(&settings);
+    let prompt = recraft_ai::build_polish_prompt(&mut session, addr, &settings)?;
+    let template = recraft_ai::PROMPT_TEMPLATE_VERSION;
+    let cache_key = recraft_ai::AiCache::key(&prompt, provider.name(), &settings.model, template);
+    let mut cache = match recraft_ai::AiCache::open_default() {
+        Ok(cache) => Some(cache),
+        Err(error) => {
+            eprintln!("warning: ai cache unavailable: {error}");
+            None
+        }
+    };
+    let cached_entry = if no_cache {
+        None
+    } else {
+        cache
+            .as_ref()
+            .and_then(|cache| cache.get(&cache_key))
+            .cloned()
+    };
+    let (response, cached) = match cached_entry {
+        Some(entry) => (entry.response, true),
+        None => {
+            let response = provider.complete(&prompt)?;
+            if let Some(cache) = cache.as_mut() {
+                cache.insert(
+                    cache_key,
+                    recraft_ai::CacheEntry {
+                        response: response.clone(),
+                        provider: provider.name().to_owned(),
+                        model: settings.model.clone(),
+                        template: template.to_owned(),
+                        created_unix: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|duration| duration.as_secs())
+                            .unwrap_or(0),
+                    },
+                );
+                if let Err(error) = cache.save() {
+                    eprintln!("warning: could not save ai cache: {error}");
+                }
+            }
+            (response, false)
+        }
+    };
+    let audit = recraft_ai::AuditRecord {
+        provider: provider.name().to_owned(),
+        model: settings.model.clone(),
+        template: template.to_owned(),
+        function: Some(addr),
+        prompt_tokens: prompt.estimated_tokens,
+        response_tokens: recraft_ai::TokenBudget::estimate(&response),
+        cached,
+    };
+    if let Err(error) = recraft_ai::append_default_audit(&audit) {
+        eprintln!("warning: could not append ai audit: {error}");
+    }
+    if as_json {
+        return json_result(&json!({
+            "addr": format!("{:#x}", addr.get()),
+            "provider": provider.name(),
+            "model": settings.model,
+            "template": template,
+            "cached": cached,
+            "polished": response,
+            "note": "suggestion only; the project is not modified",
+        }));
+    }
+    println!(
+        "// AI polish suggestion (provider={}, model={}, cached={cached})",
+        provider.name(),
+        settings.model
+    );
+    println!("// The project is not modified; L1 output stays authoritative.");
+    println!("{response}");
+    Ok(())
 }
 
 fn cmd_ai_eval(project: &Path, as_json: bool) -> Result<()> {

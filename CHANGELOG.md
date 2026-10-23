@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- AI natural-language queries and pseudo-code polish (DESIGN §9.2 completion):
+  `recraft ai query <project> "<question>" [--json]` recognises offline intents
+  (`urls`, `api_callers`, `function_callers`, `text`), answers from local tables
+  (strings/xrefs/API tags/functions), extracts identifiers from free-form questions
+  (`CreateFileW`, `Microsoft`) and supports zh-CN phrasing; `recraft ai polish <project>
+  --addr <f>` sends the L1 output through the configured provider with `POLISH_SYSTEM`
+  (semantics-preserving polish), prints the suggestion with a "not stored" banner,
+  reuses the prompt cache and writes an audit record; offline it fails with a
+  configuration hint. Adds `POLISH_SYSTEM`/`build_polish_prompt`, four query unit tests
+  (URL/api-caller/unknown target/text), a polish-prompt test, E2E query assertions and
+  docs/AI.md + ROADMAP updates (DESIGN §9.2 now fully covered).
+
 - Release rebuild after the flag-semantics work: `package.ps1` (zip 10.2 MiB, 23
   entries) → `verify-package.ps1` PACKAGE PASS → `demo.ps1` DEMO PASS on the staged
   binary. The packaged exe reproduces the source metrics for notepad (502 functions,

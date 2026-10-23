@@ -20,6 +20,8 @@
 - 反编译质量门禁：corpus 覆盖率 97.4% / 结构化 100%，真实样本 notepad 覆盖率 99.4% /
   结构化 86.1%（阈值 95% / 70%），golden 31 份快照 + CI 回环。
 - 调用参数与类型：x64/x86 实参、栈参数恢复、原型覆盖与指针 cast、间接调用/IAT 尾调用。
+- AI（DESIGN §9.2 全部条目）：函数解释、命名建议、样本摘要、**自然语言查询**、**伪代码
+  润色**（LLM 建议、不写回），provider 抽象/缓存/审计/prompt 评测齐备。
 - MCP：stdio + HTTP（bearer token），只读工具/资源，单测 + E2E 真实服务断言。
 - CLI：import/analyze/disasm/decompile/strings/imports/funcs/xrefs/cfg/search/callgraph/
   metrics/golden/batch/serve-mcp/ai 全部可用并带 `--json`。

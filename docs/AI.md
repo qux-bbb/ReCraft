@@ -20,7 +20,37 @@ recraft ai triage notepad.rcraft [--json]
 
 # 应用已 review 的 proposals（无 --yes 直接拒绝）
 recraft ai apply notepad.rcraft proposals.json --yes
+
+# 自然语言查询（DESIGN §9.2）：离线意图解析 → 本地表查询
+recraft ai query notepad.rcraft "find every function that references a URL" [--json]
+recraft ai query notepad.rcraft "找所有引用字符串 Microsoft 的函数"
+recraft ai query notepad.rcraft "which functions call CreateFileW"
+
+# 伪代码润色（DESIGN §9.2）：需要已配置 LLM；只输出建议，不写回项目
+recraft ai polish notepad.rcraft --addr entry [--json] [--no-cache]
 ```
+
+## 自然语言查询（离线）
+
+`ai query` 先在本地识别意图，再查已分析项目的派生表（strings/xref/API tags/functions），
+**不联网**：
+
+| 意图 | 触发关键词 | 回答内容 |
+|---|---|---|
+| `urls` | url/http/网址/链接 | 以 `http(s)://`/`www.` 开头的字符串 + 引用它们的函数 |
+| `api_callers` | 调用/引用/call/caller + 句中出现已知 API 名 | 调用该 API 的函数列表 |
+| `function_callers` | 同上 + 函数名/引号目标 | 该函数的调用者 |
+| `text` | 字符串/string/text 或兜底 | 名字/字符串内容匹配，并附引用函数 |
+
+未识别的目标会抽取句中"最长标识符"（如 `CreateFileW`、`Microsoft`）继续查询，而不是
+退化为整句匹配。`--json` 输出 `{intent, query, items:[{kind,addr,text,functions}], count}`。
+
+## 伪代码润色（需 LLM）
+
+`ai polish` 取该函数的 **L1** 输出，构造带脱敏的 prompt（`POLISH_SYSTEM`：只允许改善命名/
+格式，禁止改动语义），经 provider 发送；结果仅打印（带 `// AI polish suggestion` 头），
+**不写回项目**，并复用结果缓存（prompt 哈希）与审计日志。未配置 provider 时直接报错并
+给出配置提示（默认离线）。
 
 ## Proposal 协议
 

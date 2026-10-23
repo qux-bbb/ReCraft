@@ -22,6 +22,7 @@
 mod cache;
 mod eval;
 mod provider;
+mod query;
 mod transport;
 
 pub use cache::{
@@ -31,10 +32,11 @@ pub use cache::{
 pub use eval::{CORPUS_CASES, EVAL_VERSION, EvalCase, EvalReport, ensure_eval, evaluate_explain};
 pub use provider::{
     AuditEntry, AuditLog, EXPLAIN_SYSTEM, HeuristicProvider, OllamaProvider,
-    OpenAiCompatibleProvider, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest, Provider,
-    ProviderKind, ProviderSettings, RENAME_SYSTEM, TokenBudget, build_explain_prompt,
-    build_rename_prompt, provider_from_settings, redact,
+    OpenAiCompatibleProvider, POLISH_SYSTEM, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest,
+    Provider, ProviderKind, ProviderSettings, RENAME_SYSTEM, TokenBudget, build_explain_prompt,
+    build_polish_prompt, build_rename_prompt, provider_from_settings, redact,
 };
+pub use query::{QueryAnswer, QueryItem, answer_query};
 pub use transport::{
     HttpRequest, HttpResponse, MockTransport, TcpHttpTransport, Transport, TransportKind,
     UreqTransport, parse_ollama_response, parse_openai_response, transport_for, transport_kind,
@@ -703,6 +705,19 @@ mod tests {
         assert!(explanation.summary.contains("instructions"));
         // The entry point may sit inside the CRT startup function.
         assert!(explanation.start <= entry && entry < explanation.end);
+    }
+
+    #[test]
+    fn polish_prompt_contains_l1_output_and_polish_system() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let entry = session.entry_point();
+        let settings = ProviderSettings::default();
+        let prompt = build_polish_prompt(&mut session, entry, &settings).unwrap();
+        assert_eq!(prompt.system, POLISH_SYSTEM);
+        assert!(prompt.user.contains("pseudo-code:"), "{}", prompt.user);
+        assert!(prompt.user.contains("function: 0x"), "{}", prompt.user);
     }
 
     #[test]
