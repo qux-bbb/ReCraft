@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- User prototypes (write tool, DESIGN §9.1): `recraft prototype <project> --addr <func>
+  --text "int foo(int)"` stores a C declaration through `Command::SetPrototype`
+  (journaled, undo/redo/persistence), and `recraft unprototype` deletes it; structured
+  pseudocode shows it as `// prototype: ...` above the generated signature. Schema v2
+  adds the `prototype` table (idempotent migration from v1). AI `ProposalKind::Prototype`
+  can carry the same write through `ai apply`. New tests: command undo/redo/persistence,
+  decompiler rendering, AI proposal apply; E2E sets/renders/undoes a prototype.
+
 - Struct-field access rendering (M2 types): when a pointer-typed argument is dereferenced
   at a constant offset, pseudocode prints `arg1->field_10` (negative offsets
   `field_nXX`) for both integer and float loads/stores instead of

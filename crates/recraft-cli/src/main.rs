@@ -269,6 +269,20 @@ enum Commands {
         #[arg(long = "as", value_enum)]
         kind: MarkKind,
     },
+    /// Set a user prototype (C declaration) for a function; shown in pseudocode.
+    Prototype {
+        project: PathBuf,
+        #[arg(long)]
+        addr: String,
+        #[arg(long)]
+        text: String,
+    },
+    /// Delete the user prototype at a function.
+    Unprototype {
+        project: PathBuf,
+        #[arg(long)]
+        addr: String,
+    },
     /// Undo the last command.
     Undo { project: PathBuf },
     /// Redo the last undone command.
@@ -400,6 +414,12 @@ fn run(cli: Cli) -> Result<()> {
             len,
             kind,
         } => cmd_mark(&project, &addr, len, kind),
+        Commands::Prototype {
+            project,
+            addr,
+            text,
+        } => cmd_prototype(&project, &addr, Some(&text)),
+        Commands::Unprototype { project, addr } => cmd_prototype(&project, &addr, None),
         Commands::Undo { project } => cmd_undo(&project),
         Commands::Redo { project } => cmd_redo(&project),
     }
@@ -1697,6 +1717,20 @@ fn cmd_mark(project: &Path, addr: &str, len: u64, kind: MarkKind) -> Result<()> 
         range.end.get(),
         code_data
     );
+    Ok(())
+}
+
+fn cmd_prototype(project: &Path, addr: &str, text: Option<&str>) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let addr = resolve_address(&session, addr)?;
+    session.execute(Command::SetPrototype {
+        addr,
+        text: text.map(str::to_owned),
+    })?;
+    match text {
+        Some(text) => println!("prototype at {:#x}: {text}", addr.get()),
+        None => println!("prototype at {:#x} removed", addr.get()),
+    }
     Ok(())
 }
 

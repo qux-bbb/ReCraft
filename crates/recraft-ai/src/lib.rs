@@ -65,6 +65,7 @@ const WEIGHTS: [(&str, f32); 12] = [
 pub enum ProposalKind {
     Rename,
     Comment,
+    Prototype,
 }
 
 impl ProposalKind {
@@ -72,6 +73,7 @@ impl ProposalKind {
         match self {
             ProposalKind::Rename => "rename",
             ProposalKind::Comment => "comment",
+            ProposalKind::Prototype => "prototype",
         }
     }
 
@@ -79,6 +81,7 @@ impl ProposalKind {
         match text {
             "rename" => Some(ProposalKind::Rename),
             "comment" => Some(ProposalKind::Comment),
+            "prototype" => Some(ProposalKind::Prototype),
             _ => None,
         }
     }
@@ -197,6 +200,18 @@ impl Proposal {
                     addr: self.target,
                     kind: CommentKind::Regular,
                     text: Some(self.value.clone()),
+                })?;
+                Ok(())
+            }
+            ProposalKind::Prototype => {
+                let text = if self.value.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.value.clone())
+                };
+                session.execute(Command::SetPrototype {
+                    addr: self.target,
+                    text,
                 })?;
                 Ok(())
             }
@@ -704,6 +719,29 @@ mod tests {
             "notepad should have API tags"
         );
         assert!(!report.suspicious.is_empty());
+    }
+
+    #[test]
+    fn prototype_proposal_applies_through_command_bus() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let entry = session.entry_point();
+        let proposal = Proposal {
+            kind: ProposalKind::Prototype,
+            target: entry,
+            value: "int __stdcall wWinMain(void*, void*, wchar_t*, int)".to_owned(),
+            confidence: 0.5,
+            rationale: "user-confirmed prototype".to_owned(),
+            evidence: Vec::new(),
+        };
+        assert_eq!(apply_proposals(&mut session, &[proposal]).unwrap(), 1);
+        assert_eq!(
+            session.prototype_at(entry).unwrap().as_deref(),
+            Some("int __stdcall wWinMain(void*, void*, wchar_t*, int)")
+        );
+        session.undo().unwrap();
+        assert!(session.prototype_at(entry).unwrap().is_none());
     }
 
     #[test]

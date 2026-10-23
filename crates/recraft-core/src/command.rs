@@ -68,6 +68,8 @@ pub enum Command {
     DefineFunc { start: Address, end: Address },
     /// Remove the function starting at `start`.
     UndefineFunc { start: Address },
+    /// Set (`Some`) or delete (`None`) a user prototype (C declaration) for a function.
+    SetPrototype { addr: Address, text: Option<String> },
 }
 
 impl Command {
@@ -79,13 +81,16 @@ impl Command {
             Command::RestoreFlags { .. } => "restore_flags",
             Command::DefineFunc { .. } => "define_func",
             Command::UndefineFunc { .. } => "undefine_func",
+            Command::SetPrototype { .. } => "prototype",
         }
     }
 
     /// Ranges the UI should refresh after this command (or its inverse) is applied.
     pub fn effect(&self) -> Effect {
         let dirty = match self {
-            Command::Rename { addr, .. } | Command::UndefineFunc { start: addr } => {
+            Command::Rename { addr, .. }
+            | Command::UndefineFunc { start: addr }
+            | Command::SetPrototype { addr, .. } => {
                 vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
             }
             Command::SetComment { addr, .. } => {
@@ -112,6 +117,10 @@ impl Command {
                 addr: *addr,
                 kind: *kind,
                 text: session.comment_at(*addr, *kind)?,
+            }),
+            Command::SetPrototype { addr, .. } => Ok(Command::SetPrototype {
+                addr: *addr,
+                text: session.prototype_at(*addr)?,
             }),
             Command::SetCodeData { range, .. } => {
                 // One page max keeps the inverse small; UI commands are per-selection.
@@ -219,6 +228,20 @@ pub(crate) fn apply(
             conn.execute("DELETE FROM func WHERE start = ?1", [start.get() as i64])
                 .map_err(db_err)?;
         }
+        Command::SetPrototype { addr, text } => match text {
+            Some(text) => {
+                conn.execute(
+                    "INSERT INTO prototype(addr, text) VALUES (?1, ?2)
+                     ON CONFLICT(addr) DO UPDATE SET text = excluded.text",
+                    params![addr.get() as i64, text],
+                )
+                .map_err(db_err)?;
+            }
+            None => {
+                conn.execute("DELETE FROM prototype WHERE addr = ?1", [addr.get() as i64])
+                    .map_err(db_err)?;
+            }
+        },
     }
     Ok(())
 }

@@ -123,6 +123,17 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         addr: start,
         text: "}".to_owned(),
     });
+    // A user-set prototype is authoritative for naming/definitions; show it verbatim
+    // above the generated signature (parsed type propagation comes later).
+    if let Some(prototype) = session.prototype_at(start)? {
+        lines.insert(
+            0,
+            PseudoLine {
+                addr: start,
+                text: format!("// prototype: {prototype}"),
+            },
+        );
+    }
     Ok(Pseudocode {
         func_start: start,
         lines,
@@ -1033,6 +1044,28 @@ mod tests {
         let text = pseudocode_l2(&mut session, start).unwrap().text();
         assert!(text.contains("int32 field_probe(int32* arg1)"), "{text}");
         assert!(text.contains("arg1->field_10"), "{text}");
+    }
+
+    #[test]
+    fn user_prototype_is_shown_above_the_signature_and_undoes() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "field_probe").unwrap();
+        session
+            .execute(recraft_core::Command::SetPrototype {
+                addr: start,
+                text: Some("int field_probe(const int* values)".to_owned()),
+            })
+            .unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(
+            text.contains("// prototype: int field_probe(const int* values)"),
+            "{text}"
+        );
+        session.undo().unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(!text.contains("// prototype:"), "{text}");
     }
 
     #[test]

@@ -122,6 +122,15 @@ try {
     $cfg = Invoke-Recraft @('cfg', $project, '--addr', 'entry')
     Assert-Contains $cfg 'blocks' 'control-flow graph'
 
+    Write-Host '[+] user prototype (set, render, undo)'
+    $firstFuncAddr = (($funcs -split "`r?`n" | Where-Object { $_ -match '^0x' } | Select-Object -First 1) -split '\s+')[0]
+    Invoke-Recraft @('prototype', $project, '--addr', $firstFuncAddr, '--text', 'int entry_proto(void)') | Out-Null
+    $pseudoProto = Invoke-Recraft @('decompile', $project, '--addr', $firstFuncAddr, '--l2')
+    Assert-Contains $pseudoProto '// prototype: int entry_proto(void)' 'prototype rendered above signature'
+    Invoke-Recraft @('undo', $project) | Out-Null
+    $pseudoProto = Invoke-Recraft @('decompile', $project, '--addr', $firstFuncAddr, '--l2')
+    if ($pseudoProto.Contains('// prototype:')) { throw 'undo did not remove the prototype' }
+
     Write-Host '[11/11] MCP stdio'
     $mcpLines = @(
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',

@@ -13,7 +13,7 @@ use recraft_common::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Current schema version. Stored in `meta.schema_version`.
-pub const CURRENT_VERSION: i64 = 1;
+pub const CURRENT_VERSION: i64 = 2;
 
 /// DDL for schema version 1.
 ///
@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS struct_member (
     name    TEXT    NOT NULL,
     member_type INTEGER NOT NULL,
     PRIMARY KEY (type_id, off)
+);
+
+CREATE TABLE IF NOT EXISTS prototype (
+    addr INTEGER PRIMARY KEY,
+    text TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS var (
@@ -237,16 +242,12 @@ pub fn initialize(conn: &Connection) -> Result<i64> {
 
 /// Run migrations from `from` up to [`CURRENT_VERSION`].
 ///
-/// v1 is the initial schema, so the only supported upgrade path right now is a
-/// no-op replay of the idempotent DDL (kept for symmetry with future versions).
+/// All DDL is additive and idempotent; v2 adds the `prototype` table for user-set
+/// function prototypes (`Command::SetPrototype`).
 fn migrate(conn: &Connection, from: i64) -> Result<()> {
-    #[allow(clippy::single_match)]
     match from {
         0 => conn.execute_batch(SCHEMA_V1).map_err(db_err)?,
-        _ => {
-            // Future: `1 => { ... }`, `2 => { ... }`, each additive and idempotent.
-            conn.execute_batch(SCHEMA_V1).map_err(db_err)?;
-        }
+        _ => conn.execute_batch(SCHEMA_V1).map_err(db_err)?,
     }
     Ok(())
 }

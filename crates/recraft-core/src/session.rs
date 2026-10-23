@@ -311,6 +311,19 @@ impl Session {
             .map_err(command::db_err)
     }
 
+    /// User-set prototype (C declaration) at `addr`, if any.
+    pub fn prototype_at(&self, addr: Address) -> Result<Option<String>> {
+        self.project
+            .conn()
+            .query_row(
+                "SELECT text FROM prototype WHERE addr = ?1",
+                [addr.get() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)
+    }
+
     pub fn comment_at(&self, addr: Address, kind: CommentKind) -> Result<Option<String>> {
         self.project
             .conn()
@@ -998,6 +1011,50 @@ mod tests {
             })
             .unwrap();
         assert!(!reopened.can_redo().unwrap());
+    }
+
+    #[test]
+    fn prototype_undo_redo_and_persistence() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        assert!(session.prototype_at(entry).unwrap().is_none());
+
+        session
+            .execute(Command::SetPrototype {
+                addr: entry,
+                text: Some("int __stdcall my_main(int code)".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(
+            session.prototype_at(entry).unwrap().as_deref(),
+            Some("int __stdcall my_main(int code)")
+        );
+
+        session.undo().unwrap();
+        assert!(session.prototype_at(entry).unwrap().is_none());
+        session.redo().unwrap();
+        assert!(session.prototype_at(entry).unwrap().is_some());
+
+        // Clearing is also a command; undo restores the previous text.
+        session
+            .execute(Command::SetPrototype {
+                addr: entry,
+                text: None,
+            })
+            .unwrap();
+        assert!(session.prototype_at(entry).unwrap().is_none());
+        session.undo().unwrap();
+        assert!(session.prototype_at(entry).unwrap().is_some());
+
+        let path = session.path().to_path_buf();
+        drop(session);
+        let mut reopened = Session::open(&path).unwrap();
+        assert!(reopened.prototype_at(entry).unwrap().is_some());
+        reopened.undo().unwrap();
+        assert!(reopened.prototype_at(entry).unwrap().is_none());
     }
 
     #[test]
