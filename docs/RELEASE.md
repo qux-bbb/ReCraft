@@ -43,11 +43,30 @@ makensis /DVERSION=0.1.0 /DSTAGE="dist\ReCraft-0.1.0" /DOUT="dist\recraft-0.1.0-
 [package] zip: dist\recraft-v0.1.0-windows-x64.zip (10.1 MiB)
 [package] SHA256: dist\SHA256SUMS.txt
 [package] PASS
+[verify] SHA256SUMS matches recraft-v0.1.0-windows-x64.zip
+[verify] package entries present (11 checked)
+[verify] analyze/decompile/AI/metrics OK (functions=502)
+[verify] PACKAGE PASS
 ```
 
-zip 内 18 个条目（2 个 exe + 10 篇 docs + ADR + LICENSE/README/CHANGELOG/VERSION）；
-解压后的 `recraft.exe info notepad.exe` 正常输出 PE 头；release 产物上
-`scripts/demo.ps1 -Recraft dist\ReCraft-0.1.0\recraft.exe` 输出 `DEMO PASS`。
+zip 内 23 个条目（2 个 exe + 19 篇 docs/ADR + LICENSE/README/CHANGELOG/VERSION）；
+`scripts/verify-package.ps1` 会校验 SHA256SUMS、解压后检查必需条目，并用**解压出来的
+exe** 跑 info/import/analyze/decompile/ai provider/metrics。CI 的 package job 在打包后
+自动执行该脚本。
+
+## 安装器验证状态（诚实记录）
+
+- 本开发会话无交互式 UAC：`winget install NSIS.NSIS` 与静默安装 NSIS setup 均在提权
+  阶段被取消（`0x800704c7`），`makensis` 不可用，因此 **NSIS 安装器尚未在本环境生成/实测**。
+- 绿色 zip 是当前正式发布产物（已自动验证）；安装器脚本保留，发布前需在允许提权的机器或
+  干净虚拟机上执行：
+  ```powershell
+  choco install nsis -y          # 或 winget install NSIS.NSIS
+  pwsh -File scripts/package.ps1
+  dist\recraft-0.1.0-setup.exe /S /D=%TEMP%\ReCraftInstall   # 静默安装到自定义目录
+  # 从开始菜单/安装目录启动 recraft-ui.exe，再运行 uninstall.exe /S 验证卸载
+  ```
+- 替代方案（后续）：MSIX 打包 + 代码签名；在此之前以 zip + SHA256SUMS 分发。
 
 ## 发布清单
 

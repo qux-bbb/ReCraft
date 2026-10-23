@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Release artifact verification: `scripts/verify-package.ps1` checks the zip against
+  SHA256SUMS.txt, asserts the required staged files (both exes, LICENSE, docs incl.
+  FAQ/ROADMAP/M4/DEMO, VERSION.txt) and runs the **extracted** binaries through
+  info/import/analyze/decompile/`ai provider`/metrics; wired into the CI package job.
+  Rebuilt dist (10.1 MiB, 23 entries) and verified locally (502 functions).
+  NSIS installer generation remains unverified: this session has no interactive UAC
+  (`winget install NSIS.NSIS` and silent NSIS setup were cancelled at elevation), so the
+  elevator-free green zip stays the official artifact; docs/RELEASE.md documents the
+  exact VM steps for the installer.
+
 - Complex loop headers (short-circuit guards at the top of a loop, where the header's
   condition does not cleanly split into stay/leave) now fall back to a structured
   `while (1) { <structured body> }` with break/continue carrying exits, instead of

@@ -77,6 +77,9 @@ jobs:
       - name: release build + package
         shell: pwsh
         run: pwsh -NoProfile -File scripts/package.ps1 -NoInstaller
+      - name: verify package (hashes, entries, packaged binaries)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify-package.ps1
       - name: upload package artifact
         uses: actions/upload-artifact@v4
         with:
