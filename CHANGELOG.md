@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Demo package for the M4 preview: `scripts/demo.ps1` runs a nine-step CLI walkthrough
+  (PE headers, import/analysis, function discovery, L2 pseudocode, rename+prototype,
+  struct layout/apply_type, AI triage/propose/apply/undo on a real sample, MCP stdio
+  handshake, quality metrics) and ends with `DEMO PASS`; `-Keep` leaves the project for
+  the GUI. `docs/DEMO.md` adds the CLI script, GUI walkthrough, MCP client config, local
+  Ollama setup and demo talk track; `docs/M4.md` tracks preview status.
+
 - x86 prototypes now map declared parameters onto recovered stack slots in offset
   order (`[esp+N]`/`[ebp+N]`), including names and types, so a 32-bit function with
   `int __stdcall stdcall_add(int a, int b)` renders

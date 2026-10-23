@@ -40,13 +40,14 @@ makensis /DVERSION=0.1.0 /DSTAGE="dist\ReCraft-0.1.0" /DOUT="dist\recraft-0.1.0-
 ## 本机验证（2026-10-24）
 
 ```
-[package] zip: dist\recraft-v0.1.0-windows-x64.zip (9.1 MiB)
+[package] zip: dist\recraft-v0.1.0-windows-x64.zip (9.2 MiB)
 [package] SHA256: dist\SHA256SUMS.txt
 [package] PASS
 ```
 
-zip 内 17 个条目（2 个 exe + 9 篇 docs + ADR + LICENSE/README/CHANGELOG/VERSION）；解压后的
-`recraft.exe info notepad.exe` 正常输出 PE 头。
+zip 内 18 个条目（2 个 exe + 10 篇 docs + ADR + LICENSE/README/CHANGELOG/VERSION）；
+解压后的 `recraft.exe info notepad.exe` 正常输出 PE 头；release 产物上
+`scripts/demo.ps1 -Recraft dist\ReCraft-0.1.0\recraft.exe` 输出 `DEMO PASS`。
 
 ## 发布清单
 

@@ -108,6 +108,15 @@ pwsh -File scripts/package.ps1                # also builds the NSIS installer i
 See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip +
 checksums as an artifact.
 
+### Demo
+
+```powershell
+pwsh -File scripts/demo.ps1 -Keep     # 9-step CLI walkthrough, then open the GUI
+```
+
+The full 10-minute script (CLI + GUI + MCP client + local LLM) is in
+[`docs/DEMO.md`](docs/DEMO.md).
+
 The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
 during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
 
