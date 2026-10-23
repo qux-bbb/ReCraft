@@ -109,12 +109,18 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Serve the project over the Model Context Protocol (read-only tools, stdio).
+    /// Serve the project over the Model Context Protocol (read-only tools).
     ServeMcp {
         project: PathBuf,
-        /// Reserved for the HTTP transport (M3); only stdio is implemented.
+        /// Serve JSON-RPC over HTTP POST /mcp instead of stdio.
         #[arg(long)]
         http: bool,
+        /// HTTP bind address (with --http).
+        #[arg(long, default_value = "127.0.0.1:8765")]
+        bind: String,
+        /// Bearer token for HTTP; generated and printed when omitted.
+        #[arg(long)]
+        token: Option<String>,
     },
     /// AI assist: offline explanation, rename proposals, triage and proposal apply.
     Ai {
@@ -382,13 +388,22 @@ fn run(cli: Cli) -> Result<()> {
             json,
             verbose,
         } => cmd_info(&file, json, verbose),
-        Commands::ServeMcp { project, http } => {
+        Commands::ServeMcp {
+            project,
+            http,
+            bind,
+            token,
+        } => {
             if http {
-                return Err(recraft_common::Error::unsupported(
-                    "MCP HTTP transport is not implemented yet; use stdio",
-                ));
+                let token = token.unwrap_or_else(generate_mcp_token);
+                if token.is_empty() {
+                    return Err(recraft_common::Error::internal("empty MCP token"));
+                }
+                eprintln!("[mcp] token: {token}");
+                recraft_mcp::serve_http(&project, &bind, &token)
+            } else {
+                recraft_mcp::McpServer::open(&project)?.serve_stdio()
             }
-            recraft_mcp::McpServer::open(&project)?.serve_stdio()
         }
         Commands::Ai { command } => cmd_ai(command),
         Commands::Import { file, out } => cmd_import(&file, &out),
@@ -1585,6 +1600,14 @@ fn function_containing(functions: &[recraft_core::FunctionInfo], addr: Address) 
     }
     let index = low.checked_sub(1)?;
     contains(&functions[index], addr).then_some(index)
+}
+
+fn generate_mcp_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    format!("{:032x}{:08x}", nanos, std::process::id())
 }
 
 fn cmd_xrefs(

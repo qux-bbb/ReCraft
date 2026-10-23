@@ -17,8 +17,10 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{BufRead, Write};
-use std::path::Path;
+use std::io::{BufRead, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
@@ -807,6 +809,141 @@ fn tools() -> Vec<Value> {
     ]
 }
 
+// ------------------------------------------------------------------ HTTP -----
+
+/// Serve JSON-RPC over HTTP (`POST /mcp`) with bearer-token authentication.
+pub fn serve_http(project: &Path, bind: &str, token: &str) -> Result<()> {
+    let listener = TcpListener::bind(bind).map_err(Error::from)?;
+    let local = listener.local_addr().map_err(Error::from)?;
+    eprintln!("[mcp] http listening on http://{local}/mcp (bearer token required)");
+    serve_http_listener(listener, project.to_path_buf(), token.to_owned())
+}
+
+pub(crate) fn serve_http_listener(
+    listener: TcpListener,
+    project: PathBuf,
+    token: String,
+) -> Result<()> {
+    let mut server = McpServer::open(&project)?;
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else {
+            continue;
+        };
+        let _ = handle_http_connection(&mut stream, &mut server, &token);
+    }
+    Ok(())
+}
+
+struct HttpRequest {
+    method: String,
+    path: String,
+    authorization: Option<String>,
+    body: String,
+}
+
+fn handle_http_connection(
+    stream: &mut TcpStream,
+    server: &mut McpServer,
+    token: &str,
+) -> Result<()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let Some(request) = read_http_request(stream)? else {
+        return Ok(());
+    };
+    let (status, body) = if request.method == "GET" && request.path == "/health" {
+        (200, r#"{"status":"ok"}"#.to_owned())
+    } else if request.method != "POST" {
+        (405, r#"{"error":"method not allowed"}"#.to_owned())
+    } else if request.path != "/mcp" {
+        (404, r#"{"error":"not found"}"#.to_owned())
+    } else if request.authorization.as_deref() != Some(&format!("Bearer {token}")) {
+        (
+            401,
+            r#"{"error":"missing or invalid bearer token"}"#.to_owned(),
+        )
+    } else {
+        match serde_json::from_str::<Value>(&request.body) {
+            Err(error) => (
+                400,
+                json!({"error": format!("parse error: {error}")}).to_string(),
+            ),
+            Ok(message) => match server.handle_message(&message) {
+                Some(response) => (200, response.to_string()),
+                None => (202, String::new()),
+            },
+        }
+    };
+    write_http_response(stream, status, &body)
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
+    let mut reader = std::io::BufReader::new(stream.try_clone().map_err(Error::from)?);
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line).map_err(Error::from)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        head.push_str(&line);
+        if head.ends_with("\r\n\r\n") {
+            break;
+        }
+        if head.len() > 64 * 1024 {
+            return Err(Error::internal("HTTP request headers too large"));
+        }
+    }
+    let mut lines = head.split("\r\n");
+    let request_line = lines.next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_owned();
+    let path = parts.next().unwrap_or_default().to_owned();
+    let mut authorization = None;
+    let mut content_length = 0usize;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if name == "authorization" {
+            authorization = Some(value.to_owned());
+        } else if name == "content-length" {
+            content_length = value.parse().unwrap_or(0);
+        }
+    }
+    if content_length > 4 * 1024 * 1024 {
+        return Err(Error::internal("HTTP request body too large"));
+    }
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body).map_err(Error::from)?;
+    Ok(Some(HttpRequest {
+        method,
+        path,
+        authorization,
+        body: String::from_utf8_lossy(&body).into_owned(),
+    }))
+}
+
+fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) -> Result<()> {
+    let reason = match status {
+        200 => "OK",
+        202 => "Accepted",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        _ => "OK",
+    };
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).map_err(Error::from)?;
+    stream.flush().map_err(Error::from)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -827,6 +964,92 @@ mod tests {
         // The project file must outlive the server; the process exits after the test.
         std::mem::forget(dir);
         Some(server)
+    }
+
+    fn notepad_project_path() -> Option<PathBuf> {
+        let bytes = std::fs::read("C:/Windows/System32/notepad.exe").ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("http.rcraft");
+        {
+            let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+            let result = recraft_analysis::analyze(&mut session).unwrap();
+            recraft_analysis::persist(&mut session, &result).unwrap();
+        }
+        // The project file must outlive the test; the process exits afterwards.
+        std::mem::forget(dir);
+        Some(project)
+    }
+
+    fn http_request(
+        addr: std::net::SocketAddr,
+        path: &str,
+        token: Option<&str>,
+        body: &str,
+    ) -> (u16, String) {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(addr).unwrap();
+        let auth = token
+            .map(|token| format!("Authorization: Bearer {token}\r\n"))
+            .unwrap_or_default();
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{auth}Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).unwrap();
+        let (head, response_body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+        let status = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        (status, response_body.to_owned())
+    }
+
+    #[test]
+    fn http_transport_checks_token_and_serves_jsonrpc() {
+        let Some(project) = notepad_project_path() else {
+            return;
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let token = "secret-token";
+        std::thread::spawn(move || {
+            let _ = serve_http_listener(listener, project, token.to_owned());
+        });
+
+        let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        assert_eq!(
+            http_request(addr, "/mcp", None, initialize).0,
+            401,
+            "missing token must be rejected"
+        );
+        assert_eq!(
+            http_request(addr, "/mcp", Some("wrong"), initialize).0,
+            401,
+            "wrong token must be rejected"
+        );
+        let (status, body) = http_request(addr, "/mcp", Some(token), initialize);
+        assert_eq!(status, 200);
+        assert!(body.contains("serverInfo"), "{body}");
+
+        let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":2}}}"#;
+        let (status, body) = http_request(addr, "/mcp", Some(token), call);
+        assert_eq!(status, 200);
+        assert!(body.contains("functions"), "{body}");
+
+        // Health probe does not need the token, but unknown paths do not exist.
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).unwrap();
+        assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+        assert_eq!(http_request(addr, "/nope", Some(token), initialize).0, 404);
     }
 
     fn call(server: &mut McpServer, method: &str, params: Value) -> Value {

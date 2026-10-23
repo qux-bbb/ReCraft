@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP HTTP transport with bearer-token auth (DESIGN §9.1): `recraft serve-mcp <project>
+  --http [--bind 127.0.0.1:8765] [--token <token>]` serves one JSON-RPC message per
+  `POST /mcp` request, requires `Authorization: Bearer <token>` (401 otherwise),
+  returns 202 for notifications, 400 for bad JSON, 404/405 for other paths/methods and
+  exposes an unauthenticated `GET /health` probe; the token is generated and printed to
+  stderr when omitted. Implementation uses std TCP with bounded headers/body and
+  `Connection: close`. Unit test covers missing/wrong token, initialize, tools/call and
+  health; CLI smoke verified 200/401. docs/MCP.md documents the transport.
+
 - CLI `search` and `callgraph` (DESIGN §10 headless gaps): `recraft search <project>
   --bytes <hex>|--string <ascii> [--limit] [--json]` scans readable mapped segments
   (chunked) and labels hits with their containing function; `recraft callgraph <project>

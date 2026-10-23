@@ -14,7 +14,24 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 ```
 
 传输：**stdio**，每条消息是一行 JSON-RPC 2.0（MCP stdio transport）。服务器只把
-响应写到 stdout；日志/诊断走 stderr（当前无输出）。`--http` 预留，尚未实现。
+响应写到 stdout；日志/诊断走 stderr。
+
+### HTTP 传输（`--http`）
+
+DESIGN §9.1 的 HTTP 可选传输已实现：`serve-mcp <project> --http [--bind 127.0.0.1:8765]
+[--token <token>]`。未传 `--token` 时自动生成并打印到 stderr。
+
+```powershell
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft --http --bind 127.0.0.1:8765 --token demo
+curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
+     -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}'
+```
+
+- `POST /mcp`：单个 JSON-RPC 消息，`Authorization: Bearer <token>` 必需（缺失/错误返回
+  401）；通知（无 `id`）返回 202；解析失败 400；路径不存在 404；非 POST 405。
+- `GET /health`：`{"status":"ok"}`，无需 token（只用于存活探测）。
+- 读取上限：请求头 64 KiB、请求体 4 MiB；`Connection: close` 简化实现（v1）。
+- 单连接串行处理，服务只会读取项目、不修改。
 
 客户端配置示例（Claude Desktop 风格）：
 
