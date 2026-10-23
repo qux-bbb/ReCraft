@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1: automatic function discovery (`recraft-analysis`) — seeds from `.pdata`, exports,
+  entry point and TLS callbacks, then recursive descent with tail-call detection. Exact
+  `.pdata` boundaries; functions are persisted as derived data (auto flag) without
+  clobbering user definitions.
+- `corpus/`: CRT-free MSVC benchmark (14 exports) where exports + `.pdata` are ground
+  truth; `corpus/build.ps1` locates MSVC via `vswhere`.
+- `recraft eval` / `recraft analyze` CLI commands, plus an "Analyze functions" button
+  (F5) in the UI. Baseline: `notepad.exe` recall 1.000 / 386-of-386 `.pdata` boundaries;
+  `kernel32.dll` recall 1.000 over 2460 analysable functions, precision 0.955.
+- `docs/M1.md`: M1 status, metrics and next steps.
+
 - M0 complete: end-to-end acceptance (`scripts/e2e.ps1`) covering import → info/disasm →
   rename + CJK comment → L0 decompile → undo/redo → JSON → code/data marks, plus an
   optional 1 GiB overlay smoke (4.44 s import). Wired into CI.

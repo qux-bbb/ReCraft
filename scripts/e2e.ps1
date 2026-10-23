@@ -61,51 +61,57 @@ function Assert-Contains([string]$Text, [string]$Needle, [string]$What) {
 try {
     $project = Join-Path $work 'sample.rcraft'
 
-    Write-Host '[1/9] import'
+    Write-Host '[1/10] import'
     $out = Invoke-Recraft @('import', $PEFile, '-o', $project)
     Assert-Contains $out 'OK:' 'import output'
     if (-not (Test-Path $project)) { throw 'project file was not created' }
 
-    Write-Host '[2/9] info --json'
+    Write-Host '[2/10] info --json'
     $info = Invoke-Recraft @('info', $PEFile, '--json') -Json | ConvertFrom-Json
     if (-not $info.entry) { throw 'info: missing entry point' }
     if ($info.sections.Count -lt 1) { throw 'info: no sections' }
     if ($info.imports.Count -lt 1) { throw 'info: no imports' }
 
-    Write-Host '[3/9] disasm'
+    Write-Host '[3/10] disasm'
     $disasm = Invoke-Recraft @('disasm', $project, '--addr', 'entry', '--count', '20')
     Assert-Contains $disasm 'start' 'entry name shown'
     Assert-Contains $disasm 'sub' 'disassembly mnemonic'
 
-    Write-Host '[4/9] rename + CJK comment'
+    Write-Host '[4/10] rename + CJK comment'
     Invoke-Recraft @('rename', $project, '--addr', 'entry', '--name', 'my_main') | Out-Null
     Invoke-Recraft @('comment', $project, '--addr', 'entry', '--text', $cjkComment) | Out-Null
     $disasm = Invoke-Recraft @('disasm', $project, '--addr', 'entry', '--count', '1')
     Assert-Contains $disasm 'my_main' 'renamed entry'
     Assert-Contains $disasm $cjkComment 'CJK comment'
 
-    Write-Host '[5/9] decompile L0'
+    Write-Host '[5/10] decompile L0'
     $pseudo = Invoke-Recraft @('decompile', $project, '--addr', 'entry', '--max-insns', '64')
     Assert-Contains $pseudo 'return' 'pseudo-C control flow'
 
-    Write-Host '[6/9] undo removes the comment'
+    Write-Host '[6/10] undo removes the comment'
     Invoke-Recraft @('undo', $project) | Out-Null
     $disasm = Invoke-Recraft @('disasm', $project, '--addr', 'entry', '--count', '1')
     if ($disasm.Contains($cjkComment)) { throw 'undo did not remove the comment' }
     Assert-Contains $disasm 'my_main' 'rename survives undoing the comment'
 
-    Write-Host '[7/9] redo, and persistence after a fresh process'
+    Write-Host '[7/10] redo, and persistence after a fresh process'
     Invoke-Recraft @('redo', $project) | Out-Null
     $disasm = Invoke-Recraft @('disasm', $project, '--addr', 'entry', '--count', '1')
     Assert-Contains $disasm $cjkComment 'redo restores the comment'
 
-    Write-Host '[8/9] JSON output'
+    Write-Host '[8/10] JSON output'
     $lines = (Invoke-Recraft @('disasm', $project, '--count', '5', '--json') -Json | ConvertFrom-Json).lines
     if ($lines.Count -ne 5) { throw "expected 5 JSON lines, got $($lines.Count)" }
 
-    Write-Host '[9/9] mark code/data'
+    Write-Host '[9/10] mark code/data'
     Invoke-Recraft @('mark', $project, '--addr', 'entry', '--len', '16', '--as', 'code') | Out-Null
     Invoke-Recraft @('undo', $project) | Out-Null
+
+    Write-Host '[10/10] analyze functions'
+    $summary = Invoke-Recraft @('analyze', $project)
+    Assert-Contains $summary 'functions:' 'analysis summary'
+    $funcs = Invoke-Recraft @('funcs', $project)
+    Assert-Contains $funcs '0x' 'function list after analysis'
 
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"

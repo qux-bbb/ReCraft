@@ -14,3 +14,6 @@ publish = false
 recraft-common = { workspace = true }
 recraft-core = { workspace = true }
 recraft-decode = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"

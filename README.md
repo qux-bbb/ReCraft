@@ -1,10 +1,12 @@
 # ReCraft
 
-> **Status: M0 complete (walking skeleton).** You can import a PE, browse the disassembly
-> and L0 pseudo-C, rename/comment with undo/redo, and reopen projects — from both the CLI and
-> the native UI. Automatic analysis (functions, xrefs, strings) and MCP/AI land in M1.
+> **Status: M0 complete, M1 in progress.** You can import a PE, analyze it (function
+> discovery from `.pdata`/exports/entry + recursive descent), browse disassembly and
+> L0 pseudo-C, rename/comment with undo/redo, and reopen projects — from both the CLI and
+> the native UI. Strings, xrefs, runtime recovery (Go/Rust) and MCP/AI are next.
 >
-> See [`docs/M0-REPORT.md`](docs/M0-REPORT.md) for metrics and known limitations.
+> See [`docs/M0-REPORT.md`](docs/M0-REPORT.md) and [`docs/M1.md`](docs/M1.md) for metrics
+> and known limitations.
 
 ReCraft is an AI-native reverse-engineering platform: a native desktop disassembler and
 decompiler for Windows binaries, with an MCP server and LLM assistance built in from day one.
@@ -55,6 +57,16 @@ First import a binary from the command line:
 cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
 cargo run -p recraft-cli -- disasm notepad.rcraft --count 40
 cargo run -p recraft-cli -- decompile notepad.rcraft --addr entry
+cargo run -p recraft-cli -- analyze notepad.rcraft
+cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
+```
+
+The analysis corpus is built with MSVC (no CRT) and doubles as a regression benchmark
+where exports + `.pdata` are ground truth:
+
+```powershell
+.\corpus\build.ps1
+cargo run -p recraft-cli -- eval .\corpus\build\x64\corpus.exe
 ```
 
 The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver

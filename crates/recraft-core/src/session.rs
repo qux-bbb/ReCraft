@@ -33,6 +33,9 @@ const IMAGE_CACHE_PAGES: usize = 512;
 const FLAGS_CACHE_PAGES: usize = 1024;
 const DECODE_CACHE_ENTRIES: usize = 65_536;
 
+/// `func.flags` bit marking functions produced by automatic analysis (derived data).
+pub const FUNC_FLAG_AUTO: u32 = 1;
+
 /// Page cache over the project's original image bytes.
 struct ImageCache {
     pages: HashMap<u64, Vec<u8>>,
@@ -366,6 +369,34 @@ impl Session {
             .optional()
             .map_err(command::db_err)?;
         Ok(addr.map(|value| Address::new(value as u64)))
+    }
+
+    /// Replace functions produced by automatic analysis, keeping user-defined ones.
+    ///
+    /// Analysis results are derived data (see DESIGN §2.3): they are not journaled and
+    /// can be recomputed at any time. User `DefineFunc` commands write `flags = 0` and
+    /// therefore survive a re-analysis.
+    pub fn replace_auto_functions(&mut self, functions: &[(Address, Address)]) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute("DELETE FROM func WHERE (flags & ?1) != 0", [FUNC_FLAG_AUTO])
+            .map_err(command::db_err)?;
+        for (start, end) in functions {
+            if end <= start {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO func(start, end, flags, cc) VALUES (?1, ?2, ?3, 0)
+                 ON CONFLICT(start) DO NOTHING",
+                params![start.get() as i64, end.get() as i64, FUNC_FLAG_AUTO as i64],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
     }
 
     // ----------------------------------------------------------- commands ----

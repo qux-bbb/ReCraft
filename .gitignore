@@ -4,6 +4,9 @@
 /spike/**/target/
 **/*.rs.bk
 
+# Generated analysis corpus (built by corpus/build.ps1)
+/corpus/build/
+
 # ReCraft project files (user data, never commit)
 *.rcraft
 *.rcraft-*

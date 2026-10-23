@@ -13,6 +13,7 @@ use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Key, RichText, Sense};
 
+use recraft_analysis::{analyze, persist};
 use recraft_common::Address;
 use recraft_core::{Command, CommentKind, DisasmLine, FunctionInfo, Session};
 use recraft_decompile::{PseudoLine, pseudocode_l0};
@@ -57,6 +58,7 @@ enum Action {
     None,
     Open,
     Import,
+    Analyze,
     Undo,
     Redo,
     ToggleLang,
@@ -349,6 +351,7 @@ impl ReCraftApp {
         let undo_label = self.t("Undo", "撤销");
         let redo_label = self.t("Redo", "重做");
         let no_project = self.t("<no project>", "<未打开项目>");
+        let analyze_label = self.t("Analyze functions", "分析函数");
         egui::Panel::top("recraft_top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button(file_label, |ui| {
@@ -366,6 +369,10 @@ impl ReCraftApp {
                 }
                 if ui.button(redo_label).clicked() {
                     *action = Action::Redo;
+                }
+                ui.separator();
+                if ui.button(analyze_label).clicked() {
+                    *action = Action::Analyze;
                 }
                 ui.separator();
                 if ui
@@ -705,6 +712,9 @@ impl ReCraftApp {
             if input.modifiers.command && input.key_pressed(Key::O) {
                 action = Action::Open;
             }
+            if input.key_pressed(Key::F5) {
+                action = Action::Analyze;
+            }
             if input.key_pressed(Key::G) {
                 action = Action::GotoDialog;
             } else if input.key_pressed(Key::N) {
@@ -745,6 +755,29 @@ impl ReCraftApp {
                     .pick_file()
                 {
                     self.open_path(&path);
+                }
+            }
+            Action::Analyze => {
+                let Some(session) = self.session.as_mut() else {
+                    return;
+                };
+                let started = std::time::Instant::now();
+                let outcome = analyze(session).and_then(|result| {
+                    persist(session, &result)?;
+                    Ok(result)
+                });
+                let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                match outcome {
+                    Ok(result) => {
+                        self.functions_dirty = true;
+                        self.disasm_dirty = true;
+                        self.pseudo_dirty = true;
+                        self.set_status(format!(
+                            "{} functions in {elapsed_ms:.0} ms",
+                            result.functions.len()
+                        ));
+                    }
+                    Err(error) => self.set_error(error),
                 }
             }
             Action::Undo => {

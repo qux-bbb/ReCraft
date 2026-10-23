@@ -2784,6 +2784,7 @@ dependencies = [
  "recraft-common",
  "recraft-core",
  "recraft-decode",
+ "tempfile",
 ]
 
 [[package]]
@@ -2803,6 +2804,7 @@ name = "recraft-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "recraft-analysis",
  "recraft-app",
  "recraft-common",
  "recraft-core",
@@ -2894,6 +2896,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "recraft-analysis",
  "recraft-app",
  "recraft-common",
  "recraft-core",

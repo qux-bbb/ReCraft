@@ -18,6 +18,7 @@ eframe = { version = "0.36.2", features = ["glow"] }
 egui = "0.36.2"
 rfd = "0.17.2"
 recraft-decompile.workspace = true
+recraft-analysis.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -6,8 +6,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use recraft_analysis::{analyze, persist};
 use recraft_common::{Address, AddressRange, Error, Result};
 use recraft_core::{CodeData, Command, CommentKind, Session};
 use recraft_decompile::pseudocode_l0;
@@ -66,6 +68,18 @@ enum Commands {
         /// Prefix each line with its source address.
         #[arg(long)]
         addresses: bool,
+    },
+    /// Run automatic analysis (function discovery) and persist it into the project.
+    Analyze {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Evaluate function discovery against exports + .pdata (ground truth).
+    Eval {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// List defined functions.
     Funcs {
@@ -160,6 +174,8 @@ fn run(cli: Cli) -> Result<()> {
             json,
         } => cmd_disasm(&project, addr.as_deref(), count, json),
         Commands::Funcs { project, json } => cmd_funcs(&project, json),
+        Commands::Analyze { project, json } => cmd_analyze(&project, json),
+        Commands::Eval { file, json } => cmd_eval(&file, json),
         Commands::Decompile {
             project,
             addr,
@@ -463,6 +479,174 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
         println!("{text}");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------- analysis ----
+
+fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let started = Instant::now();
+    let result = analyze(&mut session)?;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    persist(&mut session, &result)?;
+
+    if as_json {
+        return json_result(&json!({
+            "functions": result.functions.len(),
+            "instructions": result.instructions,
+            "seeds": result.seeds,
+            "discovered_by_call": result.discovered_by_call,
+            "call_edges": result.calls.len(),
+            "elapsed_ms": elapsed_ms,
+        }));
+    }
+
+    println!("functions:            {}", result.functions.len());
+    println!(
+        "  from .pdata:        {}",
+        result
+            .functions
+            .iter()
+            .filter(|f| f.source == recraft_analysis::FunctionSource::Pdata)
+            .count()
+    );
+    println!(
+        "  from exports/entry: {}",
+        result
+            .functions
+            .iter()
+            .filter(|f| matches!(
+                f.source,
+                recraft_analysis::FunctionSource::Export
+                    | recraft_analysis::FunctionSource::Entry
+                    | recraft_analysis::FunctionSource::Tls
+            ))
+            .count()
+    );
+    println!(
+        "  from call targets:  {}",
+        result
+            .functions
+            .iter()
+            .filter(|f| f.source == recraft_analysis::FunctionSource::CallTarget)
+            .count()
+    );
+    println!("instructions decoded: {}", result.instructions);
+    println!("direct call edges:    {}", result.calls.len());
+    println!("elapsed:              {elapsed_ms:.1} ms");
+    println!("saved to project:     {}", project.display());
+    Ok(())
+}
+
+fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {
+    let bytes = std::fs::read(file)?;
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("recraft-eval-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let project = dir.join("eval.rcraft");
+
+    let outcome = (|| -> Result<()> {
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false)?;
+        let image = session.image().clone();
+        let started = Instant::now();
+        let result = analyze(&mut session)?;
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+        let mut ground_truth: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+        ground_truth.insert(session.entry_point().get());
+        let segments = session.segments().to_vec();
+        let in_code = |va: u64| {
+            segments
+                .iter()
+                .any(|segment| segment.perm.is_executable() && segment.contains(Address::new(va)))
+        };
+        let mut code_exports = 0usize;
+        let mut skipped_exports = 0usize;
+        for export in &image.exports {
+            if export.forwarder.is_some() {
+                skipped_exports += 1;
+                continue;
+            }
+            let va = image.image_base.get() + u64::from(export.rva);
+            if !in_code(va) {
+                skipped_exports += 1;
+                continue;
+            }
+            ground_truth.insert(va);
+            code_exports += 1;
+        }
+        for range in &image.pdata_functions {
+            if in_code(range.start.get()) {
+                ground_truth.insert(range.start.get());
+            }
+        }
+        let detected: std::collections::BTreeSet<u64> = result
+            .functions
+            .iter()
+            .map(|function| function.start.get())
+            .collect();
+        let matched = ground_truth.intersection(&detected).count();
+        let recall = matched as f64 / ground_truth.len().max(1) as f64;
+        let precision = matched as f64 / detected.len().max(1) as f64;
+        let exact_boundaries = image
+            .pdata_functions
+            .iter()
+            .filter(|range| {
+                result
+                    .functions
+                    .iter()
+                    .any(|function| function.start == range.start && function.end == range.end)
+            })
+            .count();
+        let boundary_accuracy = exact_boundaries as f64 / image.pdata_functions.len().max(1) as f64;
+
+        if as_json {
+            return json_result(&json!({
+                "file": file.display().to_string(),
+                "ground_truth": ground_truth.len(),
+                "detected": detected.len(),
+                "matched": matched,
+                "recall": recall,
+                "precision": precision,
+                "code_exports": code_exports,
+                "excluded_exports": skipped_exports,
+                "pdata_functions": image.pdata_functions.len(),
+                "pdata_exact_boundaries": exact_boundaries,
+                "boundary_accuracy": boundary_accuracy,
+                "instructions": result.instructions,
+                "elapsed_ms": elapsed_ms,
+            }));
+        }
+
+        println!("File:              {}", file.display());
+        println!(
+            "Ground truth:      {} (entry 1 + code exports {code_exports} + .pdata {})",
+            ground_truth.len(),
+            image.pdata_functions.len()
+        );
+        if skipped_exports > 0 {
+            println!(
+                "Excluded exports:  {skipped_exports} (forwarders / non-code, not analysable)"
+            );
+        }
+        println!("Detected:          {}", detected.len());
+        println!("Matched:           {matched}");
+        println!("Recall:            {recall:.3}");
+        println!("Precision:         {precision:.3}");
+        println!(
+            ".pdata boundaries: {exact_boundaries}/{} ({boundary_accuracy:.3})",
+            image.pdata_functions.len()
+        );
+        println!("Instructions:      {}", result.instructions);
+        println!("Elapsed:           {elapsed_ms:.1} ms");
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_dir_all(&dir);
+    outcome
 }
 
 // ------------------------------------------------------------------ funcs ----

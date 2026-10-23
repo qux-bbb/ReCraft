@@ -18,6 +18,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: build analysis corpus (MSVC, CRT-free)
+        shell: pwsh
+        run: pwsh -NoProfile -File corpus/build.ps1
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
