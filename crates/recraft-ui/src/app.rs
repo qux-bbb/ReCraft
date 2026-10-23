@@ -8,12 +8,14 @@
 //! commands, so undo/redo behave exactly like the CLI.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Key, RichText, Sense};
 
-use recraft_analysis::{analyze, persist};
 use recraft_common::Address;
 use recraft_core::{Command, CommentKind, DisasmLine, FunctionInfo, Session};
 use recraft_decompile::{PseudoLine, pseudocode_l0};
@@ -54,6 +56,25 @@ struct ImportRow {
     first_from: Option<Address>,
 }
 
+/// Result of the background analysis worker.
+enum AnalysisMessage {
+    Done {
+        functions: usize,
+        strings: usize,
+        elapsed_ms: f64,
+    },
+    Cancelled,
+    Failed(String),
+}
+
+/// A running background analysis. The worker owns its own `Session` (separate SQLite
+/// connection), so the UI stays responsive and can be cancelled cooperatively.
+struct AnalysisJob {
+    receiver: mpsc::Receiver<AnalysisMessage>,
+    cancel: Arc<AtomicBool>,
+    started: Instant,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditKind {
     Rename,
@@ -72,6 +93,7 @@ enum Action {
     Open,
     Import,
     Analyze,
+    CancelAnalysis,
     Undo,
     Redo,
     ToggleLang,
@@ -113,6 +135,7 @@ pub struct ReCraftApp {
     cfg: Option<recraft_analysis::Cfg>,
     cfg_for: Option<Address>,
     cfg_dirty: bool,
+    analysis: Option<AnalysisJob>,
     edit: Option<EditState>,
     goto: Option<String>,
     history: Vec<Address>,
@@ -149,6 +172,7 @@ impl Default for ReCraftApp {
             cfg: None,
             cfg_for: None,
             cfg_dirty: false,
+            analysis: None,
             edit: None,
             goto: None,
             history: Vec::new(),
@@ -311,6 +335,7 @@ impl ReCraftApp {
     // ------------------------------------------------------------- refresh --
 
     fn tick(&mut self) {
+        self.poll_analysis();
         if self.disasm_dirty {
             self.refresh_disasm();
         }
@@ -329,6 +354,45 @@ impl ReCraftApp {
         self.refresh_xrefs();
         if self.tab == Tab::Graph {
             self.refresh_cfg();
+        }
+    }
+
+    fn poll_analysis(&mut self) {
+        let Some(job) = self.analysis.as_ref() else {
+            return;
+        };
+        let message = match job.receiver.try_recv() {
+            Ok(message) => message,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                AnalysisMessage::Failed("analysis worker stopped unexpectedly".to_owned())
+            }
+        };
+        self.analysis = None;
+        match message {
+            AnalysisMessage::Done {
+                functions,
+                strings,
+                elapsed_ms,
+            } => {
+                self.functions_dirty = true;
+                self.disasm_dirty = true;
+                self.pseudo_dirty = true;
+                self.strings_dirty = true;
+                self.imports_dirty = true;
+                self.xrefs_for = None;
+                self.cfg_dirty = true;
+                self.cfg_for = None;
+                self.set_status(format!(
+                    "{functions} functions, {strings} strings in {elapsed_ms:.0} ms"
+                ));
+            }
+            AnalysisMessage::Cancelled => {
+                self.set_status(self.t("analysis cancelled", "分析已取消").to_owned());
+            }
+            AnalysisMessage::Failed(error) => {
+                self.set_error(recraft_common::Error::internal(error));
+            }
         }
     }
 
@@ -543,6 +607,8 @@ impl ReCraftApp {
         let redo_label = self.t("Redo", "重做");
         let no_project = self.t("<no project>", "<未打开项目>");
         let analyze_label = self.t("Analyze functions", "分析函数");
+        let cancel_label = self.t("Cancel", "取消");
+        let analyzing_label = self.t("analyzing", "分析中");
         egui::Panel::top("recraft_top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button(file_label, |ui| {
@@ -562,7 +628,13 @@ impl ReCraftApp {
                     *action = Action::Redo;
                 }
                 ui.separator();
-                if ui.button(analyze_label).clicked() {
+                if let Some(job) = self.analysis.as_ref() {
+                    let elapsed = job.started.elapsed().as_secs_f64();
+                    ui.label(format!("{analyzing_label}… {elapsed:.1}s"));
+                    if ui.button(cancel_label).clicked() {
+                        *action = Action::CancelAnalysis;
+                    }
+                } else if ui.button(analyze_label).clicked() {
                     *action = Action::Analyze;
                 }
                 ui.separator();
@@ -1175,34 +1247,31 @@ impl ReCraftApp {
                 }
             }
             Action::Analyze => {
-                let Some(session) = self.session.as_mut() else {
+                if self.analysis.is_some() {
+                    return;
+                }
+                let Some(project) = self.project.clone() else {
+                    self.set_status(self.t("no project", "无项目").to_owned());
                     return;
                 };
-                let started = std::time::Instant::now();
-                let outcome = analyze(session).and_then(|result| {
-                    persist(session, &result)?;
-                    let strings = recraft_analysis::extract_strings(session, 4, 200_000)?;
-                    recraft_analysis::persist_strings(session, &strings)?;
-                    Ok((result, strings.len()))
+                let (sender, receiver) = mpsc::channel();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let worker_cancel = cancel.clone();
+                std::thread::spawn(move || {
+                    let message = run_analysis_job(&project, &worker_cancel);
+                    let _ = sender.send(message);
                 });
-                let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-                match outcome {
-                    Ok((result, string_count)) => {
-                        self.functions_dirty = true;
-                        self.disasm_dirty = true;
-                        self.pseudo_dirty = true;
-                        self.strings_dirty = true;
-                        self.imports_dirty = true;
-                        self.xrefs_for = None;
-                        self.cfg_dirty = true;
-                        self.cfg_for = None;
-                        self.set_status(format!(
-                            "{} functions, {} strings in {elapsed_ms:.0} ms",
-                            result.functions.len(),
-                            string_count
-                        ));
-                    }
-                    Err(error) => self.set_error(error),
+                self.analysis = Some(AnalysisJob {
+                    receiver,
+                    cancel,
+                    started: Instant::now(),
+                });
+                self.set_status(self.t("analyzing…", "分析中…").to_owned());
+            }
+            Action::CancelAnalysis => {
+                if let Some(job) = self.analysis.as_ref() {
+                    job.cancel.store(true, Ordering::Relaxed);
+                    self.set_status(self.t("cancelling…", "正在取消…").to_owned());
                 }
             }
             Action::Undo => {
@@ -1362,6 +1431,32 @@ fn truncate_chars(text: &str, max: usize) -> String {
     chars.into_iter().collect()
 }
 
+/// Background worker: its own `Session` (separate SQLite connection) keeps the UI
+/// responsive; `cancel` is polled by the analysis pass.
+fn run_analysis_job(project: &Path, cancel: &Arc<AtomicBool>) -> AnalysisMessage {
+    let started = Instant::now();
+    let outcome = (|| -> recraft_common::Result<(usize, usize)> {
+        let mut session = Session::open(project)?;
+        let options = recraft_analysis::AnalysisOptions {
+            cancel: Some(cancel.clone()),
+        };
+        let result = recraft_analysis::analyze_with_options(&mut session, &options)?;
+        recraft_analysis::persist(&mut session, &result)?;
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
+        recraft_analysis::persist_strings(&mut session, &strings)?;
+        Ok((result.functions.len(), strings.len()))
+    })();
+    match outcome {
+        Ok((functions, strings)) => AnalysisMessage::Done {
+            functions,
+            strings,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        },
+        Err(recraft_common::Error::Cancelled) => AnalysisMessage::Cancelled,
+        Err(error) => AnalysisMessage::Failed(error.to_string()),
+    }
+}
+
 fn resolve_address(session: &Session, raw: &str) -> Result<Address, String> {
     let raw = raw.trim();
     if raw.eq_ignore_ascii_case("entry") {
@@ -1487,7 +1582,7 @@ mod tests {
         let project = dir.path().join("ui-panels.rcraft");
         let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
         let result = recraft_analysis::analyze(&mut session).unwrap();
-        persist(&mut session, &result).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
         let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).unwrap();
         recraft_analysis::persist_strings(&mut session, &strings).unwrap();
 
@@ -1542,5 +1637,42 @@ mod tests {
             .as_ref()
             .expect("CFG not built for the selected function");
         assert!(!cfg.blocks.is_empty(), "CFG has no blocks");
+    }
+
+    /// Runs the background worker function directly (no UI thread): it must persist
+    /// functions/strings through a second SQLite connection and honour cancellation.
+    #[test]
+    fn background_analysis_job_persists_and_cancels() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("bg.rcraft");
+        {
+            let _session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        match run_analysis_job(&project, &cancel) {
+            AnalysisMessage::Done {
+                functions, strings, ..
+            } => {
+                assert!(functions > 100, "only {functions} functions");
+                assert!(strings > 100, "only {strings} strings");
+            }
+            AnalysisMessage::Cancelled => panic!("job was cancelled unexpectedly"),
+            AnalysisMessage::Failed(error) => panic!("job failed: {error}"),
+        }
+
+        // A fresh connection sees the persisted derived data.
+        let session = Session::open(&project).unwrap();
+        assert!(session.functions().unwrap().len() > 100);
+        assert!(session.strings().unwrap().len() > 100);
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        assert!(matches!(
+            run_analysis_job(&project, &cancel),
+            AnalysisMessage::Cancelled
+        ));
     }
 }

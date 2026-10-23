@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 background analysis: the UI Analyze action runs on a worker thread with its own
+  SQLite connection; the top bar shows elapsed time and a Cancel button. Cancellation is
+  cooperative (`AnalysisOptions { cancel }`, checked between functions and every 1024
+  instructions) and returns `Error::Cancelled`; completed runs refresh every panel via
+  the derived-data tables. Benchmarks (debug build): `kernel32.dll` 292 ms / 79,797
+  instructions including strings; 1 GiB overlay sample analysis 317 ms (overlay is not
+  mapped, so it is not scanned), import 3.88 s.
+
 - M1 function boundaries: MSVC cold `.pdata` fragments (hot/cold splits) are merged back
   into their owning function when they are fallthrough-contiguous or targeted by a
   conditional branch; x64 corpus precision against the linker map goes 0.857 -> 1.000.

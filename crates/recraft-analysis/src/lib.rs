@@ -105,8 +105,32 @@ const MAX_INSTRUCTIONS_PER_FUNCTION: usize = 20_000;
 const MAX_TOTAL_INSTRUCTIONS: u64 = 5_000_000;
 const MAX_DATA_POINTERS: usize = 65_536;
 
-/// Run function discovery (plus call/jump/data xref collection) over an opened session.
+/// Options for a (possibly long-running) analysis pass.
+#[derive(Clone, Default)]
+pub struct AnalysisOptions {
+    /// Cooperative cancellation flag, checked between functions and periodically while
+    /// walking a function body. The caller may set it from another thread.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl AnalysisOptions {
+    fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+/// Run function discovery with default options.
 pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
+    analyze_with_options(session, &AnalysisOptions::default())
+}
+
+/// Run function discovery (plus call/jump/data xref collection) over an opened session.
+pub fn analyze_with_options(
+    session: &mut Session,
+    options: &AnalysisOptions,
+) -> Result<AnalysisResult> {
     let entry = session.entry_point();
     let segments = session.segments().to_vec();
     let image = session.image().clone();
@@ -260,6 +284,9 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
     let mut discovered_by_call: u64 = 0;
 
     while let Some(start) = queue.pop_front() {
+        if options.cancelled() {
+            return Err(recraft_common::Error::Cancelled);
+        }
         let Some(record) = known.get(&start.get()) else {
             continue;
         };
@@ -278,6 +305,7 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
             &segments,
             &iat,
             &mut instruction_total,
+            options,
         )?;
 
         calls.extend(output.calls);
@@ -421,6 +449,7 @@ fn scan_function(
     segments: &[recraft_core::Segment],
     iat: &HashMap<u64, (String, String)>,
     instruction_total: &mut u64,
+    options: &AnalysisOptions,
 ) -> Result<ScanOutput> {
     let mut visited: BTreeSet<u64> = BTreeSet::new();
     let mut stack: Vec<Address> = vec![start];
@@ -451,6 +480,9 @@ fn scan_function(
         };
         local_instructions += 1;
         *instruction_total += 1;
+        if local_instructions % 1024 == 0 && options.cancelled() {
+            return Err(recraft_common::Error::Cancelled);
+        }
         let next = insn.next_addr();
         if next > max_end {
             max_end = next;
@@ -741,6 +773,21 @@ mod tests {
             "api tag missing at {:#x}",
             site.get()
         );
+    }
+
+    #[test]
+    fn analysis_can_be_cancelled() {
+        let Some(path) = corpus_path() else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("cancel.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let options = AnalysisOptions { cancel: Some(flag) };
+        let error = analyze_with_options(&mut session, &options).unwrap_err();
+        assert!(matches!(error, recraft_common::Error::Cancelled));
     }
 
     #[test]
