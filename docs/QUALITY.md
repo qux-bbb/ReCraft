@@ -53,6 +53,21 @@ goto fallback functions: 0
 （do-while）→ 78.7%（复杂循环 header 兜底），已超过 v1 的 70% 目标）；不作为门禁，
 仅作为观察指标。
 
+## 畸形输入回归（DESIGN §11 的离线 fuzz 替代）
+
+`crates/recraft-format/tests/malformed.rs` 用确定性 xorshift PRNG 覆盖三类输入，要求
+加载与所有公开访问器**不 panic**（加载失败可以，崩溃不行）：
+
+| 用例 | 规模 |
+|---|---|
+| 随机字节 blob | 500 例（长度 1–4096，含完整随机头） |
+| 真实 notepad.exe 随机截断 | 400 例 + DOS/NT 头边界定点截断 |
+| 头部/节表字节突变 | 400 例（DOS/NT 头与节表区，1–4 个 bit flip） |
+
+加载成功的畸形镜像还会遍历 `segment_containing`/`rva_to_file_offset`/节权限/导入/导出/
+TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06 s）。真实
+`cargo-fuzz` 需要 nightly，当前环境未启用，作为发布前的可选补充。
+
 ## golden 快照
 
 - 目录：`tests/golden/corpus/`，每个函数一个 `.c` 文件，**按符号名命名**（插入新函数不会

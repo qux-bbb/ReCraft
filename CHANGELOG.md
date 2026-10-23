@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Deterministic malformed-input regression for the PE loader (DESIGN §11 offline
+  fuzz substitute): `crates/recraft-format/tests/malformed.rs` feeds 500 random blobs,
+  400 truncations of notepad.exe plus DOS/NT boundary cuts, and 400 header/section-table
+  bit-flip mutations; loading and every public accessor must never panic, and
+  successfully loaded mutants are exercised through section lookup, RVA mapping,
+  permissions, imports/exports/TLS/pdata. Runs in ~0.06 s as part of the workspace
+  tests; cargo-fuzz remains a nightly-only optional extra. docs/QUALITY.md documents it.
+
 - Release regression after the M2/MCP/CLI work: rebuilt `dist` (zip 10.2 MiB, 23 entries)
   and re-ran the full chain — `package.ps1` PASS, `verify-package.ps1` PACKAGE PASS
   (hash + entries + packaged exe info/import/analyze/decompile/AI/metrics, 502 functions),
