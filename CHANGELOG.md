@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SSA-lite argument tracking: a may-write forward dataflow over the CFG (entry set
+  empty, join = union of predecessor out-sets) seeds a second lifting pass, so `argN`
+  is only printed for incoming values that are intact on every path; clobbered values
+  at joins fall back to the concrete register view. Unit test covers the dataflow on a
+  diamond with an argument write on one arm.
+
 - Basic float typing: SSE scalar memory operands (`movss/movsd` and float arithmetic)
   are typed loads/stores (`f32`/`f64`) instead of raw `u32`/`u64`, float arithmetic uses
   dedicated `BinOp::FAdd/FSub/FMul/FDiv`, and int<->float conversions pick the typed

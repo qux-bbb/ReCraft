@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use recraft_analysis::{Cfg, EdgeKind, build_cfg};
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
-use recraft_ir::Flow;
+use recraft_ir::{Flow, Reg};
 
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
@@ -59,7 +59,24 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     let args = info.as_ref().map(|info| &info.args);
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
     for block in &cfg.blocks {
-        bodies.push(lift_block(session, block.start, block.end, args)?);
+        bodies.push(lift_block(session, block.start, block.end, args, None)?);
+    }
+    // SSA-lite: which registers are already overwritten on every path reaching a block.
+    // Re-lifting with that seed keeps `argN` off clobbered values at join points.
+    if args.is_some() {
+        let written: Vec<BTreeSet<Reg>> = bodies.iter().map(|body| body.written.clone()).collect();
+        let seeds = entry_written(&cfg, &written);
+        let mut seeded = Vec::with_capacity(cfg.blocks.len());
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            seeded.push(lift_block(
+                session,
+                block.start,
+                block.end,
+                args,
+                Some(&seeds[index]),
+            )?);
+        }
+        bodies = seeded;
     }
     let mut structurer = Structurer::new(&cfg, bodies, info.as_ref().map(|info| info.args.clone()));
     structurer.compute_rpo();
@@ -110,6 +127,49 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         func_start: start,
         lines,
     })
+}
+
+/// Which registers may already have been overwritten whenever a block is entered.
+///
+/// Forward may-write dataflow: `in[b] = ∪ out[pred]`, `out[b] = in[b] ∪ written[b]`.
+/// The function entry starts empty (incoming argument registers are intact there).
+fn entry_written(cfg: &Cfg, written: &[BTreeSet<Reg>]) -> Vec<BTreeSet<Reg>> {
+    let count = written.len();
+    let mut predecessors = vec![Vec::new(); count];
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        for (target, _) in &block.edges {
+            if *target < count {
+                predecessors[*target].push(index);
+            }
+        }
+    }
+    let mut entering: Vec<BTreeSet<Reg>> = vec![BTreeSet::new(); count];
+    let mut leaving = written.to_vec();
+    for _ in 0..(count + 4) {
+        let mut changed = false;
+        for block in 0..count {
+            let mut set = BTreeSet::new();
+            if block != cfg.entry {
+                for &pred in &predecessors[block] {
+                    set.extend(leaving[pred].iter().copied());
+                }
+            }
+            if set != entering[block] {
+                entering[block] = set;
+                changed = true;
+            }
+            let mut out = entering[block].clone();
+            out.extend(written[block].iter().copied());
+            if out != leaving[block] {
+                leaving[block] = out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    entering
 }
 
 struct Block {
@@ -802,7 +862,7 @@ fn negate(condition: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use recraft_analysis::{analyze, persist};
+    use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
 
     fn analyzed_corpus() -> Option<(Session, TempDir)> {
@@ -915,6 +975,43 @@ mod tests {
             text.contains("int32 add_leaf(int64 arg1, int64 arg2)"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn dataflow_marks_arguments_written_on_any_path() {
+        let address = |value: u64| Address::new(value);
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: address(start),
+            end: address(start + 0x10),
+            insns: Vec::new(),
+            edges,
+        };
+        let cfg = Cfg {
+            function: address(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(
+                    0,
+                    0x1000,
+                    vec![(1, EdgeKind::Taken), (2, EdgeKind::Fallthrough)],
+                ),
+                block(1, 0x1010, vec![(3, EdgeKind::Unconditional)]),
+                block(2, 0x1020, vec![(3, EdgeKind::Unconditional)]),
+                block(3, 0x1030, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: BTreeMap::new(),
+        };
+        let mut written = vec![BTreeSet::new(); 4];
+        written[1].insert(Reg::Rcx);
+        let seeds = entry_written(&cfg, &written);
+        // Entering the writing block still holds the original argument.
+        assert!(!seeds[1].contains(&Reg::Rcx));
+        // The other arm is untouched.
+        assert!(!seeds[2].contains(&Reg::Rcx));
+        // At the join one path has overwritten rcx: may-write unions it.
+        assert!(seeds[3].contains(&Reg::Rcx));
     }
 
     #[test]

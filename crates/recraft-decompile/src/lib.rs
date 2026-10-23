@@ -37,20 +37,27 @@ pub(crate) struct BlockLift {
     /// Condition text for a conditional branch terminating the block.
     pub condition: Option<String>,
     pub flow: Flow,
+    /// Registers written anywhere in the block (for cross-block argument tracking).
+    pub written: BTreeSet<Reg>,
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
+///
+/// `seed` carries registers already overwritten on every path reaching this block, so
+/// argument names are not shown for clobbered values.
 pub(crate) fn lift_block(
     session: &mut Session,
     start: Address,
     end: Address,
     args: Option<&ArgNames>,
+    seed: Option<&BTreeSet<Reg>>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
             statements: Vec::new(),
             condition: None,
             flow: Flow::Fallthrough,
+            written: BTreeSet::new(),
         });
     }
     let mut lifter = Lifter::new();
@@ -76,6 +83,7 @@ pub(crate) fn lift_block(
             statements: Vec::new(),
             condition: None,
             flow: Flow::Fallthrough,
+            written: BTreeSet::new(),
         });
     }
 
@@ -102,12 +110,18 @@ pub(crate) fn lift_block(
         end,
         labels: &BTreeSet::new(),
         args,
-        written: HashSet::new(),
+        written: seed
+            .map(|seed| seed.iter().copied().collect())
+            .unwrap_or_default(),
     };
 
     let mut statements = Vec::new();
+    let mut written = BTreeSet::new();
     for item in &lifted {
         for stmt in &item.stmts {
+            if let Stmt::WriteReg { reg, .. } = stmt {
+                written.insert(reg.base);
+            }
             if printer.is_noop_write(stmt) {
                 continue;
             }
@@ -128,6 +142,7 @@ pub(crate) fn lift_block(
         statements,
         condition,
         flow: last.flow,
+        written,
     })
 }
 
