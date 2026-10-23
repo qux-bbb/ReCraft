@@ -551,6 +551,29 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// All persisted cross-references, optionally filtered by kind.
+    pub fn all_xrefs(&self, kind: Option<i64>) -> Result<Vec<XrefEntry>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT from_addr, to_addr, type FROM xref
+                 WHERE (?1 IS NULL OR type = ?1)
+                 ORDER BY from_addr",
+            )
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map(params![kind], |row| {
+                Ok(XrefEntry {
+                    from: Address::new(row.get::<_, i64>(0)? as u64),
+                    to: Address::new(row.get::<_, i64>(1)? as u64),
+                    kind: row.get(2)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
     /// Cross-references originating *at* `addr`.
     pub fn xrefs_from(&self, addr: Address) -> Result<Vec<XrefEntry>> {
         let mut stmt = self

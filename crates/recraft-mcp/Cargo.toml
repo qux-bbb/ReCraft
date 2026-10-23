@@ -14,3 +14,9 @@ publish = false
 recraft-common = { workspace = true }
 recraft-app = { workspace = true }
 recraft-core = { workspace = true }
+recraft-decompile = { workspace = true }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+recraft-analysis = { workspace = true }
+tempfile = "3.27.0"

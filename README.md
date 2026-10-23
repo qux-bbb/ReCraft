@@ -98,6 +98,17 @@ cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
 during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
 
+### MCP server
+
+Read-only Model Context Protocol tools over stdio: `list_functions`, `get_disassembly`,
+`get_pseudocode` (L0/L1/L2), `xrefs_to/from`, `list_strings`, `list_imports`,
+`callgraph`, `search_bytes`, `function_summary`, plus project resources.
+
+```powershell
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft
+# newline-delimited JSON-RPC 2.0 on stdin/stdout; see docs/MCP.md
+```
+
 ## Contributing
 
 Contributions are welcome, but **every contribution requires a signed CLA**

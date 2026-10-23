@@ -2822,6 +2822,7 @@ dependencies = [
  "recraft-core",
  "recraft-decompile",
  "recraft-format",
+ "recraft-mcp",
  "serde_json",
  "tempfile",
 ]
@@ -2890,9 +2891,13 @@ dependencies = [
 name = "recraft-mcp"
 version = "0.1.0"
 dependencies = [
+ "recraft-analysis",
  "recraft-app",
  "recraft-common",
  "recraft-core",
+ "recraft-decompile",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

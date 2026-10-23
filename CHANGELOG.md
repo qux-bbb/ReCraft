@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M2 MCP read-only server: `recraft serve-mcp <project>` speaks newline-delimited
+  JSON-RPC 2.0 over stdio with the DESIGN read tools (`list_functions`,
+  `get_disassembly`, `get_pseudocode` L0/L1/L2, `xrefs_to/from`, `list_strings`,
+  `list_imports`, `callgraph`, `search_bytes`, `function_summary`) and project
+  resources (`functions`, `strings`, `imports`, `pseudocode/{func}`). Write tools stay
+  in M3 with the propose/apply protocol. New `Session::all_xrefs` backs the call graph.
+  Docs: `docs/MCP.md`; E2E now includes an MCP stdio smoke step.
+
 - M2 switch selector recovery: jump tables carry the traced selector register
   (`mov eax, ecx; ...; mov ecx, [base+rax*4+tbl]; jmp rcx` -> `switch (ecx)`), and L2
   renders it as `argN` when the selector is still the intact argument. Case bodies are

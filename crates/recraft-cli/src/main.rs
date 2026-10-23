@@ -45,6 +45,13 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// Serve the project over the Model Context Protocol (read-only tools, stdio).
+    ServeMcp {
+        project: PathBuf,
+        /// Reserved for the HTTP transport (M3); only stdio is implemented.
+        #[arg(long)]
+        http: bool,
+    },
     /// Import a PE file into a new project.
     Import {
         file: PathBuf,
@@ -219,6 +226,14 @@ fn run(cli: Cli) -> Result<()> {
             json,
             verbose,
         } => cmd_info(&file, json, verbose),
+        Commands::ServeMcp { project, http } => {
+            if http {
+                return Err(recraft_common::Error::unsupported(
+                    "MCP HTTP transport is not implemented yet; use stdio",
+                ));
+            }
+            recraft_mcp::McpServer::open(&project)?.serve_stdio()
+        }
         Commands::Import { file, out } => cmd_import(&file, &out),
         Commands::Disasm {
             project,
