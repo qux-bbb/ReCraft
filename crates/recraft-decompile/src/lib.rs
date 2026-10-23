@@ -597,6 +597,7 @@ impl Printer<'_> {
                     None => format!("{name}()"),
                 }
             }
+            Stmt::CallIndirect { target } => format!("(*{})()", self.expr(*target)),
             Stmt::Intrinsic { text } => {
                 // Unsupported instructions keep their assembly, but must stay inside
                 // a string literal so the pseudo-C does not break.

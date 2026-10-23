@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Indirect calls and IAT tail calls: `call qword ptr [IAT]`/`call reg` become
+  `Stmt::CallIndirect` and print `(*{fnptr})()`; `jmp qword ptr [rip+disp]` is modelled
+  as an indirect call followed by a return (tail call). Register/indexed indirect jumps
+  stay untouched for jump-table detection. Physical effect on notepad: its 1571
+  indirect-call intrinsics become zero, so semantic coverage rises from 94.2% to
+  **98.5%** (571/37602 intrinsics) with structured rate unchanged at 81.1% (407/502);
+  corpus stays 97.4% (10/391) with clean golden snapshots. New lift tests cover both
+  indirect call forms; docs/QUALITY, docs/M2, docs/M4 and CHANGELOG record the numbers.
+
 - Semantic coverage + honest metrics: unaligned/SSE moves (`movups`/`movdqu`/`movaps`/
   `movdqa` memory operands) now decode through `MemorySize::size()` (previously
   `Packed128_*` was unmapped and fell back to `__asm`), x86 rotates (`ror`/`rol`) are

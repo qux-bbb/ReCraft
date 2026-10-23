@@ -225,6 +225,26 @@ impl Lifter {
                     }
                     None => self.intrinsic(insn, &mut stmts),
                 },
+                recraft_decode::FlowKind::IndirectCall => {
+                    if let Some(target) = self.read_operand(insn, 0) {
+                        stmts.push(Stmt::CallIndirect { target });
+                        for reg in [
+                            Reg::Rcx,
+                            Reg::Rdx,
+                            Reg::R8,
+                            Reg::R9,
+                            Reg::Rax,
+                            Reg::R10,
+                            Reg::R11,
+                        ] {
+                            self.reg_env.remove(&reg);
+                        }
+                        self.stack_args.clear();
+                        Flow::Fallthrough
+                    } else {
+                        self.intrinsic(insn, &mut stmts)
+                    }
+                }
                 _ => self.intrinsic(insn, &mut stmts),
             },
             M::Jmp => match insn.flow() {
@@ -232,6 +252,29 @@ impl Lifter {
                     Some(target) => Flow::Goto(target),
                     None => self.intrinsic(insn, &mut stmts),
                 },
+                // `jmp [rip+disp]` is a tail call through an IAT/function-pointer slot.
+                // Register or indexed forms are usually jump-table dispatch, which the
+                // structurer turns into `switch`; keep those untouched.
+                recraft_decode::FlowKind::IndirectBranch if insn.is_ip_rel_memory_operand() => {
+                    if let Some(target) = self.read_operand(insn, 0) {
+                        stmts.push(Stmt::CallIndirect { target });
+                        for reg in [
+                            Reg::Rcx,
+                            Reg::Rdx,
+                            Reg::R8,
+                            Reg::R9,
+                            Reg::Rax,
+                            Reg::R10,
+                            Reg::R11,
+                        ] {
+                            self.reg_env.remove(&reg);
+                        }
+                        self.stack_args.clear();
+                        Flow::Return
+                    } else {
+                        self.intrinsic(insn, &mut stmts)
+                    }
+                }
                 _ => self.intrinsic(insn, &mut stmts),
             },
             M::Ret | M::Retf | M::Iret => Flow::Return,
@@ -1194,6 +1237,26 @@ mod tests {
             }
             other => panic!("unexpected stmt {other:?}"),
         }
+    }
+
+    #[test]
+    fn indirect_calls_are_lifted() {
+        // call qword ptr [rip+0]  (IAT-style indirect call)
+        let (_, call) = lift_one(&[0xff, 0x15, 0x00, 0x00, 0x00, 0x00], 0x1000);
+        assert!(
+            matches!(call.stmts[0], Stmt::CallIndirect { .. }),
+            "unexpected: {:?}",
+            call.stmts
+        );
+        assert_eq!(call.flow, Flow::Fallthrough);
+        // jmp qword ptr [rip+0]  (tail call through an IAT slot)
+        let (_, tail) = lift_one(&[0xff, 0x25, 0x00, 0x00, 0x00, 0x00], 0x1000);
+        assert!(
+            matches!(tail.stmts[0], Stmt::CallIndirect { .. }),
+            "unexpected: {:?}",
+            tail.stmts
+        );
+        assert_eq!(tail.flow, Flow::Return);
     }
 
     #[test]

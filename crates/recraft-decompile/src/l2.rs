@@ -583,7 +583,7 @@ fn walk_stmt_reads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(&RegView)
             walk_expr(exprs, *addr, visit);
             walk_expr(exprs, *value, visit);
         }
-        Stmt::Call { .. } | Stmt::Intrinsic { .. } => {}
+        Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
     }
 }
 
@@ -594,7 +594,7 @@ fn walk_stmt_loads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(ExprId)) 
             walk_expr_loads(exprs, *addr, visit);
             walk_expr_loads(exprs, *value, visit);
         }
-        Stmt::Call { .. } | Stmt::Intrinsic { .. } => {}
+        Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
     }
 }
 

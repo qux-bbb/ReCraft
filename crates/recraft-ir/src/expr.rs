@@ -176,6 +176,8 @@ pub enum Stmt {
     /// Direct call to a known address, with the argument expressions captured at the
     /// call site (x64 register arguments; empty on x86 where arguments live on the stack).
     Call { target: Address, args: Vec<ExprId> },
+    /// Indirect call through a computed target (`call [IAT]`, `call rax`, virtual calls).
+    CallIndirect { target: ExprId },
     /// Instruction we do not model yet; the original assembly text is kept.
     Intrinsic { text: String },
 }
