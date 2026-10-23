@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Release rebuild after the CFG/semantic work: `package.ps1` (zip 10.2 MiB, 23 entries)
+  → `verify-package.ps1` PACKAGE PASS (hash, required entries, packaged exe pipeline)
+  → `demo.ps1` DEMO PASS on the staged binary. The packaged exe reproduces the source
+  metrics for notepad (502 functions, 98.5% coverage, 81.1% structured); docs/RELEASE.md
+  and docs/M4.md record the run.
+
 - Indirect calls and IAT tail calls: `call qword ptr [IAT]`/`call reg` become
   `Stmt::CallIndirect` and print `(*{fnptr})()`; `jmp qword ptr [rip+disp]` is modelled
   as an indirect call followed by a return (tail call). Register/indexed indirect jumps
