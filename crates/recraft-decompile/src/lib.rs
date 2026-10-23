@@ -20,9 +20,14 @@ use recraft_core::Session;
 use recraft_ir::{Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, Stmt, UnOp, cond_name};
 
 mod l2;
+mod quality;
 mod structuring;
 
 pub use l2::{ArgNames, recover_args};
+pub use quality::{
+    FunctionQuality, GoldenReport, QualityReport, check_golden, default_golden_dir, golden_text,
+    measure, write_golden,
+};
 pub use structuring::{pseudocode_l1, pseudocode_l2};
 
 /// One block's lifted statements plus its terminating flow (used by L1/L2).

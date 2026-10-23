@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Quality gates (DESIGN 7.4): `recraft metrics` reports instruction semantic coverage
+  (intrinsic fallbacks) and structured success rate, with `--min-structured` /
+  `--min-coverage` turning it into a failing gate; `recraft golden` writes or checks
+  normalised L1 snapshots (`0x...`/`loc_...` replaced by placeholders). Committed
+  corpus snapshots under `tests/golden/corpus`; CI runs the corpus gate plus a golden
+  roundtrip. Baseline: 24 functions, structured 87.5%, coverage 80.6% (documented gap to
+  the 95% v1 target). Docs: `docs/QUALITY.md`.
+
 - M2 MCP read-only server: `recraft serve-mcp <project>` speaks newline-delimited
   JSON-RPC 2.0 over stdio with the DESIGN read tools (`list_functions`,
   `get_disassembly`, `get_pseudocode` L0/L1/L2, `xrefs_to/from`, `list_strings`,

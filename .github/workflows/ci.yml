@@ -40,6 +40,20 @@ jobs:
         run: cargo test --workspace
       - name: build binaries
         run: cargo build --workspace
+      - name: decompiler quality gate (corpus)
+        shell: pwsh
+        run: |
+          function Invoke-Recraft([string[]]$Arguments) {
+            & cargo run --quiet -p recraft-cli -- @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "recraft failed: $($Arguments -join ' ')" }
+          }
+          $project = Join-Path $env:RUNNER_TEMP 'corpus-quality.rcraft'
+          Invoke-Recraft @('import', 'corpus/build/x64/corpus.exe', '-o', $project)
+          Invoke-Recraft @('analyze', $project)
+          Invoke-Recraft @('metrics', $project, '--min-structured', '0.6', '--min-coverage', '0.75')
+          $golden = Join-Path $env:RUNNER_TEMP 'golden-corpus'
+          Invoke-Recraft @('golden', $project, '--dir', $golden)
+          Invoke-Recraft @('golden', $project, '--dir', $golden, '--check')
       - name: end-to-end CLI smoke
         shell: pwsh
         run: pwsh -NoProfile -File scripts/e2e.ps1

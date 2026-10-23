@@ -95,6 +95,30 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Measure decompiler quality gates (semantic coverage / structured rate).
+    Metrics {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 2000)]
+        max_functions: usize,
+        /// Fail (exit non-zero) when the structured rate is below this fraction.
+        #[arg(long)]
+        min_structured: Option<f64>,
+        /// Fail (exit non-zero) when instruction coverage is below this fraction.
+        #[arg(long)]
+        min_coverage: Option<f64>,
+    },
+    /// Write or check golden pseudo-C snapshots (normalised L1 text).
+    Golden {
+        project: PathBuf,
+        /// Snapshot directory (default: tests/golden/corpus).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Compare instead of writing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
         file: PathBuf,
@@ -243,6 +267,18 @@ fn run(cli: Cli) -> Result<()> {
         } => cmd_disasm(&project, addr.as_deref(), count, json),
         Commands::Funcs { project, json } => cmd_funcs(&project, json),
         Commands::Analyze { project, json } => cmd_analyze(&project, json),
+        Commands::Metrics {
+            project,
+            json,
+            max_functions,
+            min_structured,
+            min_coverage,
+        } => cmd_metrics(&project, json, max_functions, min_structured, min_coverage),
+        Commands::Golden {
+            project,
+            dir,
+            check,
+        } => cmd_golden(&project, dir.as_deref(), check),
         Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
             match demangle(&name) {
@@ -665,6 +701,102 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
     println!("elapsed:              {elapsed_ms:.1} ms");
     println!("saved to project:     {}", project.display());
     Ok(())
+}
+
+fn cmd_metrics(
+    project: &Path,
+    as_json: bool,
+    max_functions: usize,
+    min_structured: Option<f64>,
+    min_coverage: Option<f64>,
+) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let report = recraft_decompile::measure(&mut session, max_functions)?;
+    if as_json {
+        return json_result(&json!({
+            "functions": report.total(),
+            "structured": report.structured(),
+            "structured_rate": report.structured_rate(),
+            "instructions": report.instructions(),
+            "intrinsic_instructions": report.intrinsic_instructions(),
+            "coverage": report.coverage(),
+            "skipped": report.skipped,
+        }));
+    }
+    println!("functions:              {}", report.total());
+    println!(
+        "structured:             {} ({:.1}%)",
+        report.structured(),
+        report.structured_rate() * 100.0
+    );
+    println!("instructions:           {}", report.instructions());
+    println!(
+        "intrinsic instructions: {} (coverage {:.1}%)",
+        report.intrinsic_instructions(),
+        report.coverage() * 100.0
+    );
+    println!(
+        "goto fallback functions: {}",
+        report.total().saturating_sub(report.structured())
+    );
+    if report.skipped > 0 {
+        println!("skipped (limit):        {}", report.skipped);
+    }
+    let mut failures = Vec::new();
+    if let Some(min) = min_structured
+        && report.structured_rate() < min
+    {
+        failures.push(format!(
+            "structured rate {:.3} < {min:.3}",
+            report.structured_rate()
+        ));
+    }
+    if let Some(min) = min_coverage
+        && report.coverage() < min
+    {
+        failures.push(format!("coverage {:.3} < {min:.3}", report.coverage()));
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::internal(format!(
+            "quality gate failed: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
+fn cmd_golden(project: &Path, dir: Option<&Path>, check: bool) -> Result<()> {
+    let dir = dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(recraft_decompile::default_golden_dir);
+    let mut session = Session::open(project)?;
+    if check {
+        let report = recraft_decompile::check_golden(&mut session, &dir)?;
+        println!("checked:    {}", report.checked);
+        println!("missing:    {}", report.missing.len());
+        println!("mismatched: {}", report.mismatched.len());
+        for (file, _, _) in report.mismatched.iter().take(10) {
+            println!("  diff: {file}");
+        }
+        for file in report.missing.iter().take(10) {
+            println!("  missing: {file}");
+        }
+        if report.ok() {
+            Ok(())
+        } else {
+            Err(Error::internal(format!(
+                "golden regression: {} mismatched, {} missing in {}",
+                report.mismatched.len(),
+                report.missing.len(),
+                dir.display()
+            )))
+        }
+    } else {
+        let written = recraft_decompile::write_golden(&mut session, &dir)?;
+        println!("wrote {written} snapshots to {}", dir.display());
+        Ok(())
+    }
 }
 
 fn cmd_imports(project: &Path, as_json: bool) -> Result<()> {
