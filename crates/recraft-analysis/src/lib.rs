@@ -16,17 +16,19 @@
 #![forbid(unsafe_code)]
 
 mod api;
+mod boundaries;
 mod cfg;
 mod golang;
 mod strings;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use recraft_common::{Address, Result};
+use recraft_common::{Address, AddressRange, Result};
 use recraft_core::Session;
 use recraft_decode::FlowKind;
 
 pub use api::categorize;
+pub use boundaries::merge_pdata_functions;
 pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
 pub use golang::{GoFunction, parse_pclntab};
 pub use strings::{
@@ -51,6 +53,8 @@ pub enum FunctionSource {
     CallTarget,
     /// Recovered from a Go `pclntab` (exact start and real name).
     GoPclntab,
+    /// Function pointer found in a readable data segment (dispatch tables, callbacks).
+    DataPointer,
 }
 
 /// One function recovered by analysis.
@@ -99,6 +103,7 @@ struct ScanOutput {
 
 const MAX_INSTRUCTIONS_PER_FUNCTION: usize = 20_000;
 const MAX_TOTAL_INSTRUCTIONS: u64 = 5_000_000;
+const MAX_DATA_POINTERS: usize = 65_536;
 
 /// Run function discovery (plus call/jump/data xref collection) over an opened session.
 pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
@@ -109,18 +114,23 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
     let mut known: BTreeMap<u64, Known> = BTreeMap::new();
     let mut queue: VecDeque<Address> = VecDeque::new();
 
-    // 1. Exact seeds first: .pdata (x64 unwind info gives start and end).
-    for range in &image.pdata_functions {
-        if range.start.get() < range.end.get() {
-            seed(
-                &segments,
-                range.start,
-                Some(range.end),
-                FunctionSource::Pdata,
-                &mut known,
-                &mut queue,
-            );
-        }
+    // 1. Exact seeds first: .pdata (x64 unwind info gives start and end), with cold
+    //    fragments merged back into their owning function.
+    let raw_pdata: Vec<AddressRange> = image
+        .pdata_functions
+        .iter()
+        .map(|range| AddressRange::new(range.start, range.end))
+        .collect();
+    let pdata_ranges = merge_pdata_functions(session, &raw_pdata)?;
+    for (start, end) in &pdata_ranges {
+        seed(
+            &segments,
+            *start,
+            Some(*end),
+            FunctionSource::Pdata,
+            &mut known,
+            &mut queue,
+        );
     }
     // 2. Entry point and exports.
     for export in &image.exports {
@@ -173,6 +183,52 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
         }
         None => 0,
     };
+
+    // 5. Function-pointer tables: aligned pointers in readable data segments. This
+    // catches dispatch tables and callbacks that are never called directly.
+    let pointer_size = if session.mode().is_64() { 8usize } else { 4 };
+    let mut data_candidates: BTreeSet<u64> = BTreeSet::new();
+    let mut chunk = vec![0u8; 64 * 1024];
+    for segment in &segments {
+        if !segment.perm.is_readable() || segment.perm.is_executable() || segment.file_size == 0 {
+            continue;
+        }
+        let size = segment.file_size.min(segment.len());
+        let mut offset = 0u64;
+        while offset + pointer_size as u64 <= size && data_candidates.len() < MAX_DATA_POINTERS {
+            let want = (((size - offset) as usize).min(chunk.len())) & !(pointer_size - 1);
+            if want < pointer_size {
+                break;
+            }
+            let read = session.read_at(
+                Address::new(segment.range.start.get() + offset),
+                &mut chunk[..want],
+            )?;
+            let read = read & !(pointer_size - 1);
+            if read < pointer_size {
+                break;
+            }
+            for index in (0..=read - pointer_size).step_by(pointer_size) {
+                let mut raw = [0u8; 8];
+                raw[..pointer_size].copy_from_slice(&chunk[index..index + pointer_size]);
+                let value = u64::from_le_bytes(raw);
+                if is_code(&segments, Address::new(value)) {
+                    data_candidates.insert(value);
+                }
+            }
+            offset += read as u64;
+        }
+    }
+    for candidate in data_candidates {
+        seed(
+            &segments,
+            Address::new(candidate),
+            None,
+            FunctionSource::DataPointer,
+            &mut known,
+            &mut queue,
+        );
+    }
 
     let initial_seeds = known.len() as u64;
 
@@ -342,6 +398,7 @@ fn source_rank(source: FunctionSource) -> u8 {
         FunctionSource::Entry => 3,
         FunctionSource::Export => 2,
         FunctionSource::Tls => 1,
+        FunctionSource::DataPointer => 1,
         FunctionSource::CallTarget => 0,
     }
 }
@@ -531,6 +588,25 @@ mod tests {
         path.exists().then_some(path)
     }
 
+    /// Every function symbol in the MSVC linker map (`/MAP`), independent of exports
+    /// and `.pdata`; this is the ground truth for heuristic-only functions.
+    fn map_ground_truth() -> Option<BTreeSet<u64>> {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/build/x64/corpus.map");
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut starts = BTreeSet::new();
+        for line in text.lines() {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.len() >= 4
+                && tokens[3] == "f"
+                && let Ok(va) = u64::from_str_radix(tokens[2], 16)
+            {
+                starts.insert(va);
+            }
+        }
+        (!starts.is_empty()).then_some(starts)
+    }
+
     fn analyze_bytes(bytes: &[u8]) -> (AnalysisResult, Session, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("analysis.rcraft");
@@ -545,16 +621,27 @@ mod tests {
             return;
         };
         let bytes = std::fs::read(path).unwrap();
-        let (result, session, _dir) = analyze_bytes(&bytes);
-        let image = session.image();
+        let (result, mut session, _dir) = analyze_bytes(&bytes);
+        let image = session.image().clone();
+        let raw_pdata: Vec<AddressRange> = image
+            .pdata_functions
+            .iter()
+            .map(|range| AddressRange::new(range.start, range.end))
+            .collect();
+        let merged = merge_pdata_functions(&mut session, &raw_pdata).unwrap();
 
         let mut ground_truth: BTreeSet<u64> = BTreeSet::new();
         ground_truth.insert(session.entry_point().get());
         for export in &image.exports {
             ground_truth.insert(image.image_base.get() + u64::from(export.rva));
         }
-        for range in &image.pdata_functions {
-            ground_truth.insert(range.start.get());
+        for (start, _) in &merged {
+            ground_truth.insert(start.get());
+        }
+        // Prefer the linker map when present: it also covers leaf functions that have
+        // neither an export nor a `.pdata` entry.
+        if let Some(map_starts) = map_ground_truth() {
+            ground_truth.extend(map_starts);
         }
 
         let detected: BTreeSet<u64> = result.functions.iter().map(|f| f.start.get()).collect();
@@ -573,19 +660,14 @@ mod tests {
             detected.len()
         );
 
-        // Every .pdata function must keep its exact end.
-        for range in &image.pdata_functions {
+        // Every merged .pdata function must keep its exact end.
+        for (start, end) in &merged {
             let found = result
                 .functions
                 .iter()
-                .find(|function| function.start == range.start)
+                .find(|function| function.start == *start)
                 .expect("pdata function missing");
-            assert_eq!(
-                found.end,
-                range.end,
-                "boundary mismatch at {:#x}",
-                range.start.get()
-            );
+            assert_eq!(found.end, *end, "boundary mismatch at {:#x}", start.get());
         }
     }
 

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 function boundaries: MSVC cold `.pdata` fragments (hot/cold splits) are merged back
+  into their owning function when they are fallthrough-contiguous or targeted by a
+  conditional branch; x64 corpus precision against the linker map goes 0.857 -> 1.000.
+- Function-pointer table discovery: aligned pointers in readable data segments that land
+  in executable memory become `DataPointer` seeds, recovering dispatch handlers that are
+  never called directly (corpus recall 0.833 -> 1.000). `recraft eval --map` uses the
+  MSVC `/MAP` file as ground truth for every function symbol, and the corpus build now
+  emits `corpus.map`.
+
 - M1 symbol demangling: MSVC C++ names (`?name@scope@@...`, constructors, overloads —
   parameter types kept, return type dropped) and Rust legacy/v0 names via
   `msvc-demangler` + `rustc-demangle` (legacy hash suffix stripped). Applied to export

@@ -85,6 +85,11 @@ enum Commands {
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
         file: PathBuf,
+        /// Optional MSVC linker map file: uses every function symbol as ground truth
+        /// (including non-exported helpers), which makes heuristic-only functions
+        /// measurable.
+        #[arg(long)]
+        map: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -217,7 +222,7 @@ fn run(cli: Cli) -> Result<()> {
         } => cmd_disasm(&project, addr.as_deref(), count, json),
         Commands::Funcs { project, json } => cmd_funcs(&project, json),
         Commands::Analyze { project, json } => cmd_analyze(&project, json),
-        Commands::Eval { file, json } => cmd_eval(&file, json),
+        Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
             match demangle(&name) {
                 Some(demangled) => println!("{demangled}"),
@@ -608,6 +613,14 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
             .filter(|f| f.source == recraft_analysis::FunctionSource::CallTarget)
             .count()
     );
+    println!(
+        "  from data pointers: {}",
+        result
+            .functions
+            .iter()
+            .filter(|f| f.source == recraft_analysis::FunctionSource::DataPointer)
+            .count()
+    );
     println!("instructions decoded: {}", result.instructions);
     println!("direct call edges:    {}", result.calls.len());
     println!("branch edges:         {}", result.jumps.len());
@@ -812,7 +825,7 @@ fn xref_kind_name(kind: i64) -> &'static str {
     }
 }
 
-fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {
+fn cmd_eval(file: &Path, map: Option<&Path>, as_json: bool) -> Result<()> {
     let bytes = std::fs::read(file)?;
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -857,37 +870,97 @@ fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {
                 ground_truth.insert(range.start.get());
             }
         }
+        // Merge MSVC cold fragments so phantom function starts are not counted.
+        let raw_pdata: Vec<recraft_common::AddressRange> = image
+            .pdata_functions
+            .iter()
+            .map(|range| recraft_common::AddressRange::new(range.start, range.end))
+            .collect();
+        let merged_pdata = recraft_analysis::merge_pdata_functions(&mut session, &raw_pdata)?;
+        ground_truth.retain(|start| {
+            !image
+                .pdata_functions
+                .iter()
+                .any(|range| range.start.get() == *start)
+                || merged_pdata
+                    .iter()
+                    .any(|(start_merged, _)| start_merged.get() == *start)
+        });
+        for (start, _) in &merged_pdata {
+            if in_code(start.get()) {
+                ground_truth.insert(start.get());
+            }
+        }
+        let mut ground_truth_source = "entry + code exports + .pdata";
+        if let Some(map_path) = map {
+            ground_truth.clear();
+            ground_truth_source = "linker map (all function symbols)";
+            let text = std::fs::read_to_string(map_path)
+                .map_err(|error| Error::internal(format!("read map file: {error}")))?;
+            for line in text.lines() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                if tokens.len() >= 4
+                    && tokens[3] == "f"
+                    && let Ok(va) = u64::from_str_radix(tokens[2], 16)
+                    && in_code(va)
+                {
+                    ground_truth.insert(va);
+                }
+            }
+            if ground_truth.is_empty() {
+                return Err(Error::internal(
+                    "no function symbols found in the linker map",
+                ));
+            }
+        }
         let detected: std::collections::BTreeSet<u64> = result
             .functions
             .iter()
             .map(|function| function.start.get())
             .collect();
         let matched = ground_truth.intersection(&detected).count();
+        let unmatched: Vec<(u64, &'static str)> = result
+            .functions
+            .iter()
+            .filter(|function| !ground_truth.contains(&function.start.get()))
+            .map(|function| {
+                let source = match function.source {
+                    recraft_analysis::FunctionSource::Entry => "entry",
+                    recraft_analysis::FunctionSource::Export => "export",
+                    recraft_analysis::FunctionSource::Pdata => "pdata",
+                    recraft_analysis::FunctionSource::Tls => "tls",
+                    recraft_analysis::FunctionSource::CallTarget => "call",
+                    recraft_analysis::FunctionSource::GoPclntab => "go",
+                    recraft_analysis::FunctionSource::DataPointer => "data",
+                };
+                (function.start.get(), source)
+            })
+            .collect();
         let recall = matched as f64 / ground_truth.len().max(1) as f64;
         let precision = matched as f64 / detected.len().max(1) as f64;
-        let exact_boundaries = image
-            .pdata_functions
+        let exact_boundaries = merged_pdata
             .iter()
-            .filter(|range| {
+            .filter(|(start, end)| {
                 result
                     .functions
                     .iter()
-                    .any(|function| function.start == range.start && function.end == range.end)
+                    .any(|function| function.start == *start && function.end == *end)
             })
             .count();
-        let boundary_accuracy = exact_boundaries as f64 / image.pdata_functions.len().max(1) as f64;
+        let boundary_accuracy = exact_boundaries as f64 / merged_pdata.len().max(1) as f64;
 
         if as_json {
             return json_result(&json!({
                 "file": file.display().to_string(),
                 "ground_truth": ground_truth.len(),
+                "ground_truth_source": ground_truth_source,
                 "detected": detected.len(),
                 "matched": matched,
                 "recall": recall,
                 "precision": precision,
                 "code_exports": code_exports,
                 "excluded_exports": skipped_exports,
-                "pdata_functions": image.pdata_functions.len(),
+                "pdata_functions": merged_pdata.len(),
                 "pdata_exact_boundaries": exact_boundaries,
                 "boundary_accuracy": boundary_accuracy,
                 "instructions": result.instructions,
@@ -897,9 +970,9 @@ fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {
 
         println!("File:              {}", file.display());
         println!(
-            "Ground truth:      {} (entry 1 + code exports {code_exports} + .pdata {})",
+            "Ground truth:      {} ({})",
             ground_truth.len(),
-            image.pdata_functions.len()
+            ground_truth_source
         );
         if skipped_exports > 0 {
             println!(
@@ -910,9 +983,21 @@ fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {
         println!("Matched:           {matched}");
         println!("Recall:            {recall:.3}");
         println!("Precision:         {precision:.3}");
+        if !unmatched.is_empty() {
+            let sample: Vec<String> = unmatched
+                .iter()
+                .take(8)
+                .map(|(addr, source)| format!("{addr:#x} ({source})"))
+                .collect();
+            println!(
+                "Unmatched:         {} [{}]",
+                unmatched.len(),
+                sample.join(", ")
+            );
+        }
         println!(
             ".pdata boundaries: {exact_boundaries}/{} ({boundary_accuracy:.3})",
-            image.pdata_functions.len()
+            merged_pdata.len()
         );
         println!("Instructions:      {}", result.instructions);
         println!("Elapsed:           {elapsed_ms:.1} ms");

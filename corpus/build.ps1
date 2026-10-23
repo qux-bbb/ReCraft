@@ -26,7 +26,7 @@ $exports = @(
     'add_leaf', 'branchy', 'loopy', 'switcher', 'switcher_big', 'caller', 'recursive',
     'indirect', 'nested_loops', 'tailish', 'float_math', 'bitops', 'bytes_op',
     'noinline_helper', 'uses_helper', 'corpus_banner', 'corpus_wide_banner',
-    'corpus_counter_bump'
+    'corpus_counter_bump', 'dispatch'
 ) | ForEach-Object { "/EXPORT:$_" }
 
 $scriptName = if ($Arch -eq 'x64') { 'vcvars64.bat' } else { 'vcvars32.bat' }
@@ -51,10 +51,12 @@ if (-not $vcvars) {
 
 $obj = Join-Path $outDir 'functions.obj'
 $exe = Join-Path $outDir 'corpus.exe'
-Remove-Item $obj, $exe, (Join-Path $outDir 'corpus.pdb') -Force -ErrorAction SilentlyContinue
+$map = Join-Path $outDir 'corpus.map'
+Remove-Item $obj, $exe, $map, (Join-Path $outDir 'corpus.pdb') -Force -ErrorAction SilentlyContinue
 
 $compile = 'cl /nologo /c /O2 /GS- /Zl /W3 "{0}" /Fo:"{1}"' -f $source, $obj
-$link = 'link /nologo /SUBSYSTEM:CONSOLE /NODEFAULTLIB /ENTRY:corpus_main /OUT:"{0}" "{1}" {2}' -f $exe, $obj, ($exports -join ' ')
+# /MAP gives every function symbol (including non-exported helpers) as ground truth.
+$link = 'link /nologo /SUBSYSTEM:CONSOLE /NODEFAULTLIB /ENTRY:corpus_main /MAP:"{0}" /OUT:"{1}" "{2}" {3}' -f $map, $exe, $obj, ($exports -join ' ')
 $command = 'call "{0}" >nul && {1} && {2}' -f $vcvars, $compile, $link
 
 Write-Host "[corpus] $Arch $Configuration"

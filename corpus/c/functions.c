@@ -161,3 +161,29 @@ __declspec(dllexport) int corpus_counter_bump(void) {
     counter++;
     return counter;
 }
+
+/* --- function-pointer table (M1 boundary/table heuristic evaluation) --------- */
+
+typedef int (*handler_fn)(int);
+
+__declspec(noinline) static int handler_a(int value) {
+    return value + 1;
+}
+
+__declspec(noinline) static int handler_b(int value) {
+    return value * 3;
+}
+
+__declspec(noinline) static int handler_c(int value) {
+    return value ^ 0x55;
+}
+
+__declspec(noinline) static int handler_d(int value) {
+    return value - 7;
+}
+
+static handler_fn handlers[] = {handler_a, handler_b, handler_c, handler_d};
+
+__declspec(dllexport) int dispatch(int index) {
+    return handlers[index & 3](index);
+}

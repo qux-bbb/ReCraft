@@ -70,6 +70,8 @@ where exports + `.pdata` are ground truth:
 ```powershell
 .\corpus\build.ps1
 cargo run -p recraft-cli -- eval .\corpus\build\x64\corpus.exe
+# Linker map: ground truth for every function, including non-exported helpers.
+cargo run -p recraft-cli -- eval .\corpus\build\x64\corpus.exe --map .\corpus\build\x64\corpus.map
 ```
 
 A Go sample validates runtime symbol recovery (kept `pclntab`):
