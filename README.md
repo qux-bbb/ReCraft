@@ -97,6 +97,17 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
+### Packaging
+
+```powershell
+pwsh -File scripts/package.ps1 -NoInstaller   # release build + green zip + SHA256SUMS
+# dist/recraft-v0.1.0-windows-x64.zip, dist/ReCraft-0.1.0/, dist/SHA256SUMS.txt
+pwsh -File scripts/package.ps1                # also builds the NSIS installer if makensis exists
+```
+
+See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip +
+checksums as an artifact.
+
 The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
 during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
 

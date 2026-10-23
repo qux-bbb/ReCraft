@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Packaging (M3): `scripts/package.ps1` builds release binaries, stages a green
+  `dist/ReCraft-<version>` directory (exes, LICENSE/README/CHANGELOG, VERSION.txt, docs),
+  produces `recraft-v<version>-windows-x64.zip`, writes `SHA256SUMS.txt`, and optionally
+  builds the NSIS installer from `packaging/installer.nsi` when `makensis` is present.
+  CI gained a `package` job that uploads the zip + checksums as an artifact.
+  Docs: `docs/RELEASE.md`.
+
 - LLM HTTP transport behind an injectable `Transport` trait: `TcpHttpTransport` speaks
   plain `http://` (enough for a local Ollama at 127.0.0.1:11434; `https://` reports a
   clear unsupported error until a TLS stack lands), `MockTransport` enables offline tests

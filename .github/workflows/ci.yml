@@ -61,6 +61,25 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/bench-large.ps1 -OverlayMB 1024
 
+  package:
+    name: windows package (zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: release build + package
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/package.ps1 -NoInstaller
+      - name: upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recraft-windows-x64
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
   licenses:
     name: license / ban / source policy
     runs-on: ubuntu-latest
