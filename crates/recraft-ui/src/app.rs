@@ -1713,9 +1713,11 @@ mod tests {
         }
         let pseudo = app.pseudo.as_ref().expect("L2 pseudo-C was not produced");
         assert!(
-            pseudo
-                .iter()
-                .any(|line| line.text.starts_with("void ") && !line.text.contains("_l1")),
+            pseudo.iter().any(|line| !line.text.contains("_l1")
+                && line.text.ends_with('{')
+                && (line.text.starts_with("void ")
+                    || line.text.starts_with("int32 ")
+                    || line.text.starts_with("int64 "))),
             "L2 signature missing"
         );
     }

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- L2 signatures: return type inference (`int64` when the function writes full `rax`,
+  `int32` for `eax`-width results, `int64` for value-forwarding calls/tail calls,
+  otherwise `void`) and calling-convention detection (`ret imm16` -> `__stdcall`,
+  `ret` -> `__cdecl` on x86; Windows x64 fastcall stays implicit). New corpus stdcall
+  probe validates both paths on x86. L2 output example: `int32 add_leaf(int64 arg1,
+  int64 arg2)`.
+
 - Semantic lifting batch 1: `push`/`pop` (stack-pointer side effects and the memory
   access, ordered so the printed expression sees the old `rsp`), `imul` (2/3-operand),
   `cmovcc` (new `Expr::Select` keeping lazy flags valid), and an SSE/float subset

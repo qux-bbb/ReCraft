@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use recraft_common::{Address, Result};
 use recraft_core::Session;
+use recraft_decode::iced_x86;
 use recraft_ir::{BinOp, Expr, ExprId, Lifter, Reg, RegView, Stmt};
 
 /// Windows x64 integer argument registers, in declaration order.
@@ -98,6 +99,123 @@ impl ArgNames {
         );
         parts.join(", ")
     }
+}
+
+/// Inferred return type for the pseudo-C signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnKind {
+    Void,
+    Int32,
+    Int64,
+}
+
+impl ReturnKind {
+    pub const fn c_name(self) -> &'static str {
+        match self {
+            ReturnKind::Void => "void",
+            ReturnKind::Int32 => "int32",
+            ReturnKind::Int64 => "int64",
+        }
+    }
+}
+
+/// Calling convention inferred from the function epilogue (x86) or fixed (x64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallingConvention {
+    /// Windows x64 fastcall: no keyword in the signature.
+    System,
+    Cdecl,
+    Stdcall,
+}
+
+impl CallingConvention {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            CallingConvention::System => "",
+            CallingConvention::Cdecl => "__cdecl ",
+            CallingConvention::Stdcall => "__stdcall ",
+        }
+    }
+}
+
+/// Everything the printer needs for an L2 signature and body.
+#[derive(Debug, Clone)]
+pub struct L2Info {
+    pub args: ArgNames,
+    pub ret: ReturnKind,
+    pub abi: CallingConvention,
+}
+
+/// Recover argument names, return type and calling convention.
+pub fn recover_l2(session: &mut Session, start: Address, end: Address) -> Result<L2Info> {
+    let abi = if session.image().is_64 {
+        CallingConvention::System
+    } else {
+        detect_x86_abi(session, start, end)?
+    };
+    let args = recover_args(session, start, end)?;
+    let ret = recover_return(session, start, end)?;
+    Ok(L2Info { args, ret, abi })
+}
+
+/// `ret imm16` (stdcall) vs `ret` (cdecl) in the function epilogue.
+fn detect_x86_abi(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+) -> Result<CallingConvention> {
+    let mut addr = start;
+    let mut last = None;
+    while addr < end {
+        let Some(insn) = session.insn_at(addr)? else {
+            break;
+        };
+        if insn.is_invalid() {
+            break;
+        }
+        let next = insn.next_addr();
+        last = Some(insn);
+        if next <= addr || next >= end {
+            break;
+        }
+        addr = next;
+    }
+    let Some(insn) = last else {
+        return Ok(CallingConvention::Cdecl);
+    };
+    if insn.mnemonic() == iced_x86::Mnemonic::Ret && insn.op_count() > 0 {
+        return Ok(CallingConvention::Stdcall);
+    }
+    Ok(CallingConvention::Cdecl)
+}
+
+/// Return type from writes to `rax`/`eax` before the epilogue, with a tail-call or call
+/// fallback: a function whose value comes straight from a call returns a full register.
+fn recover_return(session: &mut Session, start: Address, end: Address) -> Result<ReturnKind> {
+    let (lifted, _exprs) = lift_function(session, start, end)?;
+    let mut width: Option<u8> = None;
+    let mut call_like = false;
+    for item in &lifted {
+        for stmt in &item.stmts {
+            match stmt {
+                Stmt::Call { .. } => call_like = true,
+                Stmt::WriteReg { reg, .. } if reg.base == Reg::Rax => width = Some(reg.width),
+                _ => {}
+            }
+        }
+        if let recraft_ir::Flow::Goto(target) = item.flow
+            && (target < start || target >= end)
+        {
+            // Tail call: the callee's value is returned unchanged.
+            call_like = true;
+        }
+    }
+    Ok(match width {
+        Some(8) => ReturnKind::Int64,
+        Some(_) => ReturnKind::Int32,
+        None if call_like => ReturnKind::Int64,
+        None => ReturnKind::Void,
+    })
 }
 
 /// Find argument locations that the function reads before writing.
@@ -393,6 +511,35 @@ mod tests {
         assert_eq!(stack[0].1, "arg1");
         assert_eq!(stack[1].1, "arg2");
         assert!(args.signature().contains("int64 arg1"));
+    }
+
+    #[test]
+    fn return_types_and_x64_abi() {
+        let Some((mut session, _dir)) = corpus_session("x64") else {
+            return;
+        };
+        let (start, end) = bounds(&session, "add_leaf");
+        let info = recover_l2(&mut session, start, end).unwrap();
+        assert_eq!(info.ret, ReturnKind::Int32);
+        assert_eq!(info.abi, CallingConvention::System);
+        assert_eq!(info.args.ordered().len(), 2);
+    }
+
+    #[test]
+    fn x86_cdecl_vs_stdcall_is_detected() {
+        let Some((mut session, _dir)) = corpus_session("x86") else {
+            return;
+        };
+        let (start, end) = bounds(&session, "add_leaf");
+        let cdecl = recover_l2(&mut session, start, end).unwrap();
+        assert_eq!(cdecl.abi, CallingConvention::Cdecl);
+        assert_eq!(cdecl.ret, ReturnKind::Int32);
+
+        // The stdcall probe is exported under both the plain and decorated names.
+        let (start, end) = bounds(&session, "_stdcall_add@8");
+        let stdcall = recover_l2(&mut session, start, end).unwrap();
+        assert_eq!(stdcall.abi, CallingConvention::Stdcall);
+        assert_eq!(stdcall.ret, ReturnKind::Int32);
     }
 
     #[test]

@@ -24,6 +24,11 @@ __declspec(dllexport) int add_leaf(int a, int b) {
     return a + b;
 }
 
+/* Win32 x86 ABI probe: stdcall cleans the stack with `ret 8`, cdecl with `ret`. */
+__declspec(dllexport) int __stdcall stdcall_add(int a, int b) {
+    return a + b;
+}
+
 __declspec(dllexport) int branchy(int x) {
     if (x > 10) {
         return x * 2;

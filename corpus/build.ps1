@@ -28,6 +28,12 @@ $exports = @(
     'noinline_helper', 'uses_helper', 'corpus_banner', 'corpus_wide_banner',
     'corpus_counter_bump', 'dispatch'
 ) | ForEach-Object { "/EXPORT:$_" }
+if ($Arch -eq 'x86') {
+    # stdcall symbols are decorated `_name@N`; export the plain name as an alias.
+    $exports += '/EXPORT:stdcall_add=_stdcall_add@8'
+} else {
+    $exports += '/EXPORT:stdcall_add'
+}
 
 $scriptName = if ($Arch -eq 'x64') { 'vcvars64.bat' } else { 'vcvars32.bat' }
 $vcvars = $null

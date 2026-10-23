@@ -18,24 +18,24 @@ use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_ir::Flow;
 
-use crate::{ArgNames, BlockLift, PseudoLine, Pseudocode, lift_block};
+use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
 pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode> {
     structure(session, start, None)
 }
 
-/// Render structured pseudo-C with L2 argument naming and `var_XX` stack slots.
+/// Render structured pseudo-C with L2 signature, argument naming and stack slots.
 pub fn pseudocode_l2(session: &mut Session, start: Address) -> Result<Pseudocode> {
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
         return pseudocode_l1(session, start);
     };
-    let args = crate::recover_args(session, function.start, function.end)?;
-    structure(session, start, Some(args))
+    let info = crate::l2::recover_l2(session, function.start, function.end)?;
+    structure(session, start, Some(info))
 }
 
-fn structure(session: &mut Session, start: Address, args: Option<ArgNames>) -> Result<Pseudocode> {
+fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Result<Pseudocode> {
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
         let mut fallback = crate::pseudocode_l0(session, start, 512)?;
@@ -56,11 +56,12 @@ fn structure(session: &mut Session, start: Address, args: Option<ArgNames>) -> R
         )));
     }
 
+    let args = info.as_ref().map(|info| &info.args);
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
     for block in &cfg.blocks {
-        bodies.push(lift_block(session, block.start, block.end, args.as_ref())?);
+        bodies.push(lift_block(session, block.start, block.end, args)?);
     }
-    let mut structurer = Structurer::new(&cfg, bodies, args.clone());
+    let mut structurer = Structurer::new(&cfg, bodies, info.as_ref().map(|info| info.args.clone()));
     structurer.compute_rpo();
     structurer.compute_dominators();
     structurer.compute_post_dominators();
@@ -74,21 +75,23 @@ fn structure(session: &mut Session, start: Address, args: Option<ArgNames>) -> R
         addr: start,
         text: format!("// L1 structure recovery ({} blocks)", cfg.blocks.len()),
     });
-    match &args {
-        Some(args) if !args.is_empty() => {
+    match &info {
+        Some(info) => {
+            if !info.args.is_empty() {
+                lines.push(PseudoLine {
+                    addr: start,
+                    text: format!("// L2 params: {}", info.args.comment()),
+                });
+            }
             lines.push(PseudoLine {
                 addr: start,
-                text: format!("// L2 params: {}", args.comment()),
-            });
-            lines.push(PseudoLine {
-                addr: start,
-                text: format!("void {name}({}) {{", args.signature()),
-            });
-        }
-        Some(_) => {
-            lines.push(PseudoLine {
-                addr: start,
-                text: format!("void {name}(void) {{"),
+                text: format!(
+                    "{} {}{}({}) {{",
+                    info.ret.c_name(),
+                    info.abi.keyword(),
+                    name,
+                    info.args.signature()
+                ),
             });
         }
         None => {
@@ -899,6 +902,19 @@ mod tests {
         let nested = function_start(&session, "nested_loops").unwrap();
         let text = pseudocode_l2(&mut session, nested).unwrap().text();
         assert!(text.contains("var_"), "stack slots were not named:\n{text}");
+    }
+
+    #[test]
+    fn l2_signature_has_return_type_and_abi() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "add_leaf").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(
+            text.contains("int32 add_leaf(int64 arg1, int64 arg2)"),
+            "{text}"
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@ mod l2;
 mod quality;
 mod structuring;
 
-pub use l2::{ArgNames, recover_args};
+pub use l2::{ArgNames, CallingConvention, L2Info, ReturnKind, recover_args, recover_l2};
 pub use quality::{
     FunctionQuality, GoldenReport, QualityReport, check_golden, default_golden_dir, golden_text,
     measure, write_golden,
