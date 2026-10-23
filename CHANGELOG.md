@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Complex loop headers (short-circuit guards at the top of a loop, where the header's
+  condition does not cleanly split into stay/leave) now fall back to a structured
+  `while (1) { <structured body> }` with break/continue carrying exits, instead of
+  emitting gotos. corpus reaches **30/30 structured (100%)** with 97.2% coverage;
+  notepad observation 78.7% (395/502). nested_loops golden regenerated (no goto);
+  test asserts the fallback stays structured.
+
 - Switch case inlining: jump tables whose targets are simple leaves (block ends in
   `return` or jumps to the switch join) now render as `switch (sel) { case N: { ... } }`
   instead of `case N: goto loc_X;` plus labelled bodies; grouped adjacent cases share one

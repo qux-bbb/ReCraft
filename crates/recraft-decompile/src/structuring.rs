@@ -252,6 +252,9 @@ struct Structurer {
     loop_blocks: BTreeMap<usize, BTreeSet<usize>>,
     /// Active loops while emitting bodies: `(header, exit)` for break/continue.
     loop_stack: Vec<(usize, usize)>,
+    /// Loop headers currently emitted as an unstructured `while (1)` body (avoids
+    /// recursing back into `emit_loop` for the same header).
+    fallback_headers: BTreeSet<usize>,
     emitted: Vec<bool>,
     bodies: Vec<BlockLift>,
     args: Option<ArgNames>,
@@ -340,6 +343,7 @@ impl Structurer {
             loop_of: vec![None; bodies.len()],
             loop_blocks: BTreeMap::new(),
             loop_stack: Vec::new(),
+            fallback_headers: BTreeSet::new(),
             emitted: vec![false; bodies.len()],
             bodies,
             args,
@@ -572,7 +576,7 @@ impl Structurer {
                 self.emit_raw_flow(lines, current, level);
                 return;
             }
-            if self.loop_headers.contains(&current) {
+            if self.loop_headers.contains(&current) && !self.fallback_headers.contains(&current) {
                 match self.emit_loop(lines, current, level) {
                     Some(exit) => {
                         current = exit;
@@ -824,7 +828,7 @@ impl Structurer {
         } else if body.contains(&not_taken) && !body.contains(&taken) {
             (not_taken, taken, negate(&condition))
         } else {
-            return None;
+            return self.emit_unstructured_loop(lines, header, level, &body);
         };
 
         // A single-block loop whose header is also the latch is a do-while: emit the
@@ -893,6 +897,69 @@ impl Structurer {
             }
         }
         self.loop_stack.pop();
+        Some(exit)
+    }
+
+    /// The header condition does not split into "stay in loop" vs "leave loop" (e.g. a
+    /// short-circuit guard at the top of the body). Emit `while (1) { <header structured>
+    /// ... }` and let break/continue carry the exits.
+    fn emit_unstructured_loop(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        header: usize,
+        level: usize,
+        body: &BTreeSet<usize>,
+    ) -> Option<usize> {
+        if self.emitted[header] || self.fallback_headers.contains(&header) {
+            return None;
+        }
+        let mut exit = None;
+        for &block in body {
+            for &next in &self.successors[block] {
+                if !body.contains(&next) {
+                    exit = Some(next);
+                    break;
+                }
+            }
+            if exit.is_some() {
+                break;
+            }
+        }
+        let exit = exit?;
+        let mut stop = BTreeSet::new();
+        for block in 0..self.blocks.len() {
+            if !body.contains(&block) {
+                stop.insert(block);
+            }
+        }
+        lines.push(PseudoLine {
+            addr: self.blocks[header].entry,
+            text: format!("{}while (1) {{", indent(level)),
+        });
+        self.loop_stack.push((header, exit));
+        self.fallback_headers.insert(header);
+        self.emit_linear(lines, header, level + 1, &stop);
+        self.fallback_headers.remove(&header);
+        self.loop_stack.pop();
+        lines.push(PseudoLine {
+            addr: self.blocks[header].entry,
+            text: format!("{}}}", indent(level)),
+        });
+        for block in body {
+            if !self.emitted[*block] {
+                self.emitted[*block] = true;
+                lines.push(PseudoLine {
+                    addr: self.blocks[*block].entry,
+                    text: format!(
+                        "{}loc_{:x}:",
+                        indent(level + 1),
+                        self.blocks[*block].entry.get()
+                    ),
+                });
+                self.emit_simple(lines, *block, level + 1);
+                self.emit_raw_flow(lines, *block, level + 1);
+            }
+        }
         Some(exit)
     }
 
@@ -1547,6 +1614,18 @@ mod tests {
         assert!(text.contains("case 0: {"), "{text}");
         assert!(text.contains("return;"), "{text}");
         assert!(!text.contains("goto loc_"), "{text}");
+    }
+
+    #[test]
+    fn complex_loop_headers_stay_structured() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "nested_loops").unwrap();
+        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("while (1)"), "{text}");
+        assert!(text.contains("do {"), "{text}");
     }
 
     #[test]

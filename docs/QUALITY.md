@@ -35,10 +35,10 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 
 ```
 functions:              30
-structured:             29 (96.7%)
+structured:             30 (100%)
 instructions:           386
 intrinsic instructions: 11 (coverage 97.2%)
-goto fallback functions: 1
+goto fallback functions: 0
 ```
 
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
@@ -48,9 +48,10 @@ goto fallback functions: 1
 **间接跳转**（`jmp rcx/rax/r9`）和 **SSE 比较后的未建模标志分支**——语义不可用标量
 表达式直译，保留 `__asm` 是设计允许的降级路径。
 
-真实样本 notepad（重新分析后 502 个函数）：覆盖率 84.9%、结构化 **77.7%**（390/502；
+真实样本 notepad（重新分析后 502 个函数）：覆盖率 84.9%、结构化 **78.7%**（395/502；
 依次经历 443 函数旧分析状态 49.2% → 62.4%（早退链修复）→ 77.3%（break/continue）→ 77.7%
-（do-while），已超过 v1 的 70% 目标）；不作为门禁，仅作为观察指标。
+（do-while）→ 78.7%（复杂循环 header 兜底），已超过 v1 的 70% 目标）；不作为门禁，
+仅作为观察指标。
 
 ## golden 快照
 
