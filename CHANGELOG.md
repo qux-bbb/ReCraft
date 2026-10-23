@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M3 AI layer (offline half + write protocol): `recraft ai explain` builds a function
+  summary from API tags, referenced strings and call edges; `recraft ai suggest`
+  produces rename Proposals for `sub_*` functions with evidence addresses, confidence
+  and rationale; `recraft ai triage` summarises API categories, weighted suspicious
+  functions and URLs. `recraft ai apply <file> --yes` is the only mutation path and goes
+  through the journaled/undoable command bus; without `--yes` it refuses. New
+  `Session::all_api_tags` backs the aggregation. Docs: `docs/AI.md`, `docs/M3.md`.
+
 - Pointer parameter types: a register argument used as a direct memory base is typed
   from the unique access width (`char*` for 1-byte, `wchar_t*` for 2, `int32*`/`int64*`
   for 4/8, `void*` for mixed, `int64` when never used as a base). New corpus probes

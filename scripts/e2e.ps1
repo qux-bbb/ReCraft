@@ -133,6 +133,15 @@ try {
     Assert-Contains $mcp 'recraft' 'MCP server name'
     Assert-Contains $mcp 'recraft://project/sample/functions' 'MCP functions resource'
 
+    Write-Host '[+] AI assist (offline explain/suggest/triage + propose-apply)'
+    $aiTriage = Invoke-Recraft @('ai', 'triage', $project, '--json')
+    Assert-Contains $aiTriage 'apis_by_category' 'AI triage categories'
+    $proposalFile = Join-Path $work 'proposals.json'
+    Invoke-Recraft @('ai', 'suggest', $project, '--limit', '3', '--out', $proposalFile) | Out-Null
+    Assert-Contains (Get-Content -Raw -LiteralPath $proposalFile) 'confidence' 'AI proposals JSON'
+    $aiApplied = Invoke-Recraft @('ai', 'apply', $project, $proposalFile, '--yes')
+    Assert-Contains $aiApplied 'applied' 'AI proposal apply'
+
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"
         $big = Join-Path $work 'big.exe'

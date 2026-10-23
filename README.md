@@ -111,6 +111,18 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 # newline-delimited JSON-RPC 2.0 on stdin/stdout; see docs/MCP.md
 ```
 
+### AI assist
+
+Offline (no network) explanation, rename proposals and sample triage; proposals carry
+evidence addresses and are only applied through the journaled command bus:
+
+```powershell
+cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry
+cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json
+cargo run -p recraft-cli -- ai triage notepad.rcraft
+cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # undoable
+```
+
 ## Contributing
 
 Contributions are welcome, but **every contribution requires a signed CLA**

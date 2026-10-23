@@ -34,6 +34,45 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum AiCommand {
+    /// Explain one function from API tags, referenced strings and calls.
+    Explain {
+        project: PathBuf,
+        /// Function address/name (defaults to the entry point).
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Propose names for `sub_*` functions (evidence + confidence); never applies.
+    Suggest {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Write the proposals JSON to this file for review/apply.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Sample triage: API categories, suspicious functions, URLs.
+    Triage {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply reviewed proposals through the command bus (journaled/undoable).
+    Apply {
+        project: PathBuf,
+        /// Proposals JSON produced by `ai suggest --out`.
+        file: PathBuf,
+        /// Required confirmation: proposals are never applied silently.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Show headers, sections, imports and exports of a PE file (no project needed).
     Info {
@@ -51,6 +90,11 @@ enum Commands {
         /// Reserved for the HTTP transport (M3); only stdio is implemented.
         #[arg(long)]
         http: bool,
+    },
+    /// AI assist: offline explanation, rename proposals, triage and proposal apply.
+    Ai {
+        #[command(subcommand)]
+        command: AiCommand,
     },
     /// Import a PE file into a new project.
     Import {
@@ -258,6 +302,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             recraft_mcp::McpServer::open(&project)?.serve_stdio()
         }
+        Commands::Ai { command } => cmd_ai(command),
         Commands::Import { file, out } => cmd_import(&file, &out),
         Commands::Disasm {
             project,
@@ -797,6 +842,178 @@ fn cmd_golden(project: &Path, dir: Option<&Path>, check: bool) -> Result<()> {
         println!("wrote {written} snapshots to {}", dir.display());
         Ok(())
     }
+}
+
+fn cmd_ai(command: AiCommand) -> Result<()> {
+    match command {
+        AiCommand::Explain {
+            project,
+            addr,
+            json,
+        } => cmd_ai_explain(&project, addr.as_deref(), json),
+        AiCommand::Suggest {
+            project,
+            json,
+            limit,
+            out,
+        } => cmd_ai_suggest(&project, json, limit, out.as_deref()),
+        AiCommand::Triage { project, json } => cmd_ai_triage(&project, json),
+        AiCommand::Apply { project, file, yes } => cmd_ai_apply(&project, &file, yes),
+    }
+}
+
+fn cmd_ai_explain(project: &Path, addr: Option<&str>, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let addr = match addr {
+        Some(raw) => resolve_address(&session, raw)?,
+        None => session.entry_point(),
+    };
+    let explanation = recraft_ai::explain(&mut session, addr)?;
+    if as_json {
+        return json_result(&json!({
+            "name": explanation.name,
+            "start": format!("{:#x}", explanation.start.get()),
+            "end": format!("{:#x}", explanation.end.get()),
+            "instructions": explanation.instructions,
+            "summary": explanation.summary,
+            "apis": explanation.apis.iter().map(|(site, rule, category)| json!({
+                "site": format!("{:#x}", site.get()),
+                "rule": rule,
+                "category": category,
+            })).collect::<Vec<_>>(),
+            "strings": explanation.strings.iter().map(|(addr, text)| json!({
+                "addr": format!("{:#x}", addr.get()),
+                "text": text,
+            })).collect::<Vec<_>>(),
+            "calls": explanation.calls.iter().map(|(site, name)| json!({
+                "site": format!("{:#x}", site.get()),
+                "name": name,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    println!("{}", explanation.summary);
+    for (site, rule, category) in &explanation.apis {
+        println!("  api  {:#012x}  {rule} [{category}]", site.get());
+    }
+    for (addr, text) in &explanation.strings {
+        println!("  str  {:#012x}  {text}", addr.get());
+    }
+    for (site, name) in &explanation.calls {
+        println!("  call {:#012x}  {name}", site.get());
+    }
+    Ok(())
+}
+
+fn cmd_ai_suggest(project: &Path, as_json: bool, limit: usize, out: Option<&Path>) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let proposals = recraft_ai::suggest_names(&mut session, limit)?;
+    let values: Vec<Value> = proposals
+        .iter()
+        .map(|proposal| proposal.to_json())
+        .collect();
+    if let Some(out) = out {
+        let text = serde_json::to_string_pretty(&values)
+            .map_err(|error| Error::internal(format!("proposal JSON: {error}")))?;
+        std::fs::write(out, text)?;
+        println!("wrote {} proposals to {}", values.len(), out.display());
+        return Ok(());
+    }
+    if as_json {
+        return json_result(&json!({ "proposals": values, "count": values.len() }));
+    }
+    println!("{} proposal(s); review before applying:", values.len());
+    for proposal in &proposals {
+        println!(
+            "  {:.2}  {:#012x} -> {}",
+            proposal.confidence,
+            proposal.target.get(),
+            proposal.value
+        );
+        println!("        {}", proposal.rationale);
+        for evidence in proposal.evidence.iter().take(3) {
+            println!(
+                "        evidence {:#012x} {}: {}",
+                evidence.addr.get(),
+                evidence.kind,
+                evidence.text
+            );
+        }
+    }
+    Ok(())
+}
+
+fn cmd_ai_triage(project: &Path, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let triage = recraft_ai::triage(&mut session)?;
+    if as_json {
+        return json_result(&json!({
+            "functions": triage.functions,
+            "instructions": triage.instructions,
+            "strings": triage.strings,
+            "apis_by_category": triage.apis_by_category,
+            "suspicious": triage.suspicious.iter().map(|item| json!({
+                "start": format!("{:#x}", item.start.get()),
+                "name": item.name,
+                "categories": item.categories,
+                "score": item.score,
+                "apis": item.apis,
+            })).collect::<Vec<_>>(),
+            "urls": triage.urls,
+        }));
+    }
+    println!(
+        "functions: {}  instructions: {}  strings: {}",
+        triage.functions, triage.instructions, triage.strings
+    );
+    println!("api categories:");
+    for (category, count) in &triage.apis_by_category {
+        println!("  {category:16} {count}");
+    }
+    println!("suspicious functions:");
+    for item in &triage.suspicious {
+        println!(
+            "  {:.1}  {:#012x}  {}  [{}]  {}",
+            item.score,
+            item.start.get(),
+            item.name.as_deref().unwrap_or("?"),
+            item.categories.join(","),
+            item.apis.join(",")
+        );
+    }
+    if !triage.urls.is_empty() {
+        println!("urls:");
+        for url in &triage.urls {
+            println!("  {url}");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_ai_apply(project: &Path, file: &Path, yes: bool) -> Result<()> {
+    if !yes {
+        return Err(Error::unsupported(
+            "refusing to apply proposals without --yes; review the JSON diff first",
+        ));
+    }
+    let text = std::fs::read_to_string(file)?;
+    let values: Value = serde_json::from_str(&text)
+        .map_err(|error| Error::internal(format!("proposal JSON: {error}")))?;
+    let items = values
+        .as_array()
+        .cloned()
+        .or_else(|| values.get("proposals").and_then(Value::as_array).cloned())
+        .ok_or_else(|| Error::internal("proposal file must be a JSON array"))?;
+    let mut proposals = Vec::with_capacity(items.len());
+    for item in &items {
+        proposals.push(recraft_ai::Proposal::from_json(item)?);
+    }
+    let mut session = Session::open(project)?;
+    let applied = recraft_ai::apply_proposals(&mut session, &proposals)?;
+    println!("applied {applied} proposal(s) through the command bus (undoable)");
+    for proposal in &proposals {
+        println!("  {:#012x} -> {}", proposal.target.get(), proposal.value);
+    }
+    Ok(())
 }
 
 fn cmd_imports(project: &Path, as_json: bool) -> Result<()> {

@@ -476,6 +476,25 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// All analysis API tags: `(call site, rule id, category)`.
+    pub fn all_api_tags(&self) -> Result<Vec<(Address, String, String)>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare("SELECT addr, rule_id, category FROM api_tag ORDER BY addr")
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    Address::new(row.get::<_, i64>(0)? as u64),
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
     /// Number of analysis-produced names currently stored.
     pub fn auto_name_count(&self) -> Result<u64> {
         let count: i64 = self

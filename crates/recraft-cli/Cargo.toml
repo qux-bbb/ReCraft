@@ -24,6 +24,7 @@ serde_json = "1.0.154"
 recraft-decompile.workspace = true
 recraft-analysis.workspace = true
 recraft-mcp = { version = "0.1.0", path = "../recraft-mcp" }
+recraft-ai = { version = "0.1.0", path = "../recraft-ai" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
