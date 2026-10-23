@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Prototype declarations are now parsed and drive the decompiler signature: return
+  type, `__cdecl`/`__stdcall`, parameter types (`int32`/`int64`/`char*`/`wchar_t*`/
+  `int32*`/`int64*`/`void*`) and parameter names replace the inferred values on x64
+  (up to four register arguments), and bodies use the declared names. Unknown or
+  unsupported declarators (function pointers, arrays) fall back to the verbatim
+  `// prototype:` comment. New `parse_prototype`/`ProtoSig`/`ProtoParam` API with
+  parser tests and an override/undo decompiler test; E2E asserts the overridden
+  signature.
+
 - User struct layouts + `apply_type` (DESIGN §9.1): `recraft define-struct --name Probe
   --size 24 --field 0:tag:u32 --field 16:value:i32` stores a layout (schema v3:
   user_struct/user_struct_field/func_arg_type, idempotent migration), `recraft apply-type

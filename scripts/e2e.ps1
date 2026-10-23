@@ -127,6 +127,7 @@ try {
     Invoke-Recraft @('prototype', $project, '--addr', $firstFuncAddr, '--text', 'int entry_proto(void)') | Out-Null
     $pseudoProto = Invoke-Recraft @('decompile', $project, '--addr', $firstFuncAddr, '--l2')
     Assert-Contains $pseudoProto '// prototype: int entry_proto(void)' 'prototype rendered above signature'
+    Assert-Contains $pseudoProto 'int32 entry_proto(void)' 'prototype types override the signature'
     Invoke-Recraft @('undo', $project) | Out-Null
     $pseudoProto = Invoke-Recraft @('decompile', $project, '--addr', $firstFuncAddr, '--l2')
     if ($pseudoProto.Contains('// prototype:')) { throw 'undo did not remove the prototype' }

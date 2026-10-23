@@ -18,7 +18,7 @@ use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_ir::{Flow, Reg};
 
-use crate::l2::X64_ARG_REGS;
+use crate::l2::{X64_ARG_REGS, parse_prototype};
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
@@ -37,6 +37,7 @@ pub fn pseudocode_l2(session: &mut Session, start: Address) -> Result<Pseudocode
 }
 
 fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Result<Pseudocode> {
+    let mut info = info;
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
         let mut fallback = crate::pseudocode_l0(session, start, 512)?;
@@ -55,6 +56,22 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             "no basic blocks at {:#x}",
             start.get()
         )));
+    }
+
+    // A user prototype overrides the inferred signature: return type, calling
+    // convention and (on x64) the register arguments with their declared names/types.
+    let prototype_text = session.prototype_at(start)?;
+    let parsed_proto = prototype_text.as_deref().and_then(parse_prototype);
+    if let Some(parsed) = parsed_proto.as_ref() {
+        if let Some(info) = info.as_mut() {
+            info.ret = parsed.ret;
+            if let Some(cc) = parsed.cc {
+                info.abi = cc;
+            }
+            if session.image().is_64 {
+                info.args = ArgNames::from_prototype(&parsed.params);
+            }
+        }
     }
 
     let args = info.as_ref().map(|info| &info.args);
@@ -104,9 +121,12 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     structurer.compute_post_dominators();
     structurer.compute_loops();
 
-    let name = session
+    let mut name = session
         .name_at(start)?
         .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+    if let Some(parsed_name) = parsed_proto.as_ref().and_then(|parsed| parsed.name.clone()) {
+        name = parsed_name;
+    }
     let mut lines = Vec::with_capacity(64);
     lines.push(PseudoLine {
         addr: start,
@@ -144,7 +164,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         text: "}".to_owned(),
     });
     // A user-set prototype is authoritative for naming/definitions; show it verbatim
-    // above the generated signature (parsed type propagation comes later).
+    // above the generated signature (which already reflects its parsed types/names).
     if let Some(prototype) = session.prototype_at(start)? {
         lines.insert(
             0,
@@ -1128,6 +1148,29 @@ mod tests {
             .unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
         assert!(text.contains("arg1->field_10"), "{text}");
+    }
+
+    #[test]
+    fn user_prototype_overrides_signature_and_argument_names() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "field_probe").unwrap();
+        session
+            .execute(recraft_core::Command::SetPrototype {
+                addr: start,
+                text: Some("int __stdcall field_probe(const int* values, int count)".to_owned()),
+            })
+            .unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(
+            text.contains("int32 __stdcall field_probe(int32* values, int32 count)"),
+            "{text}"
+        );
+        assert!(text.contains("values->field_10"), "{text}");
+        session.undo().unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(!text.contains("__stdcall"), "{text}");
     }
 
     #[test]

@@ -35,6 +35,7 @@ pub struct ArgNames {
 /// Parameter type inferred from how the argument is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgType {
+    Int32,
     Int64,
     /// Byte-sized memory access through the argument.
     CharPtr,
@@ -49,6 +50,7 @@ pub enum ArgType {
 impl ArgType {
     pub const fn c_name(self) -> &'static str {
         match self {
+            ArgType::Int32 => "int32",
             ArgType::Int64 => "int64",
             ArgType::CharPtr => "char*",
             ArgType::WCharPtr => "wchar_t*",
@@ -56,6 +58,17 @@ impl ArgType {
             ArgType::Int64Ptr => "int64*",
             ArgType::VoidPtr => "void*",
         }
+    }
+
+    pub const fn is_pointer(self) -> bool {
+        matches!(
+            self,
+            ArgType::CharPtr
+                | ArgType::WCharPtr
+                | ArgType::Int32Ptr
+                | ArgType::Int64Ptr
+                | ArgType::VoidPtr
+        )
     }
 }
 
@@ -71,7 +84,7 @@ impl ArgNames {
     /// True when the argument was inferred as a pointer (`char*`, `wchar_t*`, `int32*`,
     /// `int64*` or `void*`), i.e. field-style rendering through it is meaningful.
     pub fn is_pointer_arg(&self, reg: Reg) -> bool {
-        matches!(self.types.get(&reg), Some(ty) if !matches!(ty, ArgType::Int64))
+        self.types.get(&reg).is_some_and(|ty| ty.is_pointer())
     }
 
     /// Calling-convention slot (0-based) of a register argument: `argN` -> `N - 1`.
@@ -84,6 +97,23 @@ impl ArgNames {
 
     pub fn is_empty(&self) -> bool {
         self.names.is_empty() && self.stack.is_empty()
+    }
+
+    /// Build arguments from a parsed user prototype (x64 register arguments; at most
+    /// four slots are representable without stack-argument layout).
+    pub fn from_prototype(params: &[ProtoParam]) -> Self {
+        let mut names = BTreeMap::new();
+        let mut types = BTreeMap::new();
+        for (slot, param) in params.iter().take(X64_ARG_REGS.len()).enumerate() {
+            let reg = X64_ARG_REGS[slot];
+            names.insert(reg, param.name.clone());
+            types.insert(reg, param.ty);
+        }
+        ArgNames {
+            names,
+            stack: BTreeMap::new(),
+            types,
+        }
     }
 
     /// Register arguments in calling-convention order.
@@ -566,9 +596,210 @@ fn walk_expr(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(&RegView)) {
     }
 }
 
+/// One parameter of a parsed user prototype.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtoParam {
+    pub ty: ArgType,
+    /// Parameter name, or a generated `argN` when the declaration omitted it.
+    pub name: String,
+}
+
+/// Parsed form of a user prototype like `int __stdcall foo(const char* text, int count)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtoSig {
+    pub ret: ReturnKind,
+    /// Function name from the declaration, when present.
+    pub name: Option<String>,
+    pub cc: Option<CallingConvention>,
+    pub params: Vec<ProtoParam>,
+}
+
+/// Best-effort parser for a single C function declaration.
+///
+/// Supports `RET [__cdecl|__stdcall|__fastcall|__thiscall] name(TYPE [name], ...)`
+/// with `const`/`volatile`/`struct` qualifiers and pointer stars; nested parentheses
+/// (function pointers) and arrays are not supported and yield `None`.
+pub fn parse_prototype(text: &str) -> Option<ProtoSig> {
+    let text = text.trim().trim_end_matches(';').trim();
+    if text.is_empty() {
+        return None;
+    }
+    let open = text.find('(')?;
+    let close = text.rfind(')')?;
+    if close < open {
+        return None;
+    }
+    let head = text[..open].trim();
+    let inside = text[open + 1..close].trim();
+    if head.contains('(') || inside.contains('(') {
+        return None; // function pointers / nested declarators
+    }
+
+    let mut cc = None;
+    let mut head_tokens: Vec<&str> = Vec::new();
+    for token in head.split_whitespace() {
+        let lower = token.to_ascii_lowercase();
+        if lower.contains("__stdcall") || lower == "stdcall" {
+            cc = Some(CallingConvention::Stdcall);
+        } else if lower.contains("__cdecl") || lower == "cdecl" {
+            cc = Some(CallingConvention::Cdecl);
+        } else if lower.contains("__fastcall") || lower.contains("__thiscall") {
+            cc = Some(CallingConvention::System);
+        } else {
+            head_tokens.push(token);
+        }
+    }
+    let name = head_tokens
+        .iter()
+        .rev()
+        .find(|token| is_identifier(token))
+        .map(|token| (*token).to_owned());
+    if let Some(name_token) = name.as_ref()
+        && let Some(index) = head_tokens.iter().rposition(|token| token == name_token)
+    {
+        head_tokens.remove(index);
+    }
+    let ret_text = head_tokens.join(" ");
+    let ret = parse_return(&ret_text)?;
+
+    let params = if inside.is_empty() || inside.eq_ignore_ascii_case("void") {
+        Vec::new()
+    } else {
+        let mut params = Vec::new();
+        for (index, raw) in inside.split(',').enumerate() {
+            let param = parse_param(raw, index)?;
+            params.push(param);
+        }
+        params
+    };
+    Some(ProtoSig {
+        ret,
+        name,
+        cc,
+        params,
+    })
+}
+
+fn is_identifier(token: &str) -> bool {
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        && !matches!(
+            token.to_ascii_lowercase().as_str(),
+            "void"
+                | "int"
+                | "char"
+                | "short"
+                | "long"
+                | "unsigned"
+                | "signed"
+                | "const"
+                | "volatile"
+                | "struct"
+                | "int32"
+                | "int64"
+                | "wchar_t"
+                | "bool"
+                | "float"
+                | "double"
+                | "size_t"
+        )
+}
+
+fn parse_return(text: &str) -> Option<ReturnKind> {
+    let normalized = text.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    let pointer = normalized.contains('*');
+    let lower = normalized.to_ascii_lowercase();
+    if !pointer && (lower == "void" || lower.ends_with(" void")) {
+        return Some(ReturnKind::Void);
+    }
+    if pointer || lower.contains("int64") || lower.contains("long long") || lower.contains("size_t")
+    {
+        return Some(ReturnKind::Int64);
+    }
+    Some(ReturnKind::Int32)
+}
+
+fn parse_param(raw: &str, index: usize) -> Option<ProtoParam> {
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut name = format!("arg{}", index + 1);
+    let mut type_tokens = tokens.clone();
+    if tokens.len() > 1 {
+        let last = tokens[tokens.len() - 1];
+        if is_identifier(last) {
+            name = last.to_owned();
+            type_tokens.truncate(tokens.len() - 1);
+        }
+    }
+    let type_text = type_tokens.join(" ");
+    if type_text.trim().is_empty() || type_text.contains('[') {
+        return None;
+    }
+    let pointer = type_text.contains('*');
+    let base = type_text
+        .replace(['*', '&'], " ")
+        .split_whitespace()
+        .filter(|token| {
+            !matches!(
+                token.to_ascii_lowercase().as_str(),
+                "const" | "volatile" | "struct" | "unsigned" | "signed"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let ty = if pointer {
+        match base.to_ascii_lowercase().as_str() {
+            "char" | "int8_t" | "uint8_t" => ArgType::CharPtr,
+            "wchar_t" | "char16_t" => ArgType::WCharPtr,
+            "int" | "int32" | "int32_t" | "uint32" | "uint32_t" => ArgType::Int32Ptr,
+            "int64" | "int64_t" | "uint64" | "uint64_t" | "long long" => ArgType::Int64Ptr,
+            _ => ArgType::VoidPtr,
+        }
+    } else if base.contains("int64") || base == "long long" || base == "size_t" {
+        ArgType::Int64
+    } else {
+        ArgType::Int32
+    };
+    Some(ProtoParam { ty, name })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_prototype_declarations() {
+        let parsed = parse_prototype("int __stdcall field_probe(const int* values, int count)")
+            .expect("valid prototype");
+        assert_eq!(parsed.ret, ReturnKind::Int32);
+        assert_eq!(parsed.cc, Some(CallingConvention::Stdcall));
+        assert_eq!(parsed.name.as_deref(), Some("field_probe"));
+        assert_eq!(parsed.params.len(), 2);
+        assert_eq!(parsed.params[0].ty, ArgType::Int32Ptr);
+        assert_eq!(parsed.params[0].name, "values");
+        assert_eq!(parsed.params[1].ty, ArgType::Int32);
+        assert_eq!(parsed.params[1].name, "count");
+
+        let void = parse_prototype("void __cdecl cleanup(void);").expect("void prototype");
+        assert_eq!(void.ret, ReturnKind::Void);
+        assert_eq!(void.cc, Some(CallingConvention::Cdecl));
+        assert!(void.params.is_empty());
+
+        let ptr = parse_prototype("char* dup(const char* text)").expect("pointer return");
+        assert_eq!(ptr.ret, ReturnKind::Int64);
+        assert_eq!(ptr.params[0].ty, ArgType::CharPtr);
+
+        assert!(parse_prototype("int (*callback)(int)").is_none());
+    }
     use std::path::PathBuf;
 
     fn corpus_session(arch: &str) -> Option<(Session, tempfile::TempDir)> {
