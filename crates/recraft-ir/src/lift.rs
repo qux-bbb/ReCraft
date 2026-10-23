@@ -24,6 +24,8 @@ enum CmpSource {
     Arithmetic,
     /// `test` / bitwise / inc / dec: only zero/sign meanings are trustworthy.
     ZeroOnly,
+    /// `bt`: only CF (= the tested bit) is meaningful.
+    BitTest,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -122,6 +124,10 @@ impl Lifter {
             }
             M::Test => {
                 self.lift_cmp(insn, true);
+                Flow::Fallthrough
+            }
+            M::Bt => {
+                self.lift_bt(insn);
                 Flow::Fallthrough
             }
             M::Imul => self.lift_imul(insn, &mut stmts),
@@ -285,6 +291,8 @@ impl Lifter {
                     self.lift_jcc(insn, kind, &mut stmts)
                 } else if let Some(kind) = cmov_condition_of(mnemonic) {
                     self.lift_cmov(insn, kind, &mut stmts)
+                } else if let Some(kind) = set_condition_of(mnemonic) {
+                    self.lift_setcc(insn, kind, &mut stmts)
                 } else {
                     self.intrinsic(insn, &mut stmts)
                 }
@@ -746,18 +754,83 @@ impl Lifter {
     /// `kind`. `consume` clears the tracked comparison (branches do; `cmov` does not).
     fn condition_expr(&mut self, kind: CondKind, consume: bool) -> Option<ExprId> {
         let state = self.last_cmp?;
-        if state.source != CmpSource::Arithmetic && !uses_zero_only(kind) {
-            return None;
-        }
-        let condition = self.push(Expr::Cmp {
-            kind,
-            lhs: state.lhs,
-            rhs: state.rhs,
-        });
+        // SF/!SF are exact signed comparisons with zero for every tracked flag source
+        // (`cmp`/`sub` set SF from the result, `test`/bitwise/inc/dec set it from theirs).
+        // Overflow/parity are not modelled yet: keep them as assembly rather than print
+        // a wrong `/* overflow */ 0` placeholder.
+        let kind = match kind {
+            CondKind::Sign => CondKind::SignedLt,
+            CondKind::NotSign => CondKind::SignedGe,
+            CondKind::Overflow | CondKind::NotOverflow | CondKind::Parity | CondKind::NotParity => {
+                return None;
+            }
+            other => other,
+        };
+        let condition = match state.source {
+            CmpSource::Arithmetic => self.push(Expr::Cmp {
+                kind,
+                lhs: state.lhs,
+                rhs: state.rhs,
+            }),
+            CmpSource::ZeroOnly => {
+                if !uses_zero_only(kind) {
+                    return None;
+                }
+                self.push(Expr::Cmp {
+                    kind,
+                    lhs: state.lhs,
+                    rhs: state.rhs,
+                })
+            }
+            CmpSource::BitTest => {
+                // `bt` defines only CF: CF = (value >> bit) & 1. Only CF-based
+                // conditions (jb/jae) are meaningful afterwards.
+                if !matches!(kind, CondKind::UnsignedLt | CondKind::UnsignedGe) {
+                    return None;
+                }
+                let shifted = self.push(Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: state.lhs,
+                    rhs: state.rhs,
+                });
+                let one = self.constant(1);
+                let masked = self.push(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: shifted,
+                    rhs: one,
+                });
+                let zero = self.constant(0);
+                let cmp_kind = if matches!(kind, CondKind::UnsignedLt) {
+                    CondKind::Ne
+                } else {
+                    CondKind::Eq
+                };
+                self.push(Expr::Cmp {
+                    kind: cmp_kind,
+                    lhs: masked,
+                    rhs: zero,
+                })
+            }
+        };
         if consume {
             self.last_cmp = None;
         }
         Some(condition)
+    }
+
+    /// `bt` only updates flags (CF = tested bit); the consuming branch rebuilds the bit
+    /// test as an expression, so no statement is emitted here.
+    fn lift_bt(&mut self, insn: &Insn) {
+        match (self.read_operand(insn, 0), self.read_operand(insn, 1)) {
+            (Some(lhs), Some(rhs)) => {
+                self.last_cmp = Some(CmpState {
+                    lhs,
+                    rhs,
+                    source: CmpSource::BitTest,
+                });
+            }
+            _ => self.last_cmp = None,
+        }
     }
 
     fn lift_imul(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
@@ -801,6 +874,23 @@ impl Lifter {
         });
         if self.write_operand(insn, 0, selected, stmts) {
             // cmov preserves flags: the tracked comparison stays valid for a later jcc.
+            Flow::Fallthrough
+        } else {
+            self.intrinsic(insn, stmts)
+        }
+    }
+
+    /// `setcc r/m8`: write 0/1 from the tracked flag comparison (does not consume flags).
+    fn lift_setcc(&mut self, insn: &Insn, kind: CondKind, stmts: &mut Vec<Stmt>) -> Flow {
+        let Some(condition) = self.condition_expr(kind, false) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let byte = self.push(Expr::Cast {
+            arg: condition,
+            width: 1,
+            signed: false,
+        });
+        if self.write_operand(insn, 0, byte, stmts) {
             Flow::Fallthrough
         } else {
             self.intrinsic(insn, stmts)
@@ -959,6 +1049,29 @@ fn cmov_condition_of(mnemonic: iced_x86::Mnemonic) -> Option<CondKind> {
         M::Cmovno => CondKind::NotOverflow,
         M::Cmovp => CondKind::Parity,
         M::Cmovnp => CondKind::NotParity,
+        _ => return None,
+    })
+}
+
+fn set_condition_of(mnemonic: iced_x86::Mnemonic) -> Option<CondKind> {
+    use iced_x86::Mnemonic as M;
+    Some(match mnemonic {
+        M::Sete => CondKind::Eq,
+        M::Setne => CondKind::Ne,
+        M::Seta => CondKind::UnsignedGt,
+        M::Setae => CondKind::UnsignedGe,
+        M::Setb => CondKind::UnsignedLt,
+        M::Setbe => CondKind::UnsignedLe,
+        M::Setg => CondKind::SignedGt,
+        M::Setge => CondKind::SignedGe,
+        M::Setl => CondKind::SignedLt,
+        M::Setle => CondKind::SignedLe,
+        M::Sets => CondKind::Sign,
+        M::Setns => CondKind::NotSign,
+        M::Seto => CondKind::Overflow,
+        M::Setno => CondKind::NotOverflow,
+        M::Setp => CondKind::Parity,
+        M::Setnp => CondKind::NotParity,
         _ => return None,
     })
 }
@@ -1237,6 +1350,91 @@ mod tests {
             }
             other => panic!("unexpected stmt {other:?}"),
         }
+    }
+
+    #[test]
+    fn setcc_uses_tracked_flags() {
+        // cmp eax, ecx ; sete al
+        let cmp = recraft_decode::decode(
+            &[0x39, 0xc8],
+            recraft_common::Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("cmp decodes");
+        let setcc = recraft_decode::decode(
+            &[0x0f, 0x94, 0xc0],
+            recraft_common::Address::new(0x1002),
+            recraft_decode::Mode::X64,
+        )
+        .expect("sete decodes");
+        let mut lifter = Lifter::new();
+        lifter.lift(&cmp);
+        let item = lifter.lift(&setcc);
+        assert!(
+            matches!(item.stmts[0], Stmt::WriteReg { .. }),
+            "sete should write a register: {:?}",
+            item.stmts
+        );
+    }
+
+    #[test]
+    fn sign_flags_feed_branches() {
+        // add eax, ecx ; js rel8
+        let add = recraft_decode::decode(
+            &[0x01, 0xc8],
+            recraft_common::Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("add decodes");
+        let js = recraft_decode::decode(
+            &[0x78, 0x10],
+            recraft_common::Address::new(0x1002),
+            recraft_decode::Mode::X64,
+        )
+        .expect("js decodes");
+        let mut lifter = Lifter::new();
+        lifter.lift(&add);
+        let branch = lifter.lift(&js);
+        assert!(
+            matches!(branch.flow, Flow::CondGoto { .. }),
+            "add/js should produce a real condition: {:?}",
+            branch.flow
+        );
+        assert!(
+            branch.stmts.is_empty(),
+            "unexpected intrinsic: {:?}",
+            branch.stmts
+        );
+    }
+
+    #[test]
+    fn bit_test_flags_feed_branches() {
+        // bt rcx, rax ; jae rel8
+        let bt = recraft_decode::decode(
+            &[0x48, 0x0f, 0xa3, 0xc1],
+            recraft_common::Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("bt decodes");
+        let jae = recraft_decode::decode(
+            &[0x73, 0x14],
+            recraft_common::Address::new(0x1004),
+            recraft_decode::Mode::X64,
+        )
+        .expect("jae decodes");
+        let mut lifter = Lifter::new();
+        assert!(lifter.lift(&bt).stmts.is_empty());
+        let branch = lifter.lift(&jae);
+        assert!(
+            matches!(branch.flow, Flow::CondGoto { .. }),
+            "bt/jae should produce a real condition: {:?}",
+            branch.flow
+        );
+        assert!(
+            branch.stmts.is_empty(),
+            "unexpected intrinsic: {:?}",
+            branch.stmts
+        );
     }
 
     #[test]

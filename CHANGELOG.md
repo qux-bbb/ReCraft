@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Flag-consuming instruction semantics: `bt` now records CF (= the tested bit) and the
+  consuming branch rebuilds it as `((value >> bit) & 1) != 0` (only jb/jae are defined
+  afterwards); `js`/`jns` become exact signed comparisons of the producing result with
+  zero for `cmp`/`sub`/`test`/bitwise/`inc`/`dec`; `setcc` writes 0/1 from the tracked
+  comparison without consuming it. Overflow/parity conditions now stay as assembly
+  instead of printing a wrong placeholder. notepad: "unmodelled flags" branches drop
+  from 270 to 23, semantic coverage rises 98.5% -> **99.4%** (239/37522 intrinsics) and
+  structured rate 84.7% -> **86.1%** (432/502); corpus stays 100% structured / 97.4%
+  coverage. Lift tests cover bt/jae, add/js and cmp/sete; docs/QUALITY, docs/M2,
+  docs/M4 and CHANGELOG updated.
+
 - Shared tail-chain duplication: when a branch targets an already-emitted straight-line
   chain (≤24 statements ending in `return`/tail call, no loop headers or switch
   dispatch), the structurer re-emits that chain inside the reaching arm instead of

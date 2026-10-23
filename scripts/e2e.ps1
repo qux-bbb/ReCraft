@@ -41,13 +41,20 @@ $cjkComment = [System.Text.Encoding]::UTF8.GetString(
 function Invoke-Recraft {
     param([string[]]$Arguments, [switch]$Json)
     # Windows PowerShell turns native stderr into ErrorRecords; the CLI writes
-    # progress there, so relax ErrorActionPreference for the duration of the call.
+    # progress there, so relax ErrorActionPreference and capture stderr to a file so
+    # failures can report the real diagnostic instead of swallowing it.
     $ErrorActionPreference = 'Continue'
-    $output = & $Recraft $Arguments 2>$null
+    $errFile = [System.IO.Path]::GetTempFileName()
+    $output = & $Recraft $Arguments 2>$errFile
     $code = $LASTEXITCODE
+    $stderr = ''
+    if (Test-Path $errFile) {
+        $stderr = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    }
     $ErrorActionPreference = 'Stop'
     if ($code -ne 0) {
-        throw ("recraft {0} failed with exit code {1}`n{2}" -f ($Arguments -join ' '), $code, ($output -join "`n"))
+        throw ("recraft {0} failed with exit code {1}`n{2}`n--- stderr ---`n{3}" -f ($Arguments -join ' '), $code, ($output -join "`n"), $stderr)
     }
     return (($output | Out-String).Trim())
 }
@@ -183,12 +190,23 @@ try {
     Assert-Contains $mcp 'recraft://project/sample/functions' 'MCP functions resource'
 
     Write-Host '[+] MCP HTTP transport (bearer token)'
+    # The HTTP server is killed at the end of the step; run it against a copy so a
+    # hard kill can never leave the main project's WAL/SHM in a state that makes the
+    # following AI step fail with a transient SQLite I/O error.
+    $httpProject = Join-Path $work 'sample-http.rcraft'
+    Copy-Item -LiteralPath $project -Destination $httpProject -Force
+    foreach ($suffix in @('-wal', '-shm')) {
+        $source = "$project$suffix"
+        if (Test-Path -LiteralPath $source) {
+            Copy-Item -LiteralPath $source -Destination "$httpProject$suffix" -Force
+        }
+    }
     $port = Get-Random -Minimum 20000 -Maximum 40000
     $mcpToken = 'e2e-token'
     $mcpOut = Join-Path $work 'mcp-http.out.log'
     $mcpErr = Join-Path $work 'mcp-http.err.log'
     $mcpProc = Start-Process -FilePath $Recraft `
-        -ArgumentList @('serve-mcp', $project, '--http', '--bind', "127.0.0.1:$port", '--token', $mcpToken) `
+        -ArgumentList @('serve-mcp', $httpProject, '--http', '--bind', "127.0.0.1:$port", '--token', $mcpToken) `
         -RedirectStandardOutput $mcpOut -RedirectStandardError $mcpErr -PassThru -WindowStyle Hidden
     try {
         $ready = $false
