@@ -54,6 +54,9 @@ jobs:
           $golden = Join-Path $env:RUNNER_TEMP 'golden-corpus'
           Invoke-Recraft @('golden', $project, '--dir', $golden)
           Invoke-Recraft @('golden', $project, '--dir', $golden, '--check')
+      - name: docs link check
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/check-docs.ps1
       - name: end-to-end CLI smoke
         shell: pwsh
         run: pwsh -NoProfile -File scripts/e2e.ps1

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M4 preview materials: README refreshed (current status, feature comparison, mermaid
+  architecture, document index links), new docs/FAQ.md (ten questions incl. AI privacy,
+  license and safety), docs/ROADMAP.md (milestone status + near-term priorities) and
+  docs/README.md (documentation index). scripts/check-docs.ps1 validates every relative
+  Markdown link (52 links across 18 files) and runs in CI. Also removed stray tracked
+  MSVC linker artifacts (functions.obj/.exp/.lib) and ignored those extensions.
+
 - Structurer quality: `test`/`cmp`-based signed conditional jumps (`jle/jg/jl/jge` and
   the matching `cmov`) are now modelled from the zero-only flag state, and if/else
   packaging accepts a join that already lies in the enclosing region's stop set, so

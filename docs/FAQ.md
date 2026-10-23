@@ -1,0 +1,56 @@
+# FAQ / 十问十答
+
+## 1. ReCraft 是 IDA 的替代品吗？
+
+不是兼容替代品。它是独立实现（clean-room，不使用 IDA SDK/数据库/签名库），目标是覆盖
+恶意样本初筛与 CTF 场景的常用工作流。没有 IDAPython、没有 `.idb` 兼容、没有插件生态。
+
+## 2. 反编译质量到什么程度？
+
+伪代码是**可读但不保证可编译**的 C-like 输出，每个 token 可回溯到指令地址（DESIGN §7）。
+corpus 基准：语义覆盖 97.1%、结构化成功率 93.1%；真实样本（notepad）结构化 62.4%。
+复杂异常处理/不可归约控制流会回退到 `goto` 标签，这是设计允许的降级路径。
+
+## 3. AI 会把我的样本/伪代码发到云端吗？
+
+默认**不联网**：AI 功能默认是确定性启发式（解释/命名/摘要），provider 为 `heuristic` 且
+`enabled=false`。只有显式配置 `RECRAFT_AI_PROVIDER` + endpoint + API key 后才会发送，
+发送前经过脱敏（URL/IP/邮箱）与 token 预算裁剪，并且可以用 `recraft ai prompt` 先审阅。
+详见 [docs/AI.md](AI.md)。
+
+## 4. AI 能直接改我的数据库吗？
+
+不能静默修改。LLM/启发式只能产出带证据地址和置信度的 `Proposal`；用户 review 后
+`ai apply`/UI 勾选，经 journaled Command 总线写入，可 `Ctrl+Z` 撤销（DESIGN §9.1）。
+
+## 5. 支持哪些格式？
+
+v1：PE32+（x64）与 PE32（x86）。ELF/ARM64/固件/内存 dump 在路线图上（见
+[docs/ROADMAP.md](ROADMAP.md)）。Go/Rust/C++ 运行时符号恢复已支持（pclntab、legacy hash、
+MSVC demangle）。
+
+## 6. 1 GB 样本能打开吗？
+
+能。CLI 门禁（1 GiB overlay 样本）：导入 < 60 s、分析 < 5 s、内存 ≤ 512 MiB；实测
+导入约 4 s、分析约 0.3 s、峰值 5.6 MiB（debug 构建），见 [docs/PERF.md](PERF.md)。
+
+## 7. 打开恶意样本安全吗？
+
+ReCraft 只做**静态解析**，不加载、不执行、不解包样本；但解析器仍处理不可信输入，安全
+问题请按 [SECURITY.md](../SECURITY.md) 报告。分析时请勿把样本提交到仓库（`.gitignore`
+已排除常见二进制）。
+
+## 8. 为什么是 AGPL + 商业双许可？
+
+开源版 AGPL-3.0-only 保证社区可审计/可修改；不想承担 AGPL 义务的组织可购买商业许可。
+两者都要求贡献者签署 CLA（见 [CLA.md](../CLA.md)）。
+
+## 9. 有 MCP 吗？能接 Claude/Cursor 吗？
+
+有。`recraft serve-mcp <project>` 通过 stdio 提供只读工具（反汇编、伪代码、xrefs、字符串、
+导入、调用图、字节搜索、函数摘要）与项目资源；配置示例见 [docs/DEMO.md](DEMO.md)。
+
+## 10. 什么时候有公开预览？
+
+里程碑见 [docs/ROADMAP.md](ROADMAP.md)。当前 M0–M3 功能已落地，M4 在做安装包验证与
+预览材料；预览前检查清单在 [docs/M4.md](M4.md)。

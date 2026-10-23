@@ -1,18 +1,49 @@
 # ReCraft
 
-> **Status: M0 complete, M1 in progress.** You can import a PE, analyze it (function
-> discovery from `.pdata`/exports/entry + recursive descent), browse disassembly and
-> L0 pseudo-C, rename/comment with undo/redo, and reopen projects — from both the CLI and
-> the native UI. Strings, xrefs, runtime recovery (Go/Rust) and MCP/AI are next.
->
-> See [`docs/M0-REPORT.md`](docs/M0-REPORT.md) and [`docs/M1.md`](docs/M1.md) for metrics
-> and known limitations.
+> **Status: M3 complete, M4 (public preview) in progress.** Import/analyze PE32/PE32+
+> (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
+> struct-type writes through a journaled command bus with undo, MCP read-only server, and
+> offline-first AI (explain / rename proposals / triage) with a propose-apply UI.
+> Quality gates: corpus semantic coverage **97.1%**, structured rate **93.1%**; 1 GiB
+> sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
+> [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
 
 ReCraft is an AI-native reverse-engineering platform: a native desktop disassembler and
 decompiler for Windows binaries, with an MCP server and LLM assistance built in from day one.
 
 It is an independent, clean-room implementation. It is **not** affiliated with Hex-Rays or
 IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
+
+## Why ReCraft
+
+- **Native, not Electron**: Rust + egui desktop app; no webview, no Python runtime.
+- **Decompiler in the open**: LIR → SSA-lite → structured pseudo-C; every token maps back
+  to an instruction address; golden snapshots guard every change.
+- **AI that proposes, never silently writes**: proposals carry evidence addresses and a
+  confidence; writes go through the same journaled command bus as manual edits (undoable).
+- **Offline by default**: AI heuristics need no network; LLM providers are opt-in, prompts
+  are redacted + budgeted, results cached and audited locally.
+- **MCP-native**: Claude/Cursor and other agents can query functions, pseudocode, xrefs,
+  strings, imports and call graphs through a read-only MCP server.
+- **Built for triage**: API behaviour tagging, strings/xrefs, runtime symbol recovery
+  (Go/Rust/C++), one-command triage with suspicious-function ranking.
+- **Honest engineering**: documented limitations, measured quality gates, reproducible
+  corpus (MSVC, no CRT, linker map as ground truth).
+
+| | ReCraft | IDA Pro | Ghidra |
+|---|---|---|---|
+| Price / license | AGPL-3.0-only (+ commercial) | commercial | Apache-2.0 |
+| UI | native Rust/egui | native | Java/Swing |
+| Decompiler | self-built (readable, not compilable) | Hex-Rays (mature) | mature |
+| MCP / AI assist | built in (offline-first) | plugins/add-ons | plugins |
+| 1 GiB sample gate | ✅ automated | ✅ | ✅ |
+| IDA plugin ecosystem | ❌ | ✅ | ❌ |
+
+## Documents
+
+[`docs/README.md`](docs/README.md) indexes all design/milestone docs; start with
+[`docs/DESIGN.md`](docs/DESIGN.md), then [`docs/FAQ.md`](docs/FAQ.md) and
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Goals (v1)
 
@@ -28,13 +59,32 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 
 ## Architecture
 
-Headless core + command bus + MCP server + UI client. See [`docs/DESIGN.md`](docs/DESIGN.md).
+Headless core + command bus + MCP server + native UI client. See
+[`docs/DESIGN.md`](docs/DESIGN.md) for the full design.
 
+```mermaid
+flowchart TB
+    subgraph storage
+        fmt[recraft-format<br/>PE32/PE32+] --> st[recraft-storage<br/>SQLite + journal]
+        dec[recraft-decode<br/>iced-x86] --> ir[recraft-ir<br/>LIR lift]
+    end
+    st --> core[recraft-core<br/>Session / Command bus / undo]
+    ir --> core
+    core --> ana[recraft-analysis<br/>CFG / xrefs / strings / symbols]
+    core --> dc[recraft-decompile<br/>L1 structure / L2 types]
+    ana --> dc
+    dc --> app[recraft-app]
+    core --> app
+    app --> cli[recraft-cli]
+    app --> ui[recraft-ui<br/>egui/Glow]
+    app --> mcp[recraft-mcp<br/>stdio JSON-RPC]
+    app --> ai[recraft-ai<br/>explain / proposals / providers]
+    ai --> cli
+    ai --> ui
 ```
-recraft-core ── recraft-analysis ── recraft-ir ── recraft-decompile
-      │                                               │
-      └──────────── recraft-app ── recraft-mcp / recraft-cli / recraft-ui
-```
+
+All writes (rename/comment/prototype/apply_type) go through `recraft-core`'s journaled
+command bus; analysis output lives in derived tables and can be rebuilt at any time.
 
 ## Building
 
@@ -65,7 +115,7 @@ cargo run -p recraft-cli -- xrefs notepad.rcraft --addr entry
 cargo run -p recraft-cli -- imports notepad.rcraft
 cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
 cargo run -p recraft-cli -- metrics notepad.rcraft
-cargo run -p recraft-cli -- golden notepad.rcraft --dir tests/golden/notepad --check
+cargo run -p recraft-cli -- golden notepad.rcraft --dir golden-out --check
 ```
 
 The analysis corpus is built with MSVC (no CRT) and doubles as a regression benchmark
@@ -168,5 +218,8 @@ ReCraft 是一个 AI 原生的逆向工程平台：原生桌面反汇编/反编�
 v1 目标：PE x64/x86 静态分析、自研反编译器（输出可读、不保证可编译）、支持 1GB 样本、
 恶意样本初筛工作流、MCP 原生 AI、egui 原生界面（英文 + 简中）。
 
-当前处于 pre-alpha 阶段，设计文档见 [`docs/DESIGN.md`](docs/DESIGN.md)。
+当前状态：**M0–M3 完成，M4 公开预览准备中**（corpus 覆盖 97.1%、结构化 93.1%，
+1 GiB 门禁通过，AI 默认离线 + propose/apply 可撤销）。设计文档见
+[`docs/DESIGN.md`](docs/DESIGN.md)，里程碑见 [`docs/ROADMAP.md`](docs/ROADMAP.md)，
+常见问题见 [`docs/FAQ.md`](docs/FAQ.md)。
 贡献需要签署 CLA，开源版许可为 AGPL-3.0-only，另有商业许可。

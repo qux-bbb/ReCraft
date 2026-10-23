@@ -34,6 +34,12 @@ desktop.ini
 # Local artifacts
 /artifacts/
 /dist/
+# MSVC scratch output (corpus builds live under corpus/build/)
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
 
 # Harness session state (never commit)
 /.dsh/
