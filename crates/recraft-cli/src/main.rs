@@ -220,6 +220,31 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Search mapped segments for a byte pattern or ASCII string.
+    Search {
+        project: PathBuf,
+        /// Hex byte pattern, e.g. `4d5a` or `4d 5a`.
+        #[arg(long)]
+        bytes: Option<String>,
+        /// ASCII string to search for.
+        #[arg(long)]
+        string: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the call graph between defined functions.
+    Callgraph {
+        project: PathBuf,
+        /// Only show edges touching this address or symbol.
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long, default_value_t = 2000)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// List imported APIs with categories and reference counts.
     Imports {
         project: PathBuf,
@@ -400,6 +425,19 @@ fn run(cli: Cli) -> Result<()> {
             max_text,
             json,
         } => cmd_strings(&project, max_text, json),
+        Commands::Search {
+            project,
+            bytes,
+            string,
+            limit,
+            json,
+        } => cmd_search(&project, bytes.as_deref(), string.as_deref(), limit, json),
+        Commands::Callgraph {
+            project,
+            addr,
+            limit,
+            json,
+        } => cmd_callgraph(&project, addr.as_deref(), limit, json),
         Commands::Xrefs {
             project,
             addr,
@@ -1372,6 +1410,181 @@ fn truncate_string(session: &mut Session, addr: Address, len: u32, max_text: usi
         chars.push('…');
     }
     chars.into_iter().collect()
+}
+
+fn cmd_search(
+    project: &Path,
+    bytes: Option<&str>,
+    string: Option<&str>,
+    limit: usize,
+    as_json: bool,
+) -> Result<()> {
+    let needle = match (bytes, string) {
+        (Some(raw), None) => parse_hex_bytes(raw)?,
+        (None, Some(text)) => text.as_bytes().to_vec(),
+        _ => {
+            return Err(Error::internal(
+                "pass exactly one of --bytes <hex> or --string <ascii>",
+            ));
+        }
+    };
+    let mut session = Session::open(project)?;
+    let hits = session.search_bytes(&needle, limit)?;
+    let functions = session.functions()?;
+    let labelled: Vec<(Address, Option<String>)> = hits
+        .iter()
+        .map(|&hit| {
+            let name = function_containing(&functions, hit)
+                .and_then(|index| session.name_at(functions[index].start).ok().flatten());
+            (hit, name)
+        })
+        .collect();
+    if as_json {
+        let rows: Vec<Value> = labelled
+            .iter()
+            .map(|(addr, name)| json!({"addr": format!("{:#x}", addr.get()), "function": name}))
+            .collect();
+        return json_result(&json!({
+            "pattern_len": needle.len(),
+            "hits": rows,
+            "count": rows.len(),
+            "truncated": rows.len() >= limit,
+        }));
+    }
+    println!(
+        "{} hit(s) for {} byte pattern",
+        labelled.len(),
+        needle.len()
+    );
+    for (addr, name) in &labelled {
+        match name {
+            Some(name) => println!("{:#012x}  {name}", addr.get()),
+            None => println!("{:#012x}", addr.get()),
+        }
+    }
+    Ok(())
+}
+
+fn cmd_callgraph(
+    project: &Path,
+    raw_addr: Option<&str>,
+    limit: usize,
+    as_json: bool,
+) -> Result<()> {
+    let session = Session::open(project)?;
+    let functions = session.functions()?;
+    let filter = match raw_addr {
+        Some(raw) => Some(resolve_address(&session, raw)?),
+        None => None,
+    };
+    let calls = session.all_xrefs(Some(recraft_analysis::XREF_CALL))?;
+    let mut edges: Vec<(usize, usize)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for call in &calls {
+        let Some(from) = function_containing(&functions, call.from) else {
+            continue;
+        };
+        let Some(to) = function_containing(&functions, call.to) else {
+            continue;
+        };
+        if from == to || !seen.insert((from, to)) {
+            continue;
+        }
+        if let Some(filter) = filter {
+            let touches_from = contains(&functions[from], filter);
+            let touches_to = contains(&functions[to], filter);
+            if !touches_from && !touches_to {
+                continue;
+            }
+        }
+        if edges.len() >= limit {
+            break;
+        }
+        edges.push((from, to));
+    }
+    let name_of = |index: usize| {
+        session
+            .name_at(functions[index].start)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| format!("{:#x}", functions[index].start.get()))
+    };
+    if as_json {
+        let rows: Vec<Value> = edges
+            .iter()
+            .map(|(from, to)| {
+                json!({
+                    "from": format!("{:#x}", functions[*from].start.get()),
+                    "from_name": name_of(*from),
+                    "to": format!("{:#x}", functions[*to].start.get()),
+                    "to_name": name_of(*to),
+                })
+            })
+            .collect();
+        return json_result(&json!({
+            "nodes": functions.len(),
+            "edges": rows,
+            "count": rows.len(),
+            "truncated": rows.len() >= limit,
+        }));
+    }
+    println!(
+        "call graph: {} function(s), {} edge(s)",
+        functions.len(),
+        edges.len()
+    );
+    for (from, to) in &edges {
+        println!(
+            "{:#012x} {:<28} -> {:#012x} {}",
+            functions[*from].start.get(),
+            name_of(*from),
+            functions[*to].start.get(),
+            name_of(*to)
+        );
+    }
+    Ok(())
+}
+
+fn parse_hex_bytes(raw: &str) -> Result<Vec<u8>> {
+    let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    let digits = compact
+        .strip_prefix("0x")
+        .or_else(|| compact.strip_prefix("0X"))
+        .unwrap_or(&compact);
+    if digits.is_empty() || digits.len() % 2 != 0 {
+        return Err(Error::internal(format!(
+            "invalid hex pattern (need an even number of digits): {raw}"
+        )));
+    }
+    let mut out = Vec::with_capacity(digits.len() / 2);
+    for index in (0..digits.len()).step_by(2) {
+        out.push(
+            u8::from_str_radix(&digits[index..index + 2], 16).map_err(|_| {
+                Error::internal(format!("invalid hex byte: {}", &digits[index..index + 2]))
+            })?,
+        );
+    }
+    Ok(out)
+}
+
+fn contains(function: &recraft_core::FunctionInfo, addr: Address) -> bool {
+    function.start <= addr && addr < function.end
+}
+
+fn function_containing(functions: &[recraft_core::FunctionInfo], addr: Address) -> Option<usize> {
+    // `functions` is ordered by start address.
+    let mut low = 0usize;
+    let mut high = functions.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if functions[mid].start <= addr {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    let index = low.checked_sub(1)?;
+    contains(&functions[index], addr).then_some(index)
 }
 
 fn cmd_xrefs(

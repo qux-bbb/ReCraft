@@ -113,6 +113,9 @@ cargo run -p recraft-cli -- analyze notepad.rcraft
 cargo run -p recraft-cli -- strings notepad.rcraft
 cargo run -p recraft-cli -- xrefs notepad.rcraft --addr entry
 cargo run -p recraft-cli -- imports notepad.rcraft
+cargo run -p recraft-cli -- search notepad.rcraft --bytes "4d5a" --limit 5
+cargo run -p recraft-cli -- search notepad.rcraft --string "This program"
+cargo run -p recraft-cli -- callgraph notepad.rcraft --json
 cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
 cargo run -p recraft-cli -- metrics notepad.rcraft
 cargo run -p recraft-cli -- golden notepad.rcraft --dir golden-out --check

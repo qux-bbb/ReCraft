@@ -393,37 +393,10 @@ impl McpServer {
         if needle.is_empty() {
             return Err("empty pattern".to_owned());
         }
-        let mut hits = Vec::new();
-        let segments = self.session.segments().to_vec();
-        'segments: for segment in segments {
-            if !segment.perm.is_readable() {
-                continue;
-            }
-            let start = segment.range.start.get();
-            let size = segment.range.len();
-            let chunk_size = 1usize << 20;
-            let overlap = needle.len().saturating_sub(1);
-            let mut offset = 0u64;
-            while offset < size {
-                let len = (size - offset).min(chunk_size as u64) as usize;
-                let chunk = self
-                    .session
-                    .read_bytes(Address::new(start + offset), len)
-                    .map_err(|e| e.to_string())?;
-                for index in 0..=chunk.len().saturating_sub(needle.len()) {
-                    if chunk[index..index + needle.len()] == needle[..] {
-                        hits.push(Address::new(start + offset + index as u64));
-                        if hits.len() >= limit {
-                            break 'segments;
-                        }
-                    }
-                }
-                if offset + len as u64 >= size {
-                    break;
-                }
-                offset += (len - overlap) as u64;
-            }
-        }
+        let hits = self
+            .session
+            .search_bytes(&needle, limit)
+            .map_err(|e| e.to_string())?;
         let items: Vec<Value> = hits
             .iter()
             .map(|addr| json!({"addr": hex(*addr)}))

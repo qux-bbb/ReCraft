@@ -594,6 +594,43 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// Search mapped readable segments for a byte pattern (chunked to bound memory).
+    pub fn search_bytes(&mut self, needle: &[u8], limit: usize) -> Result<Vec<Address>> {
+        if needle.is_empty() {
+            return Err(Error::internal("empty search pattern"));
+        }
+        let limit = limit.max(1);
+        let segments = self.segments().to_vec();
+        let mut hits = Vec::new();
+        'segments: for segment in segments {
+            if !segment.perm.is_readable() {
+                continue;
+            }
+            let start = segment.range.start.get();
+            let size = segment.range.len();
+            let chunk_size = 1usize << 20;
+            let overlap = needle.len().saturating_sub(1);
+            let mut offset = 0u64;
+            while offset < size {
+                let len = (size - offset).min(chunk_size as u64) as usize;
+                let chunk = self.read_bytes(Address::new(start + offset), len)?;
+                for index in 0..=chunk.len().saturating_sub(needle.len()) {
+                    if chunk[index..index + needle.len()] == *needle {
+                        hits.push(Address::new(start + offset + index as u64));
+                        if hits.len() >= limit {
+                            break 'segments;
+                        }
+                    }
+                }
+                if offset + len as u64 >= size {
+                    break;
+                }
+                offset += (len - overlap) as u64;
+            }
+        }
+        Ok(hits)
+    }
+
     /// Number of analysis-produced names currently stored.
     pub fn auto_name_count(&self) -> Result<u64> {
         let count: i64 = self
@@ -1097,6 +1134,22 @@ mod tests {
             })
             .unwrap();
         assert!(!reopened.can_redo().unwrap());
+    }
+
+    #[test]
+    fn search_bytes_finds_known_patterns() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let pattern = session.read_bytes(entry, 4).unwrap();
+        let hits = session.search_bytes(&pattern, 8).unwrap();
+        assert!(hits.contains(&entry), "entry not in {hits:?}");
+        assert!(session.search_bytes(&[], 8).is_err());
+        // A pattern that cannot occur in the image returns no hits.
+        let impossible = vec![0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef];
+        assert!(session.search_bytes(&impossible, 8).unwrap().is_empty());
     }
 
     #[test]

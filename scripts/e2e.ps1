@@ -122,6 +122,16 @@ try {
     $cfg = Invoke-Recraft @('cfg', $project, '--addr', 'entry')
     Assert-Contains $cfg 'blocks' 'control-flow graph'
 
+    Write-Host '[+] byte search and call graph'
+    $search = Invoke-Recraft @('search', $project, '--bytes', '4d5a', '--limit', '5')
+    Assert-Contains $search 'hit(s) for 2 byte pattern' 'byte search reports hits'
+    $searchJson = Invoke-Recraft @('search', $project, '--bytes', '4d5a', '--limit', '1', '--json')
+    Assert-Contains $searchJson '"count"' 'byte search JSON'
+    $graph = Invoke-Recraft @('callgraph', $project, '--limit', '10')
+    Assert-Contains $graph 'call graph:' 'call graph summary'
+    $graphJson = Invoke-Recraft @('callgraph', $project, '--limit', '5', '--json')
+    Assert-Contains $graphJson '"edges"' 'call graph JSON'
+
     Write-Host '[+] user prototype (set, render, undo)'
     $firstFuncAddr = (($funcs -split "`r?`n" | Where-Object { $_ -match '^0x' } | Select-Object -First 1) -split '\s+')[0]
     Invoke-Recraft @('prototype', $project, '--addr', $firstFuncAddr, '--text', 'int entry_proto(void)') | Out-Null

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CLI `search` and `callgraph` (DESIGN §10 headless gaps): `recraft search <project>
+  --bytes <hex>|--string <ascii> [--limit] [--json]` scans readable mapped segments
+  (chunked) and labels hits with their containing function; `recraft callgraph <project>
+  [--addr <filter>] [--limit] [--json]` prints function-level call edges built from CALL
+  xrefs. Byte scanning moved into `Session::search_bytes` and the MCP `search_bytes`
+  tool now delegates to it. E2E exercises both commands; README lists examples.
+
 - Typed call arguments: when a callee has a user prototype, pointer parameters cast the
   rendered argument to the declared type (`str_probe((char*)rcx)` for
   `int str_probe(const char* text)`), while scalar parameters stay uncast for
