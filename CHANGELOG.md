@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- UI command palette (DESIGN §8.1 "menu / command palette"): `Ctrl+P` or `F1` opens a
+  fuzzy-filterable list (open/import/analyze/undo/redo/view switch/goto/rename/comment/
+  xrefs/AI suggestions/language) with arrow-key selection and Enter execution; the
+  status-bar hint lists the shortcut in EN/zh-CN. Headless egui test drives the real
+  `Ctrl+P` event (with `Event::ModifiersChanged`), filters to "rename", presses Enter and
+  asserts the edit dialog opens.
+
 - DESIGN §10 CLI convenience: read-only commands (`strings`, `imports`, `funcs`,
   `disasm`, `decompile`, `xrefs`, `cfg`, `metrics`, `golden`, `search`, `callgraph`)
   now accept a PE file path directly and auto-import+analyze it into a temporary

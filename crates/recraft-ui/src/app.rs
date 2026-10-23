@@ -92,6 +92,34 @@ struct EditState {
 /// Selected rename suggestion in the AI panel (index into `ai_proposals`).
 type AiSelection = Option<usize>;
 
+/// Fuzzy command palette state (DESIGN §8.1: menu / command palette).
+#[derive(Debug, Clone, Default)]
+struct PaletteState {
+    query: String,
+    selected: usize,
+}
+
+/// Commands offered by the palette, in display order.
+const PALETTE_COMMANDS: &[(&str, &str, Action)] = &[
+    ("Open project…", "打开项目…", Action::Open),
+    ("Import PE file…", "导入 PE 文件…", Action::Import),
+    ("Analyze (F5)", "分析 (F5)", Action::Analyze),
+    ("Undo (Ctrl+Z)", "撤销 (Ctrl+Z)", Action::Undo),
+    ("Redo (Ctrl+Y)", "重做 (Ctrl+Y)", Action::Redo),
+    ("Switch view (Space)", "切换视图 (Space)", Action::ToggleTab),
+    ("Go to address (G)", "跳转到地址 (G)", Action::GotoDialog),
+    ("Rename (N)", "改名 (N)", Action::EditName),
+    ("Comment (;)", "注释 (;)", Action::EditComment),
+    ("Cross references (X)", "交叉引用 (X)", Action::ShowXrefs),
+    ("AI name suggestions", "AI 命名建议", Action::AiSuggest),
+    (
+        "Toggle language (EN/中文)",
+        "切换语言 (EN/中文)",
+        Action::ToggleLang,
+    ),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     None,
     Open,
@@ -113,6 +141,8 @@ enum Action {
     AiSuggest,
     AiApply,
     AiClear,
+    TogglePalette,
+    PaletteCommand(usize),
 }
 
 pub struct ReCraftApp {
@@ -152,6 +182,7 @@ pub struct ReCraftApp {
     ai_status: String,
     edit: Option<EditState>,
     goto: Option<String>,
+    palette: Option<PaletteState>,
     history: Vec<Address>,
     history_pos: usize,
 }
@@ -194,6 +225,7 @@ impl Default for ReCraftApp {
             ai_status: String::new(),
             edit: None,
             goto: None,
+            palette: None,
             history: Vec::new(),
             history_pos: 0,
         }
@@ -714,8 +746,8 @@ impl ReCraftApp {
                 }
                 ui.separator();
                 ui.weak(self.t(
-                    "G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
-                    "G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格切换伪代码 · Ctrl+Z 撤销 · Esc 后退",
+                    "Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
+                    "Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Ctrl+Z 撤销 · Esc 后退",
                 ));
             });
         });
@@ -1296,6 +1328,78 @@ impl ReCraftApp {
         }
     }
 
+    /// Command palette (Ctrl+P / F1): fuzzy-filtered list of UI commands.
+    fn palette_window(&mut self, ctx: &egui::Context, action: &mut Action) {
+        let Some(mut state) = self.palette.take() else {
+            return;
+        };
+        let lang = self.lang;
+        let query = state.query.to_lowercase();
+        let filtered: Vec<usize> = PALETTE_COMMANDS
+            .iter()
+            .enumerate()
+            .filter(|(_, (en, zh, _))| {
+                query.is_empty() || en.to_lowercase().contains(&query) || zh.contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let labels: Vec<(usize, &'static str)> = filtered
+            .iter()
+            .map(|&index| {
+                (
+                    index,
+                    tr(lang, PALETTE_COMMANDS[index].0, PALETTE_COMMANDS[index].1),
+                )
+            })
+            .collect();
+        state.selected = state.selected.min(labels.len().saturating_sub(1));
+        let mut chosen: Option<usize> = None;
+        let mut open = true;
+        egui::Window::new(tr(lang, "Command palette", "命令面板"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut state.query)
+                        .desired_width(400.0)
+                        .hint_text(tr(lang, "Type a command…", "输入命令…")),
+                );
+                if state.query.is_empty() && !response.has_focus() {
+                    response.request_focus();
+                }
+                if ui.input(|input| input.key_pressed(Key::ArrowDown)) {
+                    state.selected = (state.selected + 1).min(labels.len().saturating_sub(1));
+                }
+                if ui.input(|input| input.key_pressed(Key::ArrowUp)) {
+                    state.selected = state.selected.saturating_sub(1);
+                }
+                if ui.input(|input| input.key_pressed(Key::Enter))
+                    && let Some(&(index, _)) = labels.get(state.selected)
+                {
+                    chosen = Some(index);
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        for (position, &(index, label)) in labels.iter().enumerate() {
+                            if ui
+                                .selectable_label(position == state.selected, label)
+                                .clicked()
+                            {
+                                chosen = Some(index);
+                            }
+                        }
+                    });
+            });
+        if let Some(index) = chosen {
+            *action = Action::PaletteCommand(index);
+        } else if open {
+            self.palette = Some(state);
+        }
+    }
+
     fn goto_window(&mut self, ctx: &egui::Context, action: &mut Action) {
         let Some(mut buffer) = self.goto.take() else {
             return;
@@ -1346,11 +1450,22 @@ impl ReCraftApp {
     // ------------------------------------------------------------- actions --
 
     fn handle_keys(&mut self, ctx: &egui::Context) -> Action {
+        if self.palette.is_some() {
+            if ctx.input(|input| input.key_pressed(Key::Escape)) {
+                return Action::TogglePalette;
+            }
+            // The palette's text field owns the keyboard while it is open.
+            return Action::None;
+        }
         if self.edit.is_some() || self.goto.is_some() || ctx.egui_wants_keyboard_input() {
             return Action::None;
         }
         let mut action = Action::None;
         ctx.input(|input| {
+            if (input.modifiers.command && input.key_pressed(Key::P)) || input.key_pressed(Key::F1)
+            {
+                action = Action::TogglePalette;
+            }
             if input.modifiers.command && input.key_pressed(Key::Z) {
                 action = Action::Undo;
             }
@@ -1464,6 +1579,20 @@ impl ReCraftApp {
                 self.ai_proposals.clear();
                 self.ai_selected = None;
                 self.ai_status.clear();
+            }
+            Action::TogglePalette => {
+                self.palette = if self.palette.is_some() {
+                    None
+                } else {
+                    Some(PaletteState::default())
+                };
+            }
+            Action::PaletteCommand(index) => {
+                self.palette = None;
+                if let Some((_, _, command)) = PALETTE_COMMANDS.get(index) {
+                    let command = *command;
+                    self.apply_action(ctx, command);
+                }
             }
             Action::Undo => {
                 let result = self.session.as_mut().map(Session::undo);
@@ -1585,6 +1714,7 @@ impl ReCraftApp {
         self.central(root, &mut action);
         self.edit_window(&ctx, &mut action);
         self.goto_window(&ctx, &mut action);
+        self.palette_window(&ctx, &mut action);
         self.apply_action(&ctx, action);
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
@@ -1935,6 +2065,76 @@ mod tests {
             app.side_tab,
             SideTab::Xrefs,
             "X should open the xrefs panel"
+        );
+    }
+
+    #[test]
+    fn command_palette_opens_and_executes_a_command() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-palette.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let run = |app: &mut ReCraftApp, input: &egui::RawInput| {
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        };
+        run(&mut app, &input);
+        input
+            .events
+            .push(egui::Event::ModifiersChanged(egui::Modifiers {
+                command: true,
+                ..egui::Modifiers::NONE
+            }));
+        input.events.push(egui::Event::Key {
+            key: egui::Key::P,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                command: true,
+                ..egui::Modifiers::NONE
+            },
+        });
+        run(&mut app, &input);
+        assert!(app.palette.is_some(), "Ctrl+P should open the palette");
+        input
+            .events
+            .push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+
+        // Filter to one command and press Enter.
+        app.palette = Some(PaletteState {
+            query: "rename".to_owned(),
+            selected: 0,
+        });
+        input.events.clear();
+        run(&mut app, &input);
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        run(&mut app, &input);
+        assert!(app.palette.is_none(), "Enter should close the palette");
+        assert!(
+            app.edit.is_some(),
+            "Rename command should open the edit dialog"
         );
     }
 
