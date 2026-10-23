@@ -13,6 +13,7 @@ use iced_x86::Register;
 use recraft_common::{Address, Result};
 use recraft_core::Session;
 use recraft_decode::{FlowKind, Insn};
+use recraft_ir::{RegView, from_iced};
 
 const MAX_FUNCTION_INSTRUCTIONS: usize = 20_000;
 const MAX_TABLE_ENTRIES: usize = 256;
@@ -45,6 +46,15 @@ pub enum EdgeKind {
     JumpTable,
 }
 
+/// One recognised jump table: targets in table order plus the selector register when it
+/// could be traced back to a simple register move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpTable {
+    pub targets: Vec<Address>,
+    /// Register used as the table index after tracing back (`mov eax, ecx` -> ecx).
+    pub selector: Option<RegView>,
+}
+
 /// Control-flow graph for one function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cfg {
@@ -53,8 +63,8 @@ pub struct Cfg {
     pub blocks: Vec<BasicBlock>,
     /// Branches leaving the function range (tail calls, external jumps).
     pub external: Vec<(Address, Address)>,
-    /// Jump tables: dispatch instruction address -> targets in table order.
-    pub jump_tables: BTreeMap<Address, Vec<Address>>,
+    /// Jump tables: dispatch instruction address -> table.
+    pub jump_tables: BTreeMap<Address, JumpTable>,
 }
 
 struct RawInsn {
@@ -98,13 +108,13 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
 
     // Jump tables: recognize indirect jumps fed by an indexed table load.
     let image_base = session.image().image_base.get();
-    let mut tables: BTreeMap<u64, Vec<Address>> = BTreeMap::new();
+    let mut tables: BTreeMap<u64, JumpTable> = BTreeMap::new();
     for index in 0..raw.len() {
         if raw[index].flow != FlowKind::IndirectBranch {
             continue;
         }
-        if let Some(targets) = detect_jump_table(session, &raw, index, start, end, image_base) {
-            tables.insert(raw[index].addr.get(), targets);
+        if let Some(table) = detect_jump_table(session, &raw, index, start, end, image_base) {
+            tables.insert(raw[index].addr.get(), table);
         }
     }
 
@@ -128,8 +138,8 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
             }
         }
     }
-    for targets in tables.values() {
-        for target in targets {
+    for table in tables.values() {
+        for target in &table.targets {
             if *target >= start && *target < end {
                 leaders.insert(target.get());
             }
@@ -241,8 +251,8 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
                     }
                 }
                 FlowKind::IndirectBranch => {
-                    if let Some(targets) = tables.get(&last.addr.get()) {
-                        for target in targets {
+                    if let Some(table) = tables.get(&last.addr.get()) {
+                        for target in &table.targets {
                             if let Some(&index) = by_start.get(&target.get()) {
                                 edges.push((index, EdgeKind::JumpTable));
                             } else {
@@ -282,9 +292,28 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
         external,
         jump_tables: tables
             .into_iter()
-            .map(|(dispatch, targets)| (Address::new(dispatch), targets))
+            .map(|(dispatch, table)| (Address::new(dispatch), table))
             .collect(),
     })
+}
+
+/// Trace the table-index register back through simple `mov dst, src` moves so the
+/// emitted `switch` can name the original selector (often an argument).
+fn trace_selector(raw: &[RawInsn], at: usize, index: Register) -> Option<RegView> {
+    let current = from_iced(index)?;
+    for earlier in (at.saturating_sub(12)..at).rev() {
+        let insn = raw[earlier].insn;
+        let destination = insn.op_register(0);
+        if from_iced(destination).map(|view| view.base) != Some(current.base) {
+            continue;
+        }
+        let source = insn.op_register(1);
+        let source_view = from_iced(source)?;
+        if source_view.base != current.base {
+            return Some(source_view);
+        }
+    }
+    Some(current)
 }
 
 fn detect_jump_table(
@@ -294,7 +323,7 @@ fn detect_jump_table(
     start: Address,
     end: Address,
     image_base: u64,
-) -> Option<Vec<Address>> {
+) -> Option<JumpTable> {
     let jmp = raw[jmp_index].insn;
 
     // Pattern A: `jmp qword ptr [index*scale + table]` with absolute pointers.
@@ -303,7 +332,10 @@ fn detect_jump_table(
     {
         let entry_size = if session.mode().is_64() { 8 } else { 4 };
         if let Some(targets) = read_table(session, Address::new(table), entry_size, 0, start, end) {
-            return Some(targets);
+            return Some(JumpTable {
+                targets,
+                selector: trace_selector(raw, jmp_index, jmp.memory_index()),
+            });
         }
     }
 
@@ -352,7 +384,10 @@ fn detect_jump_table(
                 start,
                 end,
             ) {
-                return Some(targets);
+                return Some(JumpTable {
+                    targets,
+                    selector: trace_selector(raw, index, candidate.memory_index()),
+                });
             }
         }
     }

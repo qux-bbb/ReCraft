@@ -15,6 +15,7 @@ iced-x86 = "1.21.0"
 recraft-common = { workspace = true }
 recraft-core = { workspace = true }
 recraft-decode = { workspace = true }
+recraft-ir.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

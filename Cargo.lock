@@ -2795,6 +2795,7 @@ dependencies = [
  "recraft-common",
  "recraft-core",
  "recraft-decode",
+ "recraft-ir",
  "tempfile",
 ]
 

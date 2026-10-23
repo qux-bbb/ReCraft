@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M2 switch selector recovery: jump tables carry the traced selector register
+  (`mov eax, ecx; ...; mov ecx, [base+rax*4+tbl]; jmp rcx` -> `switch (ecx)`), and L2
+  renders it as `argN` when the selector is still the intact argument. Case bodies are
+  still labelled regions. Tests: L1 selector and L2 argument selector.
+
 - M2 L2 Win32 x86 argument recovery: with a frame pointer, `[ebp+8..]` stack slots become
   `arg1..`; without one, `[esp+4..]` do (until a `push`/`sub esp` makes offsets unstable,
   in which case the heuristic stays conservative). Stack stores never take argument

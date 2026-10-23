@@ -60,7 +60,7 @@ fn structure(session: &mut Session, start: Address, args: Option<ArgNames>) -> R
     for block in &cfg.blocks {
         bodies.push(lift_block(session, block.start, block.end, args.as_ref())?);
     }
-    let mut structurer = Structurer::new(&cfg, bodies);
+    let mut structurer = Structurer::new(&cfg, bodies, args.clone());
     structurer.compute_rpo();
     structurer.compute_dominators();
     structurer.compute_post_dominators();
@@ -119,6 +119,8 @@ struct Block {
     has_table: bool,
     /// Jump-table targets in table (case) order.
     table_targets: Vec<usize>,
+    /// Traced selector register of the jump table, if any.
+    table_selector: Option<recraft_ir::RegView>,
 }
 
 struct Structurer {
@@ -134,10 +136,11 @@ struct Structurer {
     loop_blocks: BTreeMap<usize, BTreeSet<usize>>,
     emitted: Vec<bool>,
     bodies: Vec<BlockLift>,
+    args: Option<ArgNames>,
 }
 
 impl Structurer {
-    fn new(cfg: &Cfg, bodies: Vec<BlockLift>) -> Self {
+    fn new(cfg: &Cfg, bodies: Vec<BlockLift>, args: Option<ArgNames>) -> Self {
         let index_of =
             |address: Address| cfg.blocks.iter().position(|block| block.start == address);
         let mut blocks = Vec::with_capacity(cfg.blocks.len());
@@ -159,14 +162,32 @@ impl Structurer {
                 }
             }
             let lifted = &bodies[index];
-            // Dispatch instruction lives inside the block (usually its last insn).
-            let table_targets = block
-                .edges
+            // Prefer the CFG's own table (ordered targets + traced selector); the
+            // deduplicated JumpTable edges are only a fallback.
+            let dispatch = cfg
+                .jump_tables
                 .iter()
-                .filter(|(_, kind)| *kind == EdgeKind::JumpTable)
-                .map(|(target, _)| *target)
-                .collect();
-            let _ = &cfg.jump_tables;
+                .find(|(addr, _)| **addr >= block.start && **addr < block.end);
+            let (table_targets, table_selector) = if let Some((_, table)) = dispatch {
+                (
+                    table
+                        .targets
+                        .iter()
+                        .filter_map(|target| index_of(*target))
+                        .collect(),
+                    table.selector,
+                )
+            } else {
+                (
+                    block
+                        .edges
+                        .iter()
+                        .filter(|(_, kind)| *kind == EdgeKind::JumpTable)
+                        .map(|(target, _)| *target)
+                        .collect(),
+                    None,
+                )
+            };
             blocks.push(Block {
                 entry: block.start,
                 flow: lifted.flow,
@@ -179,6 +200,7 @@ impl Structurer {
                 },
                 has_table,
                 table_targets,
+                table_selector,
             });
         }
         let mut predecessors = vec![Vec::new(); cfg.blocks.len()];
@@ -201,6 +223,7 @@ impl Structurer {
             loop_blocks: BTreeMap::new(),
             emitted: vec![false; bodies.len()],
             bodies,
+            args,
         }
     }
 
@@ -643,17 +666,29 @@ impl Structurer {
             return;
         }
         let entry = self.blocks[block].entry;
+        // Prefer a traced selector: map argument registers back to `argN` when intact.
+        let selector = self.blocks[block]
+            .table_selector
+            .map(|view| {
+                if let Some(args) = self.args.as_ref()
+                    && let Some(name) = args.name_for(view.base)
+                {
+                    return name.to_owned();
+                }
+                view.name().to_owned()
+            })
+            .unwrap_or_else(|| "index".to_owned());
         lines.push(PseudoLine {
             addr: entry,
             text: format!(
-                "{}/* jump table: {} targets (selector register not recovered yet) */",
+                "{}/* jump table: {} targets, selector={selector} */",
                 indent(level),
                 targets.len()
             ),
         });
         lines.push(PseudoLine {
             addr: entry,
-            text: format!("{}switch (index) {{", indent(level)),
+            text: format!("{}switch ({selector}) {{", indent(level)),
         });
         for (case, target) in targets.iter().enumerate() {
             lines.push(PseudoLine {
@@ -819,11 +854,22 @@ mod tests {
             return;
         };
         let text = render(&mut session, "switcher_big");
-        assert!(text.contains("switch (index)"), "{text}");
+        // The selector register is traced back through the index move.
+        assert!(text.contains("switch (ecx)"), "{text}");
         assert!(text.contains("case 0:"), "{text}");
         assert!(text.contains("case 19:"), "{text}");
         // Case bodies are still emitted as labelled regions.
         assert!(text.contains("loc_"), "{text}");
+    }
+
+    #[test]
+    fn l2_switch_selector_becomes_argument() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "switcher_big").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("switch (arg1)"), "{text}");
     }
 
     #[test]
