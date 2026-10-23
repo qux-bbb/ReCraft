@@ -407,6 +407,7 @@ dependencies = [
  "recraft-app",
  "recraft-common",
  "recraft-core",
+ "recraft-decompile",
  "recraft-format",
  "serde_json",
  "tempfile",
@@ -449,6 +450,7 @@ dependencies = [
  "recraft-common",
  "recraft-core",
  "recraft-ir",
+ "tempfile",
 ]
 
 [[package]]
@@ -465,6 +467,7 @@ version = "0.1.0"
 dependencies = [
  "recraft-common",
  "recraft-decode",
+ "serde",
 ]
 
 [[package]]

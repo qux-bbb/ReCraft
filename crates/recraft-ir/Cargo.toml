@@ -13,3 +13,4 @@ publish = false
 [dependencies]
 recraft-common = { workspace = true }
 recraft-decode = { workspace = true }
+serde = { version = "1.0.229", features = ["derive"] }

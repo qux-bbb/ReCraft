@@ -28,10 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   formatter (mnemonic/operands split for UIs) and a bounded decode cache. 10 unit tests;
   stateless throughput measured at ~46 M instructions/s.
 - `recraft-cli`: `recraft` command line — `info` (PE inspect without a project),
-  `import`, `disasm`, `funcs`, `rename`/`unname`, `comment`/`uncomment`, `mark`,
-  `undo`, `redo`, with `--json` output and symbol/`entry` address resolution.
-  First end-to-end flow verified on `notepad.exe`: import → disasm at entry →
-  rename/comment (Chinese) → undo → reopen (separate process) still shows the edits.
+  `import`, `disasm`, `decompile`, `funcs`, `rename`/`unname`, `comment`/`uncomment`,
+  `mark`, `undo`, `redo`, with `--json` output and symbol/`entry` address resolution.
+  Verified end-to-end on `notepad.exe`: import → disasm at entry → rename/comment
+  (CJK) → L0 pseudo-C → undo → reopen in a new process still shows the edits.
+- `recraft-ir`: register views (al/ax/eax/rax as one base register), expression arena,
+  straight-line statements, x86/x64 lifting for mov/movzx/movsx/lea/arith/inc/dec/
+  shifts/cmp/test/call/jmp/jcc/ret, and lazy flags (only the comparison feeding the
+  next branch is tracked). Unsupported instructions become intrinsics that keep the
+  original assembly — lifting never fails. 10 unit tests.
+- `recraft-decompile`: **L0 pseudo-C** renderer — flat, instruction-faithful C-like
+  output with true/signed displacement formatting, local labels for in-range branches,
+  tail-call rendering for out-of-range jumps, call/name resolution and per-line source
+  addresses for cross-highlighting. 2 integration tests on `notepad.exe`.
 - `recraft-core`: session over the project database — segment map from the PE loader,
   4-bit-per-byte flags with a 64 KiB page cache, names/comments/functions, page-cached
   image reads (VA → file offset), linear disassembly view, and the command bus with

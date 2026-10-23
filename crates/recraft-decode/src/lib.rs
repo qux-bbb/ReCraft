@@ -200,6 +200,100 @@ impl Insn {
             .any(|index| self.instruction.op_kind(index) == iced_x86::OpKind::Memory)
     }
 
+    // ---- raw iced accessors (operands, memory, immediates) -------------------
+    // Thin delegations so IR/analysis code does not need to reach through
+    // `instruction()` for the most common queries.
+
+    #[inline]
+    pub fn op_count(&self) -> u32 {
+        self.instruction.op_count()
+    }
+
+    #[inline]
+    pub fn op_kind(&self, index: u32) -> iced_x86::OpKind {
+        self.instruction.op_kind(index)
+    }
+
+    #[inline]
+    pub fn op_register(&self, index: u32) -> iced_x86::Register {
+        self.instruction.op_register(index)
+    }
+
+    #[inline]
+    pub fn memory_segment(&self) -> iced_x86::Register {
+        self.instruction.memory_segment()
+    }
+
+    #[inline]
+    pub fn memory_base(&self) -> iced_x86::Register {
+        self.instruction.memory_base()
+    }
+
+    #[inline]
+    pub fn memory_index(&self) -> iced_x86::Register {
+        self.instruction.memory_index()
+    }
+
+    #[inline]
+    pub fn memory_index_scale(&self) -> u32 {
+        self.instruction.memory_index_scale()
+    }
+
+    #[inline]
+    pub fn memory_displacement64(&self) -> u64 {
+        self.instruction.memory_displacement64()
+    }
+
+    #[inline]
+    pub fn memory_size(&self) -> iced_x86::MemorySize {
+        self.instruction.memory_size()
+    }
+
+    #[inline]
+    pub fn is_ip_rel_memory_operand(&self) -> bool {
+        self.instruction.is_ip_rel_memory_operand()
+    }
+
+    #[inline]
+    pub fn immediate8(&self) -> u8 {
+        self.instruction.immediate8()
+    }
+
+    #[inline]
+    pub fn immediate8to16(&self) -> i16 {
+        self.instruction.immediate8to16()
+    }
+
+    #[inline]
+    pub fn immediate8to32(&self) -> i32 {
+        self.instruction.immediate8to32()
+    }
+
+    #[inline]
+    pub fn immediate8to64(&self) -> i64 {
+        self.instruction.immediate8to64()
+    }
+
+    #[inline]
+    pub fn immediate16(&self) -> u16 {
+        self.instruction.immediate16()
+    }
+
+    #[inline]
+    pub fn immediate32(&self) -> u32 {
+        self.instruction.immediate32()
+    }
+
+    #[inline]
+    pub fn immediate32to64(&self) -> i64 {
+        self.instruction.immediate32to64()
+    }
+
+    #[inline]
+    pub fn immediate64(&self) -> u64 {
+        self.instruction.immediate64()
+    }
+
     /// Format as Intel syntax, e.g. `mov rax, rbx` (allocates; for UI/CLI/tests).
     pub fn asm(&self) -> String {
         let mut formatter = Formatter::new();

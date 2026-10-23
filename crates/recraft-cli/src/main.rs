@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use recraft_common::{Address, AddressRange, Error, Result};
 use recraft_core::{CodeData, Command, CommentKind, Session};
+use recraft_decompile::pseudocode_l0;
 use serde_json::{Value, json};
 
 #[derive(Parser)]
@@ -51,6 +52,20 @@ enum Commands {
         count: usize,
         #[arg(long)]
         json: bool,
+    },
+    /// Render L0 pseudo-C for a function.
+    Decompile {
+        project: PathBuf,
+        /// Function start: `0x...`, decimal, a symbol name, or `entry`.
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long, default_value_t = 200)]
+        max_insns: usize,
+        #[arg(long)]
+        json: bool,
+        /// Prefix each line with its source address.
+        #[arg(long)]
+        addresses: bool,
     },
     /// List defined functions.
     Funcs {
@@ -145,6 +160,13 @@ fn run(cli: Cli) -> Result<()> {
             json,
         } => cmd_disasm(&project, addr.as_deref(), count, json),
         Commands::Funcs { project, json } => cmd_funcs(&project, json),
+        Commands::Decompile {
+            project,
+            addr,
+            max_insns,
+            json,
+            addresses,
+        } => cmd_decompile(&project, addr.as_deref(), max_insns, json, addresses),
         Commands::Rename {
             project,
             addr,
@@ -471,6 +493,49 @@ fn cmd_funcs(project: &Path, as_json: bool) -> Result<()> {
             function.end.get(),
             function.end.get().saturating_sub(function.start.get())
         );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- decompile ----
+
+fn cmd_decompile(
+    project: &Path,
+    addr: Option<&str>,
+    max_insns: usize,
+    as_json: bool,
+    with_addresses: bool,
+) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let start = match addr {
+        Some(raw) => resolve_address(&session, raw)?,
+        None => session.entry_point(),
+    };
+    let code = pseudocode_l0(&mut session, start, max_insns)?;
+
+    if as_json {
+        let lines: Vec<Value> = code
+            .lines
+            .iter()
+            .map(|line| {
+                json!({
+                    "addr": format!("{:#x}", line.addr.get()),
+                    "text": line.text,
+                })
+            })
+            .collect();
+        return json_result(&json!({
+            "start": format!("{:#x}", code.func_start.get()),
+            "lines": lines,
+        }));
+    }
+
+    for line in &code.lines {
+        if with_addresses {
+            println!("{:#012x}  {}", line.addr.get(), line.text);
+        } else {
+            println!("{}", line.text);
+        }
     }
     Ok(())
 }
