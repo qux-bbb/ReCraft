@@ -808,9 +808,10 @@ fn install_initial_names(conn: &Connection, image: &PeImage) -> Result<()> {
         if name.is_empty() {
             continue;
         }
+        let display = recraft_common::demangle(name).unwrap_or_else(|| name.to_owned());
         let va = image.image_base.get().saturating_add(u64::from(export.rva));
         statement
-            .execute(params![va as i64, name, NAME_KIND_LOADER])
+            .execute(params![va as i64, display, NAME_KIND_LOADER])
             .map_err(command::db_err)?;
     }
     // Name IAT slots `MODULE.dll!Api` so disassembly and xrefs resolve imports.
@@ -820,7 +821,10 @@ fn install_initial_names(conn: &Connection, image: &PeImage) -> Result<()> {
                 continue;
             }
             let text = match (&function.name, function.ordinal) {
-                (Some(name), _) if !name.is_empty() => format!("{}!{name}", module.name),
+                (Some(name), _) if !name.is_empty() => {
+                    let api = recraft_common::demangle(name).unwrap_or_else(|| name.clone());
+                    format!("{}!{api}", module.name)
+                }
                 (_, Some(ordinal)) => format!("{}!#{ordinal}", module.name),
                 _ => continue,
             };
@@ -1022,5 +1026,46 @@ mod tests {
         let lines = session.disasm(entry, 1).unwrap();
         assert_eq!(lines[0].name.as_deref(), Some("entry_renamed"));
         assert_eq!(lines[0].comment.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn cpp_export_names_are_demangled() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/cpp/corpus-cpp.dll");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("cpp.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+
+        let mut demangled = Vec::new();
+        for export in &session.image().exports {
+            let Some(name) = export.name.as_deref() else {
+                continue;
+            };
+            let va = Address::new(session.image().image_base.get() + u64::from(export.rva));
+            if let Some(stored) = session.name_at(va).unwrap() {
+                assert!(
+                    !stored.starts_with('?'),
+                    "export {name} was not demangled: {stored}"
+                );
+                demangled.push(stored);
+            }
+        }
+        assert!(!demangled.is_empty(), "no export names were demangled");
+        assert!(
+            demangled
+                .iter()
+                .any(|name| name.contains("DemoTarget::get")),
+            "DemoTarget::get missing: {demangled:?}"
+        );
+        // Overloads include parameter types so they stay distinguishable.
+        let overloads: Vec<&String> = demangled
+            .iter()
+            .filter(|name| name.contains("overloaded"))
+            .collect();
+        assert!(overloads.len() >= 2, "{demangled:?}");
+        assert_ne!(overloads[0], overloads[1]);
     }
 }

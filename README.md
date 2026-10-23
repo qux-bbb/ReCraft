@@ -81,6 +81,16 @@ cargo run -p recraft-cli -- analyze go.rcraft
 cargo run -p recraft-cli -- funcs go.rcraft    # main.main, runtime.*, ...
 ```
 
+A C++ sample validates symbol demangling:
+
+```powershell
+.\corpus\build-cpp.ps1
+cargo run -p recraft-cli -- import .\corpus\build\cpp\corpus-cpp.dll -o cpp.rcraft
+cargo run -p recraft-cli -- analyze cpp.rcraft
+cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) const, ...
+cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
+```
+
 The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
 during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
 

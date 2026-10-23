@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use recraft_analysis::{analyze, persist};
-use recraft_common::{Address, AddressRange, Error, Result};
+use recraft_common::{Address, AddressRange, Error, Result, demangle};
 use recraft_core::{CodeData, Command, CommentKind, Session};
 use recraft_decompile::pseudocode_l0;
 use serde_json::{Value, json};
@@ -88,6 +88,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Demangle a symbol name (MSVC C++, Rust legacy and v0).
+    Demangle { name: String },
     /// List strings extracted by analysis (run `analyze` first).
     Strings {
         project: PathBuf,
@@ -216,6 +218,13 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Funcs { project, json } => cmd_funcs(&project, json),
         Commands::Analyze { project, json } => cmd_analyze(&project, json),
         Commands::Eval { file, json } => cmd_eval(&file, json),
+        Commands::Demangle { name } => {
+            match demangle(&name) {
+                Some(demangled) => println!("{demangled}"),
+                None => println!("{name}"),
+            }
+            Ok(())
+        }
         Commands::Strings {
             project,
             max_text,

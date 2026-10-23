@@ -11,5 +11,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+msvc-demangler = "0.11.0"
+rustc-demangle = "0.1.28"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror.workspace = true

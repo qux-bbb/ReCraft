@@ -13,6 +13,10 @@ use std::ops::{Add, AddAssign, Sub};
 
 use serde::{Deserialize, Serialize};
 
+mod demangle;
+
+pub use demangle::demangle;
+
 /// A virtual address inside a program being analysed.
 ///
 /// Addresses are intentionally a distinct type: mixing them with file offsets or

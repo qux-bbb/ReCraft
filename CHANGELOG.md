@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 symbol demangling: MSVC C++ names (`?name@scope@@...`, constructors, overloads —
+  parameter types kept, return type dropped) and Rust legacy/v0 names via
+  `msvc-demangler` + `rustc-demangle` (legacy hash suffix stripped). Applied to export
+  and import names at load time, so disassembly, symbol lookup and `funcs` show readable
+  names. New `recraft demangle <name>` command and a CRT-free C++ corpus with namespaces,
+  class methods and overloads.
+
 - M1 Go runtime recovery: scans readable segments for the `pcHeader` magic (Go 1.16 /
   1.18 / 1.20+ layouts, including Go 1.26 where `textStart` was removed), validates
   candidates, then walks `functab` → `_func` → NUL-terminated `funcnametab` names.

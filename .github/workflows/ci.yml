@@ -21,6 +21,9 @@ jobs:
       - name: build analysis corpus (MSVC, CRT-free)
         shell: pwsh
         run: pwsh -NoProfile -File corpus/build.ps1
+      - name: build C++ analysis corpus (MSVC, CRT-free)
+        shell: pwsh
+        run: pwsh -NoProfile -File corpus/build-cpp.ps1
       - name: build Go analysis corpus (skipped when Go is unavailable)
         shell: pwsh
         run: |
