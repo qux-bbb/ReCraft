@@ -83,6 +83,8 @@ struct Block {
     not_taken: Option<usize>,
     goto_target: Option<usize>,
     has_table: bool,
+    /// Jump-table targets in table (case) order.
+    table_targets: Vec<usize>,
 }
 
 struct Structurer {
@@ -123,6 +125,14 @@ impl Structurer {
                 }
             }
             let lifted = &bodies[index];
+            // Dispatch instruction lives inside the block (usually its last insn).
+            let table_targets = block
+                .edges
+                .iter()
+                .filter(|(_, kind)| *kind == EdgeKind::JumpTable)
+                .map(|(target, _)| *target)
+                .collect();
+            let _ = &cfg.jump_tables;
             blocks.push(Block {
                 entry: block.start,
                 flow: lifted.flow,
@@ -134,6 +144,7 @@ impl Structurer {
                     _ => goto_target,
                 },
                 has_table,
+                table_targets,
             });
         }
         let mut predecessors = vec![Vec::new(); cfg.blocks.len()];
@@ -402,7 +413,7 @@ impl Structurer {
             self.emitted[current] = true;
             self.emit_simple(lines, current, level);
             if self.blocks[current].has_table {
-                self.emit_raw_flow(lines, current, level);
+                self.emit_switch(lines, current, level);
                 return;
             }
 
@@ -591,6 +602,42 @@ impl Structurer {
         Some(exit)
     }
 
+    fn emit_switch(&mut self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
+        let targets = self.blocks[block].table_targets.clone();
+        if targets.is_empty() {
+            self.emit_raw_flow(lines, block, level);
+            return;
+        }
+        let entry = self.blocks[block].entry;
+        lines.push(PseudoLine {
+            addr: entry,
+            text: format!(
+                "{}/* jump table: {} targets (selector register not recovered yet) */",
+                indent(level),
+                targets.len()
+            ),
+        });
+        lines.push(PseudoLine {
+            addr: entry,
+            text: format!("{}switch (index) {{", indent(level)),
+        });
+        for (case, target) in targets.iter().enumerate() {
+            lines.push(PseudoLine {
+                addr: self.blocks[*target].entry,
+                text: format!(
+                    "{}case {case}: goto loc_{:x};",
+                    indent(level + 1),
+                    self.blocks[*target].entry.get()
+                ),
+            });
+        }
+        lines.push(PseudoLine {
+            addr: entry,
+            text: format!("{}}}", indent(level)),
+        });
+        // Case bodies are emitted as labelled regions by the unvisited-block pass.
+    }
+
     fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
         for statement in &self.bodies[block].statements {
             lines.push(PseudoLine {
@@ -733,14 +780,15 @@ mod tests {
     }
 
     #[test]
-    fn switch_falls_back_to_labelled_regions() {
+    fn switch_is_structured_from_jump_table() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;
         };
         let text = render(&mut session, "switcher_big");
-        assert!(!text.is_empty(), "empty output");
-        // Table dispatch cannot be structured yet, so unreached case blocks appear as
-        // labelled regions instead of being dropped.
+        assert!(text.contains("switch (index)"), "{text}");
+        assert!(text.contains("case 0:"), "{text}");
+        assert!(text.contains("case 19:"), "{text}");
+        // Case bodies are still emitted as labelled regions.
         assert!(text.contains("loc_"), "{text}");
     }
 

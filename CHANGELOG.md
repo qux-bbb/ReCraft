@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M2 switch structuring: the CFG now carries its jump tables (dispatch address ->
+  targets in table order), and the L1 structurer emits `switch (index) { case N: goto
+  loc_...; }` with case bodies appended as labelled regions. The selector register is
+  still a placeholder (documented in `docs/M2.md`).
+
 - M2 L1 structure recovery: a conservative structurer turns the CFG into `if`/`else`
   diamonds, early-exit `if`s and natural `while` loops using dominators/post-dominators
   and back-edge loop detection; unsupported shapes fall back to labelled `goto` regions

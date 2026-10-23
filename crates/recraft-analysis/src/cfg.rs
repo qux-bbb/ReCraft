@@ -53,6 +53,8 @@ pub struct Cfg {
     pub blocks: Vec<BasicBlock>,
     /// Branches leaving the function range (tail calls, external jumps).
     pub external: Vec<(Address, Address)>,
+    /// Jump tables: dispatch instruction address -> targets in table order.
+    pub jump_tables: BTreeMap<Address, Vec<Address>>,
 }
 
 struct RawInsn {
@@ -90,6 +92,7 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
             entry: 0,
             blocks: Vec::new(),
             external: Vec::new(),
+            jump_tables: BTreeMap::new(),
         });
     }
 
@@ -277,6 +280,10 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
         entry,
         blocks,
         external,
+        jump_tables: tables
+            .into_iter()
+            .map(|(dispatch, targets)| (Address::new(dispatch), targets))
+            .collect(),
     })
 }
 
