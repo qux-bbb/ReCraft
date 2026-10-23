@@ -19,6 +19,7 @@ egui = "0.36.2"
 rfd = "0.17.2"
 recraft-decompile.workspace = true
 recraft-analysis.workspace = true
+recraft-ai = { version = "0.1.0", path = "../recraft-ai" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

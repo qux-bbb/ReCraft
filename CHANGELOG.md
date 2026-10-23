@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- UI AI proposal panel: a new left-side "AI" tab lists rename proposals with confidence,
+  rationale and evidence links; selecting one and pressing Apply sends it through the
+  same journaled command bus (undoable), while nothing is ever applied implicitly.
+  `suggest_names` preloads the string/xref tables once, so generating suggestions no
+  longer scales quadratically with function count. Headless UI test renders the panel
+  and applies a proposal end to end.
+
 - M3 AI layer (offline half + write protocol): `recraft ai explain` builds a function
   summary from API tags, referenced strings and call edges; `recraft ai suggest`
   produces rename Proposals for `sub_*` functions with evidence addresses, confidence

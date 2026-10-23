@@ -2922,6 +2922,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "recraft-ai",
  "recraft-analysis",
  "recraft-app",
  "recraft-common",

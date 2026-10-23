@@ -45,6 +45,7 @@ enum SideTab {
     Strings,
     Imports,
     Xrefs,
+    Ai,
 }
 
 struct ImportRow {
@@ -88,6 +89,9 @@ struct EditState {
     just_opened: bool,
 }
 
+/// Selected rename suggestion in the AI panel (index into `ai_proposals`).
+type AiSelection = Option<usize>;
+
 enum Action {
     None,
     Open,
@@ -105,6 +109,9 @@ enum Action {
     Page(i32),
     Back,
     Navigate(Address),
+    AiSuggest,
+    AiApply,
+    AiClear,
 }
 
 pub struct ReCraftApp {
@@ -138,6 +145,10 @@ pub struct ReCraftApp {
     cfg_for: Option<Address>,
     cfg_dirty: bool,
     analysis: Option<AnalysisJob>,
+    /// AI rename suggestions (never applied implicitly).
+    ai_proposals: Vec<recraft_ai::Proposal>,
+    ai_selected: AiSelection,
+    ai_status: String,
     edit: Option<EditState>,
     goto: Option<String>,
     history: Vec<Address>,
@@ -177,6 +188,9 @@ impl Default for ReCraftApp {
             cfg_for: None,
             cfg_dirty: false,
             analysis: None,
+            ai_proposals: Vec::new(),
+            ai_selected: None,
+            ai_status: String::new(),
             edit: None,
             goto: None,
             history: Vec::new(),
@@ -712,6 +726,7 @@ impl ReCraftApp {
         let strings_label = self.t("Strings", "字符串");
         let imports_label = self.t("Imports", "导入");
         let xrefs_label = self.t("Xrefs", "引用");
+        let ai_label = self.t("AI", "AI");
         egui::Panel::left("recraft_side")
             .default_size(280.0)
             .resizable(true)
@@ -722,6 +737,7 @@ impl ReCraftApp {
                     ui.selectable_value(&mut self.side_tab, SideTab::Strings, strings_label);
                     ui.selectable_value(&mut self.side_tab, SideTab::Imports, imports_label);
                     ui.selectable_value(&mut self.side_tab, SideTab::Xrefs, xrefs_label);
+                    ui.selectable_value(&mut self.side_tab, SideTab::Ai, ai_label);
                 });
                 ui.separator();
                 if self.side_tab == SideTab::Strings {
@@ -836,8 +852,102 @@ impl ReCraftApp {
                                 }
                             }
                         }
+                        SideTab::Ai => self.ai_panel(ui, action),
                     });
             });
+    }
+
+    fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let suggest = self.t("Suggest names", "建议命名");
+        let apply_label = self.t("Apply selected", "应用选中");
+        let clear = self.t("Clear", "清空");
+        let has_selection = self
+            .ai_selected
+            .and_then(|index| self.ai_proposals.get(index))
+            .is_some();
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(suggest).clicked() {
+                *action = Action::AiSuggest;
+            }
+            if ui
+                .add_enabled(has_selection, egui::Button::new(apply_label))
+                .clicked()
+            {
+                *action = Action::AiApply;
+            }
+            if ui.button(clear).clicked() {
+                *action = Action::AiClear;
+            }
+        });
+        if !self.ai_status.is_empty() {
+            ui.weak(&self.ai_status);
+        }
+        if self.ai_proposals.is_empty() {
+            ui.weak(self.t(
+                "No suggestions yet — run Analyze, then press Suggest names.",
+                "还没有建议——先运行 Analyze，再点“建议命名”。",
+            ));
+            return;
+        }
+        ui.separator();
+        for (index, proposal) in self.ai_proposals.iter().enumerate() {
+            let selected = self.ai_selected == Some(index);
+            let label = format!(
+                "{:.2}  {:#012x} -> {}",
+                proposal.confidence,
+                proposal.target.get(),
+                proposal.value
+            );
+            if ui.selectable_label(selected, label).clicked() {
+                self.ai_selected = if selected { None } else { Some(index) };
+            }
+            ui.weak(format!(
+                "{} ({} evidence)",
+                proposal.rationale,
+                proposal.evidence.len()
+            ));
+            if let Some(evidence) = proposal.evidence.first()
+                && ui
+                    .link(format!("evidence {:#x}", evidence.addr.get()))
+                    .clicked()
+            {
+                *action = Action::Navigate(evidence.addr);
+            }
+        }
+    }
+
+    /// Apply the selected AI proposal through the command bus (journaled/undoable).
+    fn apply_ai_selection(&mut self) -> bool {
+        let Some(index) = self.ai_selected else {
+            return false;
+        };
+        let Some(proposal) = self.ai_proposals.get(index).cloned() else {
+            return false;
+        };
+        let result = self
+            .session
+            .as_mut()
+            .map(|session| recraft_ai::apply_proposals(session, std::slice::from_ref(&proposal)));
+        match result {
+            Some(Ok(1)) => {
+                self.functions_dirty = true;
+                self.disasm_dirty = true;
+                self.ai_proposals.remove(index);
+                self.ai_selected = None;
+                self.ai_status = format!("renamed {:#x}", proposal.target.get());
+                self.set_status(format!(
+                    "applied 1 proposal ({:#x} -> {}); undo with Ctrl+Z",
+                    proposal.target.get(),
+                    proposal.value
+                ));
+                true
+            }
+            Some(Err(error)) => {
+                self.set_error(error);
+                false
+            }
+            _ => false,
+        }
     }
 
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -1322,6 +1432,36 @@ impl ReCraftApp {
                     self.set_status(self.t("cancelling…", "正在取消…").to_owned());
                 }
             }
+            Action::AiSuggest => {
+                let result = self
+                    .session
+                    .as_mut()
+                    .map(|session| recraft_ai::suggest_names(session, 50));
+                match result {
+                    Some(Ok(proposals)) => {
+                        self.ai_status = format!("{} suggestion(s)", proposals.len());
+                        self.ai_proposals = proposals;
+                        self.ai_selected = None;
+                        self.set_status(
+                            self.t(
+                                "AI suggestions ready — review before applying",
+                                "AI 建议已生成——应用前请 review",
+                            )
+                            .to_owned(),
+                        );
+                    }
+                    Some(Err(error)) => self.set_error(error),
+                    None => self.set_status(self.t("no project", "无项目").to_owned()),
+                }
+            }
+            Action::AiApply => {
+                self.apply_ai_selection();
+            }
+            Action::AiClear => {
+                self.ai_proposals.clear();
+                self.ai_selected = None;
+                self.ai_status.clear();
+            }
             Action::Undo => {
                 let result = self.session.as_mut().map(Session::undo);
                 match result {
@@ -1720,6 +1860,36 @@ mod tests {
                     || line.text.starts_with("int64 "))),
             "L2 signature missing"
         );
+
+        // AI proposal diff panel: render suggestions, then apply one through the bus.
+        let target = app.functions.first().expect("functions").start;
+        app.ai_proposals = vec![recraft_ai::Proposal {
+            kind: recraft_ai::ProposalKind::Rename,
+            target,
+            value: "ai_suggested_name".to_owned(),
+            confidence: 0.5,
+            rationale: "unit test evidence".to_owned(),
+            evidence: vec![recraft_ai::Evidence {
+                addr: target,
+                kind: "api_tag",
+                text: "test".to_owned(),
+            }],
+        }];
+        app.ai_selected = Some(0);
+        app.side_tab = SideTab::Ai;
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        assert_eq!(app.ai_proposals.len(), 1, "AI panel lost the proposal");
+        assert!(app.apply_ai_selection(), "AI apply failed");
+        let session = app.session.as_ref().unwrap();
+        assert_eq!(
+            session.name_at(target).unwrap().as_deref(),
+            Some("ai_suggested_name")
+        );
+        assert!(app.ai_proposals.is_empty(), "applied proposal not removed");
     }
 
     /// Runs the background worker function directly (no UI thread): it must persist

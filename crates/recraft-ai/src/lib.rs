@@ -323,6 +323,13 @@ pub fn suggest_names(session: &mut Session, limit: usize) -> Result<Vec<Proposal
     let limit = limit.clamp(1, MAX_SUGGESTIONS);
     let functions = session.functions()?;
     let api_tags = session.all_api_tags()?;
+    // Preload once: per-function lookups over all strings/xrefs would be quadratic.
+    let string_entries = session.strings()?;
+    let string_index: BTreeMap<u64, (u32, i64)> = string_entries
+        .iter()
+        .map(|entry| (entry.addr.get(), (entry.len, entry.enc)))
+        .collect();
+    let data_refs = session.all_xrefs(Some(XREF_DATA))?;
     let mut proposals = Vec::new();
     for function in &functions {
         if proposals.len() >= limit {
@@ -340,7 +347,13 @@ pub fn suggest_names(session: &mut Session, limit: usize) -> Result<Vec<Proposal
             .filter(|(site, _, _)| *site >= function.start && *site < function.end)
             .cloned()
             .collect();
-        let strings = referenced_strings(session, function.start, function.end)?;
+        let strings = strings_in_range(
+            session,
+            &string_index,
+            &data_refs,
+            function.start,
+            function.end,
+        );
         if apis.is_empty() && strings.is_empty() {
             continue;
         }
@@ -534,13 +547,24 @@ fn referenced_strings(
         .map(|entry| (entry.addr.get(), (entry.len, entry.enc)))
         .collect();
     let data_refs = session.all_xrefs(Some(XREF_DATA))?;
+    Ok(strings_in_range(session, &index, &data_refs, start, end))
+}
+
+/// Strings referenced from code inside `[start, end)` given preloaded tables.
+fn strings_in_range(
+    session: &mut Session,
+    string_index: &BTreeMap<u64, (u32, i64)>,
+    data_refs: &[recraft_core::XrefEntry],
+    start: Address,
+    end: Address,
+) -> Vec<(Address, String)> {
     let mut seen = BTreeSet::new();
     let mut found = Vec::new();
     for xref in data_refs {
         if xref.from < start || xref.from >= end || !seen.insert(xref.to.get()) {
             continue;
         }
-        if let Some((len, enc)) = index.get(&xref.to.get()) {
+        if let Some((len, enc)) = string_index.get(&xref.to.get()) {
             let text = read_string(session, xref.to, *len, *enc);
             found.push((xref.to, text));
             if found.len() >= 32 {
@@ -548,7 +572,7 @@ fn referenced_strings(
             }
         }
     }
-    Ok(found)
+    found
 }
 
 fn outgoing_calls(

@@ -65,11 +65,23 @@ recraft ai apply notepad.rcraft proposals.json --yes
   triage 类别非空、Proposal JSON roundtrip。
 - CLI 冒烟纳入 `scripts/e2e.ps1`（triage JSON / suggest --out / apply --yes）。
 
+## UI proposal 面板（M3）
+
+左侧新增 **AI** 页签：
+
+- **Suggest names**：调用 `suggest_names`，把 Proposal 列表展示为 `置信度 地址 -> 名称`，
+  下方显示理由与证据数量；证据链接可跳转到对应地址。
+- 单选 proposal → **Apply selected**：经 `Command` 总线执行（journaled，`Ctrl+Z` 可撤销），
+  应用后从列表移除并刷新反汇编/函数列表。
+- **Clear** 清空当前建议。
+
+无项目/未分析时会提示先 Analyze。UI 不会在后台自动应用任何提案。
+
 ## 限制与后续
 
+- **单条选择**：UI 当前一次应用一条 proposal；批量勾选/全选与 diff 预览（before/after
+  名称对比）在后续版本补全。
 - **尚无 LLM provider**：当前全部是确定性启发式；provider 只负责产出同形状 Proposal。
-- **无 UI diff 面板**：M3 后续在 UI 中展示 proposals 列表（证据地址可跳转）→ 勾选 →
-  apply；当前通过 CLI JSON review。
 - 命名质量有限（类别前缀 + 地址）；接入 LLM 后应结合字符串/调用关系生成更自然的名字。
 - 写工具仅 `rename`/`comment`；`set_prototype` / `define_function` / `apply_type` 尚未实现。
 - 自然语言查询（"找所有引用 URL 的函数"）与伪代码润色未实现。
