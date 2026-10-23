@@ -30,6 +30,8 @@ pub struct ArgNames {
     stack: BTreeMap<(Reg, i64), String>,
     /// Inferred parameter types for register arguments (defaults to `int64`).
     types: BTreeMap<Reg, ArgType>,
+    /// Parameter types for x86 stack arguments (from a user prototype, else `int64`).
+    stack_types: BTreeMap<(Reg, i64), ArgType>,
 }
 
 /// Parameter type inferred from how the argument is used.
@@ -124,6 +126,17 @@ impl ArgNames {
             names,
             stack: BTreeMap::new(),
             types,
+            stack_types: BTreeMap::new(),
+        }
+    }
+
+    /// Override x86 stack-argument names/types from a parsed prototype, in stack order.
+    pub fn apply_prototype_x86(&mut self, params: &[ProtoParam]) {
+        let mut keys: Vec<(Reg, i64)> = self.stack.keys().copied().collect();
+        keys.sort_by_key(|(_, offset)| *offset);
+        for ((base, offset), param) in keys.iter().zip(params) {
+            self.stack.insert((*base, *offset), param.name.clone());
+            self.stack_types.insert((*base, *offset), param.ty);
         }
     }
 
@@ -163,11 +176,14 @@ impl ArgNames {
                 format!("{} {name}", ty.c_name())
             })
             .collect();
-        params.extend(
-            self.stack_ordered()
-                .iter()
-                .map(|(_, name)| format!("int64 {name}")),
-        );
+        for ((base, offset), name) in &self.stack {
+            let ty = self
+                .stack_types
+                .get(&(*base, *offset))
+                .copied()
+                .unwrap_or(ArgType::Int64);
+            params.push(format!("{} {name}", ty.c_name()));
+        }
         if params.is_empty() {
             "void".to_owned()
         } else {
@@ -373,6 +389,7 @@ fn recover_x64(session: &mut Session, start: Address, end: Address) -> Result<Ar
         names,
         stack: BTreeMap::new(),
         types,
+        stack_types: BTreeMap::new(),
     })
 }
 
@@ -509,6 +526,7 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
         names: BTreeMap::new(),
         stack,
         types: BTreeMap::new(),
+        stack_types: BTreeMap::new(),
     })
 }
 

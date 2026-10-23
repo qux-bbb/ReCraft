@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- x86 prototypes now map declared parameters onto recovered stack slots in offset
+  order (`[esp+N]`/`[ebp+N]`), including names and types, so a 32-bit function with
+  `int __stdcall stdcall_add(int a, int b)` renders
+  `int32 __stdcall stdcall_add(int32 a, int32 b)` with bodies using `a`/`b`.
+  `ArgNames` gained `stack_types` (signature uses declared types, default int64) and
+  `apply_prototype_x86`; new x86 corpus test.
+
 - Array-subscript rendering: scaled addressing through pointer-typed arguments
   (`[rcx+rax*4]`, `[rcx+rax<<2]`, byte offsets on `char*`) prints as `arg1[index]`
   instead of raw pointer arithmetic; pointer inference now also learns element width

@@ -70,6 +70,8 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             }
             if session.image().is_64 {
                 info.args = ArgNames::from_prototype(&parsed.params);
+            } else {
+                info.args.apply_prototype_x86(&parsed.params);
             }
         }
     }
@@ -928,6 +930,18 @@ mod tests {
         Some((session, dir))
     }
 
+    fn analyzed_x86_corpus() -> Option<(Session, TempDir)> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x86/corpus.exe");
+        let bytes = std::fs::read(path).ok()?;
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("l1-x86.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        Some((session, dir))
+    }
+
     fn function_start(session: &Session, name: &str) -> Option<Address> {
         let address = session.addr_of_name(name).ok().flatten()?;
         session
@@ -1186,6 +1200,27 @@ mod tests {
         );
         assert!(text.contains("arg1["), "{text}");
         assert!(!text.contains("*(u32*)((arg1 +"), "{text}");
+    }
+
+    #[test]
+    fn x86_prototype_maps_stack_arguments() {
+        let Some((mut session, _dir)) = analyzed_x86_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "_stdcall_add@8").expect("stdcall_add");
+        session
+            .execute(recraft_core::Command::SetPrototype {
+                addr: start,
+                text: Some("int __stdcall stdcall_add(int a, int b)".to_owned()),
+            })
+            .unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(
+            text.contains("int32 __stdcall stdcall_add(int32 a, int32 b)"),
+            "{text}"
+        );
+        assert!(text.contains("eax = a;"), "{text}");
+        assert!(text.contains("(eax + b)"), "{text}");
     }
 
     #[test]
