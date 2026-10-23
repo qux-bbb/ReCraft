@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $exports = @(
     'add_leaf', 'branchy', 'loopy', 'switcher', 'caller', 'recursive', 'indirect',
     'nested_loops', 'tailish', 'float_math', 'bitops', 'bytes_op', 'noinline_helper',
-    'uses_helper'
+    'uses_helper', 'corpus_banner', 'corpus_wide_banner', 'corpus_counter_bump'
 ) | ForEach-Object { "/EXPORT:$_" }
 
 $scriptName = if ($Arch -eq 'x64') { 'vcvars64.bat' } else { 'vcvars32.bat' }

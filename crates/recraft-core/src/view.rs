@@ -35,3 +35,23 @@ pub struct FunctionInfo {
     pub start: Address,
     pub end: Address,
 }
+
+/// One extracted string, as stored in the `string` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringEntry {
+    pub addr: Address,
+    /// Length in bytes (including the terminator when present).
+    pub len: u32,
+    /// Encoding: see `recraft_analysis` string encoding constants.
+    pub enc: i64,
+    pub kind: i64,
+}
+
+/// One cross-reference, as stored in the `xref` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XrefEntry {
+    pub from: Address,
+    pub to: Address,
+    /// Kind: see `recraft_analysis` xref kind constants.
+    pub kind: i64,
+}

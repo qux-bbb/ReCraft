@@ -3,21 +3,37 @@
 
 //! Automatic analysis (M1).
 //!
-//! First deliverable: **function discovery** with recursive descent, seeded by the
-//! entry point, exports, `.pdata` ranges and TLS callbacks. `.pdata` entries give exact
-//! boundaries on x64 MSVC binaries; other functions are recovered by walking their
-//! basic blocks until return/tail-call.
+//! - **Function discovery**: seeds from `.pdata`, exports, the entry point and TLS
+//!   callbacks; recursive descent follows direct branches, direct calls become new
+//!   function seeds, and calls/jumps leaving the function are treated as tail calls.
+//! - **Cross-references**: direct call edges, branch edges and data references from
+//!   absolute/RIP-relative memory operands.
+//! - **Strings**: ASCII and UTF-16LE extraction (see [`strings`]).
 //!
 //! Evaluation lives in the CLI (`recraft eval`) and uses exports + `.pdata` as ground
 //! truth — see `corpus/` for the CRT-free benchmark binary.
 
 #![forbid(unsafe_code)]
 
+mod strings;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use recraft_common::{Address, Result};
 use recraft_core::Session;
 use recraft_decode::FlowKind;
+
+pub use strings::{
+    ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, extract_strings,
+    persist_strings,
+};
+
+/// `xref.type` for a direct call.
+pub const XREF_CALL: i64 = 1;
+/// `xref.type` for a branch (conditional or unconditional).
+pub const XREF_JUMP: i64 = 2;
+/// `xref.type` for a data reference (absolute / RIP-relative memory operand).
+pub const XREF_DATA: i64 = 3;
 
 /// Where a discovered function start came from (for stats / UI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +59,10 @@ pub struct AnalysisResult {
     pub functions: Vec<AnalyzedFunction>,
     /// Direct call edges observed while walking function bodies.
     pub calls: Vec<(Address, Address)>,
+    /// Branch edges observed while walking function bodies.
+    pub jumps: Vec<(Address, Address)>,
+    /// Data references (absolute / RIP-relative memory operands into the image).
+    pub data_refs: Vec<(Address, Address)>,
     pub instructions: u64,
     pub seeds: u64,
     pub discovered_by_call: u64,
@@ -54,10 +74,18 @@ struct Known {
     scanned: bool,
 }
 
+struct ScanOutput {
+    max_end: Address,
+    calls: Vec<(Address, Address)>,
+    jumps: Vec<(Address, Address)>,
+    data_refs: Vec<(Address, Address)>,
+    leaving: Vec<Address>,
+}
+
 const MAX_INSTRUCTIONS_PER_FUNCTION: usize = 20_000;
 const MAX_TOTAL_INSTRUCTIONS: u64 = 5_000_000;
 
-/// Run function discovery over an opened session.
+/// Run function discovery (plus call/jump/data xref collection) over an opened session.
 pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
     let entry = session.entry_point();
     let segments = session.segments().to_vec();
@@ -114,6 +142,8 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
     let initial_seeds = known.len() as u64;
 
     let mut calls: Vec<(Address, Address)> = Vec::new();
+    let mut jumps: Vec<(Address, Address)> = Vec::new();
+    let mut data_refs: Vec<(Address, Address)> = Vec::new();
     let mut instruction_total: u64 = 0;
     let mut discovered_by_call: u64 = 0;
 
@@ -129,19 +159,20 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
             record.scanned = true;
         }
 
-        let (max_end, function_calls, new_starts) =
-            scan_function(session, start, limit, &segments, &mut instruction_total)?;
+        let output = scan_function(session, start, limit, &segments, &mut instruction_total)?;
 
-        calls.extend(function_calls);
+        calls.extend(output.calls);
+        jumps.extend(output.jumps);
+        data_refs.extend(output.data_refs);
 
         if let Some(record) = known.get_mut(&start.get())
             && record.end.is_none()
-            && max_end > start
+            && output.max_end > start
         {
-            record.end = Some(max_end);
+            record.end = Some(output.max_end);
         }
 
-        for target in new_starts {
+        for target in output.leaving {
             if target <= start || known.contains_key(&target.get()) {
                 continue;
             }
@@ -195,6 +226,8 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
     Ok(AnalysisResult {
         functions,
         calls,
+        jumps,
+        data_refs,
         instructions: instruction_total,
         seeds: initial_seeds,
         discovered_by_call,
@@ -251,20 +284,24 @@ fn is_code(segments: &[recraft_core::Segment], addr: Address) -> bool {
         .any(|segment| segment.perm.is_executable() && segment.contains(addr))
 }
 
-/// Walk one function's basic blocks. Returns the furthest instruction end, the direct
-/// calls seen, and branch targets that leave the function (tail calls / callbacks).
-#[allow(clippy::type_complexity)]
+fn is_mapped(segments: &[recraft_core::Segment], addr: Address) -> bool {
+    segments.iter().any(|segment| segment.contains(addr))
+}
+
+/// Walk one function's basic blocks.
 fn scan_function(
     session: &mut Session,
     start: Address,
     limit: Option<Address>,
     segments: &[recraft_core::Segment],
     instruction_total: &mut u64,
-) -> Result<(Address, Vec<(Address, Address)>, Vec<Address>)> {
+) -> Result<ScanOutput> {
     let mut visited: BTreeSet<u64> = BTreeSet::new();
     let mut stack: Vec<Address> = vec![start];
     let mut max_end = start;
     let mut calls = Vec::new();
+    let mut jumps = Vec::new();
+    let mut data_refs = Vec::new();
     let mut leaving: BTreeSet<u64> = BTreeSet::new();
     let mut local_instructions = 0usize;
 
@@ -292,6 +329,13 @@ fn scan_function(
             max_end = next;
         }
 
+        if insn.memory_is_direct() {
+            let target = Address::new(insn.memory_displacement64());
+            if target.get() != 0 && is_mapped(segments, target) {
+                data_refs.push((addr, target));
+            }
+        }
+
         match insn.flow() {
             FlowKind::Next => stack.push(next),
             FlowKind::Call => {
@@ -307,6 +351,7 @@ fn scan_function(
             }
             FlowKind::ConditionalBranch => {
                 if let Some(target) = insn.branch_target() {
+                    jumps.push((addr, target));
                     if is_inside(limit, start, target) {
                         stack.push(target);
                     } else {
@@ -317,6 +362,7 @@ fn scan_function(
             }
             FlowKind::UnconditionalBranch => {
                 if let Some(target) = insn.branch_target() {
+                    jumps.push((addr, target));
                     if is_inside(limit, start, target) {
                         stack.push(target);
                     } else {
@@ -333,11 +379,13 @@ fn scan_function(
         }
     }
 
-    Ok((
+    Ok(ScanOutput {
         max_end,
         calls,
-        leaving.into_iter().map(Address::new).collect(),
-    ))
+        jumps,
+        data_refs,
+        leaving: leaving.into_iter().map(Address::new).collect(),
+    })
 }
 
 fn is_inside(limit: Option<Address>, start: Address, target: Address) -> bool {
@@ -347,14 +395,36 @@ fn is_inside(limit: Option<Address>, start: Address, target: Address) -> bool {
     }
 }
 
-/// Persist discovered functions into the session's function table.
+/// Persist discovered functions and xrefs into the session (derived data).
 pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
     let ranges: Vec<(Address, Address)> = result
         .functions
         .iter()
         .map(|function| (function.start, function.end))
         .collect();
-    session.replace_auto_functions(&ranges)
+    session.replace_auto_functions(&ranges)?;
+
+    let mut xrefs: Vec<(Address, Address, i64)> =
+        Vec::with_capacity(result.calls.len() + result.jumps.len() + result.data_refs.len());
+    xrefs.extend(
+        result
+            .calls
+            .iter()
+            .map(|(from, to)| (*from, *to, XREF_CALL)),
+    );
+    xrefs.extend(
+        result
+            .jumps
+            .iter()
+            .map(|(from, to)| (*from, *to, XREF_JUMP)),
+    );
+    xrefs.extend(
+        result
+            .data_refs
+            .iter()
+            .map(|(from, to)| (*from, *to, XREF_DATA)),
+    );
+    session.replace_auto_xrefs(&xrefs)
 }
 
 #[cfg(test)]
@@ -424,5 +494,34 @@ mod tests {
                 range.start.get()
             );
         }
+    }
+
+    #[test]
+    fn corpus_has_string_xrefs() {
+        let Some(path) = corpus_path() else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let (result, mut session, _dir) = analyze_bytes(&bytes);
+        let strings = extract_strings(&mut session, 4, 10_000).unwrap();
+        let banner = strings
+            .iter()
+            .find(|string| string.text == "ReCraft analysis corpus")
+            .expect("banner string missing");
+
+        assert!(
+            result.data_refs.iter().any(|(_, to)| *to == banner.addr),
+            "no data xref to the banner at {:#x}; refs: {:?}",
+            banner.addr.get(),
+            &result.data_refs[..result.data_refs.len().min(12)]
+        );
+        assert!(
+            !result.calls.is_empty(),
+            "expected direct call edges, got none"
+        );
+        assert!(
+            !result.data_refs.is_empty(),
+            "expected data references, got none"
+        );
     }
 }

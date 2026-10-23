@@ -764,17 +764,20 @@ impl ReCraftApp {
                 let started = std::time::Instant::now();
                 let outcome = analyze(session).and_then(|result| {
                     persist(session, &result)?;
-                    Ok(result)
+                    let strings = recraft_analysis::extract_strings(session, 4, 200_000)?;
+                    recraft_analysis::persist_strings(session, &strings)?;
+                    Ok((result, strings.len()))
                 });
                 let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
                 match outcome {
-                    Ok(result) => {
+                    Ok((result, string_count)) => {
                         self.functions_dirty = true;
                         self.disasm_dirty = true;
                         self.pseudo_dirty = true;
                         self.set_status(format!(
-                            "{} functions in {elapsed_ms:.0} ms",
-                            result.functions.len()
+                            "{} functions, {} strings in {elapsed_ms:.0} ms",
+                            result.functions.len(),
+                            string_count
                         ));
                     }
                     Err(error) => self.set_error(error),

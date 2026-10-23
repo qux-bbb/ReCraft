@@ -244,6 +244,17 @@ impl Insn {
         self.instruction.memory_displacement64()
     }
 
+    /// True for a memory operand with no base/index register, or a RIP-relative
+    /// operand: absolute addressing. iced resolves RIP-relative operands to an
+    /// absolute address, so [`Insn::memory_displacement64`] holds the target.
+    #[inline]
+    pub fn memory_is_direct(&self) -> bool {
+        let base = self.instruction.memory_base();
+        self.has_memory_operand()
+            && (base == iced_x86::Register::None || base == iced_x86::Register::RIP)
+            && self.instruction.memory_index() == iced_x86::Register::None
+    }
+
     #[inline]
     pub fn memory_size(&self) -> iced_x86::MemorySize {
         self.instruction.memory_size()

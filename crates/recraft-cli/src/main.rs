@@ -15,6 +15,13 @@ use recraft_core::{CodeData, Command, CommentKind, Session};
 use recraft_decompile::pseudocode_l0;
 use serde_json::{Value, json};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum XrefDirection {
+    To,
+    From,
+    Both,
+}
+
 #[derive(Parser)]
 #[command(
     name = "recraft",
@@ -78,6 +85,25 @@ enum Commands {
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
         file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List strings extracted by analysis (run `analyze` first).
+    Strings {
+        project: PathBuf,
+        /// Truncate displayed text to this many characters.
+        #[arg(long, default_value_t = 80)]
+        max_text: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show cross-references to/from an address or symbol.
+    Xrefs {
+        project: PathBuf,
+        #[arg(long)]
+        addr: String,
+        #[arg(long, value_enum, default_value_t = XrefDirection::Both)]
+        direction: XrefDirection,
         #[arg(long)]
         json: bool,
     },
@@ -176,6 +202,17 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Funcs { project, json } => cmd_funcs(&project, json),
         Commands::Analyze { project, json } => cmd_analyze(&project, json),
         Commands::Eval { file, json } => cmd_eval(&file, json),
+        Commands::Strings {
+            project,
+            max_text,
+            json,
+        } => cmd_strings(&project, max_text, json),
+        Commands::Xrefs {
+            project,
+            addr,
+            direction,
+            json,
+        } => cmd_xrefs(&project, &addr, direction, json),
         Commands::Decompile {
             project,
             addr,
@@ -487,9 +524,12 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
     let mut session = Session::open(project)?;
     let started = Instant::now();
     let result = analyze(&mut session)?;
-    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     persist(&mut session, &result)?;
+    let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
+    recraft_analysis::persist_strings(&mut session, &strings)?;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+    let xref_count = result.calls.len() + result.jumps.len() + result.data_refs.len();
     if as_json {
         return json_result(&json!({
             "functions": result.functions.len(),
@@ -497,6 +537,10 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
             "seeds": result.seeds,
             "discovered_by_call": result.discovered_by_call,
             "call_edges": result.calls.len(),
+            "jump_edges": result.jumps.len(),
+            "data_refs": result.data_refs.len(),
+            "xrefs": xref_count,
+            "strings": strings.len(),
             "elapsed_ms": elapsed_ms,
         }));
     }
@@ -533,9 +577,146 @@ fn cmd_analyze(project: &Path, as_json: bool) -> Result<()> {
     );
     println!("instructions decoded: {}", result.instructions);
     println!("direct call edges:    {}", result.calls.len());
+    println!("branch edges:         {}", result.jumps.len());
+    println!("data references:      {}", result.data_refs.len());
+    println!("strings:              {}", strings.len());
     println!("elapsed:              {elapsed_ms:.1} ms");
     println!("saved to project:     {}", project.display());
     Ok(())
+}
+
+fn cmd_strings(project: &Path, max_text: usize, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let strings = session.strings()?;
+    if strings.is_empty() {
+        if as_json {
+            return json_result(&Value::Array(Vec::new()));
+        }
+        println!("no strings in this project - run `recraft analyze` first");
+        return Ok(());
+    }
+    let previews: Vec<String> = strings
+        .iter()
+        .map(|string| truncate_string(&mut session, string.addr, string.len, max_text))
+        .collect();
+    if as_json {
+        let rows: Vec<Value> = strings
+            .iter()
+            .zip(previews.iter())
+            .map(|(string, text)| {
+                json!({
+                    "addr": format!("{:#x}", string.addr.get()),
+                    "len": string.len,
+                    "enc": string.enc,
+                    "text": text,
+                })
+            })
+            .collect();
+        return json_result(&Value::Array(rows));
+    }
+    println!("{} strings", strings.len());
+    for (string, text) in strings.iter().zip(previews.iter()) {
+        let enc = if string.enc == recraft_analysis::STRING_ENC_UTF16LE {
+            "utf16"
+        } else {
+            "ascii"
+        };
+        println!(
+            "{:#012x}  {:<5} len {:<4} {}",
+            string.addr.get(),
+            enc,
+            string.len,
+            text
+        );
+    }
+    Ok(())
+}
+
+fn truncate_string(session: &mut Session, addr: Address, len: u32, max_text: usize) -> String {
+    let mut bytes = vec![0u8; len.min(4096) as usize];
+    // Strings are file-backed; a read failure just yields an empty preview.
+    let read = session.read_at(addr, &mut bytes).unwrap_or(0);
+    bytes.truncate(read);
+    let text = String::from_utf8_lossy(&bytes)
+        .replace('\0', "")
+        .trim()
+        .to_owned();
+    let mut chars: Vec<char> = text.chars().collect();
+    if chars.len() > max_text {
+        chars.truncate(max_text);
+        chars.push('…');
+    }
+    chars.into_iter().collect()
+}
+
+fn cmd_xrefs(
+    project: &Path,
+    raw_addr: &str,
+    direction: XrefDirection,
+    as_json: bool,
+) -> Result<()> {
+    let session = Session::open(project)?;
+    let addr = resolve_address(&session, raw_addr)?;
+    let to = if matches!(direction, XrefDirection::To | XrefDirection::Both) {
+        session.xrefs_to(addr)?
+    } else {
+        Vec::new()
+    };
+    let from = if matches!(direction, XrefDirection::From | XrefDirection::Both) {
+        session.xrefs_from(addr)?
+    } else {
+        Vec::new()
+    };
+    if as_json {
+        let rows: Vec<Value> = to
+            .iter()
+            .map(|xref| {
+                json!({
+                    "from": format!("{:#x}", xref.from.get()),
+                    "to": format!("{:#x}", xref.to.get()),
+                    "type": xref_kind_name(xref.kind),
+                    "direction": "to",
+                })
+            })
+            .chain(from.iter().map(|xref| {
+                json!({
+                    "from": format!("{:#x}", xref.from.get()),
+                    "to": format!("{:#x}", xref.to.get()),
+                    "type": xref_kind_name(xref.kind),
+                    "direction": "from",
+                })
+            }))
+            .collect();
+        return json_result(&Value::Array(rows));
+    }
+
+    println!("xrefs at {:#x}:", addr.get());
+    println!("  to this address:   {}", to.len());
+    println!("  from this address: {}", from.len());
+    for xref in &to {
+        println!(
+            "  <- {:#012x}  {:<4}",
+            xref.from.get(),
+            xref_kind_name(xref.kind)
+        );
+    }
+    for xref in &from {
+        println!(
+            "  -> {:#012x}  {:<4}",
+            xref.to.get(),
+            xref_kind_name(xref.kind)
+        );
+    }
+    Ok(())
+}
+
+fn xref_kind_name(kind: i64) -> &'static str {
+    match kind {
+        recraft_analysis::XREF_CALL => "call",
+        recraft_analysis::XREF_JUMP => "jump",
+        recraft_analysis::XREF_DATA => "data",
+        _ => "other",
+    }
 }
 
 fn cmd_eval(file: &Path, as_json: bool) -> Result<()> {

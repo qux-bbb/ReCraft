@@ -15,6 +15,8 @@ typedef unsigned char u8;
 typedef int (*binary_fn)(int, int);
 typedef int (*unary_fn)(int);
 
+#include <stddef.h> /* wchar_t, headers only - no CRT is linked */
+
 /* Keep floating point from pulling in the CRT. */
 int _fltused = 1;
 
@@ -115,4 +117,20 @@ void corpus_main(void) {
     while (x) {
         x = 0;
     }
+}
+
+/* --- strings / data references (M1 string & xref evaluation) ---------------- */
+
+__declspec(dllexport) const char *corpus_banner(void) {
+    return "ReCraft analysis corpus";
+}
+
+__declspec(dllexport) const wchar_t *corpus_wide_banner(void) {
+    return L"ReCraft wide corpus";
+}
+
+__declspec(dllexport) int corpus_counter_bump(void) {
+    static int counter;
+    counter++;
+    return counter;
 }

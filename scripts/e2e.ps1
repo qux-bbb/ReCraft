@@ -110,8 +110,13 @@ try {
     Write-Host '[10/10] analyze functions'
     $summary = Invoke-Recraft @('analyze', $project)
     Assert-Contains $summary 'functions:' 'analysis summary'
+    Assert-Contains $summary 'strings:' 'string extraction summary'
     $funcs = Invoke-Recraft @('funcs', $project)
     Assert-Contains $funcs '0x' 'function list after analysis'
+    $strings = Invoke-Recraft @('strings', $project)
+    Assert-Contains $strings 'strings' 'string table'
+    $xrefs = Invoke-Recraft @('xrefs', $project, '--addr', 'entry')
+    Assert-Contains $xrefs 'xrefs at' 'xref query'
 
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 strings + xrefs: ASCII/UTF-16LE string extraction (chunked, cross-chunk run
+  continuation, ASCII-tail false-positive guard) and xref building for direct calls,
+  branches and data references (absolute / RIP-relative). Persisted as derived data into
+  the `string` and `xref` tables. New `recraft strings` and `recraft xrefs --addr`
+  commands; `analyze` reports all counts. `notepad.exe`: 3,578 strings, 618 call edges,
+  1,533 branch edges, 1,348 data refs in 34.6 ms. Corpus test verifies the
+  `lea rax,[rip+…]` data xref to the banner string.
+
 - M1: automatic function discovery (`recraft-analysis`) — seeds from `.pdata`, exports,
   entry point and TLS callbacks, then recursive descent with tail-call detection. Exact
   `.pdata` boundaries; functions are persisted as derived data (auto flag) without

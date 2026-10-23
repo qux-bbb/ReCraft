@@ -26,7 +26,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::command::{self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_LOADER};
 use crate::flags::{Flags, FlagsStore};
 use crate::segments::{self, Segment};
-use crate::view::{DisasmLine, FunctionInfo};
+use crate::view::{DisasmLine, FunctionInfo, StringEntry, XrefEntry};
 
 const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
@@ -397,6 +397,108 @@ impl Session {
         }
         tx.commit().map_err(command::db_err)?;
         Ok(())
+    }
+
+    /// Replace all derived xrefs (analysis output). User data is untouched.
+    pub fn replace_auto_xrefs(&mut self, xrefs: &[(Address, Address, i64)]) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute("DELETE FROM xref", [])
+            .map_err(command::db_err)?;
+        for (from, to, kind) in xrefs {
+            tx.execute(
+                "INSERT OR IGNORE INTO xref(from_addr, to_addr, type) VALUES (?1, ?2, ?3)",
+                params![from.get() as i64, to.get() as i64, *kind],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// Replace all extracted strings (analysis output).
+    pub fn replace_auto_strings(&mut self, strings: &[(Address, u32, i64, i64)]) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute("DELETE FROM string", [])
+            .map_err(command::db_err)?;
+        for (addr, len, enc, kind) in strings {
+            tx.execute(
+                "INSERT OR REPLACE INTO string(addr, len, enc, kind) VALUES (?1, ?2, ?3, ?4)",
+                params![addr.get() as i64, *len as i64, *enc, *kind],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// All stored strings, ordered by address.
+    pub fn strings(&self) -> Result<Vec<StringEntry>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare("SELECT addr, len, enc, kind FROM string ORDER BY addr")
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(StringEntry {
+                    addr: Address::new(row.get::<_, i64>(0)? as u64),
+                    len: row.get::<_, i64>(1)? as u32,
+                    enc: row.get(2)?,
+                    kind: row.get(3)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
+    /// Cross-references pointing *to* `addr`.
+    pub fn xrefs_to(&self, addr: Address) -> Result<Vec<XrefEntry>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT from_addr, to_addr, type FROM xref WHERE to_addr = ?1 ORDER BY from_addr",
+            )
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([addr.get() as i64], |row| {
+                Ok(XrefEntry {
+                    from: Address::new(row.get::<_, i64>(0)? as u64),
+                    to: Address::new(row.get::<_, i64>(1)? as u64),
+                    kind: row.get(2)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
+    /// Cross-references originating *at* `addr`.
+    pub fn xrefs_from(&self, addr: Address) -> Result<Vec<XrefEntry>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT from_addr, to_addr, type FROM xref WHERE from_addr = ?1 ORDER BY to_addr",
+            )
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([addr.get() as i64], |row| {
+                Ok(XrefEntry {
+                    from: Address::new(row.get::<_, i64>(0)? as u64),
+                    to: Address::new(row.get::<_, i64>(1)? as u64),
+                    kind: row.get(2)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
     // ----------------------------------------------------------- commands ----
