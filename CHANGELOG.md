@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CLI `batch` (DESIGN §10): `recraft batch <project> --script <file.json>
+  [--dry-run] [--json]` executes a JSON list of edit commands through the journaled
+  Command bus, in order, stopping at the first failure with its index/type. Supported
+  commands: `rename`, `comment` (regular/repeatable/anterior), `prototype`,
+  `define_struct` (object or `offset:name:kind` field strings) and `apply_type`
+  (`struct` field avoids clashing with the `type` discriminator). Symbolic addresses
+  resolve against both the project and earlier renames in the same script (so dry-run
+  works without applying), a UTF-8 BOM is tolerated, and `--dry-run` validates without
+  writing. E2E covers dry-run + apply + rename verification; README shows the command.
+
 - MCP HTTP transport with bearer-token auth (DESIGN §9.1): `recraft serve-mcp <project>
   --http [--bind 127.0.0.1:8765] [--token <token>]` serves one JSON-RPC message per
   `POST /mcp` request, requires `Authorization: Bearer <token>` (401 otherwise),

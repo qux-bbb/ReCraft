@@ -3,6 +3,7 @@
 
 //! ReCraft command line interface (M0: import / inspect / disassemble / edit / undo).
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -121,6 +122,18 @@ enum Commands {
         /// Bearer token for HTTP; generated and printed when omitted.
         #[arg(long)]
         token: Option<String>,
+    },
+    /// Execute a JSON batch script of edit commands.
+    Batch {
+        project: PathBuf,
+        /// Script file: `{"commands": [{"type": "rename", ...}, ...]}`.
+        #[arg(long)]
+        script: PathBuf,
+        /// Validate every command without applying it.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// AI assist: offline explanation, rename proposals, triage and proposal apply.
     Ai {
@@ -405,6 +418,12 @@ fn run(cli: Cli) -> Result<()> {
                 recraft_mcp::McpServer::open(&project)?.serve_stdio()
             }
         }
+        Commands::Batch {
+            project,
+            script,
+            dry_run,
+            json,
+        } => cmd_batch(&project, &script, dry_run, json),
         Commands::Ai { command } => cmd_ai(command),
         Commands::Import { file, out } => cmd_import(&file, &out),
         Commands::Disasm {
@@ -1600,6 +1619,228 @@ fn function_containing(functions: &[recraft_core::FunctionInfo], addr: Address) 
     }
     let index = low.checked_sub(1)?;
     contains(&functions[index], addr).then_some(index)
+}
+
+fn cmd_batch(project: &Path, script: &Path, dry_run: bool, as_json: bool) -> Result<()> {
+    let raw = std::fs::read_to_string(script)
+        .map_err(|error| Error::internal(format!("cannot read {}: {error}", script.display())))?;
+    // Tolerate a UTF-8 BOM (PowerShell 5.1 writes one with `-Encoding utf8`).
+    let raw = raw.trim_start_matches('\u{feff}');
+    let document: Value = serde_json::from_str(raw)
+        .map_err(|error| Error::unsupported(format!("invalid batch JSON: {error}")))?;
+    let entries = document
+        .get("commands")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::unsupported("batch script needs a `commands` array"))?;
+    if entries.is_empty() {
+        return Err(Error::unsupported("batch script has no commands"));
+    }
+    let mut session = Session::open(project)?;
+    let mut virtual_names: BTreeMap<String, Address> = BTreeMap::new();
+    let mut results = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let command = parse_batch_command(&session, &virtual_names, entry)
+            .map_err(|error| Error::unsupported(format!("command #{}: {error}", index + 1)))?;
+        if dry_run {
+            results.push(json!({
+                "index": index + 1,
+                "type": command.name(),
+                "status": "validated",
+            }));
+        } else {
+            session.execute(command.clone()).map_err(|error| {
+                Error::unsupported(format!(
+                    "command #{} ({}) failed: {error}",
+                    index + 1,
+                    command.name()
+                ))
+            })?;
+            results.push(json!({
+                "index": index + 1,
+                "type": command.name(),
+                "status": "applied",
+            }));
+        }
+        if let Command::Rename {
+            addr,
+            name: Some(name),
+        } = &command
+        {
+            virtual_names.insert(name.clone(), *addr);
+        }
+    }
+    if as_json {
+        return json_result(&json!({
+            "dry_run": dry_run,
+            "commands": results,
+            "count": results.len(),
+        }));
+    }
+    if dry_run {
+        println!(
+            "validated {} command(s) (dry run, nothing applied)",
+            results.len()
+        );
+    } else {
+        println!("applied {} command(s)", results.len());
+    }
+    Ok(())
+}
+
+fn parse_batch_command(
+    session: &Session,
+    virtual_names: &BTreeMap<String, Address>,
+    entry: &Value,
+) -> Result<Command> {
+    let kind = entry
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::unsupported("command needs a string `type`"))?;
+    let resolve = |raw: &str| -> Result<Address> {
+        resolve_address(session, raw).or_else(|_| {
+            virtual_names
+                .get(raw)
+                .copied()
+                .ok_or_else(|| Error::internal(format!("unknown symbol: {raw}")))
+        })
+    };
+    let addr_of = |field: &str| -> Result<Address> {
+        let raw = entry
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::unsupported(format!("{kind} needs `{field}`")))?;
+        resolve(raw)
+    };
+    let optional_text = |field: &str| -> Result<Option<String>> {
+        match entry.get(field) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(text)) if text.is_empty() => Ok(None),
+            Some(Value::String(text)) => Ok(Some(text.clone())),
+            Some(_) => Err(Error::unsupported(format!(
+                "{kind}.{field} must be a string"
+            ))),
+        }
+    };
+    match kind {
+        "rename" => {
+            let addr = addr_of("addr")?;
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned);
+            Ok(Command::Rename { addr, name })
+        }
+        "comment" => {
+            let addr = addr_of("addr")?;
+            let comment_kind = match entry.get("kind").and_then(Value::as_str) {
+                None | Some("regular") => CommentKind::Regular,
+                Some("repeatable") => CommentKind::Repeatable,
+                Some("anterior") => CommentKind::Anterior,
+                Some(other) => {
+                    return Err(Error::unsupported(format!(
+                        "unknown comment kind {other:?} (regular/repeatable/anterior)"
+                    )));
+                }
+            };
+            Ok(Command::SetComment {
+                addr,
+                kind: comment_kind,
+                text: optional_text("text")?,
+            })
+        }
+        "prototype" => Ok(Command::SetPrototype {
+            addr: addr_of("addr")?,
+            text: optional_text("text")?,
+        }),
+        "apply_type" => {
+            let func = addr_of("addr")?;
+            let slot = entry
+                .get("slot")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| Error::unsupported("apply_type needs a numeric `slot`"))?;
+            let slot = u8::try_from(slot)
+                .map_err(|_| Error::unsupported(format!("slot {slot} does not fit in u8")))?;
+            Ok(Command::ApplyType {
+                func,
+                slot,
+                struct_name: optional_text("struct")?,
+            })
+        }
+        "define_struct" => {
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::unsupported("define_struct needs `name`"))?;
+            let size = entry
+                .get("size")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| Error::unsupported("define_struct needs a numeric `size`"))?;
+            let raw_fields = entry
+                .get("fields")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::unsupported("define_struct needs a `fields` array"))?;
+            let mut fields = Vec::with_capacity(raw_fields.len());
+            for field in raw_fields {
+                if let Some(text) = field.as_str() {
+                    fields.push(parse_struct_field(tokenize_struct_field(text))?);
+                } else {
+                    let offset = field.get("offset").and_then(Value::as_u64).ok_or_else(|| {
+                        Error::unsupported("struct field needs a numeric `offset`")
+                    })?;
+                    let field_name = field
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::unsupported("struct field needs `name`"))?;
+                    let field_kind = field
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::unsupported("struct field needs `kind`"))?;
+                    fields.push(StructField {
+                        offset,
+                        name: field_name.to_owned(),
+                        kind: field_kind.to_owned(),
+                    });
+                }
+            }
+            let def = StructDef {
+                name: name.to_owned(),
+                size,
+                fields,
+            }
+            .validate()?;
+            Ok(Command::DefineStruct { def })
+        }
+        other => Err(Error::unsupported(format!(
+            "unknown batch command type {other:?}"
+        ))),
+    }
+}
+
+fn tokenize_struct_field(text: &str) -> (&str, &str, &str) {
+    let mut parts = text.split(':');
+    (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    )
+}
+
+fn parse_struct_field((offset, name, kind): (&str, &str, &str)) -> Result<StructField> {
+    if offset.is_empty() || name.is_empty() || kind.is_empty() {
+        return Err(Error::unsupported(
+            "struct field string must be offset:name:kind",
+        ));
+    }
+    let offset = offset
+        .trim_start_matches("0x")
+        .parse::<u64>()
+        .map_err(|_| Error::unsupported(format!("invalid field offset {offset:?}")))?;
+    Ok(StructField {
+        offset,
+        name: name.to_owned(),
+        kind: kind.to_owned(),
+    })
 }
 
 fn generate_mcp_token() -> String {

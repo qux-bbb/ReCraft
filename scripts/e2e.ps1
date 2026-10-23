@@ -153,6 +153,24 @@ try {
     $structsOut = Invoke-Recraft @('structs', $project)
     if ($structsOut.Contains('struct Demo')) { throw 'undo did not remove the struct definition' }
 
+    Write-Host '[+] batch script (dry run + apply)'
+    $batchScript = Join-Path $work 'batch.json'
+    $batchJson = @'
+{"commands":[
+ {"type":"rename","addr":"entry","name":"batch_entry"},
+ {"type":"comment","addr":"batch_entry","text":"from batch"},
+ {"type":"define_struct","name":"BatchDemo","size":4,"fields":[{"offset":0,"name":"tag","kind":"u32"}]},
+ {"type":"apply_type","addr":"batch_entry","slot":0,"struct":"BatchDemo"}
+]}
+'@
+    [System.IO.File]::WriteAllText($batchScript, $batchJson)
+    $dry = Invoke-Recraft @('batch', $project, '--script', $batchScript, '--dry-run')
+    Assert-Contains $dry 'validated 4 command(s)' 'batch dry run validates commands'
+    $applied = Invoke-Recraft @('batch', $project, '--script', $batchScript)
+    Assert-Contains $applied 'applied 4 command(s)' 'batch applies commands'
+    $funcsAfterBatch = Invoke-Recraft @('funcs', $project)
+    Assert-Contains $funcsAfterBatch 'batch_entry' 'batch rename took effect'
+
     Write-Host '[11/11] MCP stdio'
     $mcpLines = @(
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
