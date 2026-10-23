@@ -7,9 +7,10 @@
 //! when the user explicitly enables a provider **and** the request is made, and it is
 //! split behind [`Transport`] so providers are testable without sockets.
 //!
-//! `TcpHttpTransport` speaks plain `http://` only (sufficient for a local Ollama at
-//! `http://127.0.0.1:11434`). `https://` endpoints return a clear unsupported error
-//! until a TLS stack is added.
+//! - `TcpHttpTransport` speaks plain `http://` (local Ollama at `http://127.0.0.1:11434`).
+//! - `UreqTransport` speaks `https://` via rustls (`ureq`), for OpenAI-compatible
+//!   endpoints such as `https://api.openai.com`.
+//! - [`transport_for`] picks the right one from the endpoint URL.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -37,6 +38,67 @@ pub struct HttpResponse {
 /// Blocking HTTP transport (injectable for tests).
 pub trait Transport {
     fn send(&mut self, request: &HttpRequest) -> Result<HttpResponse>;
+}
+
+/// Which transport serves an endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Tcp,
+    Tls,
+}
+
+/// Pick a transport for a provider endpoint (`https://` uses rustls, everything else
+/// uses the plain TCP transport).
+pub fn transport_kind(url: &str) -> TransportKind {
+    if url
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("https://")
+    {
+        TransportKind::Tls
+    } else {
+        TransportKind::Tcp
+    }
+}
+
+/// Boxed transport for an endpoint URL.
+pub fn transport_for(url: &str) -> Box<dyn Transport> {
+    match transport_kind(url) {
+        TransportKind::Tls => Box::new(UreqTransport),
+        TransportKind::Tcp => Box::new(TcpHttpTransport),
+    }
+}
+
+/// HTTPS transport backed by `ureq`/rustls.
+#[derive(Debug, Default)]
+pub struct UreqTransport;
+
+impl Transport for UreqTransport {
+    fn send(&mut self, request: &HttpRequest) -> Result<HttpResponse> {
+        if !matches!(transport_kind(&request.url), TransportKind::Tls) {
+            return Err(Error::unsupported(
+                "UreqTransport only handles https:// endpoints",
+            ));
+        }
+        if request.method != "POST" {
+            return Err(Error::unsupported(
+                "provider transport only supports POST requests",
+            ));
+        }
+        let mut builder = ureq::post(request.url.as_str());
+        for (name, value) in &request.headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        let mut response = builder
+            .send(request.body.as_str())
+            .map_err(|error| Error::internal(format!("https request failed: {error}")))?;
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|error| Error::internal(format!("https response body: {error}")))?;
+        Ok(HttpResponse { status, body })
+    }
 }
 
 /// Plain-HTTP transport over `std::net::TcpStream`.
@@ -200,7 +262,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_https_without_tls() {
+    fn picks_transport_by_scheme() {
+        assert_eq!(
+            transport_kind("https://api.openai.com/v1/chat/completions"),
+            TransportKind::Tls
+        );
+        assert_eq!(
+            transport_kind("http://127.0.0.1:11434/api/chat"),
+            TransportKind::Tcp
+        );
+        assert_eq!(transport_kind("HTTPS://example.com"), TransportKind::Tls);
+    }
+
+    #[test]
+    fn plain_transport_rejects_https() {
         let mut transport = TcpHttpTransport;
         let error = transport
             .send(&HttpRequest {
@@ -211,6 +286,44 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.to_string().contains("only plain http"));
+    }
+
+    #[test]
+    fn tls_transport_rejects_plain_http() {
+        let mut transport = UreqTransport;
+        let error = transport
+            .send(&HttpRequest {
+                method: "POST",
+                url: "http://127.0.0.1:11434/api/chat".to_owned(),
+                headers: Vec::new(),
+                body: "{}".to_owned(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("only handles https"));
+    }
+
+    #[test]
+    #[ignore = "network access: verifies the TLS handshake against crates.io"]
+    fn https_tls_handshake_to_crates_io() {
+        let mut transport = UreqTransport;
+        let result = transport.send(&HttpRequest {
+            method: "POST",
+            url: "https://crates.io/".to_owned(),
+            headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+            body: "{}".to_owned(),
+        });
+        match result {
+            // Any HTTP status proves the TLS handshake completed; POST / is not a
+            // supported route, so an API error is expected.
+            Ok(response) => assert!(response.status >= 200),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(
+                    text.to_ascii_lowercase().contains("status"),
+                    "TLS/connect failure: {text}"
+                );
+            }
+        }
     }
 
     #[test]

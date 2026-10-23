@@ -28,8 +28,8 @@ pub use provider::{
     build_rename_prompt, provider_from_settings, redact,
 };
 pub use transport::{
-    HttpRequest, HttpResponse, MockTransport, TcpHttpTransport, Transport, parse_ollama_response,
-    parse_openai_response,
+    HttpRequest, HttpResponse, MockTransport, TcpHttpTransport, Transport, TransportKind,
+    UreqTransport, parse_ollama_response, parse_openai_response, transport_for, transport_kind,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

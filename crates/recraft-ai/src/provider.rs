@@ -487,13 +487,13 @@ pub fn provider_from_settings(settings: &ProviderSettings) -> Box<dyn Provider> 
     match settings.kind {
         ProviderKind::Ollama => Box::new(OllamaProvider::new(
             settings.clone(),
-            Box::new(crate::transport::TcpHttpTransport),
+            crate::transport::transport_for(&settings.endpoint),
         )),
         ProviderKind::OpenAiCompatible => {
             let api_key = std::env::var(&settings.api_key_env).ok();
             Box::new(OpenAiCompatibleProvider::new(
                 settings.clone(),
-                Box::new(crate::transport::TcpHttpTransport),
+                crate::transport::transport_for(&settings.endpoint),
                 api_key,
             ))
         }

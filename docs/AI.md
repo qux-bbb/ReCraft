@@ -99,9 +99,10 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   - **token 预算**：约 4 字符/token，超限截断并标注 `…[truncated]`；
   - **缓存**：`PromptCache`（prompt hash → response）；**审计**：`AuditLog`
     （provider/函数/prompt tokens/response tokens/cached）。
-- 传输层：`Transport` trait + `TcpHttpTransport`（**仅明文 http://**，覆盖本地 Ollama
-  `http://127.0.0.1:11434`）；`https://` 端点明确报错，待引入 TLS 后支持。`MockTransport`
-  用于无网络单测。
+- 传输层：`Transport` trait；`TcpHttpTransport` 处理**明文 http://**（本地 Ollama
+  `http://127.0.0.1:11434`），`UreqTransport`（ureq + rustls）处理 **https://**
+  （OpenAI 官方端点、云厂商兼容 API）；`transport_for(url)` 按 scheme 选择。
+  `MockTransport` 用于无网络单测。
 - Provider：`OllamaProvider`（`POST /api/chat`, `stream:false`）与
   `OpenAiCompatibleProvider`（`POST {endpoint}/v1/chat/completions`，Bearer key 从
   配置的环境变量读取）；`provider_from_settings` 在 disabled/heuristic 时返回
@@ -114,9 +115,10 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 
 - **单条选择**：UI 当前一次应用一条 proposal；批量勾选/全选与 diff 预览（before/after
   名称对比）在后续版本补全。
-- **HTTPS 未支持**：OpenAI 官方端点需要 TLS；当前只支持明文 http（本地 Ollama / 内网代理）。
-  `MockTransport` 覆盖了请求形状、鉴权头、错误码与响应解析。
 - **无评测集**：LLM 输出的命名准确率/解释质量尚无固定 prompt 回归集。
+- **网络可达性**：开发环境仅放行部分域名；TLS 栈通过 `https://crates.io/` 的忽略测试
+  （`cargo test -p recraft-ai https_tls_handshake_to_crates_io -- --ignored`）验证，
+  `api.openai.com` 在本环境不可达，未做端到端 OpenAI 账号测试。
 - 命名质量有限（类别前缀 + 地址）；接入 LLM 后应结合字符串/调用关系生成更自然的名字。
 - 写工具仅 `rename`/`comment`；`set_prototype` / `define_function` / `apply_type` 尚未实现。
 - 自然语言查询（"找所有引用 URL 的函数"）与伪代码润色未实现。

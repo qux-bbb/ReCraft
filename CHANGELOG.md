@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- HTTPS LLM transport: `UreqTransport` (ureq + rustls) serves `https://` endpoints while
+  `TcpHttpTransport` keeps plain `http://` for local Ollama; `transport_for` picks by
+  scheme and providers now use it. `TransportKind`/`transport_kind` are unit-tested and
+  a network-ignored test verifies the TLS handshake against crates.io
+  (`cargo test -p recraft-ai https_tls_handshake_to_crates_io -- --ignored`).
+  OpenAI-compatible cloud endpoints no longer report "https unsupported".
+
 - Demo package for the M4 preview: `scripts/demo.ps1` runs a nine-step CLI walkthrough
   (PE headers, import/analysis, function discovery, L2 pseudocode, rename+prototype,
   struct layout/apply_type, AI triage/propose/apply/undo on a real sample, MCP stdio

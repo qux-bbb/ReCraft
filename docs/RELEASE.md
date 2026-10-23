@@ -7,7 +7,7 @@
 | 文件 | 说明 |
 |---|---|
 | `dist/ReCraft-<version>/` | 绿色目录：`recraft.exe`、`recraft-ui.exe`、`LICENSE`、`README.md`、`CHANGELOG.md`、`VERSION.txt`、`docs/*.md` |
-| `dist/recraft-v<version>-windows-x64.zip` | 便携 zip（当前约 9 MiB） |
+| `dist/recraft-v<version>-windows-x64.zip` | 便携 zip（当前约 10 MiB；含 rustls/ureq TLS） |
 | `dist/SHA256SUMS.txt` | zip 与两个 exe 的 SHA-256 |
 | `dist/recraft-<version>-setup.exe` | 可选 NSIS 安装器（本机有 `makensis` 时生成） |
 
@@ -40,7 +40,7 @@ makensis /DVERSION=0.1.0 /DSTAGE="dist\ReCraft-0.1.0" /DOUT="dist\recraft-0.1.0-
 ## 本机验证（2026-10-24）
 
 ```
-[package] zip: dist\recraft-v0.1.0-windows-x64.zip (9.2 MiB)
+[package] zip: dist\recraft-v0.1.0-windows-x64.zip (10.1 MiB)
 [package] SHA256: dist\SHA256SUMS.txt
 [package] PASS
 ```
