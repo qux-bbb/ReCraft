@@ -1665,6 +1665,24 @@ mod tests {
     }
 
     #[test]
+    fn call_arguments_get_pointer_casts_from_callee_prototype() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let callee = function_start(&session, "str_probe").unwrap();
+        session
+            .execute(recraft_core::Command::SetPrototype {
+                addr: callee,
+                text: Some("int str_probe(const char* text)".to_owned()),
+            })
+            .unwrap();
+        let caller = function_start(&session, "call_str").unwrap();
+        let text = pseudocode_l2(&mut session, caller).unwrap().text();
+        assert!(text.contains("str_probe((char*)"), "{text}");
+        assert!(!text.contains("str_probe()"), "{text}");
+    }
+
+    #[test]
     fn output_is_deterministic() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

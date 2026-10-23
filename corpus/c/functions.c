@@ -30,8 +30,13 @@ __declspec(dllexport) int __stdcall stdcall_add(int a, int b) {
 }
 
 /* Pointer-type probe: a byte access through the argument implies `char*`. */
-__declspec(dllexport) int str_probe(const char* s) {
+__declspec(dllexport, noinline) int str_probe(const char* s) {
     return s != 0 ? (int)(unsigned char)s[0] : -1;
+}
+
+/* Call-site probe: keeps a direct call so call arguments can be rendered. */
+__declspec(dllexport) int call_str(const char* text) {
+    return str_probe(text) + 1;
 }
 
 /* Pointer-type probe: a 2-byte access implies `wchar_t*`. */

@@ -34,9 +34,9 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 ## 当前基线（2026-10-24，MSVC VS2022，corpus x64）
 
 ```
-functions:              30
-structured:             30 (100%)
-instructions:           386
+functions:              31
+structured:             31 (100%)
+instructions:           391
 intrinsic instructions: 11 (coverage 97.2%)
 goto fallback functions: 0
 ```

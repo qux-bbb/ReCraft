@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Typed call arguments: when a callee has a user prototype, pointer parameters cast the
+  rendered argument to the declared type (`str_probe((char*)rcx)` for
+  `int str_probe(const char* text)`), while scalar parameters stay uncast for
+  readability. New corpus probe `call_str` keeps a real direct call site (plus
+  `noinline` on `str_probe`); corpus is now 31 functions, still 100% structured with
+  97.2% coverage, golden snapshots regenerated from a pristine project (only the new
+  call_str snapshot is added). Test asserts the pointer cast at the call site.
+
 - x86 stack parameter recovery through prologue pushes: `recover_x86` now tracks the
   cumulative `esp` adjustment (push/pop/sub/add) and maps observed `[esp+N]` reads back
   to incoming argument offsets, inserting every observed offset for the same argument.

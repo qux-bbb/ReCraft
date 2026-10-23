@@ -576,8 +576,22 @@ impl Printer<'_> {
                 match self.call_protos.get(&target.get()) {
                     Some(proto) => {
                         let count = proto.params.len().min(args.len());
-                        let rendered: Vec<String> =
-                            args.iter().take(count).map(|arg| self.expr(*arg)).collect();
+                        let rendered: Vec<String> = args
+                            .iter()
+                            .take(count)
+                            .enumerate()
+                            .map(|(index, arg)| {
+                                let value = self.expr(*arg);
+                                match proto.params.get(index) {
+                                    // Pointer parameters make the argument's intended
+                                    // type visible; scalars stay uncast for readability.
+                                    Some(param) if param.ty.is_pointer() => {
+                                        format!("({}){value}", param.ty.c_name())
+                                    }
+                                    _ => value,
+                                }
+                            })
+                            .collect();
                         format!("{name}({})", rendered.join(", "))
                     }
                     None => format!("{name}()"),
