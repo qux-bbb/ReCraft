@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M1 UI side panels: Segments / Functions / Strings / Imports / Xrefs tabs. Strings has a
+  live substring filter (first 2000 matches rendered) and click-to-navigate; Imports shows
+  `module!api [category] ×refs` and jumps to the first call site; Xrefs lists references to
+  the currently selected line and follows them. Disassembly now shows `sub_...` and IAT
+  annotations. New headless test renders all five tabs against a real analysed notepad
+  project.
+
 - M1 import naming + API tagging: IAT slots are named `MODULE.dll!Api` at load time,
   disassembly annotates direct memory operands and call targets with resolved names
   (`jmp qword ptr [IAT] ; COMCTL32.dll!#413`), and analysis writes `sub_<hex>` names for

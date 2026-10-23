@@ -35,10 +35,22 @@ enum Tab {
     Pseudo,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SideTab {
     Segments,
     Functions,
+    Strings,
+    Imports,
+    Xrefs,
+}
+
+struct ImportRow {
+    module: String,
+    api: String,
+    category: &'static str,
+    iat: Address,
+    refs: u64,
+    first_from: Option<Address>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -89,6 +101,14 @@ pub struct ReCraftApp {
     pseudo_dirty: bool,
     functions: Vec<FunctionInfo>,
     functions_dirty: bool,
+    strings: Vec<(Address, String)>,
+    strings_dirty: bool,
+    string_filter: String,
+    imports: Vec<ImportRow>,
+    imports_dirty: bool,
+    xrefs: Vec<(Address, &'static str)>,
+    xrefs_for: Option<Address>,
+    xrefs_dirty: bool,
     edit: Option<EditState>,
     goto: Option<String>,
     history: Vec<Address>,
@@ -114,6 +134,14 @@ impl Default for ReCraftApp {
             pseudo_dirty: false,
             functions: Vec::new(),
             functions_dirty: false,
+            strings: Vec::new(),
+            strings_dirty: false,
+            string_filter: String::new(),
+            imports: Vec::new(),
+            imports_dirty: false,
+            xrefs: Vec::new(),
+            xrefs_for: None,
+            xrefs_dirty: false,
             edit: None,
             goto: None,
             history: Vec::new(),
@@ -208,6 +236,9 @@ impl ReCraftApp {
         self.pseudo_start = entry;
         self.pseudo_dirty = true;
         self.functions_dirty = true;
+        self.strings_dirty = true;
+        self.imports_dirty = true;
+        self.xrefs_for = None;
         self.history.clear();
         self.history.push(entry);
         self.history_pos = 0;
@@ -280,6 +311,13 @@ impl ReCraftApp {
         if self.functions_dirty {
             self.refresh_functions();
         }
+        if self.strings_dirty {
+            self.refresh_strings();
+        }
+        if self.imports_dirty {
+            self.refresh_imports();
+        }
+        self.refresh_xrefs();
     }
 
     fn refresh_disasm(&mut self) {
@@ -337,6 +375,110 @@ impl ReCraftApp {
             Err(error) => {
                 self.functions.clear();
                 self.functions_dirty = false;
+                self.set_error(error);
+            }
+        }
+    }
+
+    fn refresh_strings(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            self.strings.clear();
+            self.strings_dirty = false;
+            return;
+        };
+        match session.strings() {
+            Ok(rows) => {
+                let mut strings = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut bytes = vec![0u8; row.len.min(64) as usize];
+                    let read = session.read_at(row.addr, &mut bytes).unwrap_or(0);
+                    bytes.truncate(read);
+                    let text = String::from_utf8_lossy(&bytes)
+                        .replace('\0', "")
+                        .trim()
+                        .to_owned();
+                    strings.push((row.addr, text));
+                }
+                self.strings = strings;
+                self.strings_dirty = false;
+            }
+            Err(error) => {
+                self.strings.clear();
+                self.strings_dirty = false;
+                self.set_error(error);
+            }
+        }
+    }
+
+    fn refresh_imports(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            self.imports.clear();
+            self.imports_dirty = false;
+            return;
+        };
+        let image = session.image().clone();
+        let mut rows = Vec::new();
+        for module in &image.imports {
+            for function in &module.functions {
+                let api = match (&function.name, function.ordinal) {
+                    (Some(name), _) if !name.is_empty() => name.clone(),
+                    (_, Some(ordinal)) => format!("#{ordinal}"),
+                    _ => continue,
+                };
+                let category = recraft_analysis::categorize(&api);
+                let (refs, first_from) = if function.iat_va.get() == 0 {
+                    (0, None)
+                } else {
+                    match session.xrefs_to(function.iat_va) {
+                        Ok(xrefs) => (xrefs.len() as u64, xrefs.first().map(|xref| xref.from)),
+                        Err(_) => (0, None),
+                    }
+                };
+                rows.push(ImportRow {
+                    module: module.name.clone(),
+                    api,
+                    category,
+                    iat: function.iat_va,
+                    refs,
+                    first_from,
+                });
+            }
+        }
+        rows.sort_by(|left, right| {
+            (left.module.as_str(), left.api.as_str())
+                .cmp(&(right.module.as_str(), right.api.as_str()))
+        });
+        self.imports = rows;
+        self.imports_dirty = false;
+    }
+
+    fn refresh_xrefs(&mut self) {
+        let Some(current) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
+            self.xrefs.clear();
+            self.xrefs_for = None;
+            return;
+        };
+        if self.xrefs_for == Some(current) && !self.xrefs_dirty {
+            return;
+        }
+        let Some(session) = self.session.as_ref() else {
+            self.xrefs.clear();
+            self.xrefs_for = None;
+            return;
+        };
+        match session.xrefs_to(current) {
+            Ok(rows) => {
+                self.xrefs = rows
+                    .iter()
+                    .map(|xref| (xref.from, xref_kind_name(xref.kind)))
+                    .collect();
+                self.xrefs_for = Some(current);
+                self.xrefs_dirty = false;
+            }
+            Err(error) => {
+                self.xrefs.clear();
+                self.xrefs_for = Some(current);
+                self.xrefs_dirty = false;
                 self.set_error(error);
             }
         }
@@ -421,15 +563,32 @@ impl ReCraftApp {
     fn side_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let segments_label = self.t("Segments", "段");
         let functions_label = self.t("Functions", "函数");
+        let strings_label = self.t("Strings", "字符串");
+        let imports_label = self.t("Imports", "导入");
+        let xrefs_label = self.t("Xrefs", "引用");
         egui::Panel::left("recraft_side")
-            .default_size(250.0)
+            .default_size(280.0)
             .resizable(true)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.side_tab, SideTab::Segments, segments_label);
                     ui.selectable_value(&mut self.side_tab, SideTab::Functions, functions_label);
+                    ui.selectable_value(&mut self.side_tab, SideTab::Strings, strings_label);
+                    ui.selectable_value(&mut self.side_tab, SideTab::Imports, imports_label);
+                    ui.selectable_value(&mut self.side_tab, SideTab::Xrefs, xrefs_label);
                 });
                 ui.separator();
+                if self.side_tab == SideTab::Strings {
+                    let hint = self.t("substring…", "子串…");
+                    ui.horizontal(|ui| {
+                        ui.weak(self.t("filter", "过滤"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.string_filter)
+                                .desired_width(f32::INFINITY)
+                                .hint_text(hint),
+                        );
+                    });
+                }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| match self.side_tab {
@@ -453,8 +612,8 @@ impl ReCraftApp {
                         SideTab::Functions => {
                             if self.functions.is_empty() {
                                 ui.weak(self.t(
-                                    "No functions yet — automatic analysis lands in M1.",
-                                    "还没有函数——自动分析在 M1 落地。",
+                                    "No functions yet — press Analyze (F5).",
+                                    "还没有函数——按 Analyze（F5）。",
                                 ));
                             }
                             for function in &self.functions {
@@ -465,6 +624,69 @@ impl ReCraftApp {
                                 );
                                 if ui.selectable_label(false, label).clicked() {
                                     *action = Action::Navigate(function.start);
+                                }
+                            }
+                        }
+                        SideTab::Strings => {
+                            if self.strings.is_empty() {
+                                ui.weak(self.t(
+                                    "No strings yet — run Analyze (F5).",
+                                    "还没有字符串——运行 Analyze（F5）。",
+                                ));
+                            }
+                            let filter = self.string_filter.to_lowercase();
+                            let mut shown = 0usize;
+                            for (addr, text) in &self.strings {
+                                if !filter.is_empty() && !text.to_lowercase().contains(&filter) {
+                                    continue;
+                                }
+                                if shown >= 2000 {
+                                    ui.weak(self.t("(first 2000 matches)", "(仅显示前 2000 条)"));
+                                    break;
+                                }
+                                shown += 1;
+                                let label = format!("{:#012x}  {text}", addr.get());
+                                if ui.selectable_label(false, label).clicked() {
+                                    *action = Action::Navigate(*addr);
+                                }
+                            }
+                        }
+                        SideTab::Imports => {
+                            if self.imports.is_empty() {
+                                ui.weak(self.t(
+                                    "No imports (or open a project first).",
+                                    "没有导入（或先打开项目）。",
+                                ));
+                            }
+                            for import in &self.imports {
+                                let label = format!(
+                                    "{}!{}  [{}]  ×{}",
+                                    import.module, import.api, import.category, import.refs
+                                );
+                                if ui.selectable_label(false, label).clicked() {
+                                    *action =
+                                        Action::Navigate(import.first_from.unwrap_or(import.iat));
+                                }
+                            }
+                        }
+                        SideTab::Xrefs => {
+                            let Some(addr) = self.disasm_rows.get(self.selected).map(|l| l.addr)
+                            else {
+                                ui.weak(self.t("no selection", "没有选中行"));
+                                return;
+                            };
+                            ui.weak(format!(
+                                "{} {:#x}",
+                                self.t("references to", "引用目标"),
+                                addr.get()
+                            ));
+                            if self.xrefs.is_empty() {
+                                ui.weak(self.t("no references", "没有引用"));
+                            }
+                            for (from, kind) in &self.xrefs {
+                                let label = format!("<- {:#012x}  {kind}", from.get());
+                                if ui.selectable_label(false, label).clicked() {
+                                    *action = Action::Navigate(*from);
                                 }
                             }
                         }
@@ -774,6 +996,9 @@ impl ReCraftApp {
                         self.functions_dirty = true;
                         self.disasm_dirty = true;
                         self.pseudo_dirty = true;
+                        self.strings_dirty = true;
+                        self.imports_dirty = true;
+                        self.xrefs_for = None;
                         self.set_status(format!(
                             "{} functions, {} strings in {elapsed_ms:.0} ms",
                             result.functions.len(),
@@ -921,6 +1146,15 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
     );
 }
 
+fn xref_kind_name(kind: i64) -> &'static str {
+    match kind {
+        recraft_analysis::XREF_CALL => "call",
+        recraft_analysis::XREF_JUMP => "jump",
+        recraft_analysis::XREF_DATA => "data",
+        _ => "other",
+    }
+}
+
 fn resolve_address(session: &Session, raw: &str) -> Result<Address, String> {
     let raw = raw.trim();
     if raw.eq_ignore_ascii_case("entry") {
@@ -1033,5 +1267,58 @@ mod tests {
             max_frame_ms < 100.0,
             "first frames should stay interactive, took {max_frame_ms:.1} ms"
         );
+    }
+
+    /// Render every side-panel tab against a real analysed project (notepad), so the
+    /// strings/imports/xrefs views are exercised without a window.
+    #[test]
+    fn headless_side_panels_render() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-panels.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).unwrap();
+        recraft_analysis::persist_strings(&mut session, &strings).unwrap();
+
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+
+        for tab in [
+            SideTab::Functions,
+            SideTab::Strings,
+            SideTab::Imports,
+            SideTab::Xrefs,
+            SideTab::Segments,
+        ] {
+            app.side_tab = tab;
+            for frame in 0..2 {
+                input.time = Some(frame as f64 / 60.0);
+                let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+                output.textures_delta.clear();
+            }
+            assert!(
+                !app.disasm_rows.is_empty(),
+                "disassembly empty while rendering {tab:?}"
+            );
+        }
+        assert!(!app.strings.is_empty(), "strings panel data missing");
+        assert!(!app.imports.is_empty(), "imports panel data missing");
     }
 }
