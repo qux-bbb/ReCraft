@@ -83,7 +83,15 @@ impl Lifter {
         let mut stmts = Vec::new();
         let addr = insn.addr();
         let flow = match insn.mnemonic() {
-            M::Mov => self.lift_mov(insn, &mut stmts),
+            M::Mov
+            | M::Movd
+            | M::Movq
+            | M::Movdqa
+            | M::Movdqu
+            | M::Movaps
+            | M::Movups
+            | M::Movss
+            | M::Movsd => self.lift_mov(insn, &mut stmts),
             M::Movzx => self.lift_movx(insn, &mut stmts, false),
             M::Movsx | M::Movsxd => self.lift_movx(insn, &mut stmts, true),
             M::Lea => self.lift_lea(insn, &mut stmts),
@@ -111,6 +119,62 @@ impl Lifter {
                 self.lift_cmp(insn, true);
                 Flow::Fallthrough
             }
+            M::Imul => self.lift_imul(insn, &mut stmts),
+            M::Push => self.lift_push(insn, &mut stmts),
+            M::Pop => self.lift_pop(insn, &mut stmts),
+            // Packed integer SIMD: lane-wise arithmetic prints as scalar operators.
+            M::Paddb | M::Paddw | M::Paddd | M::Paddq => {
+                self.lift_binary_plain(insn, BinOp::Add, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Psubb | M::Psubw | M::Psubd | M::Psubq => {
+                self.lift_binary_plain(insn, BinOp::Sub, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Pmullw | M::Pmulld | M::Pmuludq => {
+                self.lift_binary_plain(insn, BinOp::Mul, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Pand => {
+                self.lift_binary_plain(insn, BinOp::And, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Por => {
+                self.lift_binary_plain(insn, BinOp::Or, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Pxor | M::Xorps | M::Xorpd => {
+                self.lift_binary_plain(insn, BinOp::Xor, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Psrldq => {
+                self.lift_binary_plain(insn, BinOp::Shr, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Pslldq => {
+                self.lift_binary_plain(insn, BinOp::Shl, &mut stmts);
+                Flow::Fallthrough
+            }
+            // Scalar float arithmetic (single/double precision).
+            M::Addss | M::Addsd => {
+                self.lift_binary_plain(insn, BinOp::Add, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Subss | M::Subsd => {
+                self.lift_binary_plain(insn, BinOp::Sub, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Mulss | M::Mulsd => {
+                self.lift_binary_plain(insn, BinOp::Mul, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Divss | M::Divsd => {
+                self.lift_binary_plain(insn, BinOp::Div, &mut stmts);
+                Flow::Fallthrough
+            }
+            M::Cvttss2si | M::Cvttsd2si | M::Cvtsi2ss | M::Cvtsi2sd => {
+                self.lift_convert(insn, &mut stmts)
+            }
             M::Call => match insn.flow() {
                 recraft_decode::FlowKind::Call => match insn.branch_target() {
                     Some(target) => {
@@ -134,6 +198,8 @@ impl Lifter {
             mnemonic => {
                 if let Some(kind) = condition_of(mnemonic) {
                     self.lift_jcc(insn, kind, &mut stmts)
+                } else if let Some(kind) = cmov_condition_of(mnemonic) {
+                    self.lift_cmov(insn, kind, &mut stmts)
                 } else {
                     self.intrinsic(insn, &mut stmts)
                 }
@@ -405,6 +471,42 @@ impl Lifter {
         }
     }
 
+    fn lift_binary_plain(&mut self, insn: &Insn, op: BinOp, stmts: &mut Vec<Stmt>) {
+        let (Some(lhs), Some(rhs)) = (self.read_operand(insn, 0), self.read_operand(insn, 1))
+        else {
+            stmts.push(Stmt::Intrinsic { text: insn.asm() });
+            return;
+        };
+        let result = self.push(Expr::Bin { op, lhs, rhs });
+        if !self.write_operand(insn, 0, result, stmts) {
+            stmts.push(Stmt::Intrinsic { text: insn.asm() });
+        }
+    }
+
+    /// Float <-> integer conversions: modelled as a cast; flag state is dropped because
+    /// these instructions do not update EFLAGS.
+    fn lift_convert(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Mnemonic as M;
+        let Some(source) = self.read_operand(insn, 1) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let width = match insn.mnemonic() {
+            M::Cvttss2si | M::Cvttsd2si => destination_width(insn).unwrap_or(4),
+            _ => 4,
+        };
+        let cast = self.push(Expr::Cast {
+            arg: source,
+            width,
+            signed: true,
+        });
+        if self.write_operand(insn, 0, cast, stmts) {
+            self.last_cmp = None;
+            Flow::Fallthrough
+        } else {
+            self.intrinsic(insn, stmts)
+        }
+    }
+
     fn lift_cmp(&mut self, insn: &Insn, test: bool) {
         let (Some(lhs), Some(rhs)) = (self.read_operand(insn, 0), self.read_operand(insn, 1))
         else {
@@ -436,26 +538,144 @@ impl Lifter {
         let Some(target) = insn.branch_target() else {
             return self.intrinsic(insn, stmts);
         };
-        let cond = match (self.last_cmp, kind.comparison_symbol()) {
-            (Some(state), Some(_))
-                if state.source == CmpSource::Arithmetic || uses_zero_only(kind) =>
-            {
-                self.push(Expr::Cmp {
-                    kind,
-                    lhs: state.lhs,
-                    rhs: state.rhs,
-                })
-            }
-            _ => {
-                // Flags not modelled: keep the branch, but say so.
-                stmts.push(Stmt::Intrinsic {
-                    text: format!("if ({} /* unmodelled flags */) goto {target}", insn.asm()),
-                });
-                return Flow::Fallthrough;
-            }
+        let Some(condition) = self.condition_expr(kind, true) else {
+            // Flags not modelled: keep the branch, but say so.
+            stmts.push(Stmt::Intrinsic {
+                text: format!("if ({} /* unmodelled flags */) goto {target}", insn.asm()),
+            });
+            return Flow::Fallthrough;
         };
-        self.last_cmp = None;
-        Flow::CondGoto { cond, target }
+        Flow::CondGoto {
+            cond: condition,
+            target,
+        }
+    }
+
+    /// Build `Expr::Cmp` from the lazily tracked comparison when its flags are usable for
+    /// `kind`. `consume` clears the tracked comparison (branches do; `cmov` does not).
+    fn condition_expr(&mut self, kind: CondKind, consume: bool) -> Option<ExprId> {
+        let state = self.last_cmp?;
+        if state.source != CmpSource::Arithmetic && !uses_zero_only(kind) {
+            return None;
+        }
+        let condition = self.push(Expr::Cmp {
+            kind,
+            lhs: state.lhs,
+            rhs: state.rhs,
+        });
+        if consume {
+            self.last_cmp = None;
+        }
+        Some(condition)
+    }
+
+    fn lift_imul(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        // 2-operand: dst = dst * src; 3-operand: dst = src * imm. The one-operand form
+        // writes rdx:rax and stays an intrinsic.
+        let (lhs, rhs) = match insn.op_count() {
+            2 => (self.read_operand(insn, 0), self.read_operand(insn, 1)),
+            3 => (self.read_operand(insn, 1), self.read_operand(insn, 2)),
+            _ => return self.intrinsic(insn, stmts),
+        };
+        let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let product = self.push(Expr::Bin {
+            op: BinOp::Mul,
+            lhs,
+            rhs,
+        });
+        if self.write_operand(insn, 0, product, stmts) {
+            // imul clobbers flags; zero-only consumers must not reuse an old compare.
+            self.last_cmp = None;
+            Flow::Fallthrough
+        } else {
+            self.intrinsic(insn, stmts)
+        }
+    }
+
+    fn lift_cmov(&mut self, insn: &Insn, kind: CondKind, stmts: &mut Vec<Stmt>) -> Flow {
+        let Some(condition) = self.condition_expr(kind, false) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let (Some(source), Some(current)) =
+            (self.read_operand(insn, 1), self.read_operand(insn, 0))
+        else {
+            return self.intrinsic(insn, stmts);
+        };
+        let selected = self.push(Expr::Select {
+            cond: condition,
+            then: source,
+            otherwise: current,
+        });
+        if self.write_operand(insn, 0, selected, stmts) {
+            // cmov preserves flags: the tracked comparison stays valid for a later jcc.
+            Flow::Fallthrough
+        } else {
+            self.intrinsic(insn, stmts)
+        }
+    }
+
+    fn pointer_size(insn: &Insn) -> usize {
+        if insn.mode().is_64() { 8 } else { 4 }
+    }
+
+    fn lift_push(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        let size = Self::pointer_size(insn);
+        let Some(value) = self.read_operand(insn, 0) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let rsp_old = self.reg(RegView::full(crate::reg::Reg::Rsp));
+        let delta = self.constant(size as u64);
+        let rsp_new = self.push(Expr::Bin {
+            op: BinOp::Sub,
+            lhs: rsp_old,
+            rhs: delta,
+        });
+        // Store before updating rsp: the emitted expression is evaluated at its print
+        // position, so `*(u64*)((rsp - 8))` must still see the old stack pointer.
+        stmts.push(Stmt::Store {
+            addr: rsp_new,
+            value,
+            size: size as u8,
+        });
+        stmts.push(Stmt::WriteReg {
+            reg: RegView::full(crate::reg::Reg::Rsp),
+            value: rsp_new,
+        });
+        Flow::Fallthrough
+    }
+
+    fn lift_pop(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::OpKind;
+        let size = Self::pointer_size(insn);
+        // `pop rsp` has order-dependent semantics; keep it as assembly.
+        if insn.op_kind(0) == OpKind::Register
+            && crate::reg::from_iced(insn.op_register(0))
+                .is_some_and(|view| view.base == crate::reg::Reg::Rsp)
+        {
+            return self.intrinsic(insn, stmts);
+        }
+        let rsp = self.reg(RegView::full(crate::reg::Reg::Rsp));
+        let value = self.push(Expr::Load {
+            addr: rsp,
+            size: size as u8,
+        });
+        if !self.write_operand(insn, 0, value, stmts) {
+            return self.intrinsic(insn, stmts);
+        }
+        let rsp_old = self.reg(RegView::full(crate::reg::Reg::Rsp));
+        let delta = self.constant(size as u64);
+        let rsp_new = self.push(Expr::Bin {
+            op: BinOp::Add,
+            lhs: rsp_old,
+            rhs: delta,
+        });
+        stmts.push(Stmt::WriteReg {
+            reg: RegView::full(crate::reg::Reg::Rsp),
+            value: rsp_new,
+        });
+        Flow::Fallthrough
     }
 }
 
@@ -488,6 +708,29 @@ fn condition_of(mnemonic: iced_x86::Mnemonic) -> Option<CondKind> {
     })
 }
 
+fn cmov_condition_of(mnemonic: iced_x86::Mnemonic) -> Option<CondKind> {
+    use iced_x86::Mnemonic as M;
+    Some(match mnemonic {
+        M::Cmove => CondKind::Eq,
+        M::Cmovne => CondKind::Ne,
+        M::Cmova => CondKind::UnsignedGt,
+        M::Cmovae => CondKind::UnsignedGe,
+        M::Cmovb => CondKind::UnsignedLt,
+        M::Cmovbe => CondKind::UnsignedLe,
+        M::Cmovg => CondKind::SignedGt,
+        M::Cmovge => CondKind::SignedGe,
+        M::Cmovl => CondKind::SignedLt,
+        M::Cmovle => CondKind::SignedLe,
+        M::Cmovs => CondKind::Sign,
+        M::Cmovns => CondKind::NotSign,
+        M::Cmovo => CondKind::Overflow,
+        M::Cmovno => CondKind::NotOverflow,
+        M::Cmovp => CondKind::Parity,
+        M::Cmovnp => CondKind::NotParity,
+        _ => return None,
+    })
+}
+
 fn destination_width(insn: &Insn) -> Option<u8> {
     if insn.op_kind(0) != iced_x86::OpKind::Register {
         return None;
@@ -502,6 +745,7 @@ fn memory_size_bytes(insn: &Insn) -> Option<u8> {
         S::UInt16 | S::Int16 => 2,
         S::UInt32 | S::Int32 | S::Float32 => 4,
         S::UInt64 | S::Int64 | S::Float64 => 8,
+        S::UInt128 | S::Int128 => 16,
         _ => return None,
     })
 }
@@ -652,9 +896,128 @@ mod tests {
 
     #[test]
     fn unsupported_becomes_intrinsic() {
+        let (_, cpuid) = lift_one(&[0x0f, 0xa2], 0x1000); // cpuid
+        match &cpuid.stmts[0] {
+            Stmt::Intrinsic { text } => assert!(text.contains("cpuid"), "text: {text}"),
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn push_and_pop_model_the_stack_pointer() {
         let (_, push) = lift_one(&[0x50], 0x1000); // push rax
-        match &push.stmts[0] {
-            Stmt::Intrinsic { text } => assert!(text.contains("push"), "text: {text}"),
+        assert!(
+            push.stmts
+                .iter()
+                .all(|stmt| !matches!(stmt, Stmt::Intrinsic { .. })),
+            "push fell back to intrinsic: {:?}",
+            push.stmts
+        );
+        assert!(matches!(push.stmts[0], Stmt::Store { size: 8, .. }));
+        assert!(matches!(
+            push.stmts[1],
+            Stmt::WriteReg { reg, .. } if reg.base == crate::reg::Reg::Rsp
+        ));
+
+        let (_, pop) = lift_one(&[0x58], 0x1000); // pop rax
+        assert!(matches!(
+            pop.stmts[0],
+            Stmt::WriteReg { ref reg, .. } if reg.name() == "rax"
+        ));
+        assert!(matches!(
+            pop.stmts[1],
+            Stmt::WriteReg { reg, .. } if reg.base == crate::reg::Reg::Rsp
+        ));
+    }
+
+    #[test]
+    fn imul_lifts_to_multiplication() {
+        let (lifter, item) = lift_one(&[0x0f, 0xaf, 0xc3], 0x1000); // imul eax, ebx
+        match &item.stmts[0] {
+            Stmt::WriteReg { value, .. } => assert!(matches!(
+                lifter.expr(*value),
+                Expr::Bin { op: BinOp::Mul, .. }
+            )),
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cmov_uses_the_lazy_comparison_and_keeps_flags() {
+        let cmp = recraft_decode::decode(
+            &[0x3b, 0xc3],
+            Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("cmp");
+        let cmov = recraft_decode::decode(
+            &[0x0f, 0x45, 0xc3],
+            Address::new(0x1002),
+            recraft_decode::Mode::X64,
+        )
+        .expect("cmovne");
+        let mut lifter = Lifter::new();
+        lifter.lift(&cmp);
+        let item = lifter.lift(&cmov);
+        assert!(
+            item.stmts
+                .iter()
+                .all(|stmt| !matches!(stmt, Stmt::Intrinsic { .. })),
+            "cmov fell back to intrinsic"
+        );
+        match &item.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(lifter.expr(*value), Expr::Select { .. }))
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simd_and_float_ops_are_lifted() {
+        // movdqa xmm0, xmm1
+        let (_, movdqa) = lift_one(&[0x66, 0x0f, 0x6f, 0xc1], 0x1000);
+        assert!(
+            matches!(movdqa.stmts[0], Stmt::WriteReg { ref reg, .. } if reg.name() == "xmm0"),
+            "unexpected: {:?}",
+            movdqa.stmts
+        );
+        // paddd xmm0, xmm1
+        let (lifter, paddd) = lift_one(&[0x66, 0x0f, 0xfe, 0xc1], 0x1000);
+        assert!(
+            paddd
+                .stmts
+                .iter()
+                .all(|stmt| !matches!(stmt, Stmt::Intrinsic { .. })),
+            "paddd fell back: {:?}",
+            paddd.stmts
+        );
+        match &paddd.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Bin { op: BinOp::Add, .. }
+                ))
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+        // addss xmm0, xmm1
+        let (lifter, addss) = lift_one(&[0xf3, 0x0f, 0x58, 0xc1], 0x1000);
+        assert!(
+            addss
+                .stmts
+                .iter()
+                .all(|stmt| !matches!(stmt, Stmt::Intrinsic { .. })),
+            "addss fell back: {:?}",
+            addss.stmts
+        );
+        match &addss.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Bin { op: BinOp::Add, .. }
+                ))
+            }
             other => panic!("unexpected stmt {other:?}"),
         }
     }

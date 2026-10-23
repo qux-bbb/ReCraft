@@ -298,13 +298,8 @@ mod tests {
         };
         let report = measure(&mut session, 500).unwrap();
         assert!(report.total() >= 10, "too few functions");
-        // v1 target is 95% semantics coverage; the corpus still has intrinsic
-        // fallbacks (push/pop/imul/cmov...) so the gate tracks the current floor.
-        assert!(
-            report.coverage() > 0.75,
-            "coverage {:.3}",
-            report.coverage()
-        );
+        // v1 target is 95% semantics coverage (GPR, stack, cmov/imul, SSE subset).
+        assert!(report.coverage() > 0.9, "coverage {:.3}", report.coverage());
         // M2 exit gate: structured success rate >= 60%.
         assert!(
             report.structured_rate() > 0.6,

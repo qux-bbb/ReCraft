@@ -190,6 +190,13 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
             {
                 frame_established = true;
             }
+            if let Stmt::WriteReg { reg, .. } = stmt
+                && !frame_established
+                && reg.base == Reg::Rsp
+            {
+                // push/pop and `sub esp, N` are lifted as writes to the stack pointer.
+                esp_shifted = true;
+            }
             walk_stmt_loads(stmt, &exprs, &mut |addr| {
                 let Some((base, offset)) = stack_add(&exprs, addr) else {
                     return;
@@ -286,6 +293,15 @@ fn walk_expr_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId)) {
             walk_expr_loads(exprs, *lhs, visit);
             walk_expr_loads(exprs, *rhs, visit);
         }
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            walk_expr_loads(exprs, *cond, visit);
+            walk_expr_loads(exprs, *then, visit);
+            walk_expr_loads(exprs, *otherwise, visit);
+        }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_expr_loads(exprs, *arg, visit),
         Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
     }
@@ -298,6 +314,15 @@ fn walk_expr(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(&RegView)) {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             walk_expr(exprs, *lhs, visit);
             walk_expr(exprs, *rhs, visit);
+        }
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            walk_expr(exprs, *cond, visit);
+            walk_expr(exprs, *then, visit);
+            walk_expr(exprs, *otherwise, visit);
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_expr(exprs, *arg, visit),
         Expr::Const(_) | Expr::Temp(_) => {}

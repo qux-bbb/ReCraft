@@ -369,6 +369,14 @@ impl Printer<'_> {
         }
     }
 
+    /// C spelling for a load/store width (16-byte operands are SSE vectors).
+    fn scalar_type(size: u8) -> String {
+        match size {
+            16 => "__m128".to_owned(),
+            other => format!("u{}", u16::from(other) * 8),
+        }
+    }
+
     /// Render a stack reference: a recovered x86 argument name, otherwise `var_XX` for
     /// rsp slots and frame-pointer locals. Positive `[rbp+...]` without a stack-argument
     /// match stays a raw pointer (it may be the return address / caller frame).
@@ -398,8 +406,8 @@ impl Printer<'_> {
                     format!("{} = {}", Self::stack_name(offset), self.expr(*value))
                 } else {
                     format!(
-                        "*(u{}*)({}) = {}",
-                        u16::from(*size) * 8,
+                        "*({}*)({}) = {}",
+                        Self::scalar_type(*size),
                         self.expr(*addr),
                         self.expr(*value)
                     )
@@ -432,7 +440,7 @@ impl Printer<'_> {
                 {
                     name
                 } else {
-                    format!("*(u{}*)({})", u16::from(*size) * 8, self.expr(*addr))
+                    format!("*({}*)({})", Self::scalar_type(*size), self.expr(*addr))
                 }
             }
             Expr::Bin { op, lhs, rhs } => {
@@ -463,6 +471,16 @@ impl Printer<'_> {
                 }
                 None => format!("/* {} */ 0", cond_name(*kind)),
             },
+            Expr::Select {
+                cond,
+                then,
+                otherwise,
+            } => format!(
+                "({} ? {} : {})",
+                self.expr(*cond),
+                self.expr(*then),
+                self.expr(*otherwise)
+            ),
         }
     }
 }

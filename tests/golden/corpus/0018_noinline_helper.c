@@ -4,7 +4,7 @@ void noinline_helper_l1(void) {
     var_8 = edx;
     eax = var_8;
     ecx = var_10;
-    __asm("imul eax, ecx");
+    eax = (eax * ecx);
     eax = (eax + 7);
     return;
 }

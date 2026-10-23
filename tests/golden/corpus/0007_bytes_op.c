@@ -9,34 +9,34 @@ void bytes_op_l1(void) {
     __asm("if (jle short 0xADDR /* unmodelled flags */) goto 0xADDR");
     if (!(r11d < 8)) {
         r9 = r11;
-        __asm("xorps xmm3, xmm3");
+        xmm3 = (xmm3 ^ xmm3);
         r9 = (r9 & 0xADDR);
-        __asm("xorps xmm2, xmm2");
+        xmm2 = (xmm2 ^ xmm2);
         rdx = r10;
         while (1) {
-            __asm("movd xmm1, [rdx]");
-            __asm("xorps xmm0, xmm0");
+            xmm1 = *(u32*)(rdx);
+            xmm0 = (xmm0 ^ xmm0);
             __asm("punpcklbw xmm1, xmm0");
             ecx = (ecx + 8);
             __asm("punpcklwd xmm1, xmm0");
-            __asm("paddd xmm3, xmm1");
-            __asm("movd xmm1, [rdx+0xADDR]");
+            xmm3 = (xmm3 + xmm1);
+            xmm1 = *(u32*)((rdx + 4));
             rdx = (rdx + 8);
             __asm("punpcklbw xmm1, xmm0");
             rax = rdx;
             __asm("punpcklwd xmm1, xmm0");
             rax = (rax - r10);
-            __asm("paddd xmm2, xmm1");
+            xmm2 = (xmm2 + xmm1);
             if ((rax >= r9 /* signed */)) break;
         }
-        __asm("paddd xmm2, xmm3");
-        __asm("movdqa xmm0, xmm2");
-        __asm("psrldq xmm0, 0xADDR");
-        __asm("paddd xmm2, xmm0");
-        __asm("movdqa xmm0, xmm2");
-        __asm("psrldq xmm0, 0xADDR");
-        __asm("paddd xmm2, xmm0");
-        __asm("movd r9d, xmm2");
+        xmm2 = (xmm2 + xmm3);
+        xmm0 = xmm2;
+        xmm0 = (xmm0 >> 8);
+        xmm2 = (xmm2 + xmm0);
+        xmm0 = xmm2;
+        xmm0 = (xmm0 >> 4);
+        xmm2 = (xmm2 + xmm0);
+        r9d = xmm2;
     }
     rax = (int64*)(ecx);
     edx = r8d;

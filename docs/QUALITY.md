@@ -37,12 +37,19 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 functions:              24
 structured:             21 (87.5%)
 instructions:           346
-intrinsic instructions: 67 (coverage 80.6%)
+intrinsic instructions: 13 (coverage 96.2%)
 goto fallback functions: 3
 ```
 
-结构化成功率已达 M2/M3 门槛；语义覆盖率与 95% 的 v1 目标仍有差距，主要缺口是
-`push/pop`（栈语义）、`imul`、`cmov`、间接跳转——列入下一批语义提升。
+语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
+（`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
+`xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是
+**洗牌/解包类 SIMD**（`pshufd`、`punpcklbw/lwd`）、1 条 16 字节 `movdqa` 内存形、
+**间接跳转**（`jmp rcx/rax/r9`）和 **SSE 比较后的未建模标志分支**——语义不可用标量
+表达式直译，保留 `__asm` 是设计允许的降级路径。
+
+真实样本 notepad：443 函数、覆盖率 90.8%、结构化 49.2%（体积小、CRT 紧凑函数多，
+回退分支多）；不作为门禁，仅作为观察指标。
 
 ## golden 快照
 

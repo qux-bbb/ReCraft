@@ -2,7 +2,7 @@
 void caller_l1(void) {
     if ((ecx <= 0xADDR /* signed */)) {
         eax = (eax ^ eax);
-        __asm("cmovl ecx, eax");
+        ecx = ((ecx < 0xADDR /* signed */) ? eax : ecx);
         eax = ecx;
         return;
     }

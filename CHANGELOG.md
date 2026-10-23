@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Semantic lifting batch 1: `push`/`pop` (stack-pointer side effects and the memory
+  access, ordered so the printed expression sees the old `rsp`), `imul` (2/3-operand),
+  `cmovcc` (new `Expr::Select` keeping lazy flags valid), and an SSE/float subset
+  (XMM register file: `movd/movq/movdqa/movdqu/movaps/movups/movss/movsd`,
+  `padd*/psub*/pmulld/pand/por/pxor`, `psrldq/pslldq`, scalar `addss/addsd/.../divsd`,
+  `cvttss2si/cvtsi2ss`). Corpus semantic coverage 80.6% -> **96.2%** (v1 target 95%);
+  CI coverage gate raised to 0.9. Golden snapshots regenerated.
+
 - Quality gates (DESIGN 7.4): `recraft metrics` reports instruction semantic coverage
   (intrinsic fallbacks) and structured success rate, with `--min-structured` /
   `--min-coverage` turning it into a failing gate; `recraft golden` writes or checks

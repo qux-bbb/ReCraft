@@ -9,7 +9,8 @@
 use recraft_decode::iced_x86;
 use serde::{Deserialize, Serialize};
 
-/// One of the 16 general-purpose x86-64 registers.
+/// General-purpose and SSE registers. XMM views are only used by the lifter to keep
+/// SIMD/float code out of the intrinsic fallback; their arithmetic prints lane-wise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Reg {
     Rax,
@@ -28,21 +29,59 @@ pub enum Reg {
     R13,
     R14,
     R15,
+    Xmm0,
+    Xmm1,
+    Xmm2,
+    Xmm3,
+    Xmm4,
+    Xmm5,
+    Xmm6,
+    Xmm7,
+    Xmm8,
+    Xmm9,
+    Xmm10,
+    Xmm11,
+    Xmm12,
+    Xmm13,
+    Xmm14,
+    Xmm15,
 }
 
 impl Reg {
-    const NAMES: [&'static str; 16] = [
+    const NAMES: [&'static str; 32] = [
         "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12",
-        "r13", "r14", "r15",
+        "r13", "r14", "r15", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+        "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
     ];
 
-    /// 64-bit name of this register.
+    /// 64-bit (or full XMM) name of this register.
     pub fn name64(self) -> &'static str {
         Self::NAMES[self as usize]
     }
 
     /// Name for a width in bytes (1, 2, 4, 8), ignoring high-byte views.
     pub fn name_width(self, width: u8) -> &'static str {
+        if matches!(
+            self,
+            Reg::Xmm0
+                | Reg::Xmm1
+                | Reg::Xmm2
+                | Reg::Xmm3
+                | Reg::Xmm4
+                | Reg::Xmm5
+                | Reg::Xmm6
+                | Reg::Xmm7
+                | Reg::Xmm8
+                | Reg::Xmm9
+                | Reg::Xmm10
+                | Reg::Xmm11
+                | Reg::Xmm12
+                | Reg::Xmm13
+                | Reg::Xmm14
+                | Reg::Xmm15
+        ) {
+            return self.name64();
+        }
         match width {
             8 => self.name64(),
             4 => match self {
@@ -62,6 +101,7 @@ impl Reg {
                 Reg::R13 => "r13d",
                 Reg::R14 => "r14d",
                 Reg::R15 => "r15d",
+                _ => self.name64(),
             },
             2 => match self {
                 Reg::Rax => "ax",
@@ -80,6 +120,7 @@ impl Reg {
                 Reg::R13 => "r13w",
                 Reg::R14 => "r14w",
                 Reg::R15 => "r15w",
+                _ => self.name64(),
             },
             1 => match self {
                 Reg::Rax => "al",
@@ -98,6 +139,7 @@ impl Reg {
                 Reg::R13 => "r13b",
                 Reg::R14 => "r14b",
                 Reg::R15 => "r15b",
+                _ => self.name64(),
             },
             _ => self.name64(),
         }
@@ -228,6 +270,22 @@ pub fn from_iced(register: iced_x86::Register) -> Option<RegView> {
         R::R15D => (R15, 4, 0),
         R::R15W => (R15, 2, 0),
         R::R15L => (R15, 1, 0),
+        R::XMM0 => (Xmm0, 16, 0),
+        R::XMM1 => (Xmm1, 16, 0),
+        R::XMM2 => (Xmm2, 16, 0),
+        R::XMM3 => (Xmm3, 16, 0),
+        R::XMM4 => (Xmm4, 16, 0),
+        R::XMM5 => (Xmm5, 16, 0),
+        R::XMM6 => (Xmm6, 16, 0),
+        R::XMM7 => (Xmm7, 16, 0),
+        R::XMM8 => (Xmm8, 16, 0),
+        R::XMM9 => (Xmm9, 16, 0),
+        R::XMM10 => (Xmm10, 16, 0),
+        R::XMM11 => (Xmm11, 16, 0),
+        R::XMM12 => (Xmm12, 16, 0),
+        R::XMM13 => (Xmm13, 16, 0),
+        R::XMM14 => (Xmm14, 16, 0),
+        R::XMM15 => (Xmm15, 16, 0),
         _ => return None,
     };
     Some(RegView::new(base, width, offset))
@@ -258,6 +316,10 @@ mod tests {
             from_iced(iced_x86::Register::R15W),
             Some(RegView::new(Reg::R15, 2, 0))
         );
-        assert_eq!(from_iced(iced_x86::Register::XMM0), None);
+        assert_eq!(
+            from_iced(iced_x86::Register::XMM0),
+            Some(RegView::new(Reg::Xmm0, 16, 0))
+        );
+        assert_eq!(from_iced(iced_x86::Register::MM0), None);
     }
 }

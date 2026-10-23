@@ -14,7 +14,7 @@ void loopy_l1(void) {
             if ((eax >= r9d /* signed */)) break;
         }
     }
-    __asm("cmovge eax, r10d");
+    eax = ((eax >= ecx /* signed */) ? r10d : eax);
     eax = (eax + r8d);
     eax = (eax + edx);
     return;

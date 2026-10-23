@@ -21,6 +21,7 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    Div,
     And,
     Or,
     Xor,
@@ -35,6 +36,7 @@ impl BinOp {
             BinOp::Add => "+",
             BinOp::Sub => "-",
             BinOp::Mul => "*",
+            BinOp::Div => "/",
             BinOp::And => "&",
             BinOp::Or => "|",
             BinOp::Xor => "^",
@@ -123,6 +125,13 @@ pub enum Expr {
         kind: CondKind,
         lhs: ExprId,
         rhs: ExprId,
+    },
+    /// `cmovcc`: `cond ? then : otherwise`. The condition comes from the lazily tracked
+    /// comparison; the instruction preserves flags.
+    Select {
+        cond: ExprId,
+        then: ExprId,
+        otherwise: ExprId,
     },
 }
 

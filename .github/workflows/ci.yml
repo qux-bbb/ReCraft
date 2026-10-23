@@ -50,7 +50,7 @@ jobs:
           $project = Join-Path $env:RUNNER_TEMP 'corpus-quality.rcraft'
           Invoke-Recraft @('import', 'corpus/build/x64/corpus.exe', '-o', $project)
           Invoke-Recraft @('analyze', $project)
-          Invoke-Recraft @('metrics', $project, '--min-structured', '0.6', '--min-coverage', '0.75')
+          Invoke-Recraft @('metrics', $project, '--min-structured', '0.6', '--min-coverage', '0.9')
           $golden = Join-Path $env:RUNNER_TEMP 'golden-corpus'
           Invoke-Recraft @('golden', $project, '--dir', $golden)
           Invoke-Recraft @('golden', $project, '--dir', $golden, '--check')
