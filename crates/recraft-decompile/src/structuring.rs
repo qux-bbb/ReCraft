@@ -1648,6 +1648,23 @@ mod tests {
     }
 
     #[test]
+    fn x86_call_arguments_are_recovered_from_pushes() {
+        let Some((mut session, _dir)) = analyzed_x86_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "recursive").expect("x86 recursive");
+        session
+            .execute(recraft_core::Command::SetPrototype {
+                addr: start,
+                text: Some("int __cdecl recursive(int n)".to_owned()),
+            })
+            .unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("recursive("), "{text}");
+        assert!(!text.contains("recursive()"), "{text}");
+    }
+
+    #[test]
     fn output_is_deterministic() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- x86 stack call arguments: the lifter records `push` values (newest push first) and
+  appends them to `Stmt::Call` arguments, so cdecl/stdcall call sites render pushed
+  arguments when the callee has a user prototype (`recursive(eax)` on Win32, x64
+  arguments 5+ likewise); frame adjustments clear stale candidates and calls clear them
+  after use. Tests: x86 callee-prototype argument rendering (plus the existing x64 IR
+  call-capture test). Docs/M2 documents the remaining x86 prototype-signature caveat
+  (automatic stack-slot recovery can be defeated by prologue pushes).
+
 - Call-argument recovery + cross-function prototype propagation: the lifter tracks
   register values per block (`reg_env`) and records x64 call arguments on
   `Stmt::Call { args }`; when the callee has a user prototype, pseudocode renders the

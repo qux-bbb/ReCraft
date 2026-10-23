@@ -39,6 +39,9 @@ pub struct Lifter {
     last_cmp: Option<CmpState>,
     /// Latest value written to each register (used to recover call arguments).
     reg_env: BTreeMap<Reg, ExprId>,
+    /// Recent `push` values (oldest first); the newest pushes are the call arguments
+    /// on x86 (and arguments 5+ on x64).
+    stack_args: Vec<ExprId>,
 }
 
 impl Default for Lifter {
@@ -53,6 +56,7 @@ impl Lifter {
             exprs: Vec::new(),
             last_cmp: None,
             reg_env: BTreeMap::new(),
+            stack_args: Vec::new(),
         }
     }
 
@@ -179,7 +183,7 @@ impl Lifter {
             M::Call => match insn.flow() {
                 recraft_decode::FlowKind::Call => match insn.branch_target() {
                     Some(target) => {
-                        let args = if insn.mode().is_64() {
+                        let mut args: Vec<ExprId> = if insn.mode().is_64() {
                             const ARG_REGS: [Reg; 4] = [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9];
                             ARG_REGS
                                 .iter()
@@ -198,6 +202,12 @@ impl Lifter {
                         } else {
                             Vec::new()
                         };
+                        // Arguments pushed on the stack: newest push is the first
+                        // stack argument (x86: all arguments; x64: arguments 5+).
+                        let stack_count = self.stack_args.len().min(8);
+                        for value in self.stack_args.iter().rev().take(stack_count) {
+                            args.push(*value);
+                        }
                         stmts.push(Stmt::Call { target, args });
                         // Caller-saved registers are clobbered by the call.
                         for reg in [
@@ -290,6 +300,10 @@ impl Lifter {
                     self.reg_env.insert(view.base, value);
                 } else {
                     self.reg_env.remove(&view.base);
+                }
+                if view.base == Reg::Rsp {
+                    // `sub esp`/`add esp` move the frame: stale push values are void.
+                    self.stack_args.clear();
                 }
                 true
             }
@@ -558,6 +572,10 @@ impl Lifter {
                 } else {
                     self.reg_env.remove(&view.base);
                 }
+                if view.base == Reg::Rsp {
+                    // `sub esp`/`add esp` move the frame: stale push values are void.
+                    self.stack_args.clear();
+                }
                 true
             }
             OpKind::Memory => {
@@ -771,6 +789,10 @@ impl Lifter {
             reg: RegView::full(crate::reg::Reg::Rsp),
             value: rsp_new,
         });
+        self.stack_args.push(value);
+        if self.stack_args.len() > 8 {
+            self.stack_args.remove(0);
+        }
         Flow::Fallthrough
     }
 
@@ -803,6 +825,7 @@ impl Lifter {
             reg: RegView::full(crate::reg::Reg::Rsp),
             value: rsp_new,
         });
+        self.stack_args.clear();
         Flow::Fallthrough
     }
 }
