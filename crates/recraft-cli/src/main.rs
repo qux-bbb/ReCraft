@@ -11,7 +11,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use recraft_analysis::{analyze, persist};
 use recraft_common::{Address, AddressRange, Error, Result, demangle};
-use recraft_core::{CodeData, Command, CommentKind, Session};
+use recraft_core::{CodeData, Command, CommentKind, Session, StructDef, StructField};
 use recraft_decompile::pseudocode_l0;
 use serde_json::{Value, json};
 
@@ -283,6 +283,30 @@ enum Commands {
         #[arg(long)]
         addr: String,
     },
+    /// Define or replace a user struct layout (repeatable `--field offset:name:kind`).
+    DefineStruct {
+        project: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        size: u64,
+        /// e.g. `0:count:u32`; kinds: u8/i8/u16/i16/u32/i32/u64/i64/f32/f64/ptr/char/wchar.
+        #[arg(long = "field")]
+        fields: Vec<String>,
+    },
+    /// Bind a struct layout to a function argument slot (`--slot 0` = first argument).
+    ApplyType {
+        project: PathBuf,
+        #[arg(long)]
+        addr: String,
+        #[arg(long)]
+        slot: u8,
+        /// Struct name; omitted clears the binding.
+        #[arg(long = "type")]
+        type_name: Option<String>,
+    },
+    /// List user-defined struct layouts.
+    Structs { project: PathBuf },
     /// Undo the last command.
     Undo { project: PathBuf },
     /// Redo the last undone command.
@@ -420,6 +444,19 @@ fn run(cli: Cli) -> Result<()> {
             text,
         } => cmd_prototype(&project, &addr, Some(&text)),
         Commands::Unprototype { project, addr } => cmd_prototype(&project, &addr, None),
+        Commands::DefineStruct {
+            project,
+            name,
+            size,
+            fields,
+        } => cmd_define_struct(&project, &name, size, &fields),
+        Commands::ApplyType {
+            project,
+            addr,
+            slot,
+            type_name,
+        } => cmd_apply_type(&project, &addr, slot, type_name.as_deref()),
+        Commands::Structs { project } => cmd_structs(&project),
         Commands::Undo { project } => cmd_undo(&project),
         Commands::Redo { project } => cmd_redo(&project),
     }
@@ -1730,6 +1767,75 @@ fn cmd_prototype(project: &Path, addr: &str, text: Option<&str>) -> Result<()> {
     match text {
         Some(text) => println!("prototype at {:#x}: {text}", addr.get()),
         None => println!("prototype at {:#x} removed", addr.get()),
+    }
+    Ok(())
+}
+
+fn cmd_define_struct(project: &Path, name: &str, size: u64, raw_fields: &[String]) -> Result<()> {
+    let mut fields = Vec::with_capacity(raw_fields.len());
+    for raw in raw_fields {
+        let mut parts = raw.split(':');
+        let (Some(offset), Some(field_name), Some(kind), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(Error::unsupported(format!(
+                "invalid --field {raw:?}; expected offset:name:kind"
+            )));
+        };
+        let offset = offset
+            .trim_start_matches("0x")
+            .parse::<u64>()
+            .map_err(|_| Error::unsupported(format!("invalid field offset {offset:?}")))?;
+        fields.push(StructField {
+            offset,
+            name: field_name.to_owned(),
+            kind: kind.to_owned(),
+        });
+    }
+    let def = StructDef {
+        name: name.to_owned(),
+        size,
+        fields,
+    }
+    .validate()?;
+    let mut session = Session::open(project)?;
+    session.execute(Command::DefineStruct { def: def.clone() })?;
+    println!(
+        "defined struct {} (size {}, {} field(s))",
+        def.name,
+        def.size,
+        def.fields.len()
+    );
+    Ok(())
+}
+
+fn cmd_apply_type(project: &Path, addr: &str, slot: u8, type_name: Option<&str>) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let func = resolve_address(&session, addr)?;
+    session.execute(Command::ApplyType {
+        func,
+        slot,
+        struct_name: type_name.map(str::to_owned),
+    })?;
+    match type_name {
+        Some(name) => println!("applied {name} to {:#x} arg{}", func.get(), slot + 1),
+        None => println!("cleared type on {:#x} arg{}", func.get(), slot + 1),
+    }
+    Ok(())
+}
+
+fn cmd_structs(project: &Path) -> Result<()> {
+    let session = Session::open(project)?;
+    let structs = session.structs()?;
+    if structs.is_empty() {
+        println!("no user structs");
+        return Ok(());
+    }
+    for def in structs {
+        println!("struct {} (size {:#x}):", def.name, def.size);
+        for field in &def.fields {
+            println!("  {:#06x}  {:<24} {}", field.offset, field.name, field.kind);
+        }
     }
     Ok(())
 }

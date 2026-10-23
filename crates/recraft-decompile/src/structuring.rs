@@ -18,6 +18,7 @@ use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_ir::{Flow, Reg};
 
+use crate::l2::X64_ARG_REGS;
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
@@ -57,9 +58,27 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
 
     let args = info.as_ref().map(|info| &info.args);
+    // `apply_type`: struct layouts bound to argument registers for this function.
+    let mut arg_structs: BTreeMap<Reg, recraft_core::StructDef> = BTreeMap::new();
+    if let Some(args) = args {
+        for reg in X64_ARG_REGS {
+            if let Some(slot) = args.slot_of(reg)
+                && let Some(def) = session.struct_for_arg(start, slot)?
+            {
+                arg_structs.insert(reg, def);
+            }
+        }
+    }
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
     for block in &cfg.blocks {
-        bodies.push(lift_block(session, block.start, block.end, args, None)?);
+        bodies.push(lift_block(
+            session,
+            block.start,
+            block.end,
+            args,
+            &arg_structs,
+            None,
+        )?);
     }
     // SSA-lite: which registers are already overwritten on every path reaching a block.
     // Re-lifting with that seed keeps `argN` off clobbered values at join points.
@@ -73,6 +92,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
                 block.start,
                 block.end,
                 args,
+                &arg_structs,
                 Some(&seeds[index]),
             )?);
         }
@@ -1066,6 +1086,48 @@ mod tests {
         session.undo().unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
         assert!(!text.contains("// prototype:"), "{text}");
+    }
+
+    #[test]
+    fn applied_struct_type_names_fields_in_pseudocode() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "field_probe").unwrap();
+        session
+            .execute(recraft_core::Command::DefineStruct {
+                def: recraft_core::StructDef {
+                    name: "Probe".to_owned(),
+                    size: 0x18,
+                    fields: vec![recraft_core::StructField {
+                        offset: 0x10,
+                        name: "value".to_owned(),
+                        kind: "i32".to_owned(),
+                    }],
+                },
+            })
+            .unwrap();
+        session
+            .execute(recraft_core::Command::ApplyType {
+                func: start,
+                slot: 0,
+                struct_name: Some("Probe".to_owned()),
+            })
+            .unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("arg1->value"), "{text}");
+        assert!(!text.contains("field_10"), "{text}");
+
+        // Clearing the binding restores the offset-style fallback.
+        session
+            .execute(recraft_core::Command::ApplyType {
+                func: start,
+                slot: 0,
+                struct_name: None,
+            })
+            .unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("arg1->field_10"), "{text}");
     }
 
     #[test]

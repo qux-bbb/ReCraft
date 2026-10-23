@@ -49,6 +49,90 @@ impl CommentKind {
     }
 }
 
+/// One field of a user-defined struct layout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructField {
+    /// Byte offset from the start of the struct.
+    pub offset: u64,
+    pub name: String,
+    /// C-ish field type: `u8`/`i8`/`u16`/`i16`/`u32`/`i32`/`u64`/`i64`/`f32`/`f64`/
+    /// `ptr`/`char`/`wchar`.
+    pub kind: String,
+}
+
+/// A user-defined struct layout (`Command::DefineStruct`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructDef {
+    pub name: String,
+    pub size: u64,
+    /// Sorted by offset, unique.
+    pub fields: Vec<StructField>,
+}
+
+impl StructDef {
+    /// Validate identifier, size and field list; normalises field order.
+    pub fn validate(mut self) -> Result<Self> {
+        if self.name.is_empty()
+            || !self.name.chars().enumerate().all(|(index, ch)| {
+                ch == '_' || ch.is_ascii_alphanumeric() && (index > 0 || !ch.is_ascii_digit())
+            })
+        {
+            return Err(Error::internal(format!(
+                "invalid struct name: {:?}",
+                self.name
+            )));
+        }
+        if self.size == 0 {
+            return Err(Error::internal("struct size must be positive"));
+        }
+        self.fields.sort_by_key(|field| field.offset);
+        for pair in self.fields.windows(2) {
+            if pair[0].offset == pair[1].offset {
+                return Err(Error::internal(format!(
+                    "duplicate field offset {:#x}",
+                    pair[0].offset
+                )));
+            }
+        }
+        for field in &self.fields {
+            if field.offset >= self.size {
+                return Err(Error::internal(format!(
+                    "field {:?} offset {:#x} outside struct size {:#x}",
+                    field.name, field.offset, self.size
+                )));
+            }
+            if field.name.is_empty() {
+                return Err(Error::internal("empty struct field name"));
+            }
+            if !matches!(
+                field.kind.as_str(),
+                "u8" | "i8"
+                    | "u16"
+                    | "i16"
+                    | "u32"
+                    | "i32"
+                    | "u64"
+                    | "i64"
+                    | "f32"
+                    | "f64"
+                    | "ptr"
+                    | "char"
+                    | "wchar"
+            ) {
+                return Err(Error::internal(format!(
+                    "unsupported field type {:?} (use u8/i8/u16/i16/u32/i32/u64/i64/f32/f64/ptr/char/wchar)",
+                    field.kind
+                )));
+            }
+        }
+        Ok(self)
+    }
+
+    pub fn field_at(&self, offset: u64) -> Option<&StructField> {
+        self.fields.iter().find(|field| field.offset == offset)
+    }
+}
+
 /// A mutation of the program database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
@@ -70,6 +154,16 @@ pub enum Command {
     UndefineFunc { start: Address },
     /// Set (`Some`) or delete (`None`) a user prototype (C declaration) for a function.
     SetPrototype { addr: Address, text: Option<String> },
+    /// Define or replace a user struct layout.
+    DefineStruct { def: StructDef },
+    /// Internal: delete a user struct layout (undo support).
+    DeleteStruct { name: String },
+    /// Bind a struct layout to a function argument slot (`0` = first argument).
+    ApplyType {
+        func: Address,
+        slot: u8,
+        struct_name: Option<String>,
+    },
 }
 
 impl Command {
@@ -82,6 +176,9 @@ impl Command {
             Command::DefineFunc { .. } => "define_func",
             Command::UndefineFunc { .. } => "undefine_func",
             Command::SetPrototype { .. } => "prototype",
+            Command::DefineStruct { .. } => "define_struct",
+            Command::DeleteStruct { .. } => "delete_struct",
+            Command::ApplyType { .. } => "apply_type",
         }
     }
 
@@ -90,7 +187,8 @@ impl Command {
         let dirty = match self {
             Command::Rename { addr, .. }
             | Command::UndefineFunc { start: addr }
-            | Command::SetPrototype { addr, .. } => {
+            | Command::SetPrototype { addr, .. }
+            | Command::ApplyType { func: addr, .. } => {
                 vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
             }
             Command::SetComment { addr, .. } => {
@@ -102,6 +200,7 @@ impl Command {
                 Address::new(start.get() + flags.len() as u64),
             )],
             Command::DefineFunc { start, end } => vec![AddressRange::new(*start, *end)],
+            Command::DefineStruct { .. } | Command::DeleteStruct { .. } => Vec::new(),
         };
         Effect { dirty }
     }
@@ -121,6 +220,21 @@ impl Command {
             Command::SetPrototype { addr, .. } => Ok(Command::SetPrototype {
                 addr: *addr,
                 text: session.prototype_at(*addr)?,
+            }),
+            Command::DefineStruct { def } => match session.struct_def(&def.name)? {
+                Some(previous) => Ok(Command::DefineStruct { def: previous }),
+                None => Ok(Command::DeleteStruct {
+                    name: def.name.clone(),
+                }),
+            },
+            Command::DeleteStruct { name } => match session.struct_def(name)? {
+                Some(previous) => Ok(Command::DefineStruct { def: previous }),
+                None => Ok(Command::DeleteStruct { name: name.clone() }),
+            },
+            Command::ApplyType { func, slot, .. } => Ok(Command::ApplyType {
+                func: *func,
+                slot: *slot,
+                struct_name: session.arg_type(*func, *slot)?,
             }),
             Command::SetCodeData { range, .. } => {
                 // One page max keeps the inverse small; UI commands are per-selection.
@@ -240,6 +354,76 @@ pub(crate) fn apply(
             None => {
                 conn.execute("DELETE FROM prototype WHERE addr = ?1", [addr.get() as i64])
                     .map_err(db_err)?;
+            }
+        },
+        Command::DefineStruct { def } => {
+            let def = def.clone().validate()?;
+            conn.execute(
+                "INSERT INTO user_struct(name, size) VALUES (?1, ?2)
+                 ON CONFLICT(name) DO UPDATE SET size = excluded.size",
+                params![def.name, def.size as i64],
+            )
+            .map_err(db_err)?;
+            conn.execute(
+                "DELETE FROM user_struct_field WHERE struct_name = ?1",
+                [def.name.as_str()],
+            )
+            .map_err(db_err)?;
+            for field in &def.fields {
+                conn.execute(
+                    "INSERT INTO user_struct_field(struct_name, off, name, kind)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![def.name, field.offset as i64, field.name, field.kind],
+                )
+                .map_err(db_err)?;
+            }
+        }
+        Command::DeleteStruct { name } => {
+            conn.execute("DELETE FROM user_struct WHERE name = ?1", [name.as_str()])
+                .map_err(db_err)?;
+            conn.execute(
+                "DELETE FROM user_struct_field WHERE struct_name = ?1",
+                [name.as_str()],
+            )
+            .map_err(db_err)?;
+            conn.execute(
+                "DELETE FROM func_arg_type WHERE struct_name = ?1",
+                [name.as_str()],
+            )
+            .map_err(db_err)?;
+        }
+        Command::ApplyType {
+            func,
+            slot,
+            struct_name,
+        } => match struct_name {
+            Some(struct_name) => {
+                let exists: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM user_struct WHERE name = ?1)",
+                        [struct_name.as_str()],
+                        |row| row.get(0),
+                    )
+                    .map_err(db_err)?;
+                if !exists {
+                    return Err(Error::internal(format!(
+                        "unknown struct type {struct_name:?}; define it first"
+                    )));
+                }
+                conn.execute(
+                    "INSERT INTO func_arg_type(func_addr, slot, struct_name)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(func_addr, slot) DO UPDATE SET struct_name = excluded.struct_name",
+                    params![func.get() as i64, *slot as i64, struct_name],
+                )
+                .map_err(db_err)?;
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM func_arg_type WHERE func_addr = ?1 AND slot = ?2",
+                    params![func.get() as i64, *slot as i64],
+                )
+                .map_err(db_err)?;
             }
         },
     }

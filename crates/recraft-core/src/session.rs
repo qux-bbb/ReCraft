@@ -24,7 +24,8 @@ use recraft_storage::Project;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::command::{
-    self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER,
+    self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER, StructDef,
+    StructField,
 };
 use crate::flags::{Flags, FlagsStore};
 use crate::segments::{self, Segment};
@@ -322,6 +323,91 @@ impl Session {
             )
             .optional()
             .map_err(command::db_err)
+    }
+
+    /// User-defined struct layout by name.
+    pub fn struct_def(&self, name: &str) -> Result<Option<StructDef>> {
+        let header: Option<i64> = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT size FROM user_struct WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)?;
+        let Some(size) = header else {
+            return Ok(None);
+        };
+        let mut statement = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT off, name, kind FROM user_struct_field
+                 WHERE struct_name = ?1 ORDER BY off",
+            )
+            .map_err(command::db_err)?;
+        let rows = statement
+            .query_map([name], |row| {
+                Ok(StructField {
+                    offset: row.get::<_, i64>(0)? as u64,
+                    name: row.get(1)?,
+                    kind: row.get(2)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        let fields: Vec<StructField> = rows
+            .map(|row| row.map_err(command::db_err))
+            .collect::<Result<_>>()?;
+        Ok(Some(StructDef {
+            name: name.to_owned(),
+            size: size as u64,
+            fields,
+        }))
+    }
+
+    /// All user-defined struct layouts, ordered by name.
+    pub fn structs(&self) -> Result<Vec<StructDef>> {
+        let mut statement = self
+            .project
+            .conn()
+            .prepare("SELECT name FROM user_struct ORDER BY name")
+            .map_err(command::db_err)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(command::db_err)?;
+        let names: Vec<String> = rows
+            .map(|row| row.map_err(command::db_err))
+            .collect::<Result<_>>()?;
+        let mut defs = Vec::with_capacity(names.len());
+        for name in names {
+            if let Some(def) = self.struct_def(&name)? {
+                defs.push(def);
+            }
+        }
+        Ok(defs)
+    }
+
+    /// Struct layout bound to a function argument slot (`0` = first argument).
+    pub fn arg_type(&self, func: Address, slot: u8) -> Result<Option<String>> {
+        self.project
+            .conn()
+            .query_row(
+                "SELECT struct_name FROM func_arg_type WHERE func_addr = ?1 AND slot = ?2",
+                params![func.get() as i64, slot as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)
+    }
+
+    /// Convenience: the struct layout bound to an argument slot, if any.
+    pub fn struct_for_arg(&self, func: Address, slot: u8) -> Result<Option<StructDef>> {
+        match self.arg_type(func, slot)? {
+            Some(name) => self.struct_def(&name),
+            None => Ok(None),
+        }
     }
 
     pub fn comment_at(&self, addr: Address, kind: CommentKind) -> Result<Option<String>> {
@@ -1011,6 +1097,93 @@ mod tests {
             })
             .unwrap();
         assert!(!reopened.can_redo().unwrap());
+    }
+
+    #[test]
+    fn struct_layouts_and_arg_type_bindings_undo_redo() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+
+        let def = StructDef {
+            name: "Probe".to_owned(),
+            size: 0x18,
+            fields: vec![
+                StructField {
+                    offset: 0x10,
+                    name: "value".to_owned(),
+                    kind: "i32".to_owned(),
+                },
+                StructField {
+                    offset: 0,
+                    name: "tag".to_owned(),
+                    kind: "u32".to_owned(),
+                },
+            ],
+        };
+        session.execute(Command::DefineStruct { def }).unwrap();
+        let stored = session.struct_def("Probe").unwrap().expect("struct stored");
+        // Field order is normalised by offset.
+        assert_eq!(stored.fields[0].name, "tag");
+        assert_eq!(stored.fields[1].name, "value");
+
+        session
+            .execute(Command::ApplyType {
+                func: entry,
+                slot: 0,
+                struct_name: Some("Probe".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(
+            session.arg_type(entry, 0).unwrap().as_deref(),
+            Some("Probe")
+        );
+        assert_eq!(
+            session
+                .struct_for_arg(entry, 0)
+                .unwrap()
+                .map(|def| def.name),
+            Some("Probe".to_owned())
+        );
+
+        // Unknown struct is rejected before touching the database.
+        assert!(
+            session
+                .execute(Command::ApplyType {
+                    func: entry,
+                    slot: 1,
+                    struct_name: Some("Missing".to_owned()),
+                })
+                .is_err()
+        );
+
+        // Undo the binding, then the struct; redo restores both.
+        session.undo().unwrap();
+        assert!(session.arg_type(entry, 0).unwrap().is_none());
+        session.undo().unwrap();
+        assert!(session.struct_def("Probe").unwrap().is_none());
+        session.redo().unwrap();
+        assert!(session.struct_def("Probe").unwrap().is_some());
+        session.redo().unwrap();
+        assert_eq!(
+            session.arg_type(entry, 0).unwrap().as_deref(),
+            Some("Probe")
+        );
+
+        let path = session.path().to_path_buf();
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .struct_for_arg(entry, 0)
+                .unwrap()
+                .expect("binding survives reopen")
+                .fields
+                .len(),
+            2
+        );
     }
 
     #[test]

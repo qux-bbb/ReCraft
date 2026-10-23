@@ -66,6 +66,8 @@ pub enum ProposalKind {
     Rename,
     Comment,
     Prototype,
+    /// Bind a struct layout to a function argument; `value` is `"<slot>:<Type>"`.
+    ApplyType,
 }
 
 impl ProposalKind {
@@ -74,6 +76,7 @@ impl ProposalKind {
             ProposalKind::Rename => "rename",
             ProposalKind::Comment => "comment",
             ProposalKind::Prototype => "prototype",
+            ProposalKind::ApplyType => "apply_type",
         }
     }
 
@@ -82,6 +85,7 @@ impl ProposalKind {
             "rename" => Some(ProposalKind::Rename),
             "comment" => Some(ProposalKind::Comment),
             "prototype" => Some(ProposalKind::Prototype),
+            "apply_type" => Some(ProposalKind::ApplyType),
             _ => None,
         }
     }
@@ -212,6 +216,21 @@ impl Proposal {
                 session.execute(Command::SetPrototype {
                     addr: self.target,
                     text,
+                })?;
+                Ok(())
+            }
+            ProposalKind::ApplyType => {
+                let (slot, type_name) = self.value.split_once(':').ok_or_else(|| {
+                    Error::internal("apply_type proposal value must be \"<slot>:<Type>\"")
+                })?;
+                let slot = slot.trim().parse::<u8>().map_err(|_| {
+                    Error::internal(format!("apply_type proposal has invalid slot {slot:?}"))
+                })?;
+                let type_name = type_name.trim();
+                session.execute(Command::ApplyType {
+                    func: self.target,
+                    slot,
+                    struct_name: (!type_name.is_empty()).then(|| type_name.to_owned()),
                 })?;
                 Ok(())
             }
@@ -742,6 +761,42 @@ mod tests {
         );
         session.undo().unwrap();
         assert!(session.prototype_at(entry).unwrap().is_none());
+    }
+
+    #[test]
+    fn apply_type_proposal_binds_struct_to_argument() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let entry = session.entry_point();
+        session
+            .execute(Command::DefineStruct {
+                def: recraft_core::StructDef {
+                    name: "Probe".to_owned(),
+                    size: 8,
+                    fields: vec![recraft_core::StructField {
+                        offset: 0,
+                        name: "tag".to_owned(),
+                        kind: "u32".to_owned(),
+                    }],
+                },
+            })
+            .unwrap();
+        let proposal = Proposal {
+            kind: ProposalKind::ApplyType,
+            target: entry,
+            value: "0:Probe".to_owned(),
+            confidence: 0.4,
+            rationale: "test".to_owned(),
+            evidence: Vec::new(),
+        };
+        assert_eq!(apply_proposals(&mut session, &[proposal]).unwrap(), 1);
+        assert_eq!(
+            session.arg_type(entry, 0).unwrap().as_deref(),
+            Some("Probe")
+        );
+        session.undo().unwrap();
+        assert!(session.arg_type(entry, 0).unwrap().is_none());
     }
 
     #[test]

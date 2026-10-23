@@ -38,8 +38,9 @@ recraft ai apply notepad.rcraft proposals.json --yes
 }
 ```
 
-- `apply` 把 `rename` / `comment` / `prototype` 映射为 `Command::Rename` /
-  `Command::SetComment` / `Command::SetPrototype`，写入 journal，可 `recraft undo` 撤销；
+- `apply` 把 `rename` / `comment` / `prototype` / `apply_type` 映射为对应 `Command`
+  （`Rename`/`SetComment`/`SetPrototype`/`ApplyType`），写入 journal，可 `recraft undo`
+  撤销；`apply_type` 的 proposal value 形如 `"0:Probe"`（槽位:结构体名，空类型名=清除）。
   `ai suggest` 本身永不写库。
 - 无 `--yes` 时返回 "refusing to apply proposals without --yes"，防止误操作。
 

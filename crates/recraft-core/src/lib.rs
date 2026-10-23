@@ -16,6 +16,7 @@ mod view;
 
 pub use command::{
     Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER, NAME_KIND_USER,
+    StructDef, StructField,
 };
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
 pub use segments::{Perm, Segment, SegmentKind};

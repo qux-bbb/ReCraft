@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- User struct layouts + `apply_type` (DESIGN §9.1): `recraft define-struct --name Probe
+  --size 24 --field 0:tag:u32 --field 16:value:i32` stores a layout (schema v3:
+  user_struct/user_struct_field/func_arg_type, idempotent migration), `recraft apply-type
+  --addr <func> --slot 0 --type Probe` binds it to an argument slot, `recraft structs`
+  lists layouts, and omitting `--type` clears the binding. All writes go through
+  `Command::DefineStruct`/`ApplyType` (journaled, undo/redo, persistence; unknown types
+  rejected). The decompiler renders named fields (`arg1->value`) instead of
+  `arg1->field_10` for bound arguments. AI gains `ProposalKind::ApplyType`
+  (value `"<slot>:<Type>"`). Tests: session undo/redo/persistence, decompiler
+  named-field/clear, AI proposal apply; E2E defines/applies/undoes a struct.
+
 - User prototypes (write tool, DESIGN §9.1): `recraft prototype <project> --addr <func>
   --text "int foo(int)"` stores a C declaration through `Command::SetPrototype`
   (journaled, undo/redo/persistence), and `recraft unprototype` deletes it; structured

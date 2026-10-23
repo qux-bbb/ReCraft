@@ -74,6 +74,14 @@ impl ArgNames {
         matches!(self.types.get(&reg), Some(ty) if !matches!(ty, ArgType::Int64))
     }
 
+    /// Calling-convention slot (0-based) of a register argument: `argN` -> `N - 1`.
+    pub fn slot_of(&self, reg: Reg) -> Option<u8> {
+        X64_ARG_REGS
+            .iter()
+            .position(|candidate| *candidate == reg)
+            .map(|index| index as u8)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.names.is_empty() && self.stack.is_empty()
     }

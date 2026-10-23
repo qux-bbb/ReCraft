@@ -13,10 +13,10 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
-use recraft_core::Session;
+use recraft_core::{Session, StructDef};
 use recraft_ir::{BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, Stmt, UnOp, cond_name};
 
 mod l2;
@@ -44,12 +44,14 @@ pub(crate) struct BlockLift {
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
 ///
 /// `seed` carries registers already overwritten on every path reaching this block, so
-/// argument names are not shown for clobbered values.
+/// argument names are not shown for clobbered values. `arg_structs` maps argument
+/// registers to user-defined struct layouts (`apply_type`).
 pub(crate) fn lift_block(
     session: &mut Session,
     start: Address,
     end: Address,
     args: Option<&ArgNames>,
+    arg_structs: &BTreeMap<Reg, StructDef>,
     seed: Option<&BTreeSet<Reg>>,
 ) -> Result<BlockLift> {
     if end <= start {
@@ -110,6 +112,7 @@ pub(crate) fn lift_block(
         end,
         labels: &BTreeSet::new(),
         args,
+        arg_structs,
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
@@ -224,6 +227,7 @@ pub fn pseudocode_l0(
         names.insert(target.get(), resolve_name(session, target)?);
     }
 
+    let no_structs: BTreeMap<Reg, StructDef> = BTreeMap::new();
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
@@ -231,6 +235,7 @@ pub fn pseudocode_l0(
         end,
         labels: &targets,
         args: None,
+        arg_structs: &no_structs,
         written: HashSet::new(),
     };
     let lines = printer.render(&lifted);
@@ -254,6 +259,8 @@ struct Printer<'a> {
     end: Address,
     labels: &'a BTreeSet<u64>,
     args: Option<&'a ArgNames>,
+    /// Struct layouts bound to argument registers (`apply_type`).
+    arg_structs: &'a BTreeMap<Reg, StructDef>,
     /// Registers written so far (for argument-register naming).
     written: HashSet<Reg>,
 }
@@ -431,6 +438,12 @@ impl Printer<'_> {
             return None;
         }
         let name = args.name_for(view.base)?;
+        if let Some(def) = self.arg_structs.get(&view.base)
+            && offset >= 0
+            && let Some(field) = def.field_at(offset as u64)
+        {
+            return Some(format!("{name}->{}", field.name));
+        }
         let field = if offset < 0 {
             format!("field_n{:x}", -offset)
         } else {

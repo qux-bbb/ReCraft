@@ -131,6 +131,17 @@ try {
     $pseudoProto = Invoke-Recraft @('decompile', $project, '--addr', $firstFuncAddr, '--l2')
     if ($pseudoProto.Contains('// prototype:')) { throw 'undo did not remove the prototype' }
 
+    Write-Host '[+] user struct layout bound to an argument'
+    Invoke-Recraft @('define-struct', $project, '--name', 'Demo', '--size', '4', '--field', '0:first:u32') | Out-Null
+    $structsOut = Invoke-Recraft @('structs', $project)
+    Assert-Contains $structsOut 'struct Demo' 'struct layout listed'
+    $appliedType = Invoke-Recraft @('apply-type', $project, '--addr', $firstFuncAddr, '--slot', '0', '--type', 'Demo')
+    Assert-Contains $appliedType 'applied Demo' 'struct type bound to argument'
+    Invoke-Recraft @('undo', $project) | Out-Null
+    Invoke-Recraft @('undo', $project) | Out-Null
+    $structsOut = Invoke-Recraft @('structs', $project)
+    if ($structsOut.Contains('struct Demo')) { throw 'undo did not remove the struct definition' }
+
     Write-Host '[11/11] MCP stdio'
     $mcpLines = @(
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',

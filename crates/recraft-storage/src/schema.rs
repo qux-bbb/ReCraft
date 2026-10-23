@@ -13,7 +13,7 @@ use recraft_common::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Current schema version. Stored in `meta.schema_version`.
-pub const CURRENT_VERSION: i64 = 2;
+pub const CURRENT_VERSION: i64 = 3;
 
 /// DDL for schema version 1.
 ///
@@ -96,6 +96,26 @@ CREATE TABLE IF NOT EXISTS struct_member (
 CREATE TABLE IF NOT EXISTS prototype (
     addr INTEGER PRIMARY KEY,
     text TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_struct (
+    name TEXT PRIMARY KEY,
+    size INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_struct_field (
+    struct_name TEXT    NOT NULL,
+    off         INTEGER NOT NULL,
+    name        TEXT    NOT NULL,
+    kind        TEXT    NOT NULL,
+    PRIMARY KEY (struct_name, off)
+);
+
+CREATE TABLE IF NOT EXISTS func_arg_type (
+    func_addr   INTEGER NOT NULL,
+    slot        INTEGER NOT NULL,
+    struct_name TEXT    NOT NULL,
+    PRIMARY KEY (func_addr, slot)
 );
 
 CREATE TABLE IF NOT EXISTS var (
@@ -242,8 +262,8 @@ pub fn initialize(conn: &Connection) -> Result<i64> {
 
 /// Run migrations from `from` up to [`CURRENT_VERSION`].
 ///
-/// All DDL is additive and idempotent; v2 adds the `prototype` table for user-set
-/// function prototypes (`Command::SetPrototype`).
+/// All DDL is additive and idempotent; v2 added the `prototype` table, v3 adds
+/// user struct layouts + per-argument type bindings.
 fn migrate(conn: &Connection, from: i64) -> Result<()> {
     match from {
         0 => conn.execute_batch(SCHEMA_V1).map_err(db_err)?,
