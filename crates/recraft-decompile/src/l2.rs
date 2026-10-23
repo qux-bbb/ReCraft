@@ -3,16 +3,18 @@
 
 //! L2 variable recovery (first cut).
 //!
-//! Recovers which incoming argument registers are actually used before being written
-//! (Windows x64 fastcall: rcx, rdx, r8, r9) and exposes them as `arg1..arg4`. Stack
-//! slots (`[rsp + const]`) are named `var_XX` by the printer. Types, SSA and struct
-//! recovery come later.
+//! - Windows x64: incoming integer arguments arrive in rcx, rdx, r8, r9. A register is
+//!   accepted as an argument when it is read before its first write and becomes
+//!   `arg1..arg4`.
+//! - Win32 x86: arguments live on the stack. With a frame (`push ebp; mov ebp, esp`)
+//!   `[ebp+8]`, `[ebp+0xc]`, ... are `arg1..`; without one `[esp+4]`, `[esp+8]`, ... are.
+//! - Stack slots are named `var_XX` by the printer; types/SSA come later.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use recraft_common::{Address, Result};
 use recraft_core::Session;
-use recraft_ir::{Expr, ExprId, Lifter, Reg, RegView, Stmt};
+use recraft_ir::{BinOp, Expr, ExprId, Lifter, Reg, RegView, Stmt};
 
 /// Windows x64 integer argument registers, in declaration order.
 pub const X64_ARG_REGS: [Reg; 4] = [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9];
@@ -23,6 +25,8 @@ const MAX_ARG_SCAN_INSNS: usize = 4096;
 #[derive(Debug, Clone, Default)]
 pub struct ArgNames {
     names: BTreeMap<Reg, String>,
+    /// x86 stack arguments keyed by `(base register, byte offset)`.
+    stack: BTreeMap<(Reg, i64), String>,
 }
 
 impl ArgNames {
@@ -30,11 +34,15 @@ impl ArgNames {
         self.names.get(&reg).map(String::as_str)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
+    pub fn name_for_stack(&self, base: Reg, offset: i64) -> Option<&str> {
+        self.stack.get(&(base, offset)).map(String::as_str)
     }
 
-    /// `arg1, arg2, ...` in calling-convention order.
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty() && self.stack.is_empty()
+    }
+
+    /// Register arguments in calling-convention order.
     pub fn ordered(&self) -> Vec<(&'static str, &str)> {
         X64_ARG_REGS
             .iter()
@@ -46,13 +54,29 @@ impl ArgNames {
             .collect()
     }
 
+    /// Stack arguments as `([ebp+0x8], arg1)` in offset order.
+    pub fn stack_ordered(&self) -> Vec<(String, &str)> {
+        self.stack
+            .iter()
+            .map(|((base, offset), name)| {
+                let prefix = if *base == Reg::Rbp { "ebp" } else { "esp" };
+                (format!("[{prefix}+{offset:#x}]"), name.as_str())
+            })
+            .collect()
+    }
+
     /// C parameter list (`int64 arg1, int64 arg2`) or `void`.
     pub fn signature(&self) -> String {
-        let params: Vec<String> = self
+        let mut params: Vec<String> = self
             .ordered()
             .iter()
             .map(|(_, name)| format!("int64 {name}"))
             .collect();
+        params.extend(
+            self.stack_ordered()
+                .iter()
+                .map(|(_, name)| format!("int64 {name}")),
+        );
         if params.is_empty() {
             "void".to_owned()
         } else {
@@ -60,18 +84,36 @@ impl ArgNames {
         }
     }
 
-    /// `arg1=rcx, arg2=rdx` for a leading comment.
+    /// `arg1=rcx, arg2=[ebp+0x8]` for a leading comment.
     pub fn comment(&self) -> String {
-        self.ordered()
+        let mut parts: Vec<String> = self
+            .ordered()
             .iter()
             .map(|(reg, name)| format!("{name}={reg}"))
-            .collect::<Vec<_>>()
-            .join(", ")
+            .collect();
+        parts.extend(
+            self.stack_ordered()
+                .iter()
+                .map(|(location, name)| format!("{name}={location}")),
+        );
+        parts.join(", ")
     }
 }
 
-/// Find argument registers that are read before their first write.
+/// Find argument locations that the function reads before writing.
 pub fn recover_args(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
+    if session.image().is_64 {
+        recover_x64(session, start, end)
+    } else {
+        recover_x86(session, start, end)
+    }
+}
+
+fn lift_function(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+) -> Result<(Vec<recraft_ir::LiftedInsn>, Vec<Expr>)> {
     let mut lifter = Lifter::new();
     let mut lifted = Vec::new();
     let mut addr = start;
@@ -90,7 +132,11 @@ pub fn recover_args(session: &mut Session, start: Address, end: Address) -> Resu
         }
         addr = next;
     }
-    let exprs = lifter.into_exprs();
+    Ok((lifted, lifter.into_exprs()))
+}
+
+fn recover_x64(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
+    let (lifted, exprs) = lift_function(session, start, end)?;
     let arg_registers: BTreeSet<Reg> = X64_ARG_REGS.into_iter().collect();
     let mut written: BTreeSet<Reg> = BTreeSet::new();
     let mut incoming: BTreeSet<Reg> = BTreeSet::new();
@@ -114,7 +160,97 @@ pub fn recover_args(session: &mut Session, start: Address, end: Address) -> Resu
             names.insert(*reg, format!("arg{}", index + 1));
         }
     }
-    Ok(ArgNames { names })
+    Ok(ArgNames {
+        names,
+        stack: BTreeMap::new(),
+    })
+}
+
+fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
+    let (lifted, exprs) = lift_function(session, start, end)?;
+    let mut frame_established = false;
+    let mut esp_shifted = false;
+    let mut ebp_offsets: BTreeSet<i64> = BTreeSet::new();
+    let mut esp_offsets: BTreeSet<i64> = BTreeSet::new();
+
+    for item in &lifted {
+        for stmt in &item.stmts {
+            if let Stmt::Intrinsic { text } = stmt
+                && !frame_established
+                && (text.starts_with("push ")
+                    || text.starts_with("sub esp")
+                    || text.starts_with("sub rsp"))
+            {
+                // esp-relative argument offsets are only stable until the stack moves.
+                esp_shifted = true;
+            }
+            if let Stmt::WriteReg { reg, value } = stmt
+                && reg.base == Reg::Rbp
+                && matches!(&exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
+            {
+                frame_established = true;
+            }
+            walk_stmt_loads(stmt, &exprs, &mut |addr| {
+                let Some((base, offset)) = stack_add(&exprs, addr) else {
+                    return;
+                };
+                if frame_established && base == Reg::Rbp && offset >= 8 && (offset - 8) % 4 == 0 {
+                    ebp_offsets.insert(offset);
+                } else if !frame_established
+                    && !esp_shifted
+                    && base == Reg::Rsp
+                    && offset >= 4
+                    && offset % 4 == 0
+                {
+                    // [esp+4] is the first argument (return address is at [esp]).
+                    esp_offsets.insert(offset);
+                }
+            });
+        }
+    }
+
+    let mut stack = BTreeMap::new();
+    if frame_established {
+        for (index, offset) in ebp_offsets.iter().enumerate() {
+            stack.insert((Reg::Rbp, *offset), format!("arg{}", index + 1));
+        }
+    } else {
+        for (index, offset) in esp_offsets.iter().enumerate() {
+            stack.insert((Reg::Rsp, *offset), format!("arg{}", index + 1));
+        }
+    }
+    Ok(ArgNames {
+        names: BTreeMap::new(),
+        stack,
+    })
+}
+
+fn stack_add(exprs: &[Expr], id: ExprId) -> Option<(Reg, i64)> {
+    let Expr::Bin { op, lhs, rhs } = &exprs[id as usize] else {
+        return None;
+    };
+    if *op != BinOp::Add {
+        return None;
+    }
+    let base_of = |id: ExprId| match &exprs[id as usize] {
+        Expr::Reg(view) if matches!(view.base, Reg::Rsp | Reg::Rbp) => Some(view.base),
+        _ => None,
+    };
+    let const_of = |id: ExprId| match &exprs[id as usize] {
+        Expr::Const(value) => Some(*value as i64),
+        _ => None,
+    };
+    if let Some(base) = base_of(*lhs)
+        && let Some(offset) = const_of(*rhs)
+    {
+        return Some((base, offset));
+    }
+    if let Some(base) = base_of(*rhs)
+        && let Some(offset) = const_of(*lhs)
+    {
+        return Some((base, offset));
+    }
+    None
 }
 
 fn walk_stmt_reads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(&RegView)) {
@@ -125,6 +261,33 @@ fn walk_stmt_reads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(&RegView)
             walk_expr(exprs, *value, visit);
         }
         Stmt::Call { .. } | Stmt::Intrinsic { .. } => {}
+    }
+}
+
+fn walk_stmt_loads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(ExprId)) {
+    match stmt {
+        Stmt::WriteReg { value, .. } => walk_expr_loads(exprs, *value, visit),
+        Stmt::Store { addr, value, .. } => {
+            walk_expr_loads(exprs, *addr, visit);
+            walk_expr_loads(exprs, *value, visit);
+        }
+        Stmt::Call { .. } | Stmt::Intrinsic { .. } => {}
+    }
+}
+
+/// Visits the address expression of every `Load` reachable from `id`.
+fn walk_expr_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId)) {
+    match &exprs[id as usize] {
+        Expr::Load { addr, .. } => {
+            visit(*addr);
+            walk_expr_loads(exprs, *addr, visit);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            walk_expr_loads(exprs, *lhs, visit);
+            walk_expr_loads(exprs, *rhs, visit);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_expr_loads(exprs, *arg, visit),
+        Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
     }
 }
 
@@ -146,9 +309,9 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn corpus_session() -> Option<(Session, tempfile::TempDir)> {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/build/x64/corpus.exe");
+    fn corpus_session(arch: &str) -> Option<(Session, tempfile::TempDir)> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../corpus/build/{arch}/corpus.exe"));
         let bytes = std::fs::read(path).ok()?;
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("l2.rcraft");
@@ -170,8 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn add_leaf_uses_two_argument_registers() {
-        let Some((mut session, _dir)) = corpus_session() else {
+    fn x64_add_leaf_uses_two_argument_registers() {
+        let Some((mut session, _dir)) = corpus_session("x64") else {
             return;
         };
         let (start, end) = bounds(&session, "add_leaf");
@@ -183,15 +346,39 @@ mod tests {
     }
 
     #[test]
-    fn written_registers_are_not_arguments() {
-        let Some((mut session, _dir)) = corpus_session() else {
+    fn x64_written_registers_are_not_arguments() {
+        let Some((mut session, _dir)) = corpus_session("x64") else {
             return;
         };
-        // branchy(x) reads rcx only.
         let (start, end) = bounds(&session, "branchy");
         let args = recover_args(&mut session, start, end).unwrap();
-        let ordered = args.ordered();
-        assert_eq!(ordered.len(), 1, "{ordered:?}");
-        assert_eq!(ordered[0].1, "arg1");
+        assert_eq!(args.ordered().len(), 1, "{:?}", args.ordered());
+    }
+
+    #[test]
+    fn x86_stack_arguments_are_recovered() {
+        let Some((mut session, _dir)) = corpus_session("x86") else {
+            return;
+        };
+        assert!(!session.image().is_64);
+        let (start, end) = bounds(&session, "add_leaf");
+        let args = recover_args(&mut session, start, end).unwrap();
+        let stack = args.stack_ordered();
+        assert_eq!(stack.len(), 2, "{stack:?}");
+        assert_eq!(stack[0].1, "arg1");
+        assert_eq!(stack[1].1, "arg2");
+        assert!(args.signature().contains("int64 arg1"));
+    }
+
+    #[test]
+    fn x86_shifted_stack_falls_back_to_slots() {
+        let Some((mut session, _dir)) = corpus_session("x86") else {
+            return;
+        };
+        // noinline_helper pushes onto the stack before touching its arguments, so the
+        // esp-relative heuristic stays conservative instead of mislabelling locals.
+        let (start, end) = bounds(&session, "noinline_helper");
+        let args = recover_args(&mut session, start, end).unwrap();
+        assert!(args.is_empty(), "{:?}", args.stack_ordered());
     }
 }

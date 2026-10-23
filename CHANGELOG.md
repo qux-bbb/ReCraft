@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M2 L2 Win32 x86 argument recovery: with a frame pointer, `[ebp+8..]` stack slots become
+  `arg1..`; without one, `[esp+4..]` do (until a `push`/`sub esp` makes offsets unstable,
+  in which case the heuristic stays conservative). Stack stores never take argument
+  names. `int64` remains a placeholder type. Tests: x86 add_leaf args recovered,
+  shifted-stack helper falls back to `var_XX` slots.
+
 - M2 L2 variable recovery (first cut): argument registers (Windows x64 rcx/rdx/r8/r9)
   are detected by read-before-write and rendered as `arg1..arg4` while intact; stack
   slots become `var_XX`; the signature lists the recovered parameters. Exposed as

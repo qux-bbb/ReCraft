@@ -330,8 +330,8 @@ impl Printer<'_> {
         view.name().to_owned()
     }
 
-    /// `[rsp + const]` / `[const + rsp]` -> named stack slot.
-    fn stack_slot(&self, expr: ExprId) -> Option<i64> {
+    /// `[rsp + const]`, `[rbp - const]`, `[ebp + const]` -> (base register, offset).
+    fn stack_slot(&self, expr: ExprId) -> Option<(Reg, i64)> {
         let (op, lhs, rhs) = match &self.exprs[expr as usize] {
             Expr::Bin { op, lhs, rhs } => (op, *lhs, *rhs),
             _ => return None,
@@ -339,15 +339,18 @@ impl Printer<'_> {
         if *op != recraft_ir::BinOp::Add {
             return None;
         }
-        let is_rsp = |id: ExprId, exprs: &[Expr]| matches!(exprs[id as usize], Expr::Reg(view) if view.base == Reg::Rsp);
+        let base_of = |id: ExprId, exprs: &[Expr]| match &exprs[id as usize] {
+            Expr::Reg(view) if matches!(view.base, Reg::Rsp | Reg::Rbp) => Some(view.base),
+            _ => None,
+        };
         let const_of = |id: ExprId, exprs: &[Expr]| match exprs[id as usize] {
             Expr::Const(value) => Some(value as i64),
             _ => None,
         };
-        if is_rsp(lhs, self.exprs) {
-            const_of(rhs, self.exprs)
-        } else if is_rsp(rhs, self.exprs) {
-            const_of(lhs, self.exprs)
+        if let Some(base) = base_of(lhs, self.exprs) {
+            const_of(rhs, self.exprs).map(|offset| (base, offset))
+        } else if let Some(base) = base_of(rhs, self.exprs) {
+            const_of(lhs, self.exprs).map(|offset| (base, offset))
         } else {
             None
         }
@@ -361,6 +364,19 @@ impl Printer<'_> {
         }
     }
 
+    /// Render a stack reference: a recovered x86 argument name, otherwise `var_XX` for
+    /// rsp slots and frame-pointer locals. Positive `[rbp+...]` without a stack-argument
+    /// match stays a raw pointer (it may be the return address / caller frame).
+    fn stack_reference(&self, base: Reg, offset: i64) -> Option<String> {
+        if let Some(name) = self.args.and_then(|args| args.name_for_stack(base, offset)) {
+            return Some(name.to_owned());
+        }
+        if base == Reg::Rsp || offset < 0 {
+            return Some(Self::stack_name(offset));
+        }
+        None
+    }
+
     fn stmt(&self, stmt: &Stmt) -> String {
         match stmt {
             Stmt::WriteReg { reg, value } => {
@@ -369,7 +385,11 @@ impl Printer<'_> {
                 format!("{} = {}", reg.name(), self.expr(*value))
             }
             Stmt::Store { addr, value, size } => {
-                if let Some(offset) = self.stack_slot(*addr) {
+                // Writes never use incoming argument names: storing to a caller's
+                // argument slot is rare and would read as reassigning a variable.
+                if let Some((base, offset)) = self.stack_slot(*addr)
+                    && (base == Reg::Rsp || offset < 0)
+                {
                     format!("{} = {}", Self::stack_name(offset), self.expr(*value))
                 } else {
                     format!(
@@ -402,8 +422,10 @@ impl Printer<'_> {
             Expr::Reg(view) => self.reg_name(view),
             Expr::Temp(id) => format!("t{id}"),
             Expr::Load { addr, size } => {
-                if let Some(offset) = self.stack_slot(*addr) {
-                    Self::stack_name(offset)
+                if let Some((base, offset)) = self.stack_slot(*addr)
+                    && let Some(name) = self.stack_reference(base, offset)
+                {
+                    name
                 } else {
                     format!("*(u{}*)({})", u16::from(*size) * 8, self.expr(*addr))
                 }
