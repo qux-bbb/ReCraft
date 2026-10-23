@@ -68,6 +68,12 @@ impl ArgNames {
         self.stack.get(&(base, offset)).map(String::as_str)
     }
 
+    /// True when the argument was inferred as a pointer (`char*`, `wchar_t*`, `int32*`,
+    /// `int64*` or `void*`), i.e. field-style rendering through it is meaningful.
+    pub fn is_pointer_arg(&self, reg: Reg) -> bool {
+        matches!(self.types.get(&reg), Some(ty) if !matches!(ty, ArgType::Int64))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.names.is_empty() && self.stack.is_empty()
     }

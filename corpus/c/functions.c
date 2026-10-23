@@ -39,6 +39,11 @@ __declspec(dllexport) int wide_probe(const wchar_t* s) {
     return s != 0 ? (int)s[0] : -1;
 }
 
+/* Struct-field probe: p[4] through an int* compiles to [rcx+0x10]. */
+__declspec(dllexport) int field_probe(const int* p) {
+    return p != 0 ? p[4] : -1;
+}
+
 __declspec(dllexport) int branchy(int x) {
     if (x > 10) {
         return x * 2;

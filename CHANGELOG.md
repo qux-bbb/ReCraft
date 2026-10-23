@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Struct-field access rendering (M2 types): when a pointer-typed argument is dereferenced
+  at a constant offset, pseudocode prints `arg1->field_10` (negative offsets
+  `field_nXX`) for both integer and float loads/stores instead of
+  `*(u32*)((arg1 + 0x10))`. New corpus probe `field_probe` (`p[4]` on `const int*`)
+  exercises `[rcx+0x10]`; golden snapshots, metrics (27 functions, 88.9% structured,
+  96.4% coverage) and docs updated.
+
 - Packaging (M3): `scripts/package.ps1` builds release binaries, stages a green
   `dist/ReCraft-<version>` directory (exes, LICENSE/README/CHANGELOG, VERSION.txt, docs),
   produces `recraft-v<version>-windows-x64.zip`, writes `SHA256SUMS.txt`, and optionally

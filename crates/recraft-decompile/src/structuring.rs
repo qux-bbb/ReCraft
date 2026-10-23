@@ -1025,6 +1025,17 @@ mod tests {
     }
 
     #[test]
+    fn l2_renders_struct_field_access_through_pointer_arguments() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "field_probe").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("int32 field_probe(int32* arg1)"), "{text}");
+        assert!(text.contains("arg1->field_10"), "{text}");
+    }
+
+    #[test]
     fn output_is_deterministic() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

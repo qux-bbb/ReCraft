@@ -17,7 +17,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
-use recraft_ir::{Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, Stmt, UnOp, cond_name};
+use recraft_ir::{BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, Stmt, UnOp, cond_name};
 
 mod l2;
 mod quality;
@@ -409,6 +409,36 @@ impl Printer<'_> {
         None
     }
 
+    /// `argN->field_XX` for an offset access through a pointer-typed argument.
+    fn field_access(&self, expr: ExprId) -> Option<String> {
+        let Expr::Bin { op, lhs, rhs } = &self.exprs[expr as usize] else {
+            return None;
+        };
+        if *op != BinOp::Add {
+            return None;
+        }
+        let (lhs, rhs) = (*lhs, *rhs);
+        let view = match &self.exprs[lhs as usize] {
+            Expr::Reg(view) => *view,
+            _ => return None,
+        };
+        let offset = match &self.exprs[rhs as usize] {
+            Expr::Const(value) => *value as i64,
+            _ => return None,
+        };
+        let args = self.args?;
+        if !args.is_pointer_arg(view.base) || self.written.contains(&view.base) {
+            return None;
+        }
+        let name = args.name_for(view.base)?;
+        let field = if offset < 0 {
+            format!("field_n{:x}", -offset)
+        } else {
+            format!("field_{offset:x}")
+        };
+        Some(format!("{name}->{field}"))
+    }
+
     fn stmt(&self, stmt: &Stmt) -> String {
         match stmt {
             Stmt::WriteReg { reg, value } => {
@@ -423,6 +453,8 @@ impl Printer<'_> {
                     && (base == Reg::Rsp || offset < 0)
                 {
                     format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                } else if let Some(field) = self.field_access(*addr) {
+                    format!("{field} = {}", self.expr(*value))
                 } else {
                     format!(
                         "*({}*)({}) = {}",
@@ -437,6 +469,8 @@ impl Printer<'_> {
                     && (base == Reg::Rsp || offset < 0)
                 {
                     format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                } else if let Some(field) = self.field_access(*addr) {
+                    format!("{field} = {}", self.expr(*value))
                 } else {
                     format!(
                         "*({}*)({}) = {}",
@@ -472,12 +506,18 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     name
+                } else if let Some(field) = self.field_access(*addr) {
+                    field
                 } else {
                     format!("*({}*)({})", Self::scalar_type(*size), self.expr(*addr))
                 }
             }
             Expr::LoadFloat { addr, size } => {
-                format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))
+                if let Some(field) = self.field_access(*addr) {
+                    field
+                } else {
+                    format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))
+                }
             }
             Expr::Bin { op, lhs, rhs } => {
                 format!("({} {} {})", self.expr(*lhs), op.symbol(), self.expr(*rhs))
