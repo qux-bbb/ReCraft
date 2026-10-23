@@ -366,6 +366,141 @@ pub trait Provider {
     fn complete(&mut self, request: &PromptRequest) -> Result<String>;
 }
 
+/// Local Ollama (`POST /api/chat`, `stream: false`).
+pub struct OllamaProvider {
+    settings: ProviderSettings,
+    transport: Box<dyn crate::transport::Transport>,
+}
+
+impl OllamaProvider {
+    pub fn new(
+        settings: ProviderSettings,
+        transport: Box<dyn crate::transport::Transport>,
+    ) -> Self {
+        OllamaProvider {
+            settings,
+            transport,
+        }
+    }
+}
+
+impl Provider for OllamaProvider {
+    fn name(&self) -> &'static str {
+        "ollama"
+    }
+
+    fn complete(&mut self, request: &PromptRequest) -> Result<String> {
+        let url = format!("{}/api/chat", self.settings.endpoint.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "model": self.settings.model,
+            "stream": false,
+            "options": {"num_predict": self.settings.max_tokens},
+            "messages": [
+                {"role": "system", "content": request.system},
+                {"role": "user", "content": request.user},
+            ],
+        })
+        .to_string();
+        let response = self.transport.send(&crate::transport::HttpRequest {
+            method: "POST",
+            url,
+            headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+            body,
+        })?;
+        if response.status != 200 {
+            return Err(Error::internal(format!(
+                "ollama HTTP {}: {}",
+                response.status,
+                response.body.chars().take(400).collect::<String>()
+            )));
+        }
+        crate::transport::parse_ollama_response(&response.body)
+    }
+}
+
+/// OpenAI-compatible chat completions (`POST {endpoint}/v1/chat/completions`).
+pub struct OpenAiCompatibleProvider {
+    settings: ProviderSettings,
+    transport: Box<dyn crate::transport::Transport>,
+    api_key: Option<String>,
+}
+
+impl OpenAiCompatibleProvider {
+    pub fn new(
+        settings: ProviderSettings,
+        transport: Box<dyn crate::transport::Transport>,
+        api_key: Option<String>,
+    ) -> Self {
+        OpenAiCompatibleProvider {
+            settings,
+            transport,
+            api_key,
+        }
+    }
+}
+
+impl Provider for OpenAiCompatibleProvider {
+    fn name(&self) -> &'static str {
+        "openai-compatible"
+    }
+
+    fn complete(&mut self, request: &PromptRequest) -> Result<String> {
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.settings.endpoint.trim_end_matches('/')
+        );
+        let body = serde_json::json!({
+            "model": self.settings.model,
+            "max_tokens": self.settings.max_tokens,
+            "messages": [
+                {"role": "system", "content": request.system},
+                {"role": "user", "content": request.user},
+            ],
+        })
+        .to_string();
+        let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
+        if let Some(key) = &self.api_key {
+            headers.push(("Authorization".to_owned(), format!("Bearer {key}")));
+        }
+        let response = self.transport.send(&crate::transport::HttpRequest {
+            method: "POST",
+            url,
+            headers,
+            body,
+        })?;
+        if response.status != 200 {
+            return Err(Error::internal(format!(
+                "openai HTTP {}: {}",
+                response.status,
+                response.body.chars().take(400).collect::<String>()
+            )));
+        }
+        crate::transport::parse_openai_response(&response.body)
+    }
+}
+
+/// Build the provider selected by `settings`; disabled settings stay offline.
+pub fn provider_from_settings(settings: &ProviderSettings) -> Box<dyn Provider> {
+    if !settings.enabled || settings.kind == ProviderKind::Heuristic {
+        return Box::new(HeuristicProvider);
+    }
+    match settings.kind {
+        ProviderKind::Ollama => Box::new(OllamaProvider::new(
+            settings.clone(),
+            Box::new(crate::transport::TcpHttpTransport),
+        )),
+        ProviderKind::OpenAiCompatible => {
+            let api_key = std::env::var(&settings.api_key_env).ok();
+            Box::new(OpenAiCompatibleProvider::new(
+                settings.clone(),
+                Box::new(crate::transport::TcpHttpTransport),
+                api_key,
+            ))
+        }
+        ProviderKind::Heuristic => Box::new(HeuristicProvider),
+    }
+}
+
 /// Default provider: no network. It refuses to pretend to be a model.
 #[derive(Debug, Default)]
 pub struct HeuristicProvider;
@@ -462,5 +597,82 @@ mod tests {
         let request = PromptRequest::new(TokenBudget::new(64), "system", "user");
         let error = HeuristicProvider.complete(&request).unwrap_err();
         assert!(error.to_string().contains("no LLM provider configured"));
+    }
+
+    fn test_settings(kind: ProviderKind, endpoint: &str) -> ProviderSettings {
+        ProviderSettings {
+            kind,
+            endpoint: endpoint.to_owned(),
+            model: "test-model".to_owned(),
+            api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
+            max_tokens: 256,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn ollama_provider_posts_chat_request_and_parses_reply() {
+        let mut transport = crate::transport::MockTransport::new();
+        let requests = transport.requests_handle();
+        transport.push(200, r#"{"message":{"content":"explained"}}"#);
+        let settings = test_settings(ProviderKind::Ollama, "http://127.0.0.1:11434");
+        let mut provider = OllamaProvider::new(settings, Box::new(transport));
+        let request = PromptRequest::new(TokenBudget::new(256), "sys", "user");
+        assert_eq!(provider.complete(&request).unwrap(), "explained");
+
+        let recorded = requests.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].url, "http://127.0.0.1:11434/api/chat");
+        let body: serde_json::Value = serde_json::from_str(&recorded[0].body).unwrap();
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["messages"][0]["content"], "sys");
+    }
+
+    #[test]
+    fn openai_provider_sends_key_and_parses_reply() {
+        let mut transport = crate::transport::MockTransport::new();
+        let requests = transport.requests_handle();
+        transport.push(200, r#"{"choices":[{"message":{"content":"hello"}}]}"#);
+        let settings = test_settings(
+            ProviderKind::OpenAiCompatible,
+            "http://127.0.0.1:8080/proxy",
+        );
+        let mut provider = OpenAiCompatibleProvider::new(
+            settings,
+            Box::new(transport),
+            Some("sk-test".to_owned()),
+        );
+        let request = PromptRequest::new(TokenBudget::new(128), "system", "user");
+        assert_eq!(provider.complete(&request).unwrap(), "hello");
+
+        let recorded = requests.lock().unwrap();
+        assert_eq!(
+            recorded[0].url,
+            "http://127.0.0.1:8080/proxy/v1/chat/completions"
+        );
+        assert!(
+            recorded[0]
+                .headers
+                .iter()
+                .any(|(name, value)| name == "Authorization" && value == "Bearer sk-test")
+        );
+    }
+
+    #[test]
+    fn http_error_status_is_reported() {
+        let mut transport = crate::transport::MockTransport::new();
+        transport.push(500, "boom");
+        let settings = test_settings(ProviderKind::Ollama, "http://127.0.0.1:11434");
+        let mut provider = OllamaProvider::new(settings, Box::new(transport));
+        let request = PromptRequest::new(TokenBudget::new(64), "sys", "user");
+        let error = provider.complete(&request).unwrap_err();
+        assert!(error.to_string().contains("HTTP 500"));
+    }
+
+    #[test]
+    fn disabled_settings_select_the_heuristic_provider() {
+        let provider = provider_from_settings(&ProviderSettings::default());
+        assert_eq!(provider.name(), "heuristic");
     }
 }

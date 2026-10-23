@@ -97,15 +97,24 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   - **token 预算**：约 4 字符/token，超限截断并标注 `…[truncated]`；
   - **缓存**：`PromptCache`（prompt hash → response）；**审计**：`AuditLog`
     （provider/函数/prompt tokens/response tokens/cached）。
-- 传输层（OpenAI 兼容 / Ollama HTTP）与 provider 响应解析是下一步工作；`Provider` trait
-  与 `HeuristicProvider`（明确拒绝假装是模型）已就位。
+- 传输层：`Transport` trait + `TcpHttpTransport`（**仅明文 http://**，覆盖本地 Ollama
+  `http://127.0.0.1:11434`）；`https://` 端点明确报错，待引入 TLS 后支持。`MockTransport`
+  用于无网络单测。
+- Provider：`OllamaProvider`（`POST /api/chat`, `stream:false`）与
+  `OpenAiCompatibleProvider`（`POST {endpoint}/v1/chat/completions`，Bearer key 从
+  配置的环境变量读取）；`provider_from_settings` 在 disabled/heuristic 时返回
+  `HeuristicProvider`（拒绝假装是模型）。
+- 使用：`recraft ai explain notepad.rcraft --addr entry --llm` 会在启用 provider 后把
+  脱敏 prompt 发送出去，并打印模型回答（`--json` 含 provider/tokens/response）；默认配置
+  下会明确报 "no LLM provider configured"。
 
 ## 限制与后续
 
 - **单条选择**：UI 当前一次应用一条 proposal；批量勾选/全选与 diff 预览（before/after
   名称对比）在后续版本补全。
-- **尚无 LLM 传输层**：provider 配置/prompt/脱敏/预算/缓存/审计已就绪；OpenAI 兼容与
-  Ollama 的 HTTP 调用、响应解析、prompt 模板库与结果评测未实现。
+- **HTTPS 未支持**：OpenAI 官方端点需要 TLS；当前只支持明文 http（本地 Ollama / 内网代理）。
+  `MockTransport` 覆盖了请求形状、鉴权头、错误码与响应解析。
+- **无评测集**：LLM 输出的命名准确率/解释质量尚无固定 prompt 回归集。
 - 命名质量有限（类别前缀 + 地址）；接入 LLM 后应结合字符串/调用关系生成更自然的名字。
 - 写工具仅 `rename`/`comment`；`set_prototype` / `define_function` / `apply_type` 尚未实现。
 - 自然语言查询（"找所有引用 URL 的函数"）与伪代码润色未实现。

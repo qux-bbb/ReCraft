@@ -20,10 +20,16 @@
 #![forbid(unsafe_code)]
 
 mod provider;
+mod transport;
 
 pub use provider::{
-    AuditEntry, AuditLog, HeuristicProvider, PromptCache, PromptRequest, Provider, ProviderKind,
-    ProviderSettings, TokenBudget, build_explain_prompt, build_rename_prompt, redact,
+    AuditEntry, AuditLog, HeuristicProvider, OllamaProvider, OpenAiCompatibleProvider, PromptCache,
+    PromptRequest, Provider, ProviderKind, ProviderSettings, TokenBudget, build_explain_prompt,
+    build_rename_prompt, provider_from_settings, redact,
+};
+pub use transport::{
+    HttpRequest, HttpResponse, MockTransport, TcpHttpTransport, Transport, parse_ollama_response,
+    parse_openai_response,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

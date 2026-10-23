@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- LLM HTTP transport behind an injectable `Transport` trait: `TcpHttpTransport` speaks
+  plain `http://` (enough for a local Ollama at 127.0.0.1:11434; `https://` reports a
+  clear unsupported error until a TLS stack lands), `MockTransport` enables offline tests
+  of request shape, auth headers, error statuses and response parsing.
+  `OllamaProvider` (POST /api/chat, stream=false) and `OpenAiCompatibleProvider`
+  (POST {endpoint}/v1/chat/completions with Bearer key) both return the model text;
+  `provider_from_settings` keeps the heuristic provider unless the configuration is
+  explicitly enabled. New `recraft ai explain --llm` sends the redacted,
+  budget-fitted prompt and prints the answer (default config refuses with a clear error).
+
 - LLM provider contract + prompt safety layer (no network I/O yet): `ProviderSettings` is
   offline by default and only enables an HTTP provider when kind, endpoint and the API
   key env var are all present; `redact` masks URLs/IPs/e-mails; `TokenBudget` enforces a

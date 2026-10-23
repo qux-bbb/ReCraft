@@ -43,6 +43,9 @@ enum AiCommand {
         addr: Option<String>,
         #[arg(long)]
         json: bool,
+        /// Send the redacted prompt to the configured LLM provider (disabled by default).
+        #[arg(long)]
+        llm: bool,
     },
     /// Propose names for `sub_*` functions (evidence + confidence); never applies.
     Suggest {
@@ -863,7 +866,8 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             project,
             addr,
             json,
-        } => cmd_ai_explain(&project, addr.as_deref(), json),
+            llm,
+        } => cmd_ai_explain(&project, addr.as_deref(), json, llm),
         AiCommand::Suggest {
             project,
             json,
@@ -917,12 +921,32 @@ fn cmd_ai_prompt(
     Ok(())
 }
 
-fn cmd_ai_explain(project: &Path, addr: Option<&str>, as_json: bool) -> Result<()> {
+fn cmd_ai_explain(project: &Path, addr: Option<&str>, as_json: bool, llm: bool) -> Result<()> {
     let mut session = Session::open(project)?;
     let addr = match addr {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
+    if llm {
+        let settings = recraft_ai::ProviderSettings::from_env();
+        let mut provider = recraft_ai::provider_from_settings(&settings);
+        let prompt = recraft_ai::build_explain_prompt(&mut session, addr, &settings)?;
+        let response = provider.complete(&prompt)?;
+        if as_json {
+            return json_result(&json!({
+                "provider": provider.name(),
+                "estimated_tokens": prompt.estimated_tokens,
+                "response": response,
+            }));
+        }
+        println!(
+            "# provider={} tokens≈{}",
+            provider.name(),
+            prompt.estimated_tokens
+        );
+        println!("{response}");
+        return Ok(());
+    }
     let explanation = recraft_ai::explain(&mut session, addr)?;
     if as_json {
         return json_result(&json!({
