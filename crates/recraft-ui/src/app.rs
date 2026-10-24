@@ -238,6 +238,17 @@ struct EditState {
 }
 
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`).
+/// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
+/// the default pane set changes so stale layouts fall back to the new default instead of
+/// resurrecting the old arrangement.
+const LAYOUT_VERSION: u32 = 2;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedLayout {
+    version: u32,
+    dock: egui_dock::DockState<Pane>,
+}
+
 fn layout_store_path() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
         .map(|dir| PathBuf::from(dir).join("ReCraft").join("layout.json"))
@@ -245,7 +256,8 @@ fn layout_store_path() -> Option<PathBuf> {
 
 fn load_layout_from(path: &Path) -> Option<egui_dock::DockState<Pane>> {
     let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+    let saved: SavedLayout = serde_json::from_str(&text).ok()?;
+    (saved.version == LAYOUT_VERSION).then_some(saved.dock)
 }
 
 fn save_layout_to(
@@ -255,7 +267,11 @@ fn save_layout_to(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let text = serde_json::to_string(state).map_err(|error| error.to_string())?;
+    let saved = SavedLayout {
+        version: LAYOUT_VERSION,
+        dock: state.clone(),
+    };
+    let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
     // `egui` serializes NaN coordinates as null; skip until the dock has been laid out.
     if text.contains("\"x\":null") || text.contains("\"y\":null") {
         return Err("layout not laid out yet".to_owned());
@@ -1435,17 +1451,21 @@ impl ReCraftApp {
         }
     }
 
-    /// Build the default IDA-like dock layout once: center tabs (Disassembly/Pseudo-C/
-    /// Graph), a left tool column and a bottom hex pane.
+    /// Build the default IDA-like dock layout once: Functions column on the left,
+    /// Disassembly/Graph in the center, Pseudo-C on the right and Hex across the bottom.
     fn ensure_dock(&mut self) {
         if self.dock.is_some() {
             return;
         }
-        let mut state = egui_dock::DockState::new(vec![Pane::Disasm, Pane::Pseudo, Pane::Graph]);
+        let mut state = egui_dock::DockState::new(vec![Pane::Disasm, Pane::Graph]);
         {
             let surface = state.main_surface_mut();
+            // Hex spans the full width at the bottom.
+            let [top, _hex] =
+                surface.split_below(egui_dock::NodeIndex::root(), 0.72, vec![Pane::Hex]);
+            // Tool column on the left.
             let [center, _tools] = surface.split_left(
-                egui_dock::NodeIndex::root(),
+                top,
                 0.24,
                 vec![
                     Pane::Functions,
@@ -1458,7 +1478,8 @@ impl ReCraftApp {
                     Pane::Structs,
                 ],
             );
-            let [_center, _hex] = surface.split_below(center, 0.72, vec![Pane::Hex]);
+            // Pseudocode beside the disassembly view (about 44% of the view area).
+            let [_view, _pseudo] = surface.split_right(center, 0.56, vec![Pane::Pseudo]);
         }
         self.dock = Some(state);
     }
@@ -1473,7 +1494,20 @@ impl ReCraftApp {
         {
             let mut viewer = DockViewer { app: self, action };
             egui::CentralPanel::default().show(ui, |ui| {
-                let style = egui_dock::Style::from_egui(ui.style().as_ref());
+                let mut style = egui_dock::Style::from_egui(ui.style().as_ref());
+                // IDA-ish chrome: dark tab bars, subtle separators, compact tabs.
+                style.tab_bar.bg_fill = Color32::from_rgb(0x1b, 0x1f, 0x27);
+                style.tab_bar.hline_color = Color32::from_rgb(0x2c, 0x32, 0x3c);
+                style.tab_bar.height = 22.0;
+                style.tab.active.bg_fill = Color32::from_rgb(0x26, 0x2c, 0x36);
+                style.tab.focused.bg_fill = Color32::from_rgb(0x2f, 0x36, 0x42);
+                style.tab.inactive.bg_fill = Color32::from_rgb(0x1b, 0x1f, 0x27);
+                style.tab.active.text_color = Color32::from_rgb(0xd8, 0xdc, 0xe4);
+                style.tab.inactive.text_color = Color32::from_rgb(0x90, 0x98, 0xa6);
+                style.tab.tab_body.bg_fill = Color32::from_rgb(0x14, 0x17, 0x1d);
+                style.separator.width = 2.0;
+                style.separator.color_idle = Color32::from_rgb(0x2c, 0x32, 0x3c);
+                style.separator.color_hovered = Color32::from_rgb(0x5a, 0x7a, 0x9a);
                 egui_dock::DockArea::new(&mut state)
                     .style(style)
                     .draggable_tabs(true)
@@ -2330,7 +2364,7 @@ impl ReCraftApp {
         let mut clicked_row = None;
         let mut follow = false;
         self.navigation_band(ui, action);
-        egui::ScrollArea::vertical()
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let header = format!(
@@ -2343,7 +2377,7 @@ impl ReCraftApp {
                     self.t("Comment", "注释"),
                 );
                 ui.add(egui::Label::new(RichText::new(header).monospace().strong()).truncate());
-                let width = ui.available_width().max(120.0);
+                let width = ui.available_width().max(1000.0);
                 for (index, line) in self.disasm_rows.iter().enumerate() {
                     // One full-row hit area, like IDA: the whole line is selectable and
                     // double-click follows the operand instead of only the address cell.
@@ -2599,8 +2633,8 @@ impl ReCraftApp {
         let synced = self.disasm_rows.get(self.selected).map(|line| line.addr);
         let mut clicked = None;
         let mut jumped = None;
-        let width = ui.available_width().max(120.0);
-        egui::ScrollArea::vertical()
+        let width = ui.available_width().max(1100.0);
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
@@ -4309,9 +4343,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("layout.json");
         save_layout_to(&file, app.dock.as_ref().unwrap()).unwrap();
-        let raw = std::fs::read_to_string(&file).unwrap();
-        let parsed: std::result::Result<egui_dock::DockState<Pane>, _> = serde_json::from_str(&raw);
-        let loaded = parsed.unwrap_or_else(|error| panic!("layout reload failed: {error}\n{raw}"));
+        let loaded = load_layout_from(&file).expect("layout reload");
         assert!(
             loaded.find_tab(&Pane::Disasm).is_some(),
             "primary view must survive a layout reload"
@@ -4320,6 +4352,10 @@ mod tests {
             loaded.find_tab(&Pane::Functions).is_none(),
             "closed panes must stay closed after reload"
         );
+        // Stale layout versions and malformed files fall back to the default layout.
+        let stale = dir.path().join("stale.json");
+        std::fs::write(&stale, r#"{"version":1,"dock":{}}"#).unwrap();
+        assert!(load_layout_from(&stale).is_none());
         assert!(
             load_layout_from(&dir.path().join("missing.json")).is_none(),
             "missing layout falls back to defaults"

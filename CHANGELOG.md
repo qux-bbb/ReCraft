@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Real docking, step 4 (IDA-like default layout and chrome): the default layout now
+  mirrors IDA — tool column (Functions/…/Structures) on the left, Disassembly/Graph in the
+  center, Pseudo-C docked on the right and Hex spanning the full width at the bottom;
+  disassembly and pseudo-C panes scroll both axes when narrow, so columns are no longer
+  cut off. egui_dock chrome is tuned toward IDA (dark tab bars, compact tabs, tinted active
+  tab, subtle separators). Layout files now carry a version (`SavedLayout`, v2) so a stale
+  layout falls back to the new default instead of resurrecting the old arrangement; the
+  demo screenshot `docs/images/dock-step1.png` was refreshed with the new layout, and the
+  layout round-trip test checks version rejection.
+
 - Real docking, step 3 (persistence + focus shortcuts): dock layout is serialized with
   egui_dock's serde feature and auto-saved to `%LOCALAPPDATA%\ReCraft\layout.json`
   (split ratios, tab order, closed tabs and floating panes) after the layout settles,
