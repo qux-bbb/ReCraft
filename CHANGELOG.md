@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-layout step 4 (graph view + polish): **IDA View-A now opens in graph mode** like the
+  reference (Text View is the text document tab). Graph nodes use IDA-style chrome — dark
+  bodies, teal frames, light header bars with the block address and an `entry` marker —
+  with per-instruction mnemonic/operand/comment colours; edges are curved, coloured by
+  kind (fallthrough/jump teal, taken green, not-taken red, jump table violet) and end in
+  arrowheads. Adds zoom controls (`Fit`, `-`, `+`, 50–200 %) in the graph toolbar and a
+  graph status line (zoom/blocks/Hex sync); Output height is ~18 % like the reference and
+  the Functions/Graph-overview split was retuned. Saved layout version bumped to 4.
+  Screenshot refreshed at `docs/images/ida-layout.png`, demo/changelog updated.
+
 - IDA-layout step 3 (disassembly rendering): drops the separate "Name" column and renders
   names as IDA-style inline labels (`start:`) on a dedicated label line above the
   instruction; columns are now Address / Bytes / Mnemonic / Operands / Comment with IDA

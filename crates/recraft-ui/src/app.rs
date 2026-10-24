@@ -106,9 +106,10 @@ impl Pane {
     fn title(self) -> (&'static str, &'static str) {
         match self {
             // IDA-style document/panel names from the reference screenshot.
-            Pane::Disasm => ("IDA View-A", "IDA View-A"),
+            // Like IDA, the primary "IDA View-A" starts in graph mode; text is a tab.
+            Pane::Graph => ("IDA View-A", "IDA View-A"),
+            Pane::Disasm => ("Text View", "文本视图"),
             Pane::Pseudo => ("Pseudocode", "伪代码"),
-            Pane::Graph => ("Graph View", "图形视图"),
             Pane::Hex => ("Hex View-1", "十六进制"),
             Pane::Functions => ("Functions", "函数"),
             Pane::Strings => ("Strings", "字符串"),
@@ -262,7 +263,7 @@ struct EditState {
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
 /// resurrecting the old arrangement.
-const LAYOUT_VERSION: u32 = 3;
+const LAYOUT_VERSION: u32 = 4;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
@@ -462,6 +463,8 @@ pub struct ReCraftApp {
     cfg: Option<recraft_analysis::Cfg>,
     cfg_for: Option<Address>,
     cfg_dirty: bool,
+    /// Graph-view zoom factor (0.5..=2.0), adjusted by the on-pane +/- controls.
+    graph_zoom: f32,
     analysis: Option<AnalysisJob>,
     /// AI rename suggestions (never applied implicitly).
     ai_proposals: Vec<recraft_ai::Proposal>,
@@ -527,6 +530,7 @@ impl Default for ReCraftApp {
             xrefs_dirty: false,
             cfg: None,
             cfg_for: None,
+            graph_zoom: 1.0,
             cfg_dirty: false,
             analysis: None,
             ai_proposals: Vec::new(),
@@ -1707,8 +1711,8 @@ impl ReCraftApp {
             return;
         }
         let mut state = egui_dock::DockState::new(vec![
-            Pane::Disasm,
             Pane::Graph,
+            Pane::Disasm,
             Pane::Hex,
             Pane::Pseudo,
             Pane::Imports,
@@ -1722,13 +1726,17 @@ impl ReCraftApp {
         ]);
         {
             let surface = state.main_surface_mut();
-            // Output window across the bottom.
+            // Output window across the bottom (about 18% like the IDA reference).
             let [top, _output] =
-                surface.split_below(egui_dock::NodeIndex::root(), 0.78, vec![Pane::Output]);
+                surface.split_below(egui_dock::NodeIndex::root(), 0.82, vec![Pane::Output]);
             // Functions window with a graph overview underneath it.
             let [left, _docs] = surface.split_left(top, 0.22, vec![Pane::Functions]);
             let [_functions, _overview] =
-                surface.split_below(left, 0.68, vec![Pane::GraphOverview]);
+                surface.split_below(left, 0.74, vec![Pane::GraphOverview]);
+        }
+        // IDA shows the graph by default; Text remains one click away.
+        if let Some(path) = state.find_tab(&Pane::Graph) {
+            let _ = state.set_active_tab(path);
         }
         self.dock = Some(state);
     }
@@ -2582,6 +2590,8 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA-style graph view: basic-block nodes with teal frames and headers, curved
+    /// coloured edges with arrowheads, entry marker, zoom controls and a status line.
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Graph;
         let Some(cfg) = self.cfg.clone() else {
@@ -2595,39 +2605,80 @@ impl ReCraftApp {
             ui.weak(self.t("function has no decodable blocks", "函数没有可解码的基本块"));
             return;
         }
-        let layers = recraft_analysis::layers(&cfg);
-        const NODE_W: f32 = 250.0;
-        const GAP_X: f32 = 110.0;
-        const GAP_Y: f32 = 22.0;
-        let column_count = layers.iter().copied().max().unwrap_or(0) + 1;
-        let mut column_y = vec![20.0f32; column_count];
-        let mut local: Vec<egui::Rect> = Vec::with_capacity(cfg.blocks.len());
-        for (index, block) in cfg.blocks.iter().enumerate() {
-            let layer = layers[index];
-            let height = 26.0 + block.insns.len().min(8) as f32 * 14.0;
-            let x = 20.0 + layer as f32 * (NODE_W + GAP_X);
-            let y = column_y[layer];
-            column_y[layer] = y + height + GAP_Y;
-            local.push(egui::Rect::from_min_size(
-                egui::pos2(x, y),
-                egui::vec2(NODE_W, height),
-            ));
-        }
-        let canvas_w = 20.0 + column_count as f32 * (NODE_W + GAP_X);
-        let canvas_h = column_y.iter().copied().fold(20.0f32, f32::max) + 20.0;
-
+        let edge_color = |kind: recraft_analysis::EdgeKind| match kind {
+            recraft_analysis::EdgeKind::Fallthrough => Color32::from_rgb(0x5a, 0x9a, 0x9a),
+            recraft_analysis::EdgeKind::Taken => Color32::from_rgb(0x6a, 0xb0, 0x6a),
+            recraft_analysis::EdgeKind::NotTaken => Color32::from_rgb(0xc0, 0x6a, 0x6a),
+            recraft_analysis::EdgeKind::Unconditional => Color32::from_rgb(0x5a, 0x9a, 0x9a),
+            recraft_analysis::EdgeKind::JumpTable => Color32::from_rgb(0xa0, 0x8a, 0xc0),
+        };
         ui.horizontal(|ui| {
-            ui.weak(self.t("edges:", "边:"));
             for (label, color) in [
-                ("fallthrough", Color32::GRAY),
-                ("taken", Color32::from_rgb(0x6a, 0xb0, 0x6a)),
-                ("not taken", Color32::from_rgb(0xd0, 0x7a, 0x7a)),
-                ("jump", Color32::from_rgb(0x6a, 0x8f, 0xb5)),
-                ("jump table", Color32::from_rgb(0xb0, 0x8a, 0xd0)),
+                (
+                    "fallthrough",
+                    edge_color(recraft_analysis::EdgeKind::Fallthrough),
+                ),
+                ("taken", edge_color(recraft_analysis::EdgeKind::Taken)),
+                (
+                    "not taken",
+                    edge_color(recraft_analysis::EdgeKind::NotTaken),
+                ),
+                (
+                    "jump",
+                    edge_color(recraft_analysis::EdgeKind::Unconditional),
+                ),
+                (
+                    "jump table",
+                    edge_color(recraft_analysis::EdgeKind::JumpTable),
+                ),
             ] {
                 ui.colored_label(color, label);
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                    self.graph_zoom = (self.graph_zoom + 0.1).min(2.0);
+                }
+                if ui.small_button("-").on_hover_text("Zoom out").clicked() {
+                    self.graph_zoom = (self.graph_zoom - 0.1).max(0.5);
+                }
+                if ui.small_button("Fit").on_hover_text("Reset zoom").clicked() {
+                    self.graph_zoom = 1.0;
+                }
+                ui.monospace(format!("{:.2}%", self.graph_zoom * 100.0));
+            });
         });
+        let zoom = self.graph_zoom;
+        let node_w = 300.0 * zoom;
+        let header_h = 18.0 * zoom;
+        let line_h = 14.0 * zoom;
+        let text_size = 11.0 * zoom;
+        let gap_x = 120.0 * zoom;
+        let gap_y = 24.0 * zoom;
+        let pad = 10.0 * zoom;
+        let max_lines = 10usize;
+        let layer_of = recraft_analysis::layers(&cfg);
+        let column_count = layer_of.iter().copied().max().unwrap_or(0) + 1;
+        let mut column_y = vec![24.0 * zoom; column_count];
+        let mut local: Vec<egui::Rect> = Vec::with_capacity(cfg.blocks.len());
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            let layer = layer_of[index];
+            let shown = block.insns.len().min(max_lines);
+            let height = header_h + shown as f32 * line_h + pad * 2.0 + 4.0 * zoom;
+            let x = 24.0 * zoom + layer as f32 * (node_w + gap_x);
+            let y = column_y[layer];
+            column_y[layer] = y + height + gap_y;
+            local.push(egui::Rect::from_min_size(
+                egui::pos2(x, y),
+                egui::vec2(node_w, height),
+            ));
+        }
+        let canvas_w = 48.0 * zoom + column_count as f32 * (node_w + gap_x);
+        let canvas_h = column_y.iter().copied().fold(24.0f32 * zoom, f32::max) + 24.0 * zoom;
+        let selected = self
+            .disasm_rows
+            .get(self.selected)
+            .map(|line| line.addr.get());
+        let mono = FontId::monospace(text_size);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2639,6 +2690,7 @@ impl ReCraftApp {
                     Sense::hover(),
                 );
                 let origin = response.rect.min.to_vec2();
+                // Edges first, so frames paint on top.
                 for block in &cfg.blocks {
                     for &(target, kind) in &block.edges {
                         let Some(target_rect) = local.get(target) else {
@@ -2646,21 +2698,7 @@ impl ReCraftApp {
                         };
                         let from = local[block.index].right_center() + origin;
                         let to = target_rect.left_center() + origin;
-                        let color = match kind {
-                            recraft_analysis::EdgeKind::Fallthrough => Color32::GRAY,
-                            recraft_analysis::EdgeKind::Taken => {
-                                Color32::from_rgb(0x6a, 0xb0, 0x6a)
-                            }
-                            recraft_analysis::EdgeKind::NotTaken => {
-                                Color32::from_rgb(0xd0, 0x7a, 0x7a)
-                            }
-                            recraft_analysis::EdgeKind::Unconditional => {
-                                Color32::from_rgb(0x6a, 0x8f, 0xb5)
-                            }
-                            recraft_analysis::EdgeKind::JumpTable => {
-                                Color32::from_rgb(0xb0, 0x8a, 0xd0)
-                            }
-                        };
+                        let color = edge_color(kind);
                         let bend = ((to.x - from.x).abs() * 0.4).max(40.0);
                         painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
                             [
@@ -2671,42 +2709,86 @@ impl ReCraftApp {
                             ],
                             false,
                             Color32::TRANSPARENT,
-                            egui::Stroke::new(1.4, color),
+                            egui::Stroke::new((1.2 * zoom).max(1.0), color),
                         ));
-                        painter.circle_filled(to, 3.0, color);
+                        // Arrowhead pointing into the target block.
+                        let dir = (to - egui::pos2(to.x - bend, to.y)).normalized();
+                        let size = 5.0 * zoom;
+                        let normal = egui::vec2(-dir.y, dir.x);
+                        let tip = to;
+                        let base = to - dir * size;
+                        painter.add(egui::epaint::PathShape::convex_polygon(
+                            vec![tip, base + normal * size * 0.6, base - normal * size * 0.6],
+                            color,
+                            egui::Stroke::NONE,
+                        ));
                     }
                 }
                 for (index, block) in cfg.blocks.iter().enumerate() {
                     let rect = local[index].translate(origin);
                     let is_entry = index == cfg.entry;
-                    painter.rect_filled(rect, 6.0, Color32::from_rgb(0x22, 0x27, 0x30));
+                    let current = selected
+                        .is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
+                    // IDA-style frame: dark body, teal border, light header bar.
+                    painter.rect_filled(rect, 4.0, Color32::from_rgb(0x0d, 0x10, 0x12));
+                    let border = if current {
+                        C_ADDR
+                    } else {
+                        Color32::from_rgb(0x4a, 0x8f, 0x8f)
+                    };
                     painter.rect_stroke(
                         rect,
-                        6.0,
-                        egui::Stroke::new(
-                            1.0,
-                            if is_entry {
-                                Color32::from_rgb(0xd0, 0xa0, 0x60)
-                            } else {
-                                Color32::from_rgb(0x3a, 0x42, 0x50)
-                            },
-                        ),
+                        4.0,
+                        egui::Stroke::new(if current { 2.0 } else { 1.0 }, border),
                         egui::StrokeKind::Inside,
                     );
+                    let header =
+                        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
+                    painter.rect_filled(header, 4.0, Color32::from_rgb(0x9c, 0xc8, 0xc8));
                     painter.text(
-                        rect.min + egui::vec2(8.0, 4.0),
+                        header.min + egui::vec2(6.0, 1.0),
                         egui::Align2::LEFT_TOP,
                         format!("{:#x}", block.start.get()),
-                        FontId::monospace(11.0),
-                        C_ADDR,
+                        FontId::monospace(text_size * 0.92),
+                        Color32::from_rgb(0x14, 0x2a, 0x2a),
                     );
-                    for (line_index, insn) in block.insns.iter().take(8).enumerate() {
+                    if is_entry {
                         painter.text(
-                            rect.min + egui::vec2(8.0, 20.0 + line_index as f32 * 14.0),
-                            egui::Align2::LEFT_TOP,
-                            truncate_chars(&insn.text, 44),
-                            FontId::monospace(11.0),
-                            Color32::from_gray(0xcf),
+                            header.right_center() - egui::vec2(4.0, 0.0),
+                            egui::Align2::RIGHT_CENTER,
+                            "entry",
+                            FontId::proportional(text_size * 0.85),
+                            Color32::from_rgb(0x14, 0x4a, 0x2a),
+                        );
+                    }
+                    for (line_index, insn) in block.insns.iter().take(max_lines).enumerate() {
+                        let mut job = LayoutJob::default();
+                        let (mnemonic, operands) = match insn.text.split_once(' ') {
+                            Some((mnemonic, rest)) => (mnemonic, rest),
+                            None => (insn.text.as_str(), ""),
+                        };
+                        append(&mut job, mnemonic, C_MNEMONIC, &mono);
+                        append(&mut job, " ", C_TEXT, &mono);
+                        if let Some((operands, comment)) = operands.split_once(';') {
+                            append(&mut job, operands, C_TEXT, &mono);
+                            append(&mut job, &format!("; {comment}"), C_COMMENT, &mono);
+                        } else {
+                            append(&mut job, operands, C_TEXT, &mono);
+                        }
+                        let galley = painter.layout_job(job);
+                        painter.galley(
+                            rect.min + egui::vec2(pad, header_h + pad + line_index as f32 * line_h),
+                            galley,
+                            C_TEXT,
+                        );
+                    }
+                    if block.insns.len() > max_lines {
+                        painter.text(
+                            rect.left_bottom() + egui::vec2(pad, -pad - line_h * 0.2),
+                            egui::Align2::LEFT_BOTTOM,
+                            format!("… {} more", block.insns.len() - max_lines),
+                            FontId::proportional(text_size * 0.85),
+                            Color32::from_gray(0x90),
                         );
                     }
                     let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click());
@@ -2727,6 +2809,14 @@ impl ReCraftApp {
                     }
                 }
             });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.weak(format!("{:.2}%", zoom * 100.0));
+            ui.separator();
+            ui.weak(format!("{} blocks", cfg.blocks.len()));
+            ui.separator();
+            ui.weak(self.t("(Synchronized with Hex View-1)", "（与 Hex View-1 同步）"));
+        });
     }
 
     /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
@@ -3883,15 +3973,6 @@ fn xref_kind_name(kind: i64) -> &'static str {
         recraft_analysis::XREF_DATA => "data",
         _ => "other",
     }
-}
-
-fn truncate_chars(text: &str, max: usize) -> String {
-    let mut chars: Vec<char> = text.chars().collect();
-    if chars.len() > max {
-        chars.truncate(max);
-        chars.push('…');
-    }
-    chars.into_iter().collect()
 }
 
 /// Background worker: its own `Session` (separate SQLite connection) keeps the UI

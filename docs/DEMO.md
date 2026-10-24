@@ -58,9 +58,10 @@ applied 3 proposal(s) through the command bus (undoable)
 2. `F5` 运行分析（后台线程，可取消）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
-   图标）及其下方 **Graph overview**；右侧**文档标签区**（IDA View-A、Graph View、Hex View-1、
-   Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、Local Types、AI）；底部
-   **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex 同步提示）。
+   图标）及其下方 **Graph overview**；右侧**文档标签区**（**IDA View-A 图形视图（默认）**、
+   Text View、Hex View-1、Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、
+   Local Types、AI）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex
+   同步提示）。图形视图支持节点块/箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
    `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types。
