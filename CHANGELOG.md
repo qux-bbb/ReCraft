@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Navigation band now reflects real content and matches the legend: executable segments
+- Graph overview is now a real minimap: it reuses the graph view's CFG layout
+  (`graph_layout`), draws scaled node rectangles with their edges, highlights the block
+  containing the current address, and draws the graph view's visible viewport box when the
+  graph pane has been laid out. Clicking a node jumps to that block. A unit test covers the
+  shared layout geometry, and the screenshot is `docs/images/graph-overview.png`.
   are teal (instructions), readable data segments green, unexplored areas grey; discovered
   functions overlay the top half in the blue "Regular function" colour, import/IAT
   addresses appear as magenta "External symbol" ticks, the marker uses the current

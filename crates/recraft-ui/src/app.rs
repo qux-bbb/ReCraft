@@ -570,6 +570,8 @@ pub struct ReCraftApp {
     cfg_dirty: bool,
     /// Graph-view zoom factor (0.5..=2.0), adjusted by the on-pane +/- controls.
     graph_zoom: f32,
+    /// Last visible graph-canvas rectangle (for the overview viewport box).
+    graph_visible: Option<egui::Rect>,
     analysis: Option<AnalysisJob>,
     /// AI rename suggestions (never applied implicitly).
     ai_proposals: Vec<recraft_ai::Proposal>,
@@ -638,6 +640,7 @@ impl Default for ReCraftApp {
             cfg: None,
             cfg_for: None,
             graph_zoom: 1.0,
+            graph_visible: None,
             cfg_dirty: false,
             analysis: None,
             ai_proposals: Vec::new(),
@@ -2086,53 +2089,69 @@ impl ReCraftApp {
         if cfg.blocks.is_empty() {
             return;
         }
-        let layer_of = recraft_analysis::layers(&cfg);
-        let mut layers: std::collections::BTreeMap<usize, Vec<usize>> =
-            std::collections::BTreeMap::new();
-        for (index, layer) in layer_of.iter().enumerate() {
-            layers.entry(*layer).or_default().push(index);
-        }
+        let (local, canvas) = graph_layout(&cfg, 1.0);
         let width = ui.available_width().max(80.0);
         let height = ui.available_height().max(80.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 2.0, pal.view);
-        let columns = layers.len().max(1) as f32;
-        let rows = layers.values().map(Vec::len).max().unwrap_or(1).max(1) as f32;
-        let cell_w = rect.width() / columns;
-        let cell_h = rect.height() / rows;
+        // Fit the real graph canvas into the minimap, but keep tiny graphs readable
+        // instead of blowing a single node up to the whole pane.
+        let scale = (rect.width() / canvas.x)
+            .min(rect.height() / canvas.y)
+            .min(0.35);
+        let free = egui::vec2(
+            (rect.width() - canvas.x * scale).max(0.0),
+            (rect.height() - canvas.y * scale).max(0.0),
+        );
+        let offset = rect.min + free * 0.5;
+        let map = |r: egui::Rect| {
+            egui::Rect::from_min_size(
+                egui::pos2(offset.x + r.min.x * scale, offset.y + r.min.y * scale),
+                egui::vec2((r.width() * scale).max(2.0), (r.height() * scale).max(2.0)),
+            )
+        };
         let selected = self
             .disasm_rows
             .get(self.selected)
             .map(|line| line.addr.get());
-        for (column, (_, blocks)) in layers.iter().enumerate() {
-            for (row, &index) in blocks.iter().enumerate() {
-                let block = &cfg.blocks[index];
-                let block_w = (cell_w * 0.7).clamp(6.0, 64.0);
-                let block_h = (cell_h * 0.6).clamp(4.0, 14.0);
-                let block_rect = egui::Rect::from_min_size(
-                    egui::pos2(
-                        rect.left() + column as f32 * cell_w + 3.0,
-                        rect.top() + row as f32 * cell_h + 3.0,
-                    ),
-                    egui::vec2(block_w, block_h),
-                );
-                let current = selected
-                    .is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
-                painter.rect_filled(
-                    block_rect,
-                    1.0,
-                    if current { pal.addr } else { pal.edge_jump },
-                );
-                let response = ui.interact(
-                    block_rect,
-                    ui.id().with(("overview", block.start.get())),
-                    Sense::click(),
-                );
-                if response.clicked() {
-                    *action = Action::NavigateToDisasm(block.start);
+        for block in &cfg.blocks {
+            for &(target, _) in &block.edges {
+                if let Some(target_rect) = local.get(target) {
+                    painter.line_segment(
+                        [map(local[block.index]).center(), map(*target_rect).center()],
+                        egui::Stroke::new(0.6, pal.graph_border),
+                    );
                 }
             }
+        }
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            let node = map(local[index]);
+            let current =
+                selected.is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
+            painter.rect_filled(node, 1.0, if current { pal.addr } else { pal.edge_jump });
+            painter.rect_stroke(
+                node,
+                1.0,
+                egui::Stroke::new(0.6, pal.graph_border),
+                egui::StrokeKind::Inside,
+            );
+            let response = ui.interact(
+                node,
+                ui.id().with(("overview", block.start.get())),
+                Sense::click(),
+            );
+            if response.clicked() {
+                *action = Action::NavigateToDisasm(block.start);
+            }
+        }
+        if let Some(visible) = self.graph_visible {
+            painter.rect_stroke(
+                map(visible),
+                0.0,
+                egui::Stroke::new(1.0, pal.text),
+                egui::StrokeKind::Inside,
+            );
         }
     }
 
@@ -2804,37 +2823,20 @@ impl ReCraftApp {
             });
         });
         let zoom = self.graph_zoom;
-        let node_w = 300.0 * zoom;
         let header_h = 18.0 * zoom;
         let line_h = 14.0 * zoom;
         let text_size = 11.0 * zoom;
-        let gap_x = 120.0 * zoom;
-        let gap_y = 24.0 * zoom;
         let pad = 10.0 * zoom;
         let max_lines = 10usize;
-        let layer_of = recraft_analysis::layers(&cfg);
-        let column_count = layer_of.iter().copied().max().unwrap_or(0) + 1;
-        let mut column_y = vec![24.0 * zoom; column_count];
-        let mut local: Vec<egui::Rect> = Vec::with_capacity(cfg.blocks.len());
-        for (index, block) in cfg.blocks.iter().enumerate() {
-            let layer = layer_of[index];
-            let shown = block.insns.len().min(max_lines);
-            let height = header_h + shown as f32 * line_h + pad * 2.0 + 4.0 * zoom;
-            let x = 24.0 * zoom + layer as f32 * (node_w + gap_x);
-            let y = column_y[layer];
-            column_y[layer] = y + height + gap_y;
-            local.push(egui::Rect::from_min_size(
-                egui::pos2(x, y),
-                egui::vec2(node_w, height),
-            ));
-        }
-        let canvas_w = 48.0 * zoom + column_count as f32 * (node_w + gap_x);
-        let canvas_h = column_y.iter().copied().fold(24.0f32 * zoom, f32::max) + 24.0 * zoom;
+        let (local, canvas) = graph_layout(&cfg, zoom);
+        let canvas_w = canvas.x;
+        let canvas_h = canvas.y;
         let selected = self
             .disasm_rows
             .get(self.selected)
             .map(|line| line.addr.get());
         let mono = FontId::monospace(text_size);
+        let mut visible_rect = None;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2846,6 +2848,11 @@ impl ReCraftApp {
                     Sense::hover(),
                 );
                 let origin = response.rect.min.to_vec2();
+                let clip = ui.clip_rect();
+                visible_rect = Some(egui::Rect::from_min_max(
+                    clip.min - origin,
+                    clip.max - origin,
+                ));
                 // Edges first, so frames paint on top.
                 for block in &cfg.blocks {
                     for &(target, kind) in &block.edges {
@@ -2965,6 +2972,7 @@ impl ReCraftApp {
                     }
                 }
             });
+        self.graph_visible = visible_rect;
         ui.separator();
         ui.horizontal(|ui| {
             ui.weak(format!("{:.2}%", zoom * 100.0));
@@ -4118,6 +4126,37 @@ impl eframe::App for ReCraftApp {
     }
 }
 
+/// Lay out the CFG the same way the graph view does, so the overview minimap can reuse
+/// the exact node geometry at any scale.
+fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egui::Vec2) {
+    const MAX_LINES: usize = 10;
+    let node_w = 300.0 * zoom;
+    let header_h = 18.0 * zoom;
+    let line_h = 14.0 * zoom;
+    let gap_x = 120.0 * zoom;
+    let gap_y = 24.0 * zoom;
+    let pad = 10.0 * zoom;
+    let layer_of = recraft_analysis::layers(cfg);
+    let column_count = layer_of.iter().copied().max().unwrap_or(0) + 1;
+    let mut column_y = vec![24.0 * zoom; column_count];
+    let mut rects = Vec::with_capacity(cfg.blocks.len());
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        let layer = layer_of[index];
+        let shown = block.insns.len().min(MAX_LINES);
+        let height = header_h + shown as f32 * line_h + pad * 2.0 + 4.0 * zoom;
+        let x = 24.0 * zoom + layer as f32 * (node_w + gap_x);
+        let y = column_y[layer];
+        column_y[layer] = y + height + gap_y;
+        rects.push(egui::Rect::from_min_size(
+            egui::pos2(x, y),
+            egui::vec2(node_w, height),
+        ));
+    }
+    let width = 48.0 * zoom + column_count as f32 * (node_w + gap_x);
+    let height = column_y.iter().copied().fold(24.0f32 * zoom, f32::max) + 24.0 * zoom;
+    (rects, egui::vec2(width, height))
+}
+
 fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
     job.append(
         text,
@@ -5246,6 +5285,40 @@ mod tests {
             load_layout_from(&dir.path().join("missing.json")).is_none(),
             "missing layout falls back to defaults"
         );
+    }
+
+    #[test]
+    fn graph_layout_uses_real_cfg_geometry() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn, EdgeKind};
+        let block =
+            |index: usize, start: u64, end: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+                index,
+                start: Address::new(start),
+                end: Address::new(end),
+                insns: vec![CfgInsn {
+                    addr: Address::new(start),
+                    text: "ret".to_owned(),
+                }],
+                edges,
+            };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(0, 0x1000, 0x1001, vec![(1, EdgeKind::Unconditional)]),
+                block(1, 0x1001, 0x1002, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let (rects, canvas) = graph_layout(&cfg, 1.0);
+        assert_eq!(rects.len(), 2);
+        assert!(
+            rects[1].min.x > rects[0].min.x,
+            "the target block must sit in a later layer"
+        );
+        assert!(canvas.x > rects[1].max.x, "canvas must contain the nodes");
+        assert!(canvas.y >= rects[0].max.y);
     }
 
     #[test]
