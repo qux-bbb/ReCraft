@@ -12,6 +12,7 @@ used). Direct dependencies:
 | Component | Purpose | License |
 |---|---|---|
 | egui / eframe / epaint | native UI | MIT OR Apache-2.0 |
+| egui_dock | dockable pane layout | MIT |
 | iced-x86 | x86/x64 decoder | MIT |
 | rusqlite (bundled) | project storage | MIT; bundled SQLite is public domain |
 | goblin / pelite | PE parsing helpers | MIT |

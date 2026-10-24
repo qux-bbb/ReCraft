@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Real docking, step 1 (goal: IDA-style dockable workspace): added **egui_dock 0.21.1**
+  (egui 0.36-compatible, MIT) and replaced the floating tool windows with a single
+  dock-state workspace — center tabs (Disassembly/Pseudo-C/Graph), a left tool column
+  (Functions/Strings/Imports/Xrefs/Names/Segments/AI/Structures) and a bottom-right Hex
+  pane. Tabs can be dragged to split/merge panes, resized via separators and dragged out
+  into floating windows; primary view tabs are not closeable while tool tabs are.
+  `Views` menu focuses any pane (re-docking it if closed) and resets the layout; `Space`
+  cycles the main views by focusing the corresponding dock tab. Layout state lives in
+  `ReCraftApp` (`DockState<Pane>`), and a screenshot of the docked layout is checked in at
+  `docs/images/dock-step1.png`. Tests updated for the pane/dock API (25 UI tests pass).
+
 - IDA-style step 6 — data/type operations: `C` (code), `D` (data), `A` (ASCII data),
   `U` (undefine) and `P` (create function) on the current disassembly line, mirrored in
   the right-click menu together with remove-function, Edit prototype… and Structures…;

@@ -55,9 +55,11 @@ applied 3 proposal(s) through the command bus (undoable)
 
 1. 启动 `recraft-ui.exe`，**File → Open/Import** 选择 `%TEMP%\recraft-demo-*\demo.rcraft`
    （用 `-Keep` 运行演示脚本会打印路径）。
-2. `F5` 运行分析（后台线程，可取消）；**Views（窗口）** 菜单可打开独立的
-   **Functions/Strings/Imports/Xrefs/Names/Segments/AI** 窗口（可移动、可缩放、可关闭，
-   类似 IDA 的停靠面板）；双击条目跳转到反汇编并高亮目标行。
+2. `F5` 运行分析（后台线程，可取消）；**Views（窗口）** 菜单可聚焦任意 pane 或
+   **Reset layout**。工作区是 IDA 式可停靠布局：左侧工具 tab（Functions/Strings/Imports/
+   Xrefs/Names/Segments/AI/Structures）、中间 Disassembly/Pseudo-C/Graph、右下 Hex；
+   **拖动 tab 到边缘可分屏/合并**，拖动分隔条可调大小，tab 可拖出为独立窗口。
+   ![docked layout](images/dock-step1.png)
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
    伪代码与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
    工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在伪代码里同步高亮，

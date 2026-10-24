@@ -51,7 +51,7 @@ foreach ($file in $sourceFiles) {
 
 # 3. NOTICE must mention the key third-party licenses used directly.
 $notice = Get-Content -LiteralPath 'NOTICE.md' -Raw
-foreach ($needle in @('egui', 'iced-x86', 'rusqlite', 'SQLite', 'serde', 'clap')) {
+foreach ($needle in @('egui', 'egui_dock', 'iced-x86', 'rusqlite', 'SQLite', 'serde', 'clap')) {
     if (-not $notice.Contains($needle)) {
         $failures.Add("NOTICE.md does not mention $needle")
     }

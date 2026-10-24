@@ -54,9 +54,13 @@ enum Tab {
     Graph,
 }
 
-/// IDA-style detached tool windows (functions/strings/imports/xrefs/names/segments/AI).
+/// Docked panes (IDA-style dockable tabs, backed by `egui_dock`).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-enum ToolWindow {
+enum Pane {
+    Disasm,
+    Pseudo,
+    Graph,
+    Hex,
     Functions,
     Strings,
     Imports,
@@ -67,18 +71,91 @@ enum ToolWindow {
     Structs,
 }
 
-impl ToolWindow {
+impl Pane {
+    fn all() -> [Pane; 12] {
+        [
+            Pane::Disasm,
+            Pane::Pseudo,
+            Pane::Graph,
+            Pane::Hex,
+            Pane::Functions,
+            Pane::Strings,
+            Pane::Imports,
+            Pane::Xrefs,
+            Pane::Names,
+            Pane::Segments,
+            Pane::Ai,
+            Pane::Structs,
+        ]
+    }
+
     fn title(self) -> (&'static str, &'static str) {
         match self {
-            ToolWindow::Functions => ("Functions", "函数"),
-            ToolWindow::Strings => ("Strings", "字符串"),
-            ToolWindow::Imports => ("Imports", "导入"),
-            ToolWindow::Xrefs => ("Xrefs", "交叉引用"),
-            ToolWindow::Names => ("Names", "名字"),
-            ToolWindow::Segments => ("Segments", "段"),
-            ToolWindow::Ai => ("AI", "AI"),
-            ToolWindow::Structs => ("Structures", "结构体"),
+            Pane::Disasm => ("Disassembly", "反汇编"),
+            Pane::Pseudo => ("Pseudo-C", "伪代码"),
+            Pane::Graph => ("Graph", "控制流图"),
+            Pane::Hex => ("Hex", "十六进制"),
+            Pane::Functions => ("Functions", "函数"),
+            Pane::Strings => ("Strings", "字符串"),
+            Pane::Imports => ("Imports", "导入"),
+            Pane::Xrefs => ("Xrefs", "交叉引用"),
+            Pane::Names => ("Names", "名字"),
+            Pane::Segments => ("Segments", "段"),
+            Pane::Ai => ("AI", "AI"),
+            Pane::Structs => ("Structures", "结构体"),
         }
+    }
+}
+
+/// Renders `ReCraftApp` panes inside an `egui_dock` tab.
+struct DockViewer<'a> {
+    app: &'a mut ReCraftApp,
+    action: &'a mut Action,
+}
+
+impl egui_dock::TabViewer for DockViewer<'_> {
+    type Tab = Pane;
+
+    fn id(&mut self, tab: &mut Pane) -> egui::Id {
+        egui::Id::new(("recraft-pane", *tab))
+    }
+
+    fn title(&mut self, tab: &mut Pane) -> egui::WidgetText {
+        let (en, zh) = tab.title();
+        self.app.t(en, zh).into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Pane) {
+        match tab {
+            Pane::Disasm => {
+                if self.app.session.is_none() {
+                    self.app.welcome(ui, self.action);
+                } else {
+                    self.app.disasm_view(ui, self.action);
+                }
+            }
+            Pane::Pseudo => self.app.pseudo_view(ui, self.action),
+            Pane::Graph => self.app.graph_view(ui, self.action),
+            Pane::Hex => self.app.hex_view(ui, self.action),
+            Pane::Functions => self.app.functions_list(ui, self.action),
+            Pane::Strings => self.app.strings_list(ui, self.action),
+            Pane::Imports => self.app.imports_list(ui, self.action),
+            Pane::Xrefs => self.app.xrefs_list(ui, self.action),
+            Pane::Names => self.app.names_list(ui, self.action),
+            Pane::Segments => self.app.segments_list(ui, self.action),
+            Pane::Ai => self.app.ai_panel(ui, self.action),
+            Pane::Structs => self.app.structs_panel(ui, self.action),
+        }
+    }
+
+    fn allowed_in_windows(&self, _tab: &mut Pane) -> bool {
+        true
+    }
+
+    fn is_closeable(&self, tab: &Pane) -> bool {
+        // Keep the primary views open; auxiliary lists may be closed and reopened from
+        // the Views menu.
+        !matches!(tab, Pane::Disasm | Pane::Pseudo | Pane::Graph)
     }
 }
 
@@ -258,6 +335,8 @@ enum Action {
     ApplyData(DataOp),
     EditPrototype,
     ShowStructs,
+    FocusPane(Pane),
+    ResetLayout,
 }
 
 pub struct ReCraftApp {
@@ -265,7 +344,7 @@ pub struct ReCraftApp {
     project: Option<PathBuf>,
     lang: Lang,
     tab: Tab,
-    windows: std::collections::BTreeMap<ToolWindow, bool>,
+    dock: Option<egui_dock::DockState<Pane>>,
     status: String,
     is_error: bool,
     disasm_start: Address,
@@ -313,7 +392,6 @@ pub struct ReCraftApp {
     goto: Option<String>,
     palette: Option<PaletteState>,
     recent: Vec<PathBuf>,
-    show_hex: bool,
     hex_unit: HexUnit,
     hex_start: Address,
     hex_cursor: Option<Address>,
@@ -329,7 +407,7 @@ impl Default for ReCraftApp {
             project: None,
             lang: Lang::En,
             tab: Tab::Disasm,
-            windows: [(ToolWindow::Functions, true)].into_iter().collect(),
+            dock: None,
             status: String::new(),
             is_error: false,
             disasm_start: Address::ZERO,
@@ -375,7 +453,6 @@ impl Default for ReCraftApp {
             goto: None,
             palette: None,
             recent: Vec::new(),
-            show_hex: true,
             hex_unit: HexUnit::Byte,
             hex_start: Address::ZERO,
             hex_cursor: None,
@@ -1047,21 +1124,17 @@ impl ReCraftApp {
                     }
                 });
                 ui.menu_button(views_label, |ui| {
-                    for tool in [
-                        ToolWindow::Functions,
-                        ToolWindow::Strings,
-                        ToolWindow::Imports,
-                        ToolWindow::Xrefs,
-                        ToolWindow::Names,
-                        ToolWindow::Segments,
-                        ToolWindow::Ai,
-                        ToolWindow::Structs,
-                    ] {
-                        let (en, zh) = tool.title();
-                        let mut open = self.window_open(tool);
-                        if ui.checkbox(&mut open, self.t(en, zh)).changed() {
-                            self.set_window(tool, open);
+                    for pane in Pane::all() {
+                        let (en, zh) = pane.title();
+                        if ui.button(self.t(en, zh)).clicked() {
+                            *action = Action::FocusPane(pane);
+                            ui.close();
                         }
+                    }
+                    ui.separator();
+                    if ui.button(self.t("Reset layout", "重置布局")).clicked() {
+                        *action = Action::ResetLayout;
+                        ui.close();
                     }
                 });
                 ui.separator();
@@ -1100,8 +1173,6 @@ impl ReCraftApp {
                     *action = Action::Analyze;
                 }
                 ui.separator();
-                let hex_label = self.t("Hex", "十六进制");
-                ui.checkbox(&mut self.show_hex, hex_label);
                 ui.separator();
                 if ui
                     .button(if self.lang == Lang::En {
@@ -1152,13 +1223,6 @@ impl ReCraftApp {
                 ));
             });
         });
-    }
-
-    fn hex_panel(&mut self, root: &mut egui::Ui, action: &mut Action) {
-        egui::Panel::bottom("recraft_hex")
-            .resizable(true)
-            .default_size(190.0)
-            .show(root, |ui| self.hex_view(ui, action));
     }
 
     /// Bottom hex dump: follows the current selection, click selects a byte, double-click
@@ -1315,53 +1379,69 @@ impl ReCraftApp {
         }
     }
 
-    /// IDA-style detached tool windows, toggled from the *Views* menu.
-    fn tool_windows(&mut self, ctx: &egui::Context, action: &mut Action) {
-        let tools = [
-            ToolWindow::Functions,
-            ToolWindow::Strings,
-            ToolWindow::Imports,
-            ToolWindow::Xrefs,
-            ToolWindow::Names,
-            ToolWindow::Segments,
-            ToolWindow::Ai,
-            ToolWindow::Structs,
-        ];
-        for tool in tools {
-            if !self.window_open(tool) {
-                continue;
-            }
-            let mut open = true;
-            let (en, zh) = tool.title();
-            let title = self.t(en, zh);
-            egui::Window::new(title)
-                .id(egui::Id::new(("recraft-window", tool)))
-                .default_pos(tool_default_pos(tool))
-                .default_size(tool_default_size(tool))
-                .resizable(true)
-                .open(&mut open)
-                .show(ctx, |ui| match tool {
-                    ToolWindow::Functions => self.functions_list(ui, action),
-                    ToolWindow::Strings => self.strings_list(ui, action),
-                    ToolWindow::Imports => self.imports_list(ui, action),
-                    ToolWindow::Xrefs => self.xrefs_list(ui, action),
-                    ToolWindow::Names => self.names_list(ui, action),
-                    ToolWindow::Segments => self.segments_list(ui, action),
-                    ToolWindow::Ai => self.ai_panel(ui, action),
-                    ToolWindow::Structs => self.structs_panel(ui, action),
-                });
-            if !open {
-                self.set_window(tool, false);
-            }
+    /// Build the default IDA-like dock layout once: center tabs (Disassembly/Pseudo-C/
+    /// Graph), a left tool column and a bottom hex pane.
+    fn ensure_dock(&mut self) {
+        if self.dock.is_some() {
+            return;
         }
+        let mut state = egui_dock::DockState::new(vec![Pane::Disasm, Pane::Pseudo, Pane::Graph]);
+        {
+            let surface = state.main_surface_mut();
+            let [center, _tools] = surface.split_left(
+                egui_dock::NodeIndex::root(),
+                0.24,
+                vec![
+                    Pane::Functions,
+                    Pane::Strings,
+                    Pane::Imports,
+                    Pane::Xrefs,
+                    Pane::Names,
+                    Pane::Segments,
+                    Pane::Ai,
+                    Pane::Structs,
+                ],
+            );
+            let [_center, _hex] = surface.split_below(center, 0.72, vec![Pane::Hex]);
+        }
+        self.dock = Some(state);
     }
 
-    fn window_open(&self, tool: ToolWindow) -> bool {
-        self.windows.get(&tool).copied().unwrap_or(false)
+    /// Draw the dock area. The state is temporarily moved out so the tab viewer can borrow
+    /// the rest of the app mutably (egui_dock needs `&mut DockState` for tab drag/drop).
+    fn dock_area(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        self.ensure_dock();
+        let Some(mut state) = self.dock.take() else {
+            return;
+        };
+        {
+            let mut viewer = DockViewer { app: self, action };
+            egui::CentralPanel::default().show(ui, |ui| {
+                let style = egui_dock::Style::from_egui(ui.style().as_ref());
+                egui_dock::DockArea::new(&mut state)
+                    .style(style)
+                    .draggable_tabs(true)
+                    .show_close_buttons(true)
+                    .show_add_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .show_inside(ui, &mut viewer);
+            });
+        }
+        self.dock = Some(state);
     }
 
-    fn set_window(&mut self, tool: ToolWindow, open: bool) {
-        self.windows.insert(tool, open);
+    /// Focus an existing tab, or dock it into the focused leaf when it was closed.
+    fn focus_pane(&mut self, pane: Pane) {
+        self.ensure_dock();
+        let Some(state) = self.dock.as_mut() else {
+            return;
+        };
+        if let Some(path) = state.find_tab(&pane) {
+            let _ = state.set_active_tab(path);
+        } else {
+            state.push_to_focused_leaf(pane);
+        }
     }
 
     fn segments_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -1947,6 +2027,7 @@ impl ReCraftApp {
     }
 
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        self.tab = Tab::Graph;
         let Some(cfg) = self.cfg.clone() else {
             ui.weak(self.t(
                 "No control-flow graph — run Analyze (F5) and put the cursor inside a function.",
@@ -2089,44 +2170,6 @@ impl ReCraftApp {
             });
     }
 
-    fn central(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let disasm_label = self.t("Disassembly", "反汇编");
-        let pseudo_label = self.t("Pseudo-C (L0)", "伪代码 (L0)");
-        let graph_label = self.t("Graph", "控制流图");
-        egui::CentralPanel::default().show(ui, |ui| {
-            if self.session.is_none() {
-                self.welcome(ui, action);
-                return;
-            }
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Disasm, disasm_label);
-                ui.selectable_value(&mut self.tab, Tab::Pseudo, pseudo_label);
-                ui.selectable_value(&mut self.tab, Tab::Graph, graph_label);
-                ui.separator();
-                ui.weak(if let Some(session) = self.session.as_ref() {
-                    format!(
-                        "{} x{} · entry {:#x}",
-                        if session.mode().is_64() {
-                            "PE32+"
-                        } else {
-                            "PE32"
-                        },
-                        if session.mode().is_64() { 64 } else { 32 },
-                        session.entry_point().get()
-                    )
-                } else {
-                    String::new()
-                });
-            });
-            ui.separator();
-            match self.tab {
-                Tab::Disasm => self.disasm_view(ui, action),
-                Tab::Pseudo => self.pseudo_view(ui, action),
-                Tab::Graph => self.graph_view(ui, action),
-            }
-        });
-    }
-
     /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
     fn welcome(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         ui.add_space(24.0);
@@ -2175,6 +2218,7 @@ impl ReCraftApp {
     }
 
     fn disasm_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        self.tab = Tab::Disasm;
         if self.disasm_rows.is_empty() {
             ui.weak(self.t(
                 "No disassembly. Import a PE file first.",
@@ -2205,7 +2249,7 @@ impl ReCraftApp {
                     self.t("Name", "名字"),
                     self.t("Comment", "注释"),
                 );
-                ui.label(RichText::new(header).monospace().strong());
+                ui.add(egui::Label::new(RichText::new(header).monospace().strong()).truncate());
                 let width = ui.available_width().max(120.0);
                 for (index, line) in self.disasm_rows.iter().enumerate() {
                     // One full-row hit area, like IDA: the whole line is selectable and
@@ -2422,6 +2466,7 @@ impl ReCraftApp {
     }
 
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        self.tab = Tab::Pseudo;
         let mono = FontId::monospace(MONO_SIZE);
         let l1_label = self.t("L1 (structured)", "L1（结构化）");
         let l2_label = self.t("L2 (vars)", "L2（变量）");
@@ -2769,6 +2814,7 @@ impl ReCraftApp {
                 if let Some(target) = self.follow_target(&line) {
                     self.navigate(target);
                     self.tab = Tab::Disasm;
+                    self.focus_pane(Pane::Disasm);
                 } else {
                     self.set_status(
                         self.t("no followable target", "没有可跟随的目标")
@@ -2784,6 +2830,7 @@ impl ReCraftApp {
             Action::NavigateToDisasm(addr) => {
                 self.navigate(addr);
                 self.tab = Tab::Disasm;
+                self.focus_pane(Pane::Disasm);
             }
             Action::SyncDisasm(addr) => {
                 self.disasm_start = addr;
@@ -2793,7 +2840,15 @@ impl ReCraftApp {
                 self.pseudo_dirty = true;
             }
             Action::ShowStructs => {
-                self.set_window(ToolWindow::Structs, true);
+                self.focus_pane(Pane::Structs);
+            }
+            Action::FocusPane(pane) => {
+                self.focus_pane(pane);
+            }
+            Action::ResetLayout => {
+                self.dock = None;
+                self.ensure_dock();
+                self.set_status(self.t("layout reset", "布局已重置").to_owned());
             }
             Action::ApplyData(op) => {
                 let Some(line) = self.disasm_rows.get(self.selected).cloned() else {
@@ -3015,10 +3070,16 @@ impl ReCraftApp {
                 self.lang = self.lang.toggle();
             }
             Action::ToggleTab => {
-                self.tab = match self.tab {
-                    Tab::Disasm => Tab::Pseudo,
-                    Tab::Pseudo => Tab::Graph,
-                    Tab::Graph => Tab::Disasm,
+                let pane = match self.tab {
+                    Tab::Disasm => Pane::Pseudo,
+                    Tab::Pseudo => Pane::Graph,
+                    Tab::Graph => Pane::Disasm,
+                };
+                self.focus_pane(pane);
+                self.tab = match pane {
+                    Pane::Pseudo => Tab::Pseudo,
+                    Pane::Graph => Tab::Graph,
+                    _ => Tab::Disasm,
                 };
             }
             Action::GotoDialog => {
@@ -3027,7 +3088,7 @@ impl ReCraftApp {
                 }
             }
             Action::ShowXrefs => {
-                self.set_window(ToolWindow::Xrefs, true);
+                self.focus_pane(Pane::Xrefs);
                 self.refresh_xrefs();
             }
             Action::EditName | Action::EditComment => {
@@ -3098,11 +3159,7 @@ impl ReCraftApp {
         let mut action = self.handle_keys(&ctx);
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
-        if self.show_hex && self.session.is_some() {
-            self.hex_panel(root, &mut action);
-        }
-        self.central(root, &mut action);
-        self.tool_windows(&ctx, &mut action);
+        self.dock_area(root, &mut action);
         self.edit_window(&ctx, &mut action);
         self.goto_window(&ctx, &mut action);
         self.palette_window(&ctx, &mut action);
@@ -3130,32 +3187,6 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
 }
 
 /// Default screen position/size for detached tool windows.
-fn tool_default_pos(tool: ToolWindow) -> egui::Pos2 {
-    match tool {
-        ToolWindow::Functions => egui::pos2(30.0, 90.0),
-        ToolWindow::Strings => egui::pos2(360.0, 90.0),
-        ToolWindow::Imports => egui::pos2(700.0, 90.0),
-        ToolWindow::Xrefs => egui::pos2(360.0, 430.0),
-        ToolWindow::Names => egui::pos2(700.0, 430.0),
-        ToolWindow::Segments => egui::pos2(1030.0, 90.0),
-        ToolWindow::Ai => egui::pos2(1030.0, 430.0),
-        ToolWindow::Structs => egui::pos2(700.0, 520.0),
-    }
-}
-
-fn tool_default_size(tool: ToolWindow) -> egui::Vec2 {
-    match tool {
-        ToolWindow::Functions => egui::vec2(320.0, 500.0),
-        ToolWindow::Strings => egui::vec2(330.0, 320.0),
-        ToolWindow::Imports => egui::vec2(320.0, 320.0),
-        ToolWindow::Xrefs => egui::vec2(330.0, 300.0),
-        ToolWindow::Names => egui::vec2(320.0, 300.0),
-        ToolWindow::Segments => egui::vec2(320.0, 260.0),
-        ToolWindow::Ai => egui::vec2(360.0, 420.0),
-        ToolWindow::Structs => egui::vec2(420.0, 360.0),
-    }
-}
-
 /// Parse `offset:name:kind` (hex offsets) for the structures editor.
 fn parse_struct_field_spec(spec: &str) -> std::result::Result<StructField, String> {
     let mut parts = spec.split(':');
@@ -3419,15 +3450,15 @@ mod tests {
             ..egui::RawInput::default()
         };
 
-        for tool in [
-            ToolWindow::Functions,
-            ToolWindow::Strings,
-            ToolWindow::Imports,
-            ToolWindow::Xrefs,
-            ToolWindow::Names,
-            ToolWindow::Segments,
+        for pane in [
+            Pane::Functions,
+            Pane::Strings,
+            Pane::Imports,
+            Pane::Xrefs,
+            Pane::Names,
+            Pane::Segments,
         ] {
-            app.set_window(tool, true);
+            app.focus_pane(pane);
             for frame in 0..2 {
                 input.time = Some(frame as f64 / 60.0);
                 let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
@@ -3435,7 +3466,14 @@ mod tests {
             }
             assert!(
                 !app.disasm_rows.is_empty(),
-                "disassembly empty while rendering {tool:?}"
+                "disassembly empty while rendering {pane:?}"
+            );
+            assert!(
+                app.dock
+                    .as_ref()
+                    .and_then(|state| state.find_tab(&pane))
+                    .is_some(),
+                "pane {pane:?} missing from the dock"
             );
         }
         assert!(!app.strings.is_empty(), "strings panel data missing");
@@ -3506,7 +3544,7 @@ mod tests {
             }],
         }];
         app.ai_selected = Some(0);
-        app.set_window(ToolWindow::Ai, true);
+        app.focus_pane(Pane::Ai);
         for frame in 0..2 {
             input.time = Some(frame as f64 / 60.0);
             let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
@@ -3555,8 +3593,11 @@ mod tests {
         let mut second = ctx.run_ui(input, |ui| app.update_inner(ui));
         second.textures_delta.clear();
         assert!(
-            app.window_open(ToolWindow::Xrefs),
-            "X should open the xrefs window"
+            app.dock
+                .as_ref()
+                .and_then(|state| state.find_tab(&Pane::Xrefs))
+                .is_some(),
+            "X should focus the xrefs pane"
         );
     }
 
@@ -3702,7 +3743,6 @@ mod tests {
         run(&mut app);
         app.hex_unit = HexUnit::Word;
         run(&mut app);
-        assert!(app.show_hex);
     }
 
     #[test]
@@ -3732,7 +3772,7 @@ mod tests {
     #[test]
     fn ai_panel_renders_without_a_project() {
         let mut app = ReCraftApp::default();
-        app.set_window(ToolWindow::Ai, true);
+        app.focus_pane(Pane::Ai);
         let ctx = egui::Context::default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
