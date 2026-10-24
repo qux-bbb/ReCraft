@@ -55,7 +55,9 @@ applied 3 proposal(s) through the command bus (undoable)
 
 1. 启动 `recraft-ui.exe`，**File → Open/Import** 选择 `%TEMP%\recraft-demo-*\demo.rcraft`
    （用 `-Keep` 运行演示脚本会打印路径）。
-2. `F5` 运行分析（后台线程，可取消）；左侧 **Functions** 页签出现函数列表。
+2. `F5` 运行分析（后台线程，可取消）；**Views（窗口）** 菜单可打开独立的
+   **Functions/Strings/Imports/Xrefs/Names/Segments/AI** 窗口（可移动、可缩放、可关闭，
+   类似 IDA 的停靠面板）；双击条目跳转到反汇编并高亮目标行。
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
    反汇编视图为 IDA 式整行交互：**整行高亮选中、双击任意位置跟随、右键菜单**
    （跟随/改名/注释/交叉引用/复制地址/撤销）、工具栏 **◀ ▶** 前进后退。

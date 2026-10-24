@@ -52,14 +52,30 @@ enum Tab {
     Graph,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SideTab {
-    Segments,
+/// IDA-style detached tool windows (functions/strings/imports/xrefs/names/segments/AI).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+enum ToolWindow {
     Functions,
     Strings,
     Imports,
     Xrefs,
+    Names,
+    Segments,
     Ai,
+}
+
+impl ToolWindow {
+    fn title(self) -> (&'static str, &'static str) {
+        match self {
+            ToolWindow::Functions => ("Functions", "函数"),
+            ToolWindow::Strings => ("Strings", "字符串"),
+            ToolWindow::Imports => ("Imports", "导入"),
+            ToolWindow::Xrefs => ("Xrefs", "交叉引用"),
+            ToolWindow::Names => ("Names", "名字"),
+            ToolWindow::Segments => ("Segments", "段"),
+            ToolWindow::Ai => ("AI", "AI"),
+        }
+    }
 }
 
 struct ImportRow {
@@ -229,7 +245,7 @@ pub struct ReCraftApp {
     project: Option<PathBuf>,
     lang: Lang,
     tab: Tab,
-    side_tab: SideTab,
+    windows: std::collections::BTreeMap<ToolWindow, bool>,
     status: String,
     is_error: bool,
     disasm_start: Address,
@@ -249,6 +265,8 @@ pub struct ReCraftApp {
     strings: Vec<(Address, String)>,
     strings_dirty: bool,
     string_filter: String,
+    names: Vec<(Address, String)>,
+    names_filter: String,
     imports: Vec<ImportRow>,
     imports_dirty: bool,
     xrefs: Vec<(Address, &'static str)>,
@@ -287,7 +305,7 @@ impl Default for ReCraftApp {
             project: None,
             lang: Lang::En,
             tab: Tab::Disasm,
-            side_tab: SideTab::Segments,
+            windows: [(ToolWindow::Functions, true)].into_iter().collect(),
             status: String::new(),
             is_error: false,
             disasm_start: Address::ZERO,
@@ -306,6 +324,8 @@ impl Default for ReCraftApp {
             strings: Vec::new(),
             strings_dirty: false,
             string_filter: String::new(),
+            names: Vec::new(),
+            names_filter: String::new(),
             imports: Vec::new(),
             imports_dirty: false,
             xrefs: Vec::new(),
@@ -728,6 +748,7 @@ impl ReCraftApp {
                     .collect();
                 self.functions = functions;
                 self.function_labels = labels;
+                self.names = session.names().unwrap_or_default();
                 self.functions_dirty = false;
             }
             Err(error) => {
@@ -888,6 +909,7 @@ impl ReCraftApp {
         let import_label = self.t("Import PE…", "导入 PE…");
         let undo_label = self.t("Undo", "撤销");
         let redo_label = self.t("Redo", "重做");
+        let views_label = self.t("Views", "窗口");
         let no_project = self.t("<no project>", "<未打开项目>");
         let analyze_label = self.t("Analyze functions", "分析函数");
         let cancel_label = self.t("Cancel", "取消");
@@ -904,6 +926,24 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
+                ui.menu_button(views_label, |ui| {
+                    for tool in [
+                        ToolWindow::Functions,
+                        ToolWindow::Strings,
+                        ToolWindow::Imports,
+                        ToolWindow::Xrefs,
+                        ToolWindow::Names,
+                        ToolWindow::Segments,
+                        ToolWindow::Ai,
+                    ] {
+                        let (en, zh) = tool.title();
+                        let mut open = self.window_open(tool);
+                        if ui.checkbox(&mut open, self.t(en, zh)).changed() {
+                            self.set_window(tool, open);
+                        }
+                    }
+                });
+                ui.separator();
                 if ui
                     .add_enabled(self.history_pos > 0, egui::Button::new("◀"))
                     .on_hover_text(self.t("Back (Esc)", "后退 (Esc)"))
@@ -1144,180 +1184,270 @@ impl ReCraftApp {
         }
     }
 
-    fn side_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let segments_label = self.t("Segments", "段");
-        let functions_label = self.t("Functions", "函数");
-        let strings_label = self.t("Strings", "字符串");
-        let imports_label = self.t("Imports", "导入");
-        let xrefs_label = self.t("Xrefs", "引用");
-        let ai_label = self.t("AI", "AI");
-        egui::Panel::left("recraft_side")
-            .default_size(280.0)
-            .resizable(true)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.selectable_value(&mut self.side_tab, SideTab::Segments, segments_label);
-                    ui.selectable_value(&mut self.side_tab, SideTab::Functions, functions_label);
-                    ui.selectable_value(&mut self.side_tab, SideTab::Strings, strings_label);
-                    ui.selectable_value(&mut self.side_tab, SideTab::Imports, imports_label);
-                    ui.selectable_value(&mut self.side_tab, SideTab::Xrefs, xrefs_label);
-                    ui.selectable_value(&mut self.side_tab, SideTab::Ai, ai_label);
+    /// IDA-style detached tool windows, toggled from the *Views* menu.
+    fn tool_windows(&mut self, ctx: &egui::Context, action: &mut Action) {
+        let tools = [
+            ToolWindow::Functions,
+            ToolWindow::Strings,
+            ToolWindow::Imports,
+            ToolWindow::Xrefs,
+            ToolWindow::Names,
+            ToolWindow::Segments,
+            ToolWindow::Ai,
+        ];
+        for tool in tools {
+            if !self.window_open(tool) {
+                continue;
+            }
+            let mut open = true;
+            let (en, zh) = tool.title();
+            let title = self.t(en, zh);
+            egui::Window::new(title)
+                .id(egui::Id::new(("recraft-window", tool)))
+                .default_pos(tool_default_pos(tool))
+                .default_size(tool_default_size(tool))
+                .resizable(true)
+                .open(&mut open)
+                .show(ctx, |ui| match tool {
+                    ToolWindow::Functions => self.functions_list(ui, action),
+                    ToolWindow::Strings => self.strings_list(ui, action),
+                    ToolWindow::Imports => self.imports_list(ui, action),
+                    ToolWindow::Xrefs => self.xrefs_list(ui, action),
+                    ToolWindow::Names => self.names_list(ui, action),
+                    ToolWindow::Segments => self.segments_list(ui, action),
+                    ToolWindow::Ai => self.ai_panel(ui, action),
                 });
-                ui.separator();
-                if self.side_tab == SideTab::Strings {
-                    let hint = self.t("substring…", "子串…");
-                    ui.horizontal(|ui| {
-                        ui.weak(self.t("filter", "过滤"));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.string_filter)
-                                .desired_width(f32::INFINITY)
-                                .hint_text(hint),
-                        );
-                    });
+            if !open {
+                self.set_window(tool, false);
+            }
+        }
+    }
+
+    fn window_open(&self, tool: ToolWindow) -> bool {
+        self.windows.get(&tool).copied().unwrap_or(false)
+    }
+
+    fn set_window(&mut self, tool: ToolWindow, open: bool) {
+        self.windows.insert(tool, open);
+    }
+
+    fn segments_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let Some(session) = self.session.as_ref() else {
+            ui.weak(self.t("no project", "无项目"));
+            return;
+        };
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for segment in session.segments() {
+                    let label = format!(
+                        "{:<8} {:#012x} .. {:#012x}  {}",
+                        segment.name,
+                        segment.range.start.get(),
+                        segment.range.end.get(),
+                        if segment.perm.is_executable() {
+                            "X"
+                        } else if segment.perm.is_readable() {
+                            "R"
+                        } else {
+                            "W"
+                        }
+                    );
+                    let response = ui.selectable_label(false, label);
+                    if response.clicked() || response.double_clicked() {
+                        *action = Action::NavigateToDisasm(segment.range.start);
+                    }
                 }
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| match self.side_tab {
-                        SideTab::Segments => {
-                            let Some(session) = self.session.as_ref() else {
-                                ui.weak(self.t("no project", "无项目"));
-                                return;
-                            };
-                            for segment in session.segments() {
-                                let label = format!(
-                                    "{:<8} {:#012x} .. {:#012x}",
-                                    segment.name,
-                                    segment.range.start.get(),
-                                    segment.range.end.get()
-                                );
-                                if ui.selectable_label(false, label).clicked() {
-                                    *action = Action::Navigate(segment.range.start);
-                                }
-                            }
-                        }
-                        SideTab::Functions => {
-                            if self.functions.is_empty() {
-                                ui.weak(self.t(
-                                    "No functions yet — press Analyze (F5).",
-                                    "还没有函数——按 Analyze（F5）。",
-                                ));
-                            } else {
-                                let hint = self.t("name or address…", "名字或地址…");
-                                ui.horizontal(|ui| {
-                                    ui.weak(self.t("filter", "过滤"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.function_filter)
-                                            .desired_width(f32::INFINITY)
-                                            .hint_text(hint),
-                                    );
-                                });
-                            }
-                            let filter = self.function_filter.to_lowercase();
-                            let mut shown = 0usize;
-                            for (index, function) in self.functions.iter().enumerate() {
-                                let name = self
-                                    .function_labels
-                                    .get(index)
-                                    .map(String::as_str)
-                                    .unwrap_or("");
-                                if !function_matches(&filter, function.start, name) {
-                                    continue;
-                                }
-                                shown += 1;
-                                let label = format!("{:#x}  {name}", function.start.get());
-                                let response =
-                                    ui.selectable_label(false, label).on_hover_text(format!(
-                                        "{:#012x} .. {:#012x}",
-                                        function.start.get(),
-                                        function.end.get()
-                                    ));
-                                if response.clicked() {
-                                    *action = Action::Navigate(function.start);
-                                }
-                                if response.double_clicked() {
-                                    *action = Action::NavigateToDisasm(function.start);
-                                }
-                            }
-                            if shown == 0 && !self.functions.is_empty() {
-                                ui.weak(self.t("(no match)", "（无匹配）"));
-                            }
-                        }
-                        SideTab::Strings => {
-                            if self.strings.is_empty() {
-                                ui.weak(self.t(
-                                    "No strings yet — run Analyze (F5).",
-                                    "还没有字符串——运行 Analyze（F5）。",
-                                ));
-                            }
-                            let filter = self.string_filter.to_lowercase();
-                            let mut shown = 0usize;
-                            for (addr, text) in &self.strings {
-                                if !filter.is_empty() && !text.to_lowercase().contains(&filter) {
-                                    continue;
-                                }
-                                if shown >= 2000 {
-                                    ui.weak(self.t("(first 2000 matches)", "(仅显示前 2000 条)"));
-                                    break;
-                                }
-                                shown += 1;
-                                let label = format!("{:#012x}  {text}", addr.get());
-                                if ui.selectable_label(false, label).clicked() {
-                                    *action = Action::Navigate(*addr);
-                                }
-                            }
-                        }
-                        SideTab::Imports => {
-                            if self.imports.is_empty() {
-                                ui.weak(self.t(
-                                    "No imports (or open a project first).",
-                                    "没有导入（或先打开项目）。",
-                                ));
-                            }
-                            for import in &self.imports {
-                                let label = format!(
-                                    "{}!{}  [{}]  ×{}",
-                                    import.module, import.api, import.category, import.refs
-                                );
-                                if ui.selectable_label(false, label).clicked() {
-                                    *action =
-                                        Action::Navigate(import.first_from.unwrap_or(import.iat));
-                                }
-                            }
-                        }
-                        SideTab::Xrefs => {
-                            let Some(addr) = self.disasm_rows.get(self.selected).map(|l| l.addr)
-                            else {
-                                ui.weak(self.t("no selection", "没有选中行"));
-                                return;
-                            };
-                            ui.weak(format!(
-                                "{} {:#x}",
-                                self.t("references to", "引用目标"),
-                                addr.get()
-                            ));
-                            if self.xrefs.is_empty() {
-                                ui.weak(self.t("no references", "没有引用"));
-                            }
-                            for (from, kind) in &self.xrefs {
-                                let label = format!("<- {:#012x}  {kind}", from.get());
-                                let response =
-                                    ui.selectable_label(false, label).on_hover_text(self.t(
-                                        "double-click to follow into disassembly",
-                                        "双击跟随到反汇编",
-                                    ));
-                                if response.clicked() {
-                                    *action = Action::Navigate(*from);
-                                }
-                                if response.double_clicked() {
-                                    *action = Action::NavigateToDisasm(*from);
-                                }
-                            }
-                        }
-                        SideTab::Ai => self.ai_panel(ui, action),
-                    });
             });
     }
 
+    fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        if self.functions.is_empty() {
+            ui.weak(self.t(
+                "No functions yet — press Analyze (F5).",
+                "还没有函数——按 Analyze（F5）。",
+            ));
+        } else {
+            let hint = self.t("name or address…", "名字或地址…");
+            ui.horizontal(|ui| {
+                ui.weak(self.t("filter", "过滤"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.function_filter)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(hint),
+                );
+            });
+        }
+        let filter = self.function_filter.to_lowercase();
+        let mut shown = 0usize;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (index, function) in self.functions.iter().enumerate() {
+                    let name = self
+                        .function_labels
+                        .get(index)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    if !function_matches(&filter, function.start, name) {
+                        continue;
+                    }
+                    shown += 1;
+                    let label = format!("{:#x}  {name}", function.start.get());
+                    let response = ui.selectable_label(false, label).on_hover_text(format!(
+                        "{:#012x} .. {:#012x}",
+                        function.start.get(),
+                        function.end.get()
+                    ));
+                    if response.clicked() {
+                        *action = Action::Navigate(function.start);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(function.start);
+                    }
+                }
+                if shown == 0 && !self.functions.is_empty() {
+                    ui.weak(self.t("(no match)", "（无匹配）"));
+                }
+            });
+    }
+
+    fn strings_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        if self.strings.is_empty() {
+            ui.weak(self.t(
+                "No strings yet — run Analyze (F5).",
+                "还没有字符串——运行 Analyze（F5）。",
+            ));
+        }
+        let hint = self.t("substring…", "子串…");
+        ui.horizontal(|ui| {
+            ui.weak(self.t("filter", "过滤"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.string_filter)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(hint),
+            );
+        });
+        let filter = self.string_filter.to_lowercase();
+        let mut shown = 0usize;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (addr, text) in &self.strings {
+                    if !filter.is_empty() && !text.to_lowercase().contains(&filter) {
+                        continue;
+                    }
+                    if shown >= 2000 {
+                        ui.weak(self.t("(first 2000 matches)", "(仅显示前 2000 条)"));
+                        break;
+                    }
+                    shown += 1;
+                    let label = format!("{:#012x}  {text}", addr.get());
+                    let response = ui.selectable_label(false, label);
+                    if response.clicked() {
+                        *action = Action::Navigate(*addr);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(*addr);
+                    }
+                }
+            });
+    }
+
+    fn imports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        if self.imports.is_empty() {
+            ui.weak(self.t(
+                "No imports (or open a project first).",
+                "没有导入（或先打开项目）。",
+            ));
+        }
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for import in &self.imports {
+                    let label = format!(
+                        "{}!{}  [{}]  ×{}",
+                        import.module, import.api, import.category, import.refs
+                    );
+                    let response = ui.selectable_label(false, label);
+                    let target = import.first_from.unwrap_or(import.iat);
+                    if response.clicked() {
+                        *action = Action::Navigate(target);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(target);
+                    }
+                }
+            });
+    }
+
+    fn xrefs_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let Some(addr) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
+            ui.weak(self.t("no selection", "没有选中行"));
+            return;
+        };
+        ui.weak(format!(
+            "{} {:#x}",
+            self.t("references to", "引用目标"),
+            addr.get()
+        ));
+        if self.xrefs.is_empty() {
+            ui.weak(self.t("no references", "没有引用"));
+        }
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (from, kind) in &self.xrefs {
+                    let label = format!("<- {:#012x}  {kind}", from.get());
+                    let response = ui.selectable_label(false, label).on_hover_text(self.t(
+                        "double-click to follow into disassembly",
+                        "双击跟随到反汇编",
+                    ));
+                    if response.clicked() {
+                        *action = Action::Navigate(*from);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(*from);
+                    }
+                }
+            });
+    }
+
+    fn names_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        if self.names.is_empty() {
+            ui.weak(self.t(
+                "No names yet — open a project and run Analyze.",
+                "还没有名字——打开项目并运行 Analyze。",
+            ));
+        }
+        let hint = self.t("name or address…", "名字或地址…");
+        ui.horizontal(|ui| {
+            ui.weak(self.t("filter", "过滤"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.names_filter)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(hint),
+            );
+        });
+        let filter = self.names_filter.to_lowercase();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (addr, name) in &self.names {
+                    if !filter.is_empty()
+                        && !name.to_lowercase().contains(&filter)
+                        && !format!("{:#x}", addr.get()).contains(&filter)
+                    {
+                        continue;
+                    }
+                    let label = format!("{:#012x}  {name}", addr.get());
+                    let response = ui.selectable_label(false, label);
+                    if response.clicked() || response.double_clicked() {
+                        *action = Action::NavigateToDisasm(*addr);
+                    }
+                }
+            });
+    }
     fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let suggest = self.t("Suggest names", "建议命名");
         let apply_label = self.t("Apply selected", "应用选中");
@@ -2427,7 +2557,7 @@ impl ReCraftApp {
                 }
             }
             Action::ShowXrefs => {
-                self.side_tab = SideTab::Xrefs;
+                self.set_window(ToolWindow::Xrefs, true);
                 self.refresh_xrefs();
             }
             Action::EditName | Action::EditComment => {
@@ -2501,8 +2631,8 @@ impl ReCraftApp {
         if self.show_hex && self.session.is_some() {
             self.hex_panel(root, &mut action);
         }
-        self.side_panel(root, &mut action);
         self.central(root, &mut action);
+        self.tool_windows(&ctx, &mut action);
         self.edit_window(&ctx, &mut action);
         self.goto_window(&ctx, &mut action);
         self.palette_window(&ctx, &mut action);
@@ -2527,6 +2657,31 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
             ..Default::default()
         },
     );
+}
+
+/// Default screen position/size for detached tool windows.
+fn tool_default_pos(tool: ToolWindow) -> egui::Pos2 {
+    match tool {
+        ToolWindow::Functions => egui::pos2(30.0, 90.0),
+        ToolWindow::Strings => egui::pos2(360.0, 90.0),
+        ToolWindow::Imports => egui::pos2(700.0, 90.0),
+        ToolWindow::Xrefs => egui::pos2(360.0, 430.0),
+        ToolWindow::Names => egui::pos2(700.0, 430.0),
+        ToolWindow::Segments => egui::pos2(1030.0, 90.0),
+        ToolWindow::Ai => egui::pos2(1030.0, 430.0),
+    }
+}
+
+fn tool_default_size(tool: ToolWindow) -> egui::Vec2 {
+    match tool {
+        ToolWindow::Functions => egui::vec2(320.0, 500.0),
+        ToolWindow::Strings => egui::vec2(330.0, 320.0),
+        ToolWindow::Imports => egui::vec2(320.0, 320.0),
+        ToolWindow::Xrefs => egui::vec2(330.0, 300.0),
+        ToolWindow::Names => egui::vec2(320.0, 300.0),
+        ToolWindow::Segments => egui::vec2(320.0, 260.0),
+        ToolWindow::Ai => egui::vec2(360.0, 420.0),
+    }
 }
 
 /// Parse the `addr` string of an offline query result (`0x...` hex or decimal).
@@ -2771,14 +2926,15 @@ mod tests {
             ..egui::RawInput::default()
         };
 
-        for tab in [
-            SideTab::Functions,
-            SideTab::Strings,
-            SideTab::Imports,
-            SideTab::Xrefs,
-            SideTab::Segments,
+        for tool in [
+            ToolWindow::Functions,
+            ToolWindow::Strings,
+            ToolWindow::Imports,
+            ToolWindow::Xrefs,
+            ToolWindow::Names,
+            ToolWindow::Segments,
         ] {
-            app.side_tab = tab;
+            app.set_window(tool, true);
             for frame in 0..2 {
                 input.time = Some(frame as f64 / 60.0);
                 let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
@@ -2786,7 +2942,7 @@ mod tests {
             }
             assert!(
                 !app.disasm_rows.is_empty(),
-                "disassembly empty while rendering {tab:?}"
+                "disassembly empty while rendering {tool:?}"
             );
         }
         assert!(!app.strings.is_empty(), "strings panel data missing");
@@ -2857,7 +3013,7 @@ mod tests {
             }],
         }];
         app.ai_selected = Some(0);
-        app.side_tab = SideTab::Ai;
+        app.set_window(ToolWindow::Ai, true);
         for frame in 0..2 {
             input.time = Some(frame as f64 / 60.0);
             let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
@@ -2905,10 +3061,9 @@ mod tests {
         });
         let mut second = ctx.run_ui(input, |ui| app.update_inner(ui));
         second.textures_delta.clear();
-        assert_eq!(
-            app.side_tab,
-            SideTab::Xrefs,
-            "X should open the xrefs panel"
+        assert!(
+            app.window_open(ToolWindow::Xrefs),
+            "X should open the xrefs window"
         );
     }
 
@@ -3083,10 +3238,8 @@ mod tests {
 
     #[test]
     fn ai_panel_renders_without_a_project() {
-        let mut app = ReCraftApp {
-            side_tab: SideTab::Ai,
-            ..ReCraftApp::default()
-        };
+        let mut app = ReCraftApp::default();
+        app.set_window(ToolWindow::Ai, true);
         let ctx = egui::Context::default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(

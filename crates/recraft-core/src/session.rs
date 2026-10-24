@@ -312,6 +312,26 @@ impl Session {
             .map_err(command::db_err)
     }
 
+    /// All recorded names, ordered by address (IDA "Names" window).
+    pub fn names(&self) -> Result<Vec<(Address, String)>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare("SELECT addr, text FROM name ORDER BY addr")
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(command::db_err)?;
+        let mut names = Vec::new();
+        for row in rows {
+            let (addr, text) = row.map_err(command::db_err)?;
+            names.push((Address::new(addr as u64), text));
+        }
+        Ok(names)
+    }
+
     /// User-set prototype (C declaration) at `addr`, if any.
     pub fn prototype_at(&self, addr: Address) -> Result<Option<String>> {
         self.project

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-style step 4 — detached tool windows: Functions/Strings/Imports/Xrefs/Names/Segments
+  (and AI) are now independent movable/resizable/closable egui windows instead of tabs in
+  one fixed left panel; the top bar gains a **Views** menu to toggle each window, `X` opens
+  the Xrefs window, and every list supports double-click to jump into the disassembly with
+  the target line highlighted (new **Names** window backed by `Session::names()`, filters
+  for names and strings). Layout now gives the central disassembly/pseudo/graph view the
+  full width; tests render all windows headlessly and cover the X shortcut.
+
 - IDA-style step 1 — full-row disassembly interaction: the disassembly is now one
   full-width hit area per line (no grid cells), so clicking anywhere selects the row and
   the whole line is highlighted (IDA current-line colour plus hover tint); double-click
