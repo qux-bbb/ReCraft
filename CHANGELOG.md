@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Multi-window evaluation (ADR-012): added `examples/viewport_spike.rs`, which opens a
+  second **real OS window** via `Context::show_viewport_immediate` + `ViewportBuilder`.
+  Verified on Windows 10 + the pinned Glow backend: two native top-level windows, child
+  reports `ViewportClass::Immediate` (not the embedded fallback), and the detached window
+  can be captured independently (`docs/images/detached-spike.png`). Decision: v0.1 keeps
+  egui_dock's in-app floating tabs; promoting them to OS windows is scheduled after the
+  preview with a concrete work list, while deferred `'static` viewports are out of scope
+  for M5.
+
 - Code-view zoom: **View → Zoom in / Zoom out / Reset zoom** (shortcuts `Ctrl+=`,
   `Ctrl+-`, `Ctrl+0`) scales the monospace font and row height of Text View, Pseudocode
   and Hex View (75 %–200 %) while leaving the surrounding chrome untouched; egui's global

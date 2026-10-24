@@ -72,6 +72,8 @@ applied 3 proposal(s) through the command bus (undoable)
    `Ctrl+0`** 缩放/重置代码视图字号（Text/Pseudocode/Hex）。
    **Text View** 操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
    ![Text View operand colours](images/text-view.png)
+   注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
+   [ADR-012](adr/ADR-012-multi-window.md)）。
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
    伪代码与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
    工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在伪代码里同步高亮，
