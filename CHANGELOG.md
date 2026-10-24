@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-layout step 1 (reference-screenshot alignment, not pixel-perfect): replaced the
+  generic tool column with an IDA-style workspace — menu bar (File/Edit/Jump/Search/View/
+  Options/Windows/Help), toolbar (back/forward, Text/Graph toggle, Analyze, AI, language,
+  project path), global navigation band with an IDA-style legend, **Functions** window with
+  Function name / Segment columns and function icons, **Graph overview** minimap below it,
+  a document tab row (IDA View-A, Graph View, Hex View-1, Pseudocode, Imports, Exports,
+  Strings, Names, Xrefs, Segments, Local Types, AI), an **Output** window with the status
+  log, and an AU-style status bar with address/bytes/function/Hex-sync fields. Adds the
+  Exports pane (PE exports), the view footer line, IDA-style window title
+  (`ReCraft - <file>  <path>`), logs project-load/analysis messages to Output, and bumps the
+  saved-layout version to 3. Screenshot at `docs/images/ida-layout.png`; demo walkthrough
+  updated; 30 UI tests pass.
+
 - Real docking, step 4 (IDA-like default layout and chrome): the default layout now
   mirrors IDA — tool column (Functions/…/Structures) on the left, Disassembly/Graph in the
   center, Pseudo-C docked on the right and Hex spanning the full width at the bottom;

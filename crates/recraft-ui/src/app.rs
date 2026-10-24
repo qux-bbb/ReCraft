@@ -67,45 +67,55 @@ enum Pane {
     Functions,
     Strings,
     Imports,
+    Exports,
     Xrefs,
     Names,
     Segments,
-    Ai,
     Structs,
+    Ai,
+    GraphOverview,
+    Output,
 }
 
 impl Pane {
-    fn all() -> [Pane; 12] {
+    fn all() -> [Pane; 15] {
         [
             Pane::Disasm,
-            Pane::Pseudo,
             Pane::Graph,
             Pane::Hex,
-            Pane::Functions,
-            Pane::Strings,
+            Pane::Pseudo,
             Pane::Imports,
-            Pane::Xrefs,
+            Pane::Exports,
+            Pane::Strings,
             Pane::Names,
+            Pane::Xrefs,
             Pane::Segments,
-            Pane::Ai,
             Pane::Structs,
+            Pane::Ai,
+            Pane::Functions,
+            Pane::GraphOverview,
+            Pane::Output,
         ]
     }
 
     fn title(self) -> (&'static str, &'static str) {
         match self {
-            Pane::Disasm => ("Disassembly", "反汇编"),
-            Pane::Pseudo => ("Pseudo-C", "伪代码"),
-            Pane::Graph => ("Graph", "控制流图"),
-            Pane::Hex => ("Hex", "十六进制"),
+            // IDA-style document/panel names from the reference screenshot.
+            Pane::Disasm => ("IDA View-A", "IDA View-A"),
+            Pane::Pseudo => ("Pseudocode", "伪代码"),
+            Pane::Graph => ("Graph View", "图形视图"),
+            Pane::Hex => ("Hex View-1", "十六进制"),
             Pane::Functions => ("Functions", "函数"),
             Pane::Strings => ("Strings", "字符串"),
             Pane::Imports => ("Imports", "导入"),
+            Pane::Exports => ("Exports", "导出"),
             Pane::Xrefs => ("Xrefs", "交叉引用"),
             Pane::Names => ("Names", "名字"),
             Pane::Segments => ("Segments", "段"),
+            Pane::Structs => ("Local Types", "本地类型"),
             Pane::Ai => ("AI", "AI"),
-            Pane::Structs => ("Structures", "结构体"),
+            Pane::GraphOverview => ("Graph overview", "图形概览"),
+            Pane::Output => ("Output", "输出"),
         }
     }
 
@@ -164,6 +174,9 @@ impl egui_dock::TabViewer for DockViewer<'_> {
             Pane::Segments => self.app.segments_list(ui, self.action),
             Pane::Ai => self.app.ai_panel(ui, self.action),
             Pane::Structs => self.app.structs_panel(ui, self.action),
+            Pane::Exports => self.app.exports_list(ui, self.action),
+            Pane::GraphOverview => self.app.graph_overview(ui, self.action),
+            Pane::Output => self.app.output_pane(ui, self.action),
         }
     }
 
@@ -174,7 +187,10 @@ impl egui_dock::TabViewer for DockViewer<'_> {
     fn is_closeable(&self, tab: &Pane) -> bool {
         // Keep the primary views open; auxiliary lists may be closed and reopened from
         // the Views menu.
-        !matches!(tab, Pane::Disasm | Pane::Pseudo | Pane::Graph)
+        !matches!(
+            tab,
+            Pane::Disasm | Pane::Graph | Pane::Functions | Pane::Output | Pane::GraphOverview
+        )
     }
 }
 
@@ -241,7 +257,7 @@ struct EditState {
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
 /// resurrecting the old arrangement.
-const LAYOUT_VERSION: u32 = 2;
+const LAYOUT_VERSION: u32 = 3;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
@@ -408,6 +424,8 @@ pub struct ReCraftApp {
     dock: Option<egui_dock::DockState<Pane>>,
     layout_saved: Option<String>,
     frame_count: u64,
+    /// Output-window log (analysis/eval/status messages), oldest first.
+    log: Vec<String>,
     status: String,
     is_error: bool,
     disasm_start: Address,
@@ -473,6 +491,7 @@ impl Default for ReCraftApp {
             dock: None,
             layout_saved: None,
             frame_count: 0,
+            log: Vec::new(),
             status: String::new(),
             is_error: false,
             disasm_start: Address::ZERO,
@@ -555,13 +574,24 @@ impl ReCraftApp {
     }
 
     fn set_status(&mut self, message: impl Into<String>) {
-        self.status = message.into();
+        let message = message.into();
+        self.log(&message);
+        self.status = message;
         self.is_error = false;
     }
 
     fn set_error(&mut self, error: impl std::fmt::Display) {
-        self.status = format!("error: {error}");
+        let message = format!("error: {error}");
+        self.log(&message);
+        self.status = message;
         self.is_error = true;
+    }
+
+    fn log(&mut self, message: &str) {
+        self.log.push(message.to_owned());
+        if self.log.len() > 500 {
+            self.log.drain(..100);
+        }
     }
 
     // -------------------------------------------------------------- loading --
@@ -578,6 +608,7 @@ impl ReCraftApp {
                     self.project = Some(path.to_path_buf());
                     self.remember_recent(path);
                     self.after_open();
+                    self.set_status(format!("loaded {}", path.display()));
                 }
                 Err(error) => self.set_error(error),
             }
@@ -1166,20 +1197,41 @@ impl ReCraftApp {
 
     // ---------------------------------------------------------------- draw --
 
+    /// Focus/Show entries shared by the View and Windows menus.
+    fn pane_menu_items(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        for pane in Pane::all() {
+            let (en, zh) = pane.title();
+            let button = ui.button(self.t(en, zh));
+            let button = if let Some(shortcut) = pane.shortcut() {
+                button.on_hover_text(shortcut)
+            } else {
+                button
+            };
+            if button.clicked() {
+                *action = Action::FocusPane(pane);
+                ui.close();
+            }
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let file_label = self.t("File", "文件");
         let open_label = self.t("Open project…", "打开项目…");
         let import_label = self.t("Import PE…", "导入 PE…");
         let undo_label = self.t("Undo", "撤销");
         let redo_label = self.t("Redo", "重做");
-        let views_label = self.t("Views", "窗口");
-        let no_project = self.t("<no project>", "<未打开项目>");
+        let goto_label = self.t("Go to address…", "跳转到地址…");
+        let xrefs_label = self.t("Cross references", "交叉引用");
+        let back_label = self.t("Back", "后退");
+        let forward_label = self.t("Forward", "前进");
+        let reset_label = self.t("Reset layout", "重置布局");
         let analyze_label = self.t("Analyze functions", "分析函数");
         let cancel_label = self.t("Cancel", "取消");
         let analyzing_label = self.t("analyzing", "分析中");
+        let no_project = self.t("<no project>", "<未打开项目>");
         egui::Panel::top("recraft_top").show(ui, |ui| {
+            // IDA-style menu bar.
             ui.horizontal(|ui| {
-                ui.menu_button(file_label, |ui| {
+                ui.menu_button("File", |ui| {
                     if ui.button(open_label).clicked() {
                         *action = Action::Open;
                         ui.close();
@@ -1189,30 +1241,90 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button(views_label, |ui| {
-                    for pane in Pane::all() {
+                ui.menu_button("Edit", |ui| {
+                    if ui.button(undo_label).clicked() {
+                        *action = Action::Undo;
+                        ui.close();
+                    }
+                    if ui.button(redo_label).clicked() {
+                        *action = Action::Redo;
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Jump", |ui| {
+                    if ui.button(goto_label).clicked() {
+                        *action = Action::GotoDialog;
+                        ui.close();
+                    }
+                    if ui.button(xrefs_label).clicked() {
+                        *action = Action::ShowXrefs;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(back_label).clicked() {
+                        *action = Action::Back;
+                        ui.close();
+                    }
+                    if ui.button(forward_label).clicked() {
+                        *action = Action::Forward;
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Search", |ui| {
+                    for pane in [Pane::Strings, Pane::Names, Pane::Imports, Pane::Exports] {
                         let (en, zh) = pane.title();
-                        let button = ui.button(self.t(en, zh));
-                        let button = if let Some(shortcut) = pane.shortcut() {
-                            button.on_hover_text(shortcut)
-                        } else {
-                            button
-                        };
-                        if button.clicked() {
+                        if ui.button(self.t(en, zh)).clicked() {
                             *action = Action::FocusPane(pane);
                             ui.close();
                         }
                     }
+                });
+                ui.menu_button("View", |ui| {
+                    self.pane_menu_items(ui, action);
                     ui.separator();
-                    if ui.button(self.t("Reset layout", "重置布局")).clicked() {
+                    if ui.button(reset_label).clicked() {
                         *action = Action::ResetLayout;
                         ui.close();
                     }
                 });
-                ui.separator();
+                ui.menu_button("Options", |ui| {
+                    if ui
+                        .button(if self.lang == Lang::En {
+                            "中文"
+                        } else {
+                            "English"
+                        })
+                        .clicked()
+                    {
+                        *action = Action::ToggleLang;
+                        ui.close();
+                    }
+                    if ui.button("AI").clicked() {
+                        *action = Action::FocusPane(Pane::Ai);
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Windows", |ui| {
+                    self.pane_menu_items(ui, action);
+                    ui.separator();
+                    if ui.button(reset_label).clicked() {
+                        *action = Action::ResetLayout;
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Help", |ui| {
+                    if ui.button("About ReCraft").clicked() {
+                        self.set_status(format!("ReCraft {}", env!("CARGO_PKG_VERSION")));
+                        ui.close();
+                    }
+                });
+            });
+            ui.separator();
+            // Toolbar row.
+            ui.horizontal(|ui| {
                 if ui
                     .add_enabled(self.history_pos > 0, egui::Button::new("◀"))
-                    .on_hover_text(self.t("Back (Esc)", "后退 (Esc)"))
+                    .on_hover_text(back_label)
                     .clicked()
                 {
                     *action = Action::Back;
@@ -1222,17 +1334,18 @@ impl ReCraftApp {
                         self.history_pos + 1 < self.history.len(),
                         egui::Button::new("▶"),
                     )
-                    .on_hover_text(self.t("Forward", "前进"))
+                    .on_hover_text(forward_label)
                     .clicked()
                 {
                     *action = Action::Forward;
                 }
                 ui.separator();
-                if ui.button(undo_label).clicked() {
-                    *action = Action::Undo;
+                let graph_active = matches!(self.tab, Tab::Graph);
+                if ui.selectable_label(!graph_active, "Text").clicked() {
+                    *action = Action::FocusPane(Pane::Disasm);
                 }
-                if ui.button(redo_label).clicked() {
-                    *action = Action::Redo;
+                if ui.selectable_label(graph_active, "Graph").clicked() {
+                    *action = Action::FocusPane(Pane::Graph);
                 }
                 ui.separator();
                 if let Some(job) = self.analysis.as_ref() {
@@ -1245,6 +1358,9 @@ impl ReCraftApp {
                     *action = Action::Analyze;
                 }
                 ui.separator();
+                if ui.button("AI").clicked() {
+                    *action = Action::FocusPane(Pane::Ai);
+                }
                 ui.separator();
                 if ui
                     .button(if self.lang == Lang::En {
@@ -1256,13 +1372,41 @@ impl ReCraftApp {
                 {
                     *action = Action::ToggleLang;
                 }
-                ui.separator();
-                let path_text = self
-                    .project
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| no_project.to_owned());
-                ui.label(path_text);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let path_text = self
+                        .project
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| no_project.to_owned());
+                    ui.weak(path_text);
+                });
+            });
+            ui.separator();
+            // Navigation band + legend (IDA's address-space strip).
+            self.navigation_band(ui, action);
+            ui.horizontal_wrapped(|ui| {
+                for (color, label) in [
+                    (
+                        Color32::from_rgb(0x3a, 0x5a, 0x7a),
+                        self.t("Regular function", "常规函数"),
+                    ),
+                    (
+                        Color32::from_rgb(0x2f, 0x6a, 0x6a),
+                        self.t("Instruction", "指令"),
+                    ),
+                    (Color32::from_rgb(0x4a, 0x6a, 0x3a), self.t("Data", "数据")),
+                    (
+                        Color32::from_rgb(0x3a, 0x3a, 0x3a),
+                        self.t("Unexplored", "未探索"),
+                    ),
+                    (
+                        Color32::from_rgb(0x7a, 0x3a, 0x6a),
+                        self.t("External symbol", "外部符号"),
+                    ),
+                ] {
+                    ui.colored_label(color, "■");
+                    ui.weak(label);
+                }
             });
         });
     }
@@ -1270,29 +1414,39 @@ impl ReCraftApp {
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("recraft_bottom").show(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.weak("AU: idle");
+                ui.separator();
                 let color = if self.is_error {
                     Color32::from_rgb(0xe0, 0x6a, 0x6a)
                 } else {
                     ui.visuals().weak_text_color()
                 };
-                ui.colored_label(color, &self.status);
-                ui.separator();
-                if let Some(line) = self.disasm_rows.get(self.selected) {
-                    ui.label(format!("{:#x}", line.addr.get()));
-                    if let Some(name) = line.name.as_deref() {
-                        ui.separator();
-                        ui.label(RichText::new(name).color(C_NAME));
-                    }
+                if !self.status.is_empty() {
+                    ui.colored_label(color, &self.status);
                 }
-                if let Some((start, end)) = self.current_function() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.weak(self.t("(Synchronized with Hex View-1)", "（与 Hex View-1 同步）"));
                     ui.separator();
-                    ui.weak(format!("fn {:#x}..{:#x}", start.get(), end.get()));
-                }
-                ui.separator();
-                ui.weak(self.t(
-                    "Right-click row menu · C/D/A/U/P marks · Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
-                    "右键行菜单 · C/D/A/U/P 标记 · Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Ctrl+Z 撤销 · Esc 后退",
-                ));
+                    if let Some((start, _)) = self.current_function() {
+                        let name = self
+                            .session
+                            .as_ref()
+                            .and_then(|session| session.name_at(start).ok().flatten())
+                            .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+                        ui.label(format!("{name}."));
+                    }
+                    if let Some(line) = self.disasm_rows.get(self.selected) {
+                        let bytes = line
+                            .bytes()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<String>();
+                        ui.label(
+                            RichText::new(format!("{:016x}: {}", line.addr.get(), bytes))
+                                .monospace(),
+                        );
+                    }
+                });
             });
         });
     }
@@ -1451,35 +1605,36 @@ impl ReCraftApp {
         }
     }
 
-    /// Build the default IDA-like dock layout once: Functions column on the left,
-    /// Disassembly/Graph in the center, Pseudo-C on the right and Hex across the bottom.
+    /// Build the default IDA-like dock layout once: Functions + Graph overview on the
+    /// left, document tabs (IDA View-A/Hex/Pseudocode/Imports/…) filling the right and an
+    /// Output window across the bottom.
     fn ensure_dock(&mut self) {
         if self.dock.is_some() {
             return;
         }
-        let mut state = egui_dock::DockState::new(vec![Pane::Disasm, Pane::Graph]);
+        let mut state = egui_dock::DockState::new(vec![
+            Pane::Disasm,
+            Pane::Graph,
+            Pane::Hex,
+            Pane::Pseudo,
+            Pane::Imports,
+            Pane::Exports,
+            Pane::Strings,
+            Pane::Names,
+            Pane::Xrefs,
+            Pane::Segments,
+            Pane::Structs,
+            Pane::Ai,
+        ]);
         {
             let surface = state.main_surface_mut();
-            // Hex spans the full width at the bottom.
-            let [top, _hex] =
-                surface.split_below(egui_dock::NodeIndex::root(), 0.72, vec![Pane::Hex]);
-            // Tool column on the left.
-            let [center, _tools] = surface.split_left(
-                top,
-                0.24,
-                vec![
-                    Pane::Functions,
-                    Pane::Strings,
-                    Pane::Imports,
-                    Pane::Xrefs,
-                    Pane::Names,
-                    Pane::Segments,
-                    Pane::Ai,
-                    Pane::Structs,
-                ],
-            );
-            // Pseudocode beside the disassembly view (about 44% of the view area).
-            let [_view, _pseudo] = surface.split_right(center, 0.56, vec![Pane::Pseudo]);
+            // Output window across the bottom.
+            let [top, _output] =
+                surface.split_below(egui_dock::NodeIndex::root(), 0.78, vec![Pane::Output]);
+            // Functions window with a graph overview underneath it.
+            let [left, _docs] = surface.split_left(top, 0.22, vec![Pane::Functions]);
+            let [_functions, _overview] =
+                surface.split_below(left, 0.68, vec![Pane::GraphOverview]);
         }
         self.dock = Some(state);
     }
@@ -1598,6 +1753,152 @@ impl ReCraftApp {
             });
     }
 
+    /// PE exports list (document tab, like IDA's Exports window).
+    fn exports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let exports: Vec<(String, Address, Option<String>)> = {
+            let Some(session) = self.session.as_ref() else {
+                ui.weak(self.t("no project", "无项目"));
+                return;
+            };
+            let image = session.image();
+            image
+                .exports
+                .iter()
+                .map(|export| {
+                    let va = image.image_base.get().saturating_add(u64::from(export.rva));
+                    let name = export
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("#{}", export.ordinal));
+                    (name, Address::new(va), export.forwarder.clone())
+                })
+                .collect()
+        };
+        if exports.is_empty() {
+            ui.weak(self.t("No exports.", "没有导出。"));
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("exports_grid")
+                    .num_columns(3)
+                    .striped(true)
+                    .spacing([12.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(self.t("Name", "名字")).strong());
+                        ui.label(RichText::new(self.t("Address", "地址")).strong());
+                        ui.label(RichText::new(self.t("Forwarder", "转发")).strong());
+                        ui.end_row();
+                        for (name, address, forwarder) in &exports {
+                            let response = ui.selectable_label(false, name);
+                            ui.label(RichText::new(format!("{:#x}", address.get())).monospace());
+                            ui.label(RichText::new(forwarder.as_deref().unwrap_or("")).weak());
+                            ui.end_row();
+                            if response.clicked() || response.double_clicked() {
+                                *action = Action::NavigateToDisasm(*address);
+                            }
+                        }
+                    });
+            });
+    }
+
+    /// Miniature CFG map under the Functions window (IDA's "Graph overview").
+    fn graph_overview(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let Some((start, end)) = self.current_function() else {
+            ui.weak(self.t("no function selected", "没有选中函数"));
+            return;
+        };
+        if (self.cfg_for != Some(start) || self.cfg_dirty)
+            && let Some(session) = self.session.as_mut()
+            && let Ok(cfg) = recraft_analysis::build_cfg(session, start, end)
+        {
+            self.cfg = Some(cfg);
+            self.cfg_for = Some(start);
+            self.cfg_dirty = false;
+        }
+        let Some(cfg) = self.cfg.clone() else {
+            ui.weak(self.t("no graph", "没有图形"));
+            return;
+        };
+        if cfg.blocks.is_empty() {
+            return;
+        }
+        let layer_of = recraft_analysis::layers(&cfg);
+        let mut layers: std::collections::BTreeMap<usize, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (index, layer) in layer_of.iter().enumerate() {
+            layers.entry(*layer).or_default().push(index);
+        }
+        let width = ui.available_width().max(80.0);
+        let height = ui.available_height().max(80.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.0, Color32::from_rgb(0x0e, 0x10, 0x14));
+        let columns = layers.len().max(1) as f32;
+        let rows = layers.values().map(Vec::len).max().unwrap_or(1).max(1) as f32;
+        let cell_w = rect.width() / columns;
+        let cell_h = rect.height() / rows;
+        let selected = self
+            .disasm_rows
+            .get(self.selected)
+            .map(|line| line.addr.get());
+        for (column, (_, blocks)) in layers.iter().enumerate() {
+            for (row, &index) in blocks.iter().enumerate() {
+                let block = &cfg.blocks[index];
+                let block_w = (cell_w * 0.7).clamp(6.0, 64.0);
+                let block_h = (cell_h * 0.6).clamp(4.0, 14.0);
+                let block_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        rect.left() + column as f32 * cell_w + 3.0,
+                        rect.top() + row as f32 * cell_h + 3.0,
+                    ),
+                    egui::vec2(block_w, block_h),
+                );
+                let current = selected
+                    .is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
+                painter.rect_filled(
+                    block_rect,
+                    1.0,
+                    if current {
+                        C_ADDR
+                    } else {
+                        Color32::from_rgb(0x3a, 0x5a, 0x7a)
+                    },
+                );
+                let response = ui.interact(
+                    block_rect,
+                    ui.id().with(("overview", block.start.get())),
+                    Sense::click(),
+                );
+                if response.clicked() {
+                    *action = Action::NavigateToDisasm(block.start);
+                }
+            }
+        }
+    }
+
+    /// Output window: analysis/status log lines (IDA's Output pane).
+    fn output_pane(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
+        if self.log.is_empty() {
+            ui.weak(self.t("No messages yet.", "还没有消息。"));
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for line in &self.log {
+                    let color = if line.starts_with("error:") {
+                        Color32::from_rgb(0xe0, 0x6a, 0x6a)
+                    } else {
+                        Color32::from_gray(0xc8)
+                    };
+                    ui.label(RichText::new(line).monospace().size(11.0).color(color));
+                }
+            });
+    }
+
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if self.functions.is_empty() {
             ui.weak(self.t(
@@ -1616,33 +1917,67 @@ impl ReCraftApp {
             });
         }
         let filter = self.function_filter.to_lowercase();
+        // Segment column, precomputed once per list refresh (IDA's Functions window has
+        // "Function name" and "Segment" columns).
+        let segment_names: Vec<String> = {
+            let Some(session) = self.session.as_ref() else {
+                return;
+            };
+            self.functions
+                .iter()
+                .map(|function| {
+                    session
+                        .segment_containing(function.start)
+                        .map(|segment| segment.name.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
         let mut shown = 0usize;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (index, function) in self.functions.iter().enumerate() {
-                    let name = self
-                        .function_labels
-                        .get(index)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    if !function_matches(&filter, function.start, name) {
-                        continue;
-                    }
-                    shown += 1;
-                    let label = format!("{:#x}  {name}", function.start.get());
-                    let response = ui.selectable_label(false, label).on_hover_text(format!(
-                        "{:#012x} .. {:#012x}",
-                        function.start.get(),
-                        function.end.get()
-                    ));
-                    if response.clicked() {
-                        *action = Action::Navigate(function.start);
-                    }
-                    if response.double_clicked() {
-                        *action = Action::NavigateToDisasm(function.start);
-                    }
-                }
+                egui::Grid::new("functions_grid")
+                    .num_columns(3)
+                    .striped(true)
+                    .spacing([10.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label("");
+                        ui.label(RichText::new(self.t("Function name", "函数名")).strong());
+                        ui.label(RichText::new(self.t("Segment", "段")).strong());
+                        ui.end_row();
+                        for (index, function) in self.functions.iter().enumerate() {
+                            let name = self
+                                .function_labels
+                                .get(index)
+                                .map(String::as_str)
+                                .unwrap_or("");
+                            if !function_matches(&filter, function.start, name) {
+                                continue;
+                            }
+                            shown += 1;
+                            ui.label(RichText::new("ƒ").color(C_NAME));
+                            let response = ui.selectable_label(false, name).on_hover_text(format!(
+                                "{:#012x} .. {:#012x}",
+                                function.start.get(),
+                                function.end.get()
+                            ));
+                            ui.label(
+                                RichText::new(
+                                    segment_names.get(index).cloned().unwrap_or_default(),
+                                )
+                                .monospace()
+                                .weak(),
+                            );
+                            ui.end_row();
+                            if response.clicked() {
+                                *action = Action::Navigate(function.start);
+                            }
+                            if response.double_clicked() {
+                                *action = Action::NavigateToDisasm(function.start);
+                            }
+                        }
+                    });
                 if shown == 0 && !self.functions.is_empty() {
                     ui.weak(self.t("(no match)", "（无匹配）"));
                 }
@@ -2363,7 +2698,6 @@ impl ReCraftApp {
         let redo_menu = self.t("Redo", "重做");
         let mut clicked_row = None;
         let mut follow = false;
-        self.navigation_band(ui, action);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2521,6 +2855,22 @@ impl ReCraftApp {
         }
         if follow {
             *action = Action::Follow;
+        }
+        if let Some(line) = self.disasm_rows.get(self.selected) {
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.weak(format!("100.00%   {:#x}", line.addr.get()));
+                if let Some(name) = line.name.as_deref() {
+                    ui.separator();
+                    ui.label(RichText::new(name).color(C_NAME));
+                }
+                if let Some((start, _)) = self.current_function() {
+                    ui.separator();
+                    ui.weak(format!("fn {:#x}", start.get()));
+                }
+                ui.separator();
+                ui.weak(self.t("(Synchronized with Hex View-1)", "（与 Hex View-1 同步）"));
+            });
         }
     }
 
@@ -3307,6 +3657,17 @@ impl ReCraftApp {
     fn update_inner(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         self.tick();
+        let title = match self.project.as_ref() {
+            Some(path) => format!(
+                "ReCraft - {}  {}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("project"),
+                path.display()
+            ),
+            None => "ReCraft".to_owned(),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         let mut action = self.handle_keys(&ctx);
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
@@ -3614,6 +3975,9 @@ mod tests {
             Pane::Hex,
             Pane::Pseudo,
             Pane::Graph,
+            Pane::Exports,
+            Pane::GraphOverview,
+            Pane::Output,
         ] {
             app.focus_pane(pane);
             for frame in 0..2 {
