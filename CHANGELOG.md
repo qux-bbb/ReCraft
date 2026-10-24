@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- ADR records for every decision in DESIGN §16: `docs/adr/` now contains ADR-001 and
+  ADR-003…ADR-011 (headless core, SQLite container/flags, user-vs-derived data, own
+  decompiler ladder, no-IDAPython/own API, AGPL+commercial+CLA, MCP propose/apply,
+  Windows-first/core-portable, dependency whitelist, 1 GB targets) in addition to the
+  detailed ADR-002; docs/README indexes the directory and the M4 audit marks §16
+  complete.
+
 - Incremental range re-analysis (DESIGN §6.4): `AnalysisOptions.seed_range` restricts seed
   discovery to one range (the range start becomes an extra code seed) and
   `recraft_analysis::reanalyze_range` replaces only the auto functions/names/xrefs/API

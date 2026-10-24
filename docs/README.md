@@ -16,6 +16,6 @@
 | [RELEASE.md](RELEASE.md) | 打包/发布/安装器检查清单 |
 | [FAQ.md](FAQ.md) | 十问十答 |
 | [ROADMAP.md](ROADMAP.md) | 里程碑状态与近期优先项 |
-| [adr/ADR-002-ui-framework.md](adr/ADR-002-ui-framework.md) | UI 框架选型（egui/Glow） |
+| [adr/](adr/) | 架构决策记录 ADR-001…ADR-011（headless core、egui、存储、双许可等） |
 
-仓库根目录另有：README、CHANGELOG、CONTRIBUTING、CLA、SECURITY、TRADEMARK、LICENSE。
+仓库根目录另有：README、CHANGELOG、CONTRIBUTING、CLA、SECURITY、TRADEMARK、LICENSE、NOTICE。
