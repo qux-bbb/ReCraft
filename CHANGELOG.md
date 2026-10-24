@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Graph overview is now a real minimap: it reuses the graph view's CFG layout
+- Code-view zoom: **View → Zoom in / Zoom out / Reset zoom** (shortcuts `Ctrl+=`,
+  `Ctrl+-`, `Ctrl+0`) scales the monospace font and row height of Text View, Pseudocode
+  and Hex View (75 %–200 %) while leaving the surrounding chrome untouched; egui's global
+  GUI zoom shortcut is disabled so the shortcut only affects code views. Columns follow
+  the font size automatically, and the zoom factor is persisted with the layout
+  (`SavedLayout` v6). Adds `zoom_actions_clamp_and_reset` and a persistence assertion;
+  screenshot `docs/images/zoom.png`.
   (`graph_layout`), draws scaled node rectangles with their edges, highlights the block
   containing the current address, and draws the graph view's visible viewport box when the
   graph pane has been laid out. Clicking a node jumps to that block. A unit test covers the

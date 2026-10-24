@@ -68,7 +68,8 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
-   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types。
+   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；**`Ctrl+=` / `Ctrl+-` /
+   `Ctrl+0`** 缩放/重置代码视图字号（Text/Pseudocode/Hex）。
    **Text View** 操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
    ![Text View operand colours](images/text-view.png)
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
