@@ -59,6 +59,8 @@ applied 3 proposal(s) through the command bus (undoable)
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
 4. 底部 **Hex** 面板跟随选中地址（可切 Bytes/Words、点击选字节、双击跳转、Follow
    selection 回到当前函数）；**Enter/双击地址**跟随操作数目标，`Esc` 回退。
+   左侧 **Functions** 有过滤框（名字/地址）；**Pseudo** 行点击反跳反汇编；**Xrefs**
+   显示引用类型，双击直接跟随到反汇编。
 5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
    选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），证据链接可跳转。
    **Explain** 离线解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量

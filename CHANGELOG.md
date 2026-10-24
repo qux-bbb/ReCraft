@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usability pass 2 — navigation enhancements: **Functions** side list gains a filter box
+  (case-insensitive name/address substring) and shows resolved function names instead of
+  bare ranges (hover keeps the exact range; double-click jumps to disassembly);
+  **pseudo-C line click** now reverse-jumps into the disassembly view instead of
+  re-centering the pseudo view; **Xrefs** list keeps showing the reference type
+  (call/jump/data), gets a follow hint and double-click jumps to the referencing
+  instruction in the disassembly tab. New tests cover the filter matcher, parallel
+  function labels and the reverse-jump action.
+
 - Usability pass 2 — decompiler visible-noise cleanup: suppress stack-pointer bookkeeping
   (`rsp = rsp ± N`) in pseudo-C, name `mov r11, rsp` frames as `frame`, fold algebraic
   noise (`xor reg, reg`, `and reg, 0`, `sub reg, reg`, `x ± 0`, shifts by 0), fix value

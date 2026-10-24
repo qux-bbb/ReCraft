@@ -216,6 +216,7 @@ enum Action {
     OpenRecent(usize),
     AiExplain,
     AiPolish,
+    NavigateToDisasm(Address),
 }
 
 pub struct ReCraftApp {
@@ -236,7 +237,10 @@ pub struct ReCraftApp {
     pseudo_l1: bool,
     pseudo_l2: bool,
     functions: Vec<FunctionInfo>,
+    /// Names parallel to `functions` (for the side list), refreshed with it.
+    function_labels: Vec<String>,
     functions_dirty: bool,
+    function_filter: String,
     strings: Vec<(Address, String)>,
     strings_dirty: bool,
     string_filter: String,
@@ -289,7 +293,9 @@ impl Default for ReCraftApp {
             pseudo_l1: false,
             pseudo_l2: false,
             functions: Vec::new(),
+            function_labels: Vec::new(),
             functions_dirty: false,
+            function_filter: String::new(),
             strings: Vec::new(),
             strings_dirty: false,
             string_filter: String::new(),
@@ -681,16 +687,29 @@ impl ReCraftApp {
     fn refresh_functions(&mut self) {
         let Some(session) = self.session.as_ref() else {
             self.functions.clear();
+            self.function_labels.clear();
             self.functions_dirty = false;
             return;
         };
         match session.functions() {
             Ok(functions) => {
+                let labels = functions
+                    .iter()
+                    .map(|function| {
+                        session
+                            .name_at(function.start)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| format!("sub_{:x}", function.start.get()))
+                    })
+                    .collect();
                 self.functions = functions;
+                self.function_labels = labels;
                 self.functions_dirty = false;
             }
             Err(error) => {
                 self.functions.clear();
+                self.function_labels.clear();
                 self.functions_dirty = false;
                 self.set_error(error);
             }
@@ -1141,16 +1160,45 @@ impl ReCraftApp {
                                     "No functions yet — press Analyze (F5).",
                                     "还没有函数——按 Analyze（F5）。",
                                 ));
+                            } else {
+                                let hint = self.t("name or address…", "名字或地址…");
+                                ui.horizontal(|ui| {
+                                    ui.weak(self.t("filter", "过滤"));
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.function_filter)
+                                            .desired_width(f32::INFINITY)
+                                            .hint_text(hint),
+                                    );
+                                });
                             }
-                            for function in &self.functions {
-                                let label = format!(
-                                    "{:#012x} .. {:#012x}",
-                                    function.start.get(),
-                                    function.end.get()
-                                );
-                                if ui.selectable_label(false, label).clicked() {
+                            let filter = self.function_filter.to_lowercase();
+                            let mut shown = 0usize;
+                            for (index, function) in self.functions.iter().enumerate() {
+                                let name = self
+                                    .function_labels
+                                    .get(index)
+                                    .map(String::as_str)
+                                    .unwrap_or("");
+                                if !function_matches(&filter, function.start, name) {
+                                    continue;
+                                }
+                                shown += 1;
+                                let label = format!("{:#x}  {name}", function.start.get());
+                                let response =
+                                    ui.selectable_label(false, label).on_hover_text(format!(
+                                        "{:#012x} .. {:#012x}",
+                                        function.start.get(),
+                                        function.end.get()
+                                    ));
+                                if response.clicked() {
                                     *action = Action::Navigate(function.start);
                                 }
+                                if response.double_clicked() {
+                                    *action = Action::NavigateToDisasm(function.start);
+                                }
+                            }
+                            if shown == 0 && !self.functions.is_empty() {
+                                ui.weak(self.t("(no match)", "（无匹配）"));
                             }
                         }
                         SideTab::Strings => {
@@ -1211,8 +1259,16 @@ impl ReCraftApp {
                             }
                             for (from, kind) in &self.xrefs {
                                 let label = format!("<- {:#012x}  {kind}", from.get());
-                                if ui.selectable_label(false, label).clicked() {
+                                let response =
+                                    ui.selectable_label(false, label).on_hover_text(self.t(
+                                        "double-click to follow into disassembly",
+                                        "双击跟随到反汇编",
+                                    ));
+                                if response.clicked() {
                                     *action = Action::Navigate(*from);
+                                }
+                                if response.double_clicked() {
+                                    *action = Action::NavigateToDisasm(*from);
                                 }
                             }
                         }
@@ -1716,6 +1772,8 @@ impl ReCraftApp {
                 }
                 self.pseudo_dirty = true;
             }
+            ui.separator();
+            ui.weak(self.t("click a line to jump to disassembly", "点击行跳转到反汇编"));
         });
         if self.pseudo_dirty {
             return;
@@ -1748,7 +1806,8 @@ impl ReCraftApp {
                 }
             });
         if let Some(addr) = clicked {
-            *action = Action::Navigate(addr);
+            // Pseudo-code lines reverse-jump into the disassembly view.
+            *action = Action::NavigateToDisasm(addr);
         }
     }
 
@@ -2013,6 +2072,10 @@ impl ReCraftApp {
                 if let Some(path) = self.recent.get(index).cloned() {
                     self.open_path(&path);
                 }
+            }
+            Action::NavigateToDisasm(addr) => {
+                self.navigate(addr);
+                self.tab = Tab::Disasm;
             }
             Action::Analyze => {
                 if self.analysis.is_some() {
@@ -2296,6 +2359,14 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
             ..Default::default()
         },
     );
+}
+
+/// Function-list filter: match name or address hex substring (case-insensitive input).
+fn function_matches(filter: &str, start: Address, name: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    name.to_lowercase().contains(filter) || format!("{:#x}", start.get()).contains(filter)
 }
 
 /// Human-readable offline explanation shown in the AI panel.
@@ -2890,6 +2961,46 @@ mod tests {
             app.ai_status
         );
         assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn function_filter_matches_names_and_addresses() {
+        let start = Address::new(0x140001000);
+        assert!(function_matches("", start, "start"));
+        assert!(function_matches("star", start, "start"));
+        assert!(function_matches("start", start, "start"));
+        assert!(function_matches("140001000", start, "start"));
+        assert!(function_matches("0x140001000", start, "start"));
+        assert!(!function_matches("memcpy", start, "start"));
+    }
+
+    #[test]
+    fn function_labels_and_reverse_jump_navigation() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("nav.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_functions();
+        assert_eq!(app.functions.len(), app.function_labels.len());
+        assert!(
+            app.function_labels.iter().all(|label| !label.is_empty()),
+            "every function row needs a display name"
+        );
+        let target = app.functions[0].start;
+        let ctx = egui::Context::default();
+        app.tab = Tab::Pseudo;
+        app.apply_action(&ctx, Action::NavigateToDisasm(target));
+        assert!(matches!(app.tab, Tab::Disasm));
+        assert_eq!(app.disasm_start, target);
     }
 
     #[test]
