@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-style step 1 — full-row disassembly interaction: the disassembly is now one
+  full-width hit area per line (no grid cells), so clicking anywhere selects the row and
+  the whole line is highlighted (IDA current-line colour plus hover tint); double-click
+  anywhere follows the operand; right-click opens a context menu with Follow
+  operand/Rename/Comment/Cross references/Copy address/Undo/Redo; the toolbar gains
+  enabled ◀/▶ back/forward buttons (new `Action::Forward` and `forward()` reusing the
+  existing history stack). Tests cover the back/forward round-trip; hint bar and demo
+  walkthrough updated.
+
 - Usability pass 2 — offline natural-language **Query box** in the AI panel: `urls`,
   `callers of <api/function>` and `text <substring>` intents reuse `answer_query`, results
   show kind/address/text/functions and clicking an item reverse-jumps into the

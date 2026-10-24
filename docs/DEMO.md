@@ -57,6 +57,8 @@ applied 3 proposal(s) through the command bus (undoable)
    （用 `-Keep` 运行演示脚本会打印路径）。
 2. `F5` 运行分析（后台线程，可取消）；左侧 **Functions** 页签出现函数列表。
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
+   反汇编视图为 IDA 式整行交互：**整行高亮选中、双击任意位置跟随、右键菜单**
+   （跟随/改名/注释/交叉引用/复制地址/撤销）、工具栏 **◀ ▶** 前进后退。
 4. 底部 **Hex** 面板跟随选中地址（可切 Bytes/Words、点击选字节、双击跳转、Follow
    selection 回到当前函数）；**Enter/双击地址**跟随操作数目标，`Esc` 回退。
    左侧 **Functions** 有过滤框（名字/地址）；**Pseudo** 行点击反跳反汇编；**Xrefs**

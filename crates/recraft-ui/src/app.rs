@@ -30,6 +30,9 @@ const C_BYTES: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
 const C_MNEMONIC: Color32 = Color32::from_rgb(0x62, 0xa8, 0xe0);
 const C_NAME: Color32 = Color32::from_rgb(0xd0, 0xa0, 0x60);
 const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0xb0, 0x6a);
+/// IDA-style current-line highlight and hover tint.
+const C_SELECTED_ROW: Color32 = Color32::from_rgb(0x2f, 0x46, 0x5f);
+const C_HOVER_ROW: Color32 = Color32::from_rgb(0x22, 0x2a, 0x35);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HexUnit {
@@ -218,6 +221,7 @@ enum Action {
     AiPolish,
     AiQuery,
     NavigateToDisasm(Address),
+    Forward,
 }
 
 pub struct ReCraftApp {
@@ -485,6 +489,20 @@ impl ReCraftApp {
             return;
         }
         self.history_pos -= 1;
+        let addr = self.history[self.history_pos];
+        self.disasm_start = addr;
+        self.pseudo_start = addr;
+        self.selected = 0;
+        self.disasm_dirty = true;
+        self.pseudo_dirty = true;
+    }
+
+    /// IDA-style forward navigation (the inverse of [`Self::back`]).
+    fn forward(&mut self) {
+        if self.history_pos + 1 >= self.history.len() {
+            return;
+        }
+        self.history_pos += 1;
         let addr = self.history[self.history_pos];
         self.disasm_start = addr;
         self.pseudo_start = addr;
@@ -886,6 +904,24 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
+                if ui
+                    .add_enabled(self.history_pos > 0, egui::Button::new("◀"))
+                    .on_hover_text(self.t("Back (Esc)", "后退 (Esc)"))
+                    .clicked()
+                {
+                    *action = Action::Back;
+                }
+                if ui
+                    .add_enabled(
+                        self.history_pos + 1 < self.history.len(),
+                        egui::Button::new("▶"),
+                    )
+                    .on_hover_text(self.t("Forward", "前进"))
+                    .clicked()
+                {
+                    *action = Action::Forward;
+                }
+                ui.separator();
                 if ui.button(undo_label).clicked() {
                     *action = Action::Undo;
                 }
@@ -942,8 +978,8 @@ impl ReCraftApp {
                 }
                 ui.separator();
                 ui.weak(self.t(
-                    "Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
-                    "Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Ctrl+Z 撤销 · Esc 后退",
+                    "Right-click row menu · Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
+                    "右键行菜单 · Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Ctrl+Z 撤销 · Esc 后退",
                 ));
             });
         });
@@ -1737,63 +1773,128 @@ impl ReCraftApp {
             ));
             return;
         }
+        let mono = FontId::monospace(MONO_SIZE);
+        let follow_menu = self.t("Follow operand", "跟随操作数");
+        let rename_menu = self.t("Rename…", "改名…");
+        let comment_menu = self.t("Comment…", "注释…");
+        let xrefs_menu = self.t("Cross references", "交叉引用");
+        let copy_menu = self.t("Copy address", "复制地址");
+        let undo_menu = self.t("Undo", "撤销");
+        let redo_menu = self.t("Redo", "重做");
         let mut clicked_row = None;
+        let mut follow = false;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("disasm_grid")
-                    .num_columns(6)
-                    .striped(true)
-                    .spacing([10.0, 2.0])
-                    .show(ui, |ui| {
-                        for header in [
-                            self.t("Address", "地址"),
-                            self.t("Bytes", "字节"),
-                            self.t("Mnemonic", "助记符"),
-                            self.t("Operands", "操作数"),
-                            self.t("Name", "名字"),
-                            self.t("Comment", "注释"),
-                        ] {
-                            ui.label(RichText::new(header).monospace().strong());
+                let header = format!(
+                    "{:<14}{:<46}{:<9}{:<36}{:<20}{}",
+                    self.t("Address", "地址"),
+                    self.t("Bytes", "字节"),
+                    self.t("Mnemonic", "助记符"),
+                    self.t("Operands", "操作数"),
+                    self.t("Name", "名字"),
+                    self.t("Comment", "注释"),
+                );
+                ui.label(RichText::new(header).monospace().strong());
+                let width = ui.available_width().max(120.0);
+                for (index, line) in self.disasm_rows.iter().enumerate() {
+                    // One full-row hit area, like IDA: the whole line is selectable and
+                    // double-click follows the operand instead of only the address cell.
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(width, 16.0), Sense::click());
+                    if index == self.selected {
+                        ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(rect, 1.0, C_HOVER_ROW);
+                    }
+                    let bytes = line
+                        .bytes()
+                        .iter()
+                        .map(|byte| format!("{byte:02x} "))
+                        .collect::<String>();
+                    let mut job = LayoutJob::default();
+                    append(
+                        &mut job,
+                        &format!("{:#012x}  ", line.addr.get()),
+                        C_ADDR,
+                        &mono,
+                    );
+                    append(&mut job, &format!("{bytes:<46}"), C_BYTES, &mono);
+                    append(
+                        &mut job,
+                        &format!("{:<9}", line.mnemonic),
+                        C_MNEMONIC,
+                        &mono,
+                    );
+                    append(
+                        &mut job,
+                        &format!("{:<36}", line.operands),
+                        Color32::LIGHT_GRAY,
+                        &mono,
+                    );
+                    append(
+                        &mut job,
+                        &format!("{:<20}", line.name.as_deref().unwrap_or("")),
+                        C_NAME,
+                        &mono,
+                    );
+                    append(
+                        &mut job,
+                        line.comment.as_deref().unwrap_or(""),
+                        C_COMMENT,
+                        &mono,
+                    );
+                    let galley = ui.painter().layout_job(job);
+                    ui.painter().galley(
+                        rect.left_top() + egui::vec2(4.0, 1.0),
+                        galley,
+                        Color32::WHITE,
+                    );
+                    if response.clicked() || response.secondary_clicked() {
+                        clicked_row = Some(index);
+                    }
+                    if response.double_clicked() {
+                        clicked_row = Some(index);
+                        follow = true;
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button(follow_menu).clicked() {
+                            *action = Action::Follow;
+                            ui.close();
                         }
-                        ui.end_row();
-
-                        for (index, line) in self.disasm_rows.iter().enumerate() {
-                            let address = RichText::new(format!("{:#012x}", line.addr.get()))
-                                .monospace()
-                                .color(C_ADDR);
-                            let response = ui.selectable_label(index == self.selected, address);
-                            if response.clicked() {
-                                clicked_row = Some(index);
-                            }
-                            if response.double_clicked() {
-                                clicked_row = Some(index);
-                                *action = Action::Follow;
-                            }
-                            let bytes = line
-                                .bytes()
-                                .iter()
-                                .map(|byte| format!("{byte:02x} "))
-                                .collect::<String>();
-                            ui.label(RichText::new(bytes).monospace().color(C_BYTES));
-                            ui.label(RichText::new(&line.mnemonic).monospace().color(C_MNEMONIC));
-                            ui.label(RichText::new(&line.operands).monospace());
-                            ui.label(
-                                RichText::new(line.name.as_deref().unwrap_or(""))
-                                    .monospace()
-                                    .color(C_NAME),
-                            );
-                            ui.label(
-                                RichText::new(line.comment.as_deref().unwrap_or(""))
-                                    .monospace()
-                                    .color(C_COMMENT),
-                            );
-                            ui.end_row();
+                        if ui.button(rename_menu).clicked() {
+                            *action = Action::EditName;
+                            ui.close();
+                        }
+                        if ui.button(comment_menu).clicked() {
+                            *action = Action::EditComment;
+                            ui.close();
+                        }
+                        if ui.button(xrefs_menu).clicked() {
+                            *action = Action::ShowXrefs;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(copy_menu).clicked() {
+                            ui.ctx().copy_text(format!("{:#x}", line.addr.get()));
+                            ui.close();
+                        }
+                        if ui.button(undo_menu).clicked() {
+                            *action = Action::Undo;
+                            ui.close();
+                        }
+                        if ui.button(redo_menu).clicked() {
+                            *action = Action::Redo;
+                            ui.close();
                         }
                     });
+                }
             });
         if let Some(index) = clicked_row {
             self.selected = index;
+        }
+        if follow {
+            *action = Action::Follow;
         }
     }
 
@@ -2364,6 +2465,7 @@ impl ReCraftApp {
             }
             Action::Page(delta) => self.shift_window(delta * 20),
             Action::Back => self.back(),
+            Action::Forward => self.forward(),
             Action::Navigate(addr) => self.navigate(addr),
         }
         let _ = ctx;
@@ -3114,6 +3216,33 @@ mod tests {
         );
         app.apply_action(&ctx, Action::AiClear);
         assert!(app.ai_answer.is_none());
+    }
+
+    #[test]
+    fn back_and_forward_history_roundtrip() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("history.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let entry = app.disasm_start;
+        let second = Address::new(entry.get() + 0x10);
+        let third = Address::new(entry.get() + 0x20);
+        app.navigate(second);
+        app.navigate(third);
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::Back);
+        assert_eq!(app.disasm_start, second);
+        app.apply_action(&ctx, Action::Forward);
+        assert_eq!(app.disasm_start, third);
+        app.apply_action(&ctx, Action::Forward);
+        assert_eq!(app.disasm_start, third, "history end is a no-op");
     }
 
     #[test]
