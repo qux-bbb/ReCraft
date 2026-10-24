@@ -16,6 +16,7 @@
 //!   the future transport.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
@@ -108,6 +109,94 @@ impl ProviderSettings {
     /// Read the real process environment (defaults stay offline unless explicitly set).
     pub fn from_env() -> Self {
         ProviderSettings::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Persisted provider settings location (`%LOCALAPPDATA%\ReCraft\ai-settings.json`).
+    pub fn settings_path() -> Option<PathBuf> {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|dir| PathBuf::from(dir).join("ReCraft").join("ai-settings.json"))
+    }
+
+    /// Load persisted settings, falling back to environment-only configuration. `enabled`
+    /// is always recomputed from the current environment (keys are never stored).
+    pub fn load() -> Self {
+        match Self::settings_path().as_deref().and_then(Self::load_from) {
+            Some(mut settings) => {
+                settings.refresh_enabled();
+                settings
+            }
+            None => Self::from_env(),
+        }
+    }
+
+    /// Read settings from an explicit JSON file (UI/tests).
+    pub fn load_from(path: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let mut settings = Self::default();
+        if let Some(kind) = value
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .and_then(ProviderKind::parse)
+        {
+            settings.kind = kind;
+        }
+        if let Some(endpoint) = value.get("endpoint").and_then(|value| value.as_str()) {
+            settings.endpoint = endpoint.to_owned();
+        }
+        if let Some(model) = value.get("model").and_then(|value| value.as_str()) {
+            settings.model = model.to_owned();
+        }
+        if let Some(api_key_env) = value.get("api_key_env").and_then(|value| value.as_str()) {
+            settings.api_key_env = api_key_env.to_owned();
+        }
+        if let Some(max_tokens) = value.get("max_tokens").and_then(|value| value.as_u64()) {
+            settings.max_tokens = max_tokens as usize;
+        }
+        Some(settings)
+    }
+
+    /// Persist to the default per-user location.
+    pub fn save(&self) -> Result<()> {
+        let Some(path) = Self::settings_path() else {
+            return Err(Error::internal("LOCALAPPDATA is not set"));
+        };
+        self.save_to(&path)
+    }
+
+    /// Persist to an explicit path (creates parent directories). The API key itself is
+    /// never written — only the name of the environment variable holding it.
+    pub fn save_to(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::internal(format!("cannot create {}: {error}", parent.display()))
+            })?;
+        }
+        let value = serde_json::json!({
+            "kind": self.kind.as_str(),
+            "endpoint": self.endpoint,
+            "model": self.model,
+            "api_key_env": self.api_key_env,
+            "max_tokens": self.max_tokens,
+        });
+        let text = serde_json::to_string_pretty(&value)
+            .map_err(|error| Error::internal(format!("cannot encode settings: {error}")))?;
+        std::fs::write(path, text).map_err(|error| {
+            Error::internal(format!("cannot write {}: {error}", path.display()))
+        })?;
+        Ok(())
+    }
+
+    /// Recompute `enabled` from the current environment after the user edits settings.
+    pub fn refresh_enabled(&mut self) {
+        self.enabled = self.kind != ProviderKind::Heuristic
+            && !self.endpoint.is_empty()
+            && self.api_key_present();
+    }
+
+    /// Whether the configured API-key environment variable is set and non-empty.
+    pub fn api_key_present(&self) -> bool {
+        std::env::var(&self.api_key_env).is_ok_and(|value| !value.is_empty())
     }
 
     /// One-line description safe to show in UI/CLI (never prints a key).
@@ -557,6 +646,33 @@ mod tests {
         assert_eq!(settings.kind, ProviderKind::Heuristic);
         assert!(!settings.enabled);
         assert!(settings.describe().contains("state=disabled"));
+    }
+
+    #[test]
+    fn settings_roundtrip_through_json_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-settings.json");
+        let settings = ProviderSettings {
+            kind: ProviderKind::OpenAiCompatible,
+            endpoint: "https://api.example.test/v1".to_owned(),
+            model: "test-model".to_owned(),
+            api_key_env: "MY_TEST_KEY".to_owned(),
+            max_tokens: 512,
+            ..ProviderSettings::default()
+        };
+        settings.save_to(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sk-")); // no key material is written
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(loaded.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(loaded.endpoint, settings.endpoint);
+        assert_eq!(loaded.model, settings.model);
+        assert_eq!(loaded.api_key_env, settings.api_key_env);
+        assert_eq!(loaded.max_tokens, settings.max_tokens);
+        assert!(
+            !loaded.enabled,
+            "enabled is recomputed from the environment"
+        );
     }
 
     #[test]

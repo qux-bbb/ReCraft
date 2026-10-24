@@ -105,22 +105,34 @@ recraft ai polish notepad.rcraft --addr entry [--json] [--no-cache]
   下方显示理由与证据数量；证据链接可跳转到对应地址。
 - 单选 proposal → **Apply selected**：经 `Command` 总线执行（journaled，`Ctrl+Z` 可撤销），
   应用后从列表移除并刷新反汇编/函数列表。
-- **Clear** 清空当前建议。
+- **Explain**：离线解释当前光标所在函数（summary/API/字符串/调用），结果显示在面板内，
+  不依赖网络与配置。
+- **Polish**：对当前函数构建润色 prompt 并调用已启用的 provider；未启用时提示先配置。
+  请求在后台线程执行，UI 不阻塞；结果只做展示（不写回伪代码）。
+- **Provider settings**：UI 内直接编辑 provider 类型、endpoint、model、API key 环境变量名与
+  max tokens，保存到 `%LOCALAPPDATA%\ReCraft\ai-settings.json`（只存环境变量名，**不存密钥**）。
+  保存后从环境变量重算 `enabled`；CLI 的 `ai provider` 仍可查看解析结果。
+- **Clear** 清空当前建议、解释与状态。
 
 无项目/未分析时会提示先 Analyze。UI 不会在后台自动应用任何提案。
 
 ## Provider 抽象与 prompt 安全（M3 地基）
 
-网络传输尚未实现，但 contract 已固定并可离线验证：
+HTTP 传输已实现（OpenAI-compatible + Ollama；见 `recraft-ai/transport.rs`），CLI 与 UI 共用同一
+provider 层：
 
 ```powershell
-recraft ai provider          # 解析后的配置（不打印密钥）
+recraft ai provider                      # 解析后的配置（不打印密钥）
+recraft ai explain notepad.rcraft --addr entry --llm
+recraft ai polish notepad.rcraft --addr entry
 recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 ```
 
 - **默认离线**：`ProviderSettings` 默认 `heuristic`/`disabled`；启用 HTTP provider 必须同时
   设置 `RECRAFT_AI_PROVIDER=openai|ollama`、`RECRAFT_AI_ENDPOINT`，且
-  `RECRAFT_AI_API_KEY`（变量名可配）非空，否则 `enabled=false`。
+  `RECRAFT_AI_API_KEY`（变量名可配）非空，否则 `enabled=false`。UI 设置与文件配置同样遵守。
+- **持久化**：`ProviderSettings::save()` 写入 `%LOCALAPPDATA%\ReCraft\ai-settings.json`；
+  `load()` 优先读该文件，缺省回退环境变量，并按当前环境重算 `enabled`。
 - **配置项**：`RECRAFT_AI_PROVIDER`、`RECRAFT_AI_ENDPOINT`、`RECRAFT_AI_MODEL`、
   `RECRAFT_AI_API_KEY_ENV`、`RECRAFT_AI_MAX_TOKENS`。
 - **prompt 组装**：`build_explain_prompt`（函数摘要 + API 标签 + 引用字符串 + L2 伪代码）与

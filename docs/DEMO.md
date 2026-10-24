@@ -61,6 +61,8 @@ applied 3 proposal(s) through the command bus (undoable)
    selection 回到当前函数）；**Enter/双击地址**跟随操作数目标，`Esc` 回退。
 5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
    选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），证据链接可跳转。
+   **Explain** 离线解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量
+   （保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），启用后 **Polish** 在后台线程润色。
 6. **Strings/Xrefs/Imports** 页签展示引用与 API 分类；UI 支持 EN/zh-CN 切换。
 
 ## 对接 MCP 客户端

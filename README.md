@@ -212,7 +212,10 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 ### AI assist
 
 Offline (no network) explanation, rename proposals and sample triage; proposals carry
-evidence addresses and are only applied through the journaled command bus:
+evidence addresses and are only applied through the journaled command bus. The GUI's **AI**
+tab can configure the optional LLM provider (endpoint/model/API-key env var, persisted to
+`%LOCALAPPDATA%\ReCraft\ai-settings.json`) and run **Explain**/**Polish** without any CLI
+configuration:
 
 ```powershell
 cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry

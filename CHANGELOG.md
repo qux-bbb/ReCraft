@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usability pass 2 — AI panel usable without CLI setup: in-panel **Provider settings**
+  (kind/endpoint/model/API-key env var/max tokens) persisted to
+  `%LOCALAPPDATA%\ReCraft\ai-settings.json` (`ProviderSettings::load/save/load_from/save_to`;
+  keys are never stored, `enabled` is recomputed from the environment), plus **Explain**
+  (offline function summary/APIs/strings/calls rendered in the panel) and **Polish**
+  (builds the polish prompt and calls the enabled provider on a background thread, so the
+  UI never blocks). Clear resets explanation/status; docs AI/DEMO/README updated.
+
 - Usability pass 2 — bottom **hex dump** panel (DESIGN §8 follow-up): follows the selected
   disassembly/pseudo address (16-byte rows, address gutter, ASCII column), byte/word
   display toggle (little-endian 16-bit words), click to select a byte/word, double-click

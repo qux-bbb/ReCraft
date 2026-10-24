@@ -87,6 +87,12 @@ struct AnalysisJob {
     started: Instant,
 }
 
+/// Background LLM request; HTTP calls never run on the UI thread.
+struct AiJob {
+    receiver: mpsc::Receiver<std::result::Result<String, String>>,
+    started: Instant,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditKind {
     Rename,
@@ -208,6 +214,8 @@ enum Action {
     PaletteCommand(usize),
     Follow,
     OpenRecent(usize),
+    AiExplain,
+    AiPolish,
 }
 
 pub struct ReCraftApp {
@@ -245,6 +253,9 @@ pub struct ReCraftApp {
     ai_proposals: Vec<recraft_ai::Proposal>,
     ai_selected: AiSelection,
     ai_status: String,
+    ai_settings: recraft_ai::ProviderSettings,
+    ai_explanation: Option<String>,
+    ai_job: Option<AiJob>,
     edit: Option<EditState>,
     goto: Option<String>,
     palette: Option<PaletteState>,
@@ -294,6 +305,9 @@ impl Default for ReCraftApp {
             ai_proposals: Vec::new(),
             ai_selected: None,
             ai_status: String::new(),
+            ai_settings: recraft_ai::ProviderSettings::default(),
+            ai_explanation: None,
+            ai_job: None,
             edit: None,
             goto: None,
             palette: None,
@@ -315,6 +329,7 @@ impl ReCraftApp {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let mut app = Self {
             recent: load_recent(),
+            ai_settings: recraft_ai::ProviderSettings::load(),
             ..Self::default()
         };
         if let Some(path) = initial {
@@ -497,6 +512,7 @@ impl ReCraftApp {
 
     fn tick(&mut self) {
         self.poll_analysis();
+        self.poll_ai_job();
         if self.disasm_dirty {
             self.refresh_disasm();
         }
@@ -572,6 +588,30 @@ impl ReCraftApp {
             }
             AnalysisMessage::Failed(error) => {
                 self.set_error(recraft_common::Error::internal(error));
+            }
+        }
+    }
+
+    /// Poll a background polish request (spawned by [`Action::AiPolish`]).
+    fn poll_ai_job(&mut self) {
+        let Some(job) = self.ai_job.as_ref() else {
+            return;
+        };
+        match job.receiver.try_recv() {
+            Ok(Ok(text)) => {
+                let elapsed = job.started.elapsed().as_millis();
+                self.ai_explanation = Some(text);
+                self.ai_status = format!("polish done in {elapsed} ms");
+                self.ai_job = None;
+            }
+            Ok(Err(error)) => {
+                self.ai_job = None;
+                self.ai_status = format!("polish failed: {error}");
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.ai_job = None;
+                self.ai_status = "polish worker stopped unexpectedly".to_owned();
             }
         }
     }
@@ -1184,6 +1224,8 @@ impl ReCraftApp {
     fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let suggest = self.t("Suggest names", "建议命名");
         let apply_label = self.t("Apply selected", "应用选中");
+        let explain_label = self.t("Explain", "解释");
+        let polish_label = self.t("Polish", "润色");
         let clear = self.t("Clear", "清空");
         let has_selection = self
             .ai_selected
@@ -1199,12 +1241,29 @@ impl ReCraftApp {
             {
                 *action = Action::AiApply;
             }
+            if ui.button(explain_label).clicked() {
+                *action = Action::AiExplain;
+            }
+            if ui.button(polish_label).clicked() {
+                *action = Action::AiPolish;
+            }
             if ui.button(clear).clicked() {
                 *action = Action::AiClear;
             }
         });
+        self.ai_settings_ui(ui);
         if !self.ai_status.is_empty() {
             ui.weak(&self.ai_status);
+        }
+        if let Some(text) = self.ai_explanation.clone() {
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("ai_explanation")
+                .max_height(220.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.label(RichText::new(text).monospace().size(11.0));
+                });
         }
         if self.ai_proposals.is_empty() {
             ui.weak(self.t(
@@ -1238,6 +1297,72 @@ impl ReCraftApp {
                 *action = Action::Navigate(evidence.addr);
             }
         }
+    }
+
+    /// Provider settings editor (persisted; the API key itself is never stored).
+    fn ai_settings_ui(&mut self, ui: &mut egui::Ui) {
+        let title = self.t("Provider settings", "Provider 设置");
+        egui::CollapsingHeader::new(title)
+            .default_open(self.ai_settings.kind != recraft_ai::ProviderKind::Heuristic)
+            .show(ui, |ui| {
+                egui::ComboBox::from_id_salt("ai_provider_kind")
+                    .selected_text(self.ai_settings.kind.as_str())
+                    .show_ui(ui, |ui| {
+                        for kind in [
+                            recraft_ai::ProviderKind::Heuristic,
+                            recraft_ai::ProviderKind::OpenAiCompatible,
+                            recraft_ai::ProviderKind::Ollama,
+                        ] {
+                            ui.selectable_value(&mut self.ai_settings.kind, kind, kind.as_str());
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label(self.t("endpoint", "接口地址"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ai_settings.endpoint)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("https://api.openai.com/v1/chat/completions"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(self.t("model", "模型"));
+                    ui.add(egui::TextEdit::singleline(&mut self.ai_settings.model));
+                    ui.label(self.t("key env", "密钥环境变量"));
+                    ui.add(egui::TextEdit::singleline(
+                        &mut self.ai_settings.api_key_env,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(self.t("max tokens", "最大 token"));
+                    ui.add(egui::DragValue::new(&mut self.ai_settings.max_tokens).range(64..=8192));
+                });
+                if ui.button(self.t("Save settings", "保存设置")).clicked() {
+                    self.ai_settings.refresh_enabled();
+                    match self.ai_settings.save() {
+                        Ok(()) => {
+                            self.ai_status = format!(
+                                "{}{}",
+                                self.t("settings saved · ", "设置已保存 · "),
+                                self.ai_settings.describe()
+                            );
+                        }
+                        Err(error) => self.set_error(error),
+                    }
+                }
+                let key_state = if self.ai_settings.api_key_present() {
+                    self.t("API key env is set", "API key 环境变量已设置")
+                } else {
+                    self.t("API key env is not set", "API key 环境变量未设置")
+                };
+                ui.weak(format!(
+                    "{key_state} · {}",
+                    if self.ai_settings.enabled {
+                        self.t("enabled", "已启用")
+                    } else {
+                        self.t("offline", "离线")
+                    }
+                ));
+            });
     }
 
     /// Apply the selected AI proposal through the command bus (journaled/undoable).
@@ -1946,6 +2071,71 @@ impl ReCraftApp {
                 self.ai_proposals.clear();
                 self.ai_selected = None;
                 self.ai_status.clear();
+                self.ai_explanation = None;
+            }
+            Action::AiExplain => {
+                let Some((start, _)) = self.current_function() else {
+                    self.ai_status = self
+                        .t("put the cursor inside a function", "把光标放到函数内")
+                        .to_owned();
+                    return;
+                };
+                let Some(session) = self.session.as_mut() else {
+                    self.set_status(self.t("open a project first", "先打开项目").to_owned());
+                    return;
+                };
+                match recraft_ai::explain(session, start) {
+                    Ok(explanation) => {
+                        self.ai_status = explanation.summary.clone();
+                        self.ai_explanation = Some(format_explanation(&explanation));
+                    }
+                    Err(error) => self.set_error(error),
+                }
+            }
+            Action::AiPolish => {
+                if self.ai_job.is_some() {
+                    return;
+                }
+                self.ai_settings.refresh_enabled();
+                if !self.ai_settings.enabled {
+                    self.ai_status = self
+                        .t(
+                            "enable a provider above (endpoint + API key env) to use polish",
+                            "先在上方启用 provider（接口地址 + API key 环境变量）再润色",
+                        )
+                        .to_owned();
+                    return;
+                }
+                let Some((start, _)) = self.current_function() else {
+                    self.ai_status = self
+                        .t("put the cursor inside a function", "把光标放到函数内")
+                        .to_owned();
+                    return;
+                };
+                let settings = self.ai_settings.clone();
+                let Some(session) = self.session.as_mut() else {
+                    return;
+                };
+                let prompt = match recraft_ai::build_polish_prompt(session, start, &settings) {
+                    Ok(prompt) => prompt,
+                    Err(error) => {
+                        self.set_error(error);
+                        return;
+                    }
+                };
+                let (sender, receiver) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let mut provider = recraft_ai::provider_from_settings(&settings);
+                    let result = provider
+                        .complete(&prompt)
+                        .map_err(|error| error.to_string());
+                    let _ = sender.send(result);
+                });
+                self.ai_job = Some(AiJob {
+                    receiver,
+                    started: Instant::now(),
+                });
+                self.ai_status = self.t("calling provider…", "正在请求模型…").to_owned();
             }
             Action::TogglePalette => {
                 self.palette = if self.palette.is_some() {
@@ -2106,6 +2296,40 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
             ..Default::default()
         },
     );
+}
+
+/// Human-readable offline explanation shown in the AI panel.
+fn format_explanation(explanation: &recraft_ai::Explanation) -> String {
+    let name = explanation
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("sub_{:x}", explanation.start.get()));
+    let mut text = format!(
+        "{name}  {:#x}..{:#x}  {} insn(s)\n\n{}\n",
+        explanation.start.get(),
+        explanation.end.get(),
+        explanation.instructions,
+        explanation.summary
+    );
+    if !explanation.apis.is_empty() {
+        text.push_str("\nAPIs:\n");
+        for (addr, api, category) in &explanation.apis {
+            text.push_str(&format!("  {:#x}  {api}  [{category}]\n", addr.get()));
+        }
+    }
+    if !explanation.strings.is_empty() {
+        text.push_str("\nStrings:\n");
+        for (addr, value) in explanation.strings.iter().take(20) {
+            text.push_str(&format!("  {:#x}  {value}\n", addr.get()));
+        }
+    }
+    if !explanation.calls.is_empty() {
+        text.push_str("\nCalls:\n");
+        for (addr, callee) in &explanation.calls {
+            text.push_str(&format!("  {:#x}  {callee}\n", addr.get()));
+        }
+    }
+    text
 }
 
 fn xref_kind_name(kind: i64) -> &'static str {
@@ -2582,6 +2806,90 @@ mod tests {
         app.hex_unit = HexUnit::Word;
         run(&mut app);
         assert!(app.show_hex);
+    }
+
+    #[test]
+    fn ai_explanation_formats_offline_report() {
+        let explanation = recraft_ai::Explanation {
+            name: Some("start".to_owned()),
+            start: Address::new(0x140001000),
+            end: Address::new(0x140001050),
+            instructions: 12,
+            apis: vec![(
+                Address::new(0x140001010),
+                "kernel32!VirtualAlloc".to_owned(),
+                "memory".to_owned(),
+            )],
+            strings: vec![(Address::new(0x140002000), "http://example.test".to_owned())],
+            calls: vec![(Address::new(0x140001020), "sub_140001100".to_owned())],
+            summary: "allocates memory then calls a helper".to_owned(),
+        };
+        let text = format_explanation(&explanation);
+        assert!(text.contains("0x140001000"));
+        assert!(text.contains("VirtualAlloc"));
+        assert!(text.contains("http://example.test"));
+        assert!(text.contains("sub_140001100"));
+        assert!(text.contains("allocates memory"));
+    }
+
+    #[test]
+    fn ai_panel_renders_without_a_project() {
+        let mut app = ReCraftApp {
+            side_tab: SideTab::Ai,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_explain_works_offline_and_polish_asks_for_provider() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ai.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.refresh_functions();
+        app.tick();
+        if app.functions.is_empty() || app.disasm_rows.is_empty() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::AiExplain);
+        assert!(
+            app.ai_explanation
+                .as_ref()
+                .is_some_and(|text| text.contains("insn")),
+            "offline explanation: {:?} / status: {}",
+            app.ai_explanation,
+            app.ai_status
+        );
+        app.apply_action(&ctx, Action::AiPolish);
+        assert!(
+            app.ai_status.to_lowercase().contains("provider")
+                || app.ai_status.to_lowercase().contains("enable"),
+            "polish should ask for a provider: {}",
+            app.ai_status
+        );
+        assert!(app.ai_job.is_none());
     }
 
     #[test]
