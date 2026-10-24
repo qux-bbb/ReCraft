@@ -825,6 +825,43 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// Stored string text at `addr`, decoded from its encoding (1 = ASCII, 2 = UTF-16LE).
+    ///
+    /// Returns `None` when the address is not the start of a stored string.
+    pub fn string_at(&mut self, addr: Address) -> Result<Option<String>> {
+        let row: Option<(u32, i64)> = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT len, enc FROM string WHERE addr = ?1",
+                [addr.get() as i64],
+                |row| Ok((row.get::<_, i64>(0)? as u32, row.get(1)?)),
+            )
+            .optional()
+            .map_err(command::db_err)?;
+        let Some((len, enc)) = row else {
+            return Ok(None);
+        };
+        let mut bytes = vec![0u8; len.min(4096) as usize];
+        let read = self.read_at(addr, &mut bytes)?;
+        bytes.truncate(read);
+        let text = if enc == 2 {
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .take_while(|unit| *unit != 0)
+                .collect();
+            String::from_utf16_lossy(&units)
+        } else {
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end]).into_owned()
+        };
+        Ok(Some(text))
+    }
+
     /// Cross-references pointing *to* `addr`.
     pub fn xrefs_to(&self, addr: Address) -> Result<Vec<XrefEntry>> {
         let mut stmt = self

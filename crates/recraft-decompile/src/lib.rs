@@ -93,6 +93,7 @@ pub(crate) fn lift_block(
     }
 
     let exprs = lifter.into_exprs();
+    let literals = collect_literals(session, &exprs)?;
     let mut names: HashMap<u64, String> = HashMap::new();
     for item in &lifted {
         for stmt in &item.stmts {
@@ -122,6 +123,7 @@ pub(crate) fn lift_block(
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
+        literals: &literals,
         start,
         end,
         labels: &BTreeSet::new(),
@@ -237,6 +239,7 @@ pub fn pseudocode_l0(
     }
 
     let exprs = lifter.into_exprs();
+    let literals = collect_literals(session, &exprs)?;
     let mut names: HashMap<u64, String> = HashMap::new();
     for target in targets.iter().chain(calls.iter()) {
         let target = Address::new(*target);
@@ -248,6 +251,7 @@ pub fn pseudocode_l0(
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
+        literals: &literals,
         start,
         end,
         labels: &targets,
@@ -271,6 +275,76 @@ fn resolve_name(session: &Session, addr: Address) -> Result<String> {
     Ok(format!("sub_{:x}", addr.get()))
 }
 
+/// Quote a decoded string as a C literal, escaping quotes, backslashes and control bytes.
+fn quote_c_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                for byte in ch.to_string().as_bytes() {
+                    out.push_str(&format!("\\x{byte:02x}"));
+                }
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Resolve address constants that name a stored string to quoted C literals.
+fn collect_literals(session: &mut Session, exprs: &[Expr]) -> Result<HashMap<u64, String>> {
+    let mut literals = HashMap::new();
+    let mut values: BTreeSet<u64> = exprs
+        .iter()
+        .filter_map(|expr| match expr {
+            Expr::Const(value) => Some(*value),
+            _ => None,
+        })
+        .collect();
+    values.retain(|value| *value > 0x10000);
+    for value in values {
+        let addr = Address::new(value);
+        if let Some(text) = session.string_at(addr)? {
+            if !text.is_empty() {
+                literals.insert(value, quote_c_string(&text));
+            }
+            continue;
+        }
+        // Short literals such as `"\r\n"` are not always in the string table; read them
+        // directly when the address lies in read-only data.
+        let in_rdata = session
+            .segment_containing(addr)
+            .is_some_and(|segment| segment.name == ".rdata");
+        if in_rdata && let Some(text) = read_c_literal(session, addr) {
+            literals.insert(value, quote_c_string(&text));
+        }
+    }
+    Ok(literals)
+}
+
+/// Read a NUL-terminated printable ASCII literal for short data not in the string table.
+fn read_c_literal(session: &mut Session, addr: Address) -> Option<String> {
+    let mut bytes = [0u8; 64];
+    let read = session.read_at(addr, &mut bytes).ok()?;
+    let bytes = &bytes[..read];
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    if end == 0 {
+        return None;
+    }
+    let text = &bytes[..end];
+    let printable = text
+        .iter()
+        .all(|byte| matches!(byte, b'\r' | b'\n' | b'\t' | 0x20..=0x7e));
+    printable.then(|| String::from_utf8_lossy(text).into_owned())
+}
+
 struct Printer<'a> {
     exprs: &'a [Expr],
     names: &'a HashMap<u64, String>,
@@ -282,6 +356,8 @@ struct Printer<'a> {
     arg_structs: &'a BTreeMap<Reg, StructDef>,
     /// User prototypes of direct call targets (renders call arguments/types).
     call_protos: &'a HashMap<u64, crate::l2::ProtoSig>,
+    /// Quoted C literals for address constants that name a stored string.
+    literals: &'a HashMap<u64, String>,
     /// Registers written so far (for argument-register naming).
     written: HashSet<Reg>,
     /// Register that aliases `rsp` for frame-relative locals (e.g. `mov r11, rsp`).
@@ -381,6 +457,11 @@ impl Printer<'_> {
     }
 
     fn name(&self, target: Address) -> String {
+        if let Some(proto) = self.call_protos.get(&target.get())
+            && let Some(name) = proto.name.as_deref()
+        {
+            return name.to_owned();
+        }
         self.names
             .get(&target.get())
             .cloned()
@@ -650,6 +731,9 @@ impl Printer<'_> {
     fn expr(&self, id: ExprId) -> String {
         match &self.exprs[id as usize] {
             Expr::Const(value) => {
+                if let Some(literal) = self.literals.get(value) {
+                    return literal.clone();
+                }
                 if *value < 10 {
                     value.to_string()
                 } else {
@@ -724,6 +808,11 @@ impl Printer<'_> {
                 format!("{symbol}({})", self.expr(*arg))
             }
             Expr::Cast { arg, width, signed } => {
+                if let Expr::Const(value) = &self.exprs[*arg as usize]
+                    && let Some(literal) = self.literals.get(value)
+                {
+                    return literal.clone();
+                }
                 let kind = if *signed { "int" } else { "uint" };
                 format!("({kind}{})({})", u16::from(*width) * 8, self.expr(*arg))
             }
@@ -759,6 +848,16 @@ impl Printer<'_> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn string_literals_are_c_escaped() {
+        assert_eq!(quote_c_string("plain"), "\"plain\"");
+        assert_eq!(
+            quote_c_string("a\"b\\c\n\t"),
+            "\"a\\\"b\\\\c\\n\\t\"",
+            "quotes, backslashes and control characters must be escaped"
+        );
+    }
 
     fn sample_pe() -> Option<Vec<u8>> {
         for path in [

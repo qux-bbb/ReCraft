@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Decompiler output is more source-like for string-heavy functions: address constants
+  that name a stored string render as quoted C literals (including short `.rdata`
+  literals such as `"\r\n"`), and a user prototype's function name is used at call sites
+  (`printf`, `fgets`, `strcmp`, …) instead of `sub_*`. Adds `Session::string_at` and a
+  C-escaping unit test.
+- End-to-end CTF case study `docs/cases/crackme_win_x64.md` and the reproducer
+  `scripts/case-crackme.ps1`: strings → xref → disassembly → L2 decompile → AI-polished
+  source. The recovered flag is `flag{shuffl3d_x0r3d_4nd_sh1ft3d}`; the obvious
+  `flag{strings_are_not_enough_you_know}` is a decoy rejected by `strcmp`.
+
 - Navigating to a known string address now opens the Disassembly in **data view**: the
   string is rendered as `db '…',0` (or `dw` for UTF-16LE) with its resolved name and a
   `; DATA XREF: …` comment, and the following strings in the same region are listed as
