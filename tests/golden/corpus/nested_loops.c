@@ -1,29 +1,25 @@
 // L1 structure recovery (16 blocks)
 void nested_loops_l1(void) {
     *(u64*)((rsp - 8)) = rbx;
-    rsp = (rsp - 8);
     *(u64*)((rsp - 8)) = rsi;
-    rsp = (rsp - 8);
-    esi = (esi ^ esi);
-    r11d = (r11d ^ r11d);
+    esi = 0;
+    r11d = 0;
     ebx = ecx;
-    if (((ecx & ecx) <= 0 /* signed */)) {
+    if ((ecx <= 0 /* signed */)) {
         eax = esi;
         rsi = *(u64*)(rsp);
-        rsp = (rsp + 8);
         rbx = *(u64*)(rsp);
-        rsp = (rsp + 8);
         return;
     }
     xmm3 = *(__m128*)(0xADDR);
-    xmm4 = (xmm4 ^ xmm4);
+    xmm4 = 0;
     var_28 = rbp;
-    xmm2 = (xmm2 ^ xmm2);
+    xmm2 = 0;
     ebp = *(u32*)(0xADDR);
     var_30 = rdi;
-    edi = (edi ^ edi);
+    edi = 0;
     while (1) {
-        edx = (edx ^ edx);
+        edx = 0;
         xmm1 = r11d;
         __asm("pshufd xmm1, xmm1, 0xADDR");
         if (!(ebx < 8)) {
@@ -46,8 +42,8 @@ void nested_loops_l1(void) {
                 } while ((edx < ecx /* signed */));
             }
         }
-        r8d = (r8d ^ r8d);
-        r9d = (r9d ^ r9d);
+        r8d = 0;
+        r9d = 0;
         if (!(edx >= ebx /* signed */)) {
             eax = ebx;
             eax = (eax - edx);
@@ -91,8 +87,6 @@ void nested_loops_l1(void) {
     eax = xmm2;
     eax = (eax + esi);
     rsi = *(u64*)(rsp);
-    rsp = (rsp + 8);
     rbx = *(u64*)(rsp);
-    rsp = (rsp + 8);
     return;
 }

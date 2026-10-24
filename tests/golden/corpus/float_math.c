@@ -2,6 +2,6 @@
 void float_math_l1(void) {
     xmm0 = (xmm0 * *(f32*)(0xADDR));
     xmm0 = (xmm0 + *(f32*)(0xADDR));
-    eax = (int32*)(xmm0);
+    eax = (int32)(xmm0);
     return;
 }

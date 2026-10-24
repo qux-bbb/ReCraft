@@ -1,21 +1,20 @@
 // L1 structure recovery (13 blocks)
 void bytes_op_l1(void) {
-    rsp = (rsp - 8);
-    r8d = (r8d ^ r8d);
-    r11 = (int64*)(edx);
+    r8d = 0;
+    r11 = (int64)(edx);
     r10 = rcx;
     r9d = r8d;
     ecx = r8d;
-    if (!((edx & edx) <= 0 /* signed */)) {
+    if (!(edx <= 0 /* signed */)) {
         if (!(r11d < 8)) {
             r9 = r11;
-            xmm3 = (xmm3 ^ xmm3);
+            xmm3 = 0;
             r9 = (r9 & 0xADDR);
-            xmm2 = (xmm2 ^ xmm2);
+            xmm2 = 0;
             rdx = r10;
             do {
                 xmm1 = *(u32*)(rdx);
-                xmm0 = (xmm0 ^ xmm0);
+                xmm0 = 0;
                 __asm("punpcklbw xmm1, xmm0");
                 ecx = (ecx + 8);
                 __asm("punpcklwd xmm1, xmm0");
@@ -38,40 +37,37 @@ void bytes_op_l1(void) {
             r9d = xmm2;
         }
     }
-    rax = (int64*)(ecx);
+    rax = (int64)(ecx);
     edx = r8d;
     if ((rax >= r11 /* signed */)) {
         eax = r9d;
-        rsp = (rsp + 8);
         return;
     }
     rcx = r11;
     rcx = (rcx - rax);
     if ((rcx < 2 /* signed */)) {
-        ecx = (uint32*)(*(u8*)((rax + (r10 * 1))));
+        ecx = (uint32)(*(u8*)((rax + (r10 * 1))));
         r9d = (r9d + ecx);
     } else {
         *(u64*)(rsp) = rbx;
         rbx = (r11 - 1);
         do {
-            ecx = (uint32*)(*(u8*)((r10 + (rax * 1))));
+            ecx = (uint32)(*(u8*)((r10 + (rax * 1))));
             r8d = (r8d + ecx);
-            ecx = (uint32*)(*(u8*)(((r10 + (rax * 1)) + 1)));
+            ecx = (uint32)(*(u8*)(((r10 + (rax * 1)) + 1)));
             edx = (edx + ecx);
             rax = (rax + 2);
         } while ((rax < rbx /* signed */));
         rbx = *(u64*)(rsp);
         if (!(rax >= r11 /* signed */)) {
-            ecx = (uint32*)(*(u8*)((rax + (r10 * 1))));
+            ecx = (uint32)(*(u8*)((rax + (r10 * 1))));
             r9d = (r9d + ecx);
             eax = (rdx + (r8 * 1));
             eax = (eax + r9d);
-            rsp = (rsp + 8);
             return;
         }
     }
     eax = (rdx + (r8 * 1));
     eax = (eax + r9d);
-    rsp = (rsp + 8);
     return;
 }

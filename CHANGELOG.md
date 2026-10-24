@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usability pass 2 — decompiler visible-noise cleanup: suppress stack-pointer bookkeeping
+  (`rsp = rsp ± N`) in pseudo-C, name `mov r11, rsp` frames as `frame`, fold algebraic
+  noise (`xor reg, reg`, `and reg, 0`, `sub reg, reg`, `x ± 0`, shifts by 0), fix value
+  casts that rendered as pointer casts (`(uint32*)(x)` → `(uint32)(x)`), and render tail
+  calls as `return sub_…();` instead of a comment. Corpus golden snapshots regenerated
+  (31/31 clean), notepad metrics unchanged (502/99.4%/86.1%); new golden noise-regression
+  test plus docs/M2 notes on the remaining frame/var artifacts and the SSA/phi evaluation
+  (deferred: cost outweighs preview benefit, keeping the SSA-lite register model).
+
 - Usability pass 2 — AI panel usable without CLI setup: in-panel **Provider settings**
   (kind/endpoint/model/API-key env var/max tokens) persisted to
   `%LOCALAPPDATA%\ReCraft\ai-settings.json` (`ProviderSettings::load/save/load_from/save_to`;

@@ -1290,11 +1290,7 @@ impl Structurer {
                 } else {
                     lines.push(PseudoLine {
                         addr: entry,
-                        text: format!(
-                            "{}/* tail call -> {:#x} */ return;",
-                            indent(level),
-                            target.get()
-                        ),
+                        text: format!("{}return sub_{:x}();", indent(level), target.get()),
                     });
                 }
             }

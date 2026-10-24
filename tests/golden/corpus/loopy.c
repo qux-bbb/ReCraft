@@ -1,6 +1,6 @@
 // L1 structure recovery (4 blocks)
 void loopy_l1(void) {
-    r10d = (r10d ^ r10d);
+    r10d = 0;
     edx = r10d;
     r8d = r10d;
     eax = r10d;

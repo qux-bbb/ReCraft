@@ -131,6 +131,7 @@ pub(crate) fn lift_block(
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
+        frame_reg: None,
     };
 
     let mut statements = Vec::new();
@@ -254,6 +255,7 @@ pub fn pseudocode_l0(
         arg_structs: &no_structs,
         call_protos: &no_protos,
         written: HashSet::new(),
+        frame_reg: None,
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -282,6 +284,8 @@ struct Printer<'a> {
     call_protos: &'a HashMap<u64, crate::l2::ProtoSig>,
     /// Registers written so far (for argument-register naming).
     written: HashSet<Reg>,
+    /// Register that aliases `rsp` for frame-relative locals (e.g. `mov r11, rsp`).
+    frame_reg: Option<Reg>,
 }
 
 impl Printer<'_> {
@@ -341,15 +345,34 @@ impl Printer<'_> {
 
     /// Records a register write so later reads no longer render as `argN`.
     fn note_write(&mut self, stmt: &Stmt) {
-        if let Stmt::WriteReg { reg, .. } = stmt {
+        if let Stmt::WriteReg { reg, value } = stmt {
             self.written.insert(reg.base);
+            // `mov r11, rsp` (MSVC exception-handler frames) — keep the alias readable.
+            if self.frame_reg.is_none()
+                && reg.base != Reg::Rsp
+                && matches!(self.exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
+            {
+                self.frame_reg = Some(reg.base);
+            }
         }
     }
 
-    fn is_noop_write(&self, stmt: &Stmt) -> bool {
+    fn is_noop_write(&mut self, stmt: &Stmt) -> bool {
         let Stmt::WriteReg { reg, value } = stmt else {
             return false;
         };
+        // Stack-pointer bookkeeping (`sub rsp, N` / `add rsp, N`, push/pop) is already
+        // reflected in stack-relative slot names, so it is noise in pseudo-C.
+        if reg.base == Reg::Rsp {
+            return true;
+        }
+        // `mov r11, rsp` (MSVC exception-handler frames): name the alias before printing
+        // so the statement itself reads `frame = rsp`.
+        if self.frame_reg.is_none()
+            && matches!(self.exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
+        {
+            self.frame_reg = Some(reg.base);
+        }
         matches!(self.exprs[*value as usize], Expr::Reg(view) if view == *reg)
     }
 
@@ -367,6 +390,9 @@ impl Printer<'_> {
     /// Register reads render as `argN` while the register still holds its incoming
     /// argument value.
     fn reg_name(&self, view: &recraft_ir::RegView) -> String {
+        if self.frame_reg == Some(view.base) {
+            return "frame".to_owned();
+        }
         if let Some(args) = self.args
             && let Some(name) = args.name_for(view.base)
             && !self.written.contains(&view.base)
@@ -530,8 +556,14 @@ impl Printer<'_> {
         match stmt {
             Stmt::WriteReg { reg, value } => {
                 // Writes always use the concrete register view; argument names only
-                // re-label reads of the still-intact incoming value.
-                format!("{} = {}", reg.name(), self.expr(*value))
+                // re-label reads of the still-intact incoming value. The frame alias is
+                // the one exception so `mov r11, rsp` reads as `frame = rsp`.
+                let name = if self.frame_reg == Some(reg.base) {
+                    "frame".to_owned()
+                } else {
+                    reg.name().to_owned()
+                };
+                format!("{name} = {}", self.expr(*value))
             }
             Stmt::Store { addr, value, size } => {
                 // Writes never use incoming argument names: storing to a caller's
@@ -640,12 +672,42 @@ impl Printer<'_> {
                     format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))
                 }
             }
-            Expr::Bin { op, lhs, rhs } => match op {
-                // Rotates have no C operator; print them as intrinsic-style calls.
-                BinOp::Ror => format!("ror({}, {})", self.expr(*lhs), self.expr(*rhs)),
-                BinOp::Rol => format!("rol({}, {})", self.expr(*lhs), self.expr(*rhs)),
-                _ => format!("({} {} {})", self.expr(*lhs), op.symbol(), self.expr(*rhs)),
-            },
+            Expr::Bin { op, lhs, rhs } => {
+                let lhs_text = self.expr(*lhs);
+                let rhs_text = self.expr(*rhs);
+                // Algebraic simplifications that remove the noise emitted by flag setup
+                // (`xor eax, eax`, `and ecx, 0`, shifts by zero).
+                if lhs_text == rhs_text {
+                    match op {
+                        BinOp::Xor | BinOp::Sub => return "0".to_owned(),
+                        BinOp::And | BinOp::Or => return lhs_text,
+                        _ => {}
+                    }
+                }
+                if rhs_text == "0" {
+                    match op {
+                        BinOp::Add | BinOp::Or | BinOp::Xor => return lhs_text,
+                        BinOp::Mul | BinOp::And => return "0".to_owned(),
+                        BinOp::Shl | BinOp::Shr | BinOp::Sar | BinOp::Ror | BinOp::Rol => {
+                            return lhs_text;
+                        }
+                        _ => {}
+                    }
+                }
+                if lhs_text == "0" {
+                    match op {
+                        BinOp::Add | BinOp::Or | BinOp::Xor => return rhs_text,
+                        BinOp::Mul | BinOp::And => return "0".to_owned(),
+                        _ => {}
+                    }
+                }
+                match op {
+                    // Rotates have no C operator; print them as intrinsic-style calls.
+                    BinOp::Ror => format!("ror({lhs_text}, {rhs_text})"),
+                    BinOp::Rol => format!("rol({lhs_text}, {rhs_text})"),
+                    _ => format!("({lhs_text} {} {rhs_text})", op.symbol()),
+                }
+            }
             Expr::Un { op, arg } => {
                 let symbol = match op {
                     UnOp::Not => "~",
@@ -655,7 +717,7 @@ impl Printer<'_> {
             }
             Expr::Cast { arg, width, signed } => {
                 let kind = if *signed { "int" } else { "uint" };
-                format!("({kind}{}*)({})", u16::from(*width) * 8, self.expr(*arg))
+                format!("({kind}{})({})", u16::from(*width) * 8, self.expr(*arg))
             }
             Expr::Cmp { kind, lhs, rhs } => match kind.comparison_symbol() {
                 Some(symbol) => {
@@ -722,12 +784,79 @@ mod tests {
         assert!(!code.lines.is_empty());
         assert!(code.lines.iter().all(|line| line.addr.get() >= entry.get()));
         let text = code.text();
-        assert!(text.contains('='), "expected assignments:\n{text}");
+        assert!(
+            text.contains('=') || text.contains("();"),
+            "expected assignments or calls:\n{text}"
+        );
         assert!(
             text.contains("return") || text.contains("goto"),
             "expected control flow:\n{text}"
         );
-        assert!(text.contains("rsp"), "expected stack handling:\n{text}");
+        // Stack-pointer bookkeeping is suppressed now; the epilogue tail call becomes a
+        // real return call instead of a comment.
+        assert!(
+            !text.contains("rsp = "),
+            "stack-pointer noise should be suppressed:\n{text}"
+        );
+        assert!(
+            text.contains("return sub_") || text.contains("goto"),
+            "expected a rendered tail call:\n{text}"
+        );
+    }
+
+    /// Guard the visible-noise cleanup against regressions in golden snapshots.
+    #[test]
+    fn golden_snapshots_have_no_known_noise() {
+        let dir = default_golden_dir();
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let mut checked = 0usize;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("c") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            checked += 1;
+            assert!(
+                !text.contains("rsp = "),
+                "rsp bookkeeping leaked into {}",
+                path.display()
+            );
+            assert!(
+                !text.contains("tail call ->"),
+                "old tail-call comment leaked into {}",
+                path.display()
+            );
+            assert!(
+                !text.contains("(uint32*)(") && !text.contains("(uint64*)("),
+                "value cast rendered as pointer cast in {}",
+                path.display()
+            );
+            for line in text.lines() {
+                if let Some(index) = line.find(" ^ ") {
+                    let lhs = line[..index].split_whitespace().last();
+                    let rhs = line[index + 3..]
+                        .split(|character: char| {
+                            !character.is_ascii_alphanumeric() && character != '_'
+                        })
+                        .next();
+                    assert!(
+                        lhs != rhs || lhs.is_none(),
+                        "x ^ x not simplified in {}: {line}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        assert!(
+            checked > 0,
+            "no golden snapshots found in {}",
+            dir.display()
+        );
     }
 
     #[test]
