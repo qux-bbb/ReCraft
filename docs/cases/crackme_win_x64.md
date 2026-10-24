@@ -134,6 +134,16 @@ polish prompt.
 > `recraft ai polish` uses the same L1 evidence with a configured provider and returns a
 > suggestion; it never stores the result automatically. The polished source below is the
 > expected output for this case.
+>
+> The provider path itself is smoke-tested by `scripts/ai-polish-mock.ps1`, which starts a
+> local OpenAI-compatible stub and runs `recraft ai polish` end-to-end (prompt → HTTP →
+> cache → output). It returns canned text, so it validates plumbing, not model quality.
+> With a real endpoint, set `RECRAFT_AI_PROVIDER`/`RECRAFT_AI_ENDPOINT`/`RECRAFT_AI_MODEL`
+> and the key env var, then run:
+>
+> ```powershell
+> recraft ai polish <project> --addr 0x140001010
+> ```
 
 ```c
 #include <stdint.h>

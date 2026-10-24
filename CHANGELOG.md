@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- AI polish plumbing is now smoke-tested end-to-end: `scripts/ai-polish-mock.ps1` starts a
+  local OpenAI-compatible stub (`scripts/ai_mock_server.py`), configures
+  `RECRAFT_AI_PROVIDER=openai`, and runs `recraft ai polish` on the crackme project
+  (prompt → HTTP → cache → printed suggestion). The stub returns canned source, so it
+  verifies transport/config, not model quality; real providers use the same path.
 - Decompiler output is more source-like for string-heavy functions: address constants
   that name a stored string render as quoted C literals (including short `.rdata`
   literals such as `"\r\n"`), and a user prototype's function name is used at call sites
