@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Strings view is now IDA-like: four columns **Address (segment:address) / Length (hex) /
+  Type (C or C16) / String**, zebra rows and a persistent selection that follows the
+  disassembly cursor. The full stored string is decoded according to its encoding
+  (ASCII or UTF-16LE) instead of reading 64 bytes as lossy UTF-8, so wide strings no
+  longer garble and long strings are no longer truncated. Single click selects and syncs
+  the disassembly cursor, double-click navigates. A `Hide headers/section names` toggle
+  (on by default) removes header/section-name noise while keeping the substring filter.
+  Adds `strings_decode_encodings_and_filter_noise` and `docs/images/strings.png`.
+
 - Default document tabs now follow the requested order: **Disassembly, Decompile, Hex,
   Strings, Local Types, Imports, Exports, AI**; **Names, Xrefs and Segments are hidden by
   default** and remain reachable from the Views menu. `Hex View-1` was renamed to **Hex**.

@@ -317,6 +317,48 @@ struct ImportRow {
     first_from: Option<Address>,
 }
 
+/// One row of the Strings view: metadata from the project DB plus the decoded text.
+struct StringRow {
+    addr: Address,
+    /// Byte length including the terminator, as stored by analysis.
+    len: u32,
+    enc: i64,
+    kind: i64,
+    segment: String,
+    text: String,
+}
+
+/// Decode stored string bytes according to the analysis encoding id.
+fn decode_string(bytes: &[u8], enc: i64) -> String {
+    if enc == recraft_analysis::STRING_ENC_UTF16LE {
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .take_while(|unit| *unit != 0)
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        let end = bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(bytes.len());
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+}
+
+/// Header/section-name strings that IDA's default list does not surface.
+fn is_string_noise(segment: &str, text: &str) -> bool {
+    const SECTION_NAMES: [&str; 14] = [
+        ".text", ".rdata", ".data", ".pdata", ".rsrc", ".reloc", ".idata", ".edata", ".tls",
+        ".didat", ".bss", ".debug", ".gfids", ".00cfg",
+    ];
+    segment.is_empty()
+        || segment.eq_ignore_ascii_case("HEADER")
+        || text.is_empty()
+        || SECTION_NAMES.contains(&text.trim())
+        || (text.starts_with('.') && !text.contains(char::is_whitespace))
+}
+
 /// Result of the background analysis worker.
 enum AnalysisMessage {
     Done {
@@ -586,7 +628,8 @@ pub struct ReCraftApp {
     function_labels: Vec<String>,
     functions_dirty: bool,
     function_filter: String,
-    strings: Vec<(Address, String)>,
+    strings: Vec<StringRow>,
+    strings_hide_noise: bool,
     strings_dirty: bool,
     string_filter: String,
     names: Vec<(Address, String)>,
@@ -663,6 +706,7 @@ impl Default for ReCraftApp {
             functions_dirty: false,
             function_filter: String::new(),
             strings: Vec::new(),
+            strings_hide_noise: true,
             strings_dirty: false,
             string_filter: String::new(),
             names: Vec::new(),
@@ -1347,14 +1391,21 @@ impl ReCraftApp {
             Ok(rows) => {
                 let mut strings = Vec::with_capacity(rows.len());
                 for row in rows {
-                    let mut bytes = vec![0u8; row.len.min(64) as usize];
+                    // Read the full stored string (analysis caps it at ~1 KiB of text).
+                    let mut bytes = vec![0u8; row.len.min(64 * 1024) as usize];
                     let read = session.read_at(row.addr, &mut bytes).unwrap_or(0);
                     bytes.truncate(read);
-                    let text = String::from_utf8_lossy(&bytes)
-                        .replace('\0', "")
-                        .trim()
-                        .to_owned();
-                    strings.push((row.addr, text));
+                    strings.push(StringRow {
+                        addr: row.addr,
+                        len: row.len,
+                        enc: row.enc,
+                        kind: row.kind,
+                        segment: session
+                            .segment_containing(row.addr)
+                            .map(|segment| segment.name.clone())
+                            .unwrap_or_default(),
+                        text: decode_string(&bytes, row.enc),
+                    });
                 }
                 self.strings = strings;
                 self.strings_dirty = false;
@@ -2338,6 +2389,7 @@ impl ReCraftApp {
     }
 
     fn strings_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         if self.strings.is_empty() {
             ui.weak(self.t(
                 "No strings yet — run Analyze (F5).",
@@ -2345,36 +2397,122 @@ impl ReCraftApp {
             ));
         }
         let hint = self.t("substring…", "子串…");
+        let hide_label = self.t("Hide headers/section names", "隐藏头部/节名");
         ui.horizontal(|ui| {
             ui.weak(self.t("filter", "过滤"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.string_filter)
-                    .desired_width(f32::INFINITY)
+                    .desired_width(260.0)
                     .hint_text(hint),
             );
+            ui.checkbox(&mut self.strings_hide_noise, hide_label);
+            ui.weak(format!("{}", self.strings.len()));
         });
         let filter = self.string_filter.to_lowercase();
+        let hide_noise = self.strings_hide_noise;
+        let mono_size = self.mono_size();
+        let row_h = self.row_height().max(16.0);
+        let scale = mono_size / MONO_SIZE;
+        let addr_w = 280.0 * scale;
+        let len_w = 90.0 * scale;
+        let type_w = 70.0 * scale;
+        let selected = self
+            .disasm_rows
+            .get(self.selected)
+            .map(|line| line.addr)
+            .unwrap_or(self.disasm_start);
+        let mono = FontId::monospace(mono_size);
+        let width = ui.available_width().max(640.0);
+        // Header row, aligned with the row offsets below.
+        let (header, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+        let painter = ui.painter_at(header);
+        for (x, text) in [
+            (4.0, self.t("Address", "地址")),
+            (addr_w, self.t("Length", "长度")),
+            (addr_w + len_w, self.t("Type", "类型")),
+            (addr_w + len_w + type_w, self.t("String", "字符串")),
+        ] {
+            painter.text(
+                egui::pos2(header.left() + x, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                FontId::monospace(mono_size),
+                pal.text,
+            );
+        }
         let mut shown = 0usize;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (addr, text) in &self.strings {
-                    if !filter.is_empty() && !text.to_lowercase().contains(&filter) {
+                for (index, row) in self.strings.iter().enumerate() {
+                    if hide_noise && is_string_noise(&row.segment, &row.text) {
+                        continue;
+                    }
+                    if !filter.is_empty() && !row.text.to_lowercase().contains(&filter) {
                         continue;
                     }
                     if shown >= 2000 {
-                        ui.weak(self.t("(first 2000 matches)", "(仅显示前 2000 条)"));
+                        ui.weak(self.t("(first 2000 matches)", "（仅显示前 2000 条）"));
                         break;
                     }
-                    shown += 1;
-                    let label = format!("{:#012x}  {text}", addr.get());
-                    let response = ui.selectable_label(false, label);
+                    let is_selected = row.addr == selected;
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
+                    if is_selected {
+                        ui.painter().rect_filled(rect, 1.0, pal.selected_row);
+                    } else if response.hovered() || shown % 2 == 1 {
+                        ui.painter().rect_filled(rect, 1.0, pal.hover_row);
+                    }
+                    let painter = ui.painter_at(rect);
+                    let address = if row.segment.is_empty() {
+                        format!("{:016x}", row.addr.get())
+                    } else {
+                        format!("{}:{:016x}", row.segment, row.addr.get())
+                    };
+                    painter.text(
+                        egui::pos2(rect.left() + 4.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &address,
+                        mono.clone(),
+                        pal.addr,
+                    );
+                    painter.text(
+                        egui::pos2(rect.left() + addr_w, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{:08x}", row.len),
+                        mono.clone(),
+                        pal.bytes,
+                    );
+                    painter.text(
+                        egui::pos2(rect.left() + addr_w + len_w, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+                            "C16"
+                        } else {
+                            "C"
+                        },
+                        mono.clone(),
+                        pal.mnemonic,
+                    );
+                    painter.text(
+                        egui::pos2(rect.left() + addr_w + len_w + type_w, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &row.text,
+                        mono.clone(),
+                        pal.text,
+                    );
+                    let response = response.on_hover_text(format!(
+                        "{} · {} bytes · enc {} · kind {}",
+                        row.text, row.len, row.enc, row.kind
+                    ));
                     if response.clicked() {
-                        *action = Action::Navigate(*addr);
+                        *action = Action::SyncDisasm(row.addr);
                     }
                     if response.double_clicked() {
-                        *action = Action::NavigateToDisasm(*addr);
+                        *action = Action::NavigateToDisasm(row.addr);
                     }
+                    shown += 1;
+                    let _ = index;
                 }
             });
     }
@@ -5424,6 +5562,23 @@ mod tests {
             load_layout_from(&dir.path().join("missing.json")).is_none(),
             "missing layout falls back to defaults"
         );
+    }
+
+    #[test]
+    fn strings_decode_encodings_and_filter_noise() {
+        assert_eq!(decode_string(b"hello\0", 1), "hello");
+        assert_eq!(
+            decode_string(&[b'h', 0, b'i', 0, 0, 0], 2),
+            "hi",
+            "UTF-16LE strings must decode to readable text"
+        );
+        assert!(is_string_noise("", "!This program cannot run in DOS mode."));
+        assert!(is_string_noise(
+            "HEADER",
+            "!This program cannot run in DOS mode."
+        ));
+        assert!(is_string_noise(".rdata", ".rdata"));
+        assert!(!is_string_noise(".rdata", "flag{strings_are_not_enough}"));
     }
 
     #[test]
