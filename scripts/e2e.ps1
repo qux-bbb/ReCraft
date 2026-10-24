@@ -123,6 +123,12 @@ try {
     $strings = Invoke-Recraft @('strings', $project)
     Assert-Contains $strings 'strings' 'string table'
 
+    Write-Host '[+] incremental re-analysis (range-scoped, DESIGN §6.4)'
+    $reanalyzed = Invoke-Recraft @('reanalyze', $project, '--addr', 'entry', '--len', '0x80')
+    Assert-Contains $reanalyzed 'reanalyzed' 'range-scoped reanalysis'
+    $reanalyzeJson = Invoke-Recraft @('reanalyze', $project, '--addr', 'entry', '--len', '0x40', '--json')
+    Assert-Contains $reanalyzeJson '"elapsed_ms"' 'reanalysis JSON with timing'
+
     Write-Host '[+] PE file directly (read-only commands + analyze --out)'
     $directStrings = Invoke-Recraft @('strings', $PEFile)
     Assert-Contains $directStrings 'strings' 'read-only command accepts a PE path'

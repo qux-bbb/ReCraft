@@ -206,6 +206,17 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Incrementally re-analyze one code range (DESIGN §6.4).
+    Reanalyze {
+        project: PathBuf,
+        /// Range start: `0x...`, decimal, a symbol name, or `entry`.
+        #[arg(long)]
+        addr: String,
+        #[arg(long, default_value_t = 0x100, value_parser = parse_u64_value)]
+        len: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Measure decompiler quality gates (semantic coverage / structured rate).
     Metrics {
         project: PathBuf,
@@ -463,6 +474,15 @@ fn run(cli: Cli) -> Result<()> {
             cmd_funcs(&materialized.path, json)
         }
         Commands::Analyze { project, out, json } => cmd_analyze(&project, out.as_deref(), json),
+        Commands::Reanalyze {
+            project,
+            addr,
+            len,
+            json,
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_reanalyze(&materialized.path, &addr, len, json)
+        }
         Commands::Metrics {
             project,
             json,
@@ -698,6 +718,18 @@ fn materialize_project(input: &Path) -> Result<MaterializedProject> {
         path: project,
         _temp: Some(dir),
     })
+}
+
+fn parse_u64_value(raw: &str) -> std::result::Result<u64, String> {
+    let trimmed = raw.trim();
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        u64::from_str_radix(hex, 16).map_err(|error| error.to_string())
+    } else {
+        trimmed.parse::<u64>().map_err(|error| error.to_string())
+    }
 }
 
 fn resolve_address(session: &Session, raw: &str) -> Result<Address> {
@@ -965,6 +997,39 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
 }
 
 // ---------------------------------------------------------------- analysis ----
+
+fn cmd_reanalyze(project: &Path, raw: &str, len: u64, as_json: bool) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let start = resolve_address(&session, raw)?;
+    let range = AddressRange::new(start, Address::new(start.get().saturating_add(len.max(1))));
+    let started = Instant::now();
+    let result = recraft_analysis::reanalyze_range(&mut session, range)?;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if as_json {
+        return json_result(&json!({
+            "start": format!("{:#x}", range.start.get()),
+            "end": format!("{:#x}", range.end.get()),
+            "functions": result.functions.len(),
+            "instructions": result.instructions,
+            "seeds": result.seeds,
+            "call_edges": result.calls.len(),
+            "jump_edges": result.jumps.len(),
+            "data_refs": result.data_refs.len(),
+            "api_tags": result.api_refs.len(),
+            "elapsed_ms": elapsed_ms,
+        }));
+    }
+    println!(
+        "reanalyzed {:#x}..{:#x}: {} function(s), {} instruction(s), {} xref(s) in {:.1} ms",
+        range.start.get(),
+        range.end.get(),
+        result.functions.len(),
+        result.instructions,
+        result.calls.len() + result.jumps.len() + result.data_refs.len(),
+        elapsed_ms
+    );
+    Ok(())
+}
 
 fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool) -> Result<()> {
     // DESIGN §10: `analyze <file> --out project.rcraft` imports and analyses in one step.
@@ -2342,6 +2407,7 @@ fn cmd_eval(file: &Path, map: Option<&Path>, as_json: bool) -> Result<()> {
                     recraft_analysis::FunctionSource::CallTarget => "call",
                     recraft_analysis::FunctionSource::GoPclntab => "go",
                     recraft_analysis::FunctionSource::DataPointer => "data",
+                    recraft_analysis::FunctionSource::UserRange => "range",
                 };
                 (function.start.get(), source)
             })
@@ -2642,11 +2708,15 @@ fn cmd_mark(project: &Path, addr: &str, len: u64, kind: MarkKind) -> Result<()> 
         range,
         kind: code_data,
     })?;
+    // DESIGN §6.4: a user code/data change triggers a range-scoped re-analysis.
+    let stats = recraft_analysis::reanalyze_range(&mut session, range)?;
     println!(
-        "marked {:#x}..{:#x} as {:?}",
+        "marked {:#x}..{:#x} as {:?} (incremental: {} function(s), {} instruction(s))",
         range.start.get(),
         range.end.get(),
-        code_data
+        code_data,
+        stats.functions.len(),
+        stats.instructions
     );
     Ok(())
 }

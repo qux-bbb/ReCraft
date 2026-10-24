@@ -55,6 +55,8 @@ pub enum FunctionSource {
     GoPclntab,
     /// Function pointer found in a readable data segment (dispatch tables, callbacks).
     DataPointer,
+    /// Seed for an incremental re-analysis of a user-edited code range.
+    UserRange,
 }
 
 /// One function recovered by analysis.
@@ -111,6 +113,8 @@ pub struct AnalysisOptions {
     /// Cooperative cancellation flag, checked between functions and periodically while
     /// walking a function body. The caller may set it from another thread.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Restrict the initial seeds to this range (incremental re-analysis, DESIGN §6.4).
+    pub seed_range: Option<AddressRange>,
 }
 
 impl AnalysisOptions {
@@ -252,6 +256,30 @@ pub fn analyze_with_options(
             &mut known,
             &mut queue,
         );
+    }
+
+    // Incremental mode: keep only seeds inside the requested range, and make the range
+    // start itself a seed so user-marked code is scanned even without a known prologue.
+    if let Some(range) = options.seed_range {
+        known.retain(|start, _| range.contains(Address::new(*start)));
+        queue.clear();
+        for start in known.keys() {
+            queue.push_back(Address::new(*start));
+        }
+        if range.start < range.end
+            && is_code(&segments, range.start)
+            && !known.contains_key(&range.start.get())
+        {
+            known.insert(
+                range.start.get(),
+                Known {
+                    end: None,
+                    source: FunctionSource::UserRange,
+                    scanned: false,
+                },
+            );
+            queue.push_back(range.start);
+        }
     }
 
     let initial_seeds = known.len() as u64;
@@ -455,6 +483,7 @@ fn source_rank(source: FunctionSource) -> u8 {
         FunctionSource::Tls => 1,
         FunctionSource::DataPointer => 1,
         FunctionSource::CallTarget => 0,
+        FunctionSource::UserRange => 3,
     }
 }
 
@@ -587,6 +616,73 @@ fn is_inside(limit: Option<Address>, start: Address, target: Address) -> bool {
 
 /// Persist discovered functions, names, xrefs and API tags into the session
 /// (all derived data).
+/// Analyze only `range`: incremental re-analysis (DESIGN §6.4). Seeds outside the range
+/// are ignored and the range start is used as an extra code seed.
+pub fn analyze_range(session: &mut Session, range: AddressRange) -> Result<AnalysisResult> {
+    let options = AnalysisOptions {
+        seed_range: Some(range),
+        ..AnalysisOptions::default()
+    };
+    analyze_with_options(session, &options)
+}
+
+/// Recompute the functions/xrefs/names/API tags intersecting `range` and merge them back,
+/// leaving everything outside the range untouched.
+pub fn reanalyze_range(session: &mut Session, range: AddressRange) -> Result<AnalysisResult> {
+    let result = analyze_range(session, range)?;
+    let intersects = |start: Address, end: Address| start < range.end && end > range.start;
+    let functions: Vec<(Address, Address)> = result
+        .functions
+        .iter()
+        .filter(|function| intersects(function.start, function.end))
+        .map(|function| (function.start, function.end))
+        .collect();
+    session.replace_auto_functions_in_range(range, &functions)?;
+    let names: Vec<(Address, String)> = functions
+        .iter()
+        .map(|(start, _)| {
+            let name = result
+                .go_names
+                .get(&start.get())
+                .cloned()
+                .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+            (*start, name)
+        })
+        .collect();
+    session.replace_auto_names_in_range(range, &names)?;
+    let mut xrefs: Vec<(Address, Address, i64)> = Vec::new();
+    xrefs.extend(
+        result
+            .calls
+            .iter()
+            .filter(|(from, _)| range.contains(*from))
+            .map(|(from, to)| (*from, *to, XREF_CALL)),
+    );
+    xrefs.extend(
+        result
+            .jumps
+            .iter()
+            .filter(|(from, _)| range.contains(*from))
+            .map(|(from, to)| (*from, *to, XREF_JUMP)),
+    );
+    xrefs.extend(
+        result
+            .data_refs
+            .iter()
+            .filter(|(from, _)| range.contains(*from))
+            .map(|(from, to)| (*from, *to, XREF_DATA)),
+    );
+    session.replace_auto_xrefs_in_range(range, &xrefs)?;
+    let tags: Vec<(Address, String, String)> = result
+        .api_refs
+        .iter()
+        .filter(|(addr, _, _)| range.contains(*addr))
+        .cloned()
+        .collect();
+    session.replace_auto_api_tags_in_range(range, &tags)?;
+    Ok(result)
+}
+
 pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
     let ranges: Vec<(Address, Address)> = result
         .functions
@@ -672,6 +768,64 @@ mod tests {
         let mut session = Session::create(&project, bytes, &mut |_, _| {}, &|| false).unwrap();
         let result = analyze(&mut session).unwrap();
         (result, session, dir)
+    }
+
+    #[test]
+    fn incremental_reanalysis_is_range_scoped() {
+        let Some(path) = corpus_path() else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let (result, mut session, _dir) = analyze_bytes(&bytes);
+        persist(&mut session, &result).unwrap();
+        let before = session.functions().unwrap();
+        // Pick a function with code on both sides so "unaffected" is meaningful.
+        let target = result
+            .functions
+            .iter()
+            .find(|function| {
+                function.start > before.first().unwrap().start
+                    && function.end < before.last().unwrap().start
+            })
+            .copied()
+            .unwrap_or_else(|| {
+                panic!(
+                    "no interior function among {} (first={:?} last={:?})",
+                    result.functions.len(),
+                    before.first(),
+                    before.last()
+                )
+            });
+        let range = AddressRange::new(target.start, target.end);
+        let rerun = reanalyze_range(&mut session, range).unwrap();
+        assert!(
+            rerun
+                .functions
+                .iter()
+                .all(|function| function.start < range.end && function.end > range.start),
+            "reanalysis leaked functions outside the range"
+        );
+        let after = session.functions().unwrap();
+        assert!(
+            after.iter().all(|function| function.end > function.start),
+            "invalid function range after merge"
+        );
+        let unaffected = before
+            .iter()
+            .find(|function| function.start < range.start)
+            .expect("function before the range");
+        assert!(
+            after.contains(unaffected),
+            "function before the range changed: {unaffected:?}"
+        );
+        let unaffected_after = before
+            .iter()
+            .find(|function| function.start > range.end)
+            .expect("function after the range");
+        assert!(
+            after.contains(unaffected_after),
+            "function after the range changed: {unaffected_after:?}"
+        );
     }
 
     #[test]
@@ -812,7 +966,10 @@ mod tests {
         let project = dir.path().join("cancel.rcraft");
         let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
         let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let options = AnalysisOptions { cancel: Some(flag) };
+        let options = AnalysisOptions {
+            cancel: Some(flag),
+            seed_range: None,
+        };
         let error = analyze_with_options(&mut session, &options).unwrap_err();
         assert!(matches!(error, recraft_common::Error::Cancelled));
     }

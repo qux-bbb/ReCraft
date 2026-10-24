@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Incremental range re-analysis (DESIGN §6.4): `AnalysisOptions.seed_range` restricts seed
+  discovery to one range (the range start becomes an extra code seed) and
+  `recraft_analysis::reanalyze_range` replaces only the auto functions/names/xrefs/API
+  tags intersecting that range, leaving every other function byte-identical
+  (`Session::replace_auto_*_in_range`). Exposed as `recraft reanalyze <project> --addr A
+  --len N [--json]`; `mark` now triggers a range-scoped re-analysis automatically after a
+  code/data change. Corpus unit test asserts no leakage outside the range and that
+  unaffected functions keep their exact start/end; E2E covers the CLI. docs/M4 audit
+  table and M2 gain the §6.4 evidence, ROADMAP drops the gap.
+
 - License/notice compliance (DESIGN §12): added `NOTICE.md` (direct dependencies, SQLite
   public domain, Noto CJK OFL, sample policy), `scripts/check-license.ps1` (verifies
   required legal files, SPDX headers on all hand-written source files outside generated

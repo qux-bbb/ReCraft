@@ -472,6 +472,126 @@ impl Session {
         Ok(addr.map(|value| Address::new(value as u64)))
     }
 
+    /// Replace auto functions intersecting `range` (incremental re-analysis, §6.4).
+    pub fn replace_auto_functions_in_range(
+        &mut self,
+        range: AddressRange,
+        functions: &[(Address, Address)],
+    ) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute(
+            "DELETE FROM func WHERE (flags & ?1) != 0 AND start < ?3 AND \"end\" > ?2",
+            params![
+                FUNC_FLAG_AUTO,
+                range.start.get() as i64,
+                range.end.get() as i64
+            ],
+        )
+        .map_err(command::db_err)?;
+        for (start, end) in functions {
+            if end <= start {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO func(start, end, flags, cc) VALUES (?1, ?2, ?3, 0)
+                 ON CONFLICT(start) DO NOTHING",
+                params![start.get() as i64, end.get() as i64, FUNC_FLAG_AUTO],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// Replace auto xrefs originating in `range` (incremental re-analysis, §6.4).
+    pub fn replace_auto_xrefs_in_range(
+        &mut self,
+        range: AddressRange,
+        xrefs: &[(Address, Address, i64)],
+    ) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute(
+            "DELETE FROM xref WHERE from_addr >= ?1 AND from_addr < ?2",
+            params![range.start.get() as i64, range.end.get() as i64],
+        )
+        .map_err(command::db_err)?;
+        for (from, to, kind) in xrefs {
+            tx.execute(
+                "INSERT OR IGNORE INTO xref(from_addr, to_addr, type) VALUES (?1, ?2, ?3)",
+                params![from.get() as i64, to.get() as i64, *kind],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// Replace auto names in `range` (incremental re-analysis, §6.4).
+    pub fn replace_auto_names_in_range(
+        &mut self,
+        range: AddressRange,
+        names: &[(Address, String)],
+    ) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute(
+            "DELETE FROM name WHERE kind = ?1 AND addr >= ?2 AND addr < ?3",
+            params![
+                NAME_KIND_AUTO,
+                range.start.get() as i64,
+                range.end.get() as i64
+            ],
+        )
+        .map_err(command::db_err)?;
+        for (addr, text) in names {
+            tx.execute(
+                "INSERT OR IGNORE INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)",
+                params![addr.get() as i64, text, NAME_KIND_AUTO],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// Replace API tags in `range` (incremental re-analysis, §6.4).
+    pub fn replace_auto_api_tags_in_range(
+        &mut self,
+        range: AddressRange,
+        tags: &[(Address, String, String)],
+    ) -> Result<()> {
+        let tx = self
+            .project
+            .conn_mut()
+            .transaction()
+            .map_err(command::db_err)?;
+        tx.execute(
+            "DELETE FROM api_tag WHERE addr >= ?1 AND addr < ?2",
+            params![range.start.get() as i64, range.end.get() as i64],
+        )
+        .map_err(command::db_err)?;
+        for (addr, rule_id, category) in tags {
+            tx.execute(
+                "INSERT OR IGNORE INTO api_tag(addr, rule_id, category) VALUES (?1, ?2, ?3)",
+                params![addr.get() as i64, rule_id, category],
+            )
+            .map_err(command::db_err)?;
+        }
+        tx.commit().map_err(command::db_err)?;
+        Ok(())
+    }
+
     /// Replace functions produced by automatic analysis, keeping user-defined ones.
     ///
     /// Analysis results are derived data (see DESIGN §2.3): they are not journaled and

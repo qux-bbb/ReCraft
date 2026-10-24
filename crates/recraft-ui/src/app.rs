@@ -1764,6 +1764,7 @@ fn run_analysis_job(project: &Path, cancel: &Arc<AtomicBool>) -> AnalysisMessage
         let mut session = Session::open(project)?;
         let options = recraft_analysis::AnalysisOptions {
             cancel: Some(cancel.clone()),
+            seed_range: None,
         };
         let result = recraft_analysis::analyze_with_options(&mut session, &options)?;
         recraft_analysis::persist(&mut session, &result)?;
