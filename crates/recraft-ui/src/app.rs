@@ -2799,25 +2799,41 @@ impl ReCraftApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let header = format!(
-                    "{:<14}{:<46}{:<9}{:<36}{:<20}{}",
+                    "{:<14}{:<46}{:<9}{:<36}{}",
                     self.t("Address", "地址"),
                     self.t("Bytes", "字节"),
                     self.t("Mnemonic", "助记符"),
                     self.t("Operands", "操作数"),
-                    self.t("Name", "名字"),
                     self.t("Comment", "注释"),
                 );
                 ui.add(egui::Label::new(RichText::new(header).monospace().strong()).truncate());
                 let width = ui.available_width().max(1000.0);
                 for (index, line) in self.disasm_rows.iter().enumerate() {
+                    // IDA renders names as inline labels above the instruction instead of a
+                    // dedicated "Name" column.
+                    let label_height = if line.name.is_some() {
+                        MONO_SIZE + 1.0
+                    } else {
+                        0.0
+                    };
+                    let row_height = ROW_HEIGHT + label_height;
                     // One full-row hit area, like IDA: the whole line is selectable and
                     // double-click follows the operand instead of only the address cell.
                     let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click());
                     if index == self.selected {
                         ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
                     } else if response.hovered() {
                         ui.painter().rect_filled(rect, 1.0, C_HOVER_ROW);
+                    }
+                    if let Some(name) = line.name.as_deref() {
+                        ui.painter().text(
+                            rect.left_top() + egui::vec2(4.0, 1.0),
+                            egui::Align2::LEFT_TOP,
+                            format!("{name}:"),
+                            mono.clone(),
+                            C_NAME,
+                        );
                     }
                     let bytes = line
                         .bytes()
@@ -2838,18 +2854,7 @@ impl ReCraftApp {
                         C_MNEMONIC,
                         &mono,
                     );
-                    append(
-                        &mut job,
-                        &format!("{:<36}", line.operands),
-                        Color32::LIGHT_GRAY,
-                        &mono,
-                    );
-                    append(
-                        &mut job,
-                        &format!("{:<20}", line.name.as_deref().unwrap_or("")),
-                        C_NAME,
-                        &mono,
-                    );
+                    append(&mut job, &format!("{:<36}", line.operands), C_TEXT, &mono);
                     append(
                         &mut job,
                         line.comment.as_deref().unwrap_or(""),
@@ -2858,7 +2863,7 @@ impl ReCraftApp {
                     );
                     let galley = ui.painter().layout_job(job);
                     ui.painter().galley(
-                        rect.left_top() + egui::vec2(4.0, 1.0),
+                        rect.left_top() + egui::vec2(4.0, label_height + 1.0),
                         galley,
                         Color32::WHITE,
                     );

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-layout step 3 (disassembly rendering): drops the separate "Name" column and renders
+  names as IDA-style inline labels (`start:`) on a dedicated label line above the
+  instruction; columns are now Address / Bytes / Mnemonic / Operands / Comment with IDA
+  colors (yellow addresses and labels, grey bytes, blue mnemonics, light operands, green
+  comments), and the selected/current-row highlight (IDA blue) covers the label line as
+  well. Rows keep the compact 15 px height while label lines add their own baseline.
+
 - IDA-layout step 2 (theme + fonts): installs IDA-like typography on the first frame —
   Consolas for monospace text, Segoe UI for the UI and Microsoft YaHei as CJK fallback
   (system font files are optional; egui's defaults remain as fallback). Unifies the dark
