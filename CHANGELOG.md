@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Real docking, step 3 (persistence + focus shortcuts): dock layout is serialized with
+  egui_dock's serde feature and auto-saved to `%LOCALAPPDATA%\ReCraft\layout.json`
+  (split ratios, tab order, closed tabs and floating panes) after the layout settles,
+  restored at startup; `Reset layout` clears the file and rebuilds the default. Saves are
+  skipped until the dock has finite rectangles (egui serializes NaN as null). New pane
+  focus shortcuts: `F2` Functions, `F3` Names, `F4` Strings, `F6` Imports, `F7` Xrefs,
+  `F8` Segments, `F9` Hex, `F10` AI, `F11` Structures, with the bindings shown as tooltips
+  in the Views menu. Tests cover the JSON round-trip (closed panes stay closed) and the
+  `F2` focus shortcut (30 UI tests).
+
 - Real docking, step 2 (navigation parity in the dock): every tool pane keeps
   double-click-to-follow — Functions/Strings/Imports/Xrefs/Names/Segments jump into the
   disassembly with the target line highlighted, Hex double-click and Graph block

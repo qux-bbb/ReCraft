@@ -59,6 +59,9 @@ applied 3 proposal(s) through the command bus (undoable)
    **Reset layout**。工作区是 IDA 式可停靠布局：左侧工具 tab（Functions/Strings/Imports/
    Xrefs/Names/Segments/AI/Structures）、中间 Disassembly/Pseudo-C/Graph、右下 Hex；
    **拖动 tab 到边缘可分屏/合并**，拖动分隔条可调大小，tab 可拖出为独立窗口。
+   **布局会自动保存**到 `%LOCALAPPDATA%\ReCraft\layout.json`，下次启动恢复（关闭的 tab
+   保持关闭，可从 Views 重开）。快捷键聚焦 pane：`F2` Functions、`F3` Names、`F4` Strings、
+   `F6` Imports、`F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Structures。
    ![docked layout](images/dock-step1.png)
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
    伪代码与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
