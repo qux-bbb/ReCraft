@@ -29,7 +29,7 @@ const MONO_SIZE: f32 = 12.5;
 const ROW_HEIGHT: f32 = 15.0;
 
 /// Which colour scheme the workspace uses. Persisted with the dock layout.
-/// `Light` is IDA's mixed look (light chrome around dark code views) and is the default.
+/// `Light` is a full light theme (light chrome and light views) and is the default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ThemeMode {
@@ -44,12 +44,6 @@ struct Palette {
     panel: Color32,
     view: Color32,
     text: Color32,
-    /// Text drawn on the light/dark *chrome* (menus, toolbars, lists, status bar).
-    chrome_text: Color32,
-    /// Background for editable fields inside code views.
-    field: Color32,
-    /// Background for editable fields on the chrome.
-    chrome_field: Color32,
     addr: Color32,
     bytes: Color32,
     mnemonic: Color32,
@@ -77,9 +71,6 @@ impl Palette {
         panel: Color32::from_rgb(0x1e, 0x1e, 0x1e),
         view: Color32::from_rgb(0x14, 0x14, 0x14),
         text: Color32::from_rgb(0xd4, 0xd4, 0xd4),
-        chrome_text: Color32::from_rgb(0xd4, 0xd4, 0xd4),
-        field: Color32::from_rgb(0x14, 0x14, 0x14),
-        chrome_field: Color32::from_rgb(0x14, 0x14, 0x14),
         addr: Color32::from_rgb(0xc9, 0xb4, 0x58),
         bytes: Color32::from_rgb(0x85, 0x85, 0x85),
         mnemonic: Color32::from_rgb(0x7e, 0x9e, 0xd0),
@@ -102,35 +93,31 @@ impl Palette {
         edge_jump_table: Color32::from_rgb(0xa0, 0x8a, 0xc0),
     };
 
-    /// IDA's mixed scheme: light chrome (menu/toolbar/tabs/lists) around dark code
-    /// views, like the reference screenshot.
+    /// Full light scheme: white views and light grey chrome.
     const LIGHT: Self = Self {
         panel: Color32::from_rgb(0xf0, 0xf0, 0xf0),
-        view: Color32::from_rgb(0x1e, 0x1e, 0x1e),
-        text: Color32::from_rgb(0xd4, 0xd4, 0xd4),
-        chrome_text: Color32::from_rgb(0x1e, 0x1e, 0x1e),
-        field: Color32::from_rgb(0x25, 0x25, 0x25),
-        chrome_field: Color32::from_rgb(0xff, 0xff, 0xff),
-        addr: Color32::from_rgb(0xc9, 0xb4, 0x58),
-        bytes: Color32::from_rgb(0x9a, 0x9a, 0x9a),
-        mnemonic: Color32::from_rgb(0x7e, 0x9e, 0xd0),
-        name: Color32::from_rgb(0xd7, 0xd7, 0x87),
-        comment: Color32::from_rgb(0x6a, 0x99, 0x55),
-        selected_row: Color32::from_rgb(0x26, 0x4f, 0x78),
-        hover_row: Color32::from_rgb(0x2a, 0x30, 0x38),
+        view: Color32::from_rgb(0xff, 0xff, 0xff),
+        text: Color32::from_rgb(0x1e, 0x1e, 0x1e),
+        addr: Color32::from_rgb(0x1a, 0x3f, 0x8f),
+        bytes: Color32::from_rgb(0x60, 0x60, 0x60),
+        mnemonic: Color32::from_rgb(0x00, 0x50, 0xa0),
+        name: Color32::from_rgb(0x80, 0x50, 0x00),
+        comment: Color32::from_rgb(0x00, 0x78, 0x00),
+        selected_row: Color32::from_rgb(0xcc, 0xe4, 0xff),
+        hover_row: Color32::from_rgb(0xee, 0xf3, 0xf8),
         tab_active_bg: Color32::from_rgb(0xff, 0xff, 0xff),
         tab_focused_bg: Color32::from_rgb(0xe4, 0xec, 0xf4),
-        tab_inactive_text: Color32::from_rgb(0x50, 0x58, 0x60),
+        tab_inactive_text: Color32::from_rgb(0x40, 0x48, 0x50),
         grid_line: Color32::from_rgb(0xc0, 0xc6, 0xcc),
-        graph_node: Color32::from_rgb(0x0d, 0x10, 0x12),
-        graph_border: Color32::from_rgb(0x4a, 0x8f, 0x8f),
-        graph_selected_border: Color32::from_rgb(0xc9, 0xb4, 0x58),
-        graph_header: Color32::from_rgb(0x9c, 0xc8, 0xc8),
-        graph_header_text: Color32::from_rgb(0x14, 0x2a, 0x2a),
-        edge_jump: Color32::from_rgb(0x5a, 0x9a, 0x9a),
-        edge_taken: Color32::from_rgb(0x6a, 0xb0, 0x6a),
-        edge_not_taken: Color32::from_rgb(0xc0, 0x6a, 0x6a),
-        edge_jump_table: Color32::from_rgb(0xa0, 0x8a, 0xc0),
+        graph_node: Color32::from_rgb(0xff, 0xff, 0xff),
+        graph_border: Color32::from_rgb(0x3a, 0x8f, 0x8f),
+        graph_selected_border: Color32::from_rgb(0xb0, 0x7a, 0x00),
+        graph_header: Color32::from_rgb(0xc8, 0xe4, 0xe4),
+        graph_header_text: Color32::from_rgb(0x10, 0x30, 0x30),
+        edge_jump: Color32::from_rgb(0x1f, 0x6f, 0x6f),
+        edge_taken: Color32::from_rgb(0x1f, 0x7a, 0x1f),
+        edge_not_taken: Color32::from_rgb(0xa0, 0x20, 0x20),
+        edge_jump_table: Color32::from_rgb(0x6a, 0x3f, 0x9f),
     };
 }
 
@@ -254,33 +241,8 @@ impl egui_dock::TabViewer for DockViewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Pane) {
-        // Mixed IDA theme: code views are dark with light text, chrome-like panes
-        // (Functions) are light with dark text.
         let pal = self.app.palette();
-        let is_chrome = matches!(tab, Pane::Functions);
-        if is_chrome {
-            let visuals = ui.visuals_mut();
-            visuals.override_text_color = Some(pal.chrome_text);
-            visuals.widgets.noninteractive.fg_stroke.color = pal.chrome_text;
-            visuals.widgets.inactive.fg_stroke.color = pal.chrome_text;
-            visuals.extreme_bg_color = pal.chrome_field;
-            ui.painter().rect_filled(ui.clip_rect(), 0.0, pal.panel);
-        } else {
-            // Code views stay dark in the mixed theme, so give their widgets dark
-            // backgrounds (otherwise light-theme buttons render as blank boxes).
-            let mut visuals = egui::Visuals::dark();
-            visuals.override_text_color = Some(pal.text);
-            visuals.panel_fill = pal.view;
-            visuals.window_fill = pal.view;
-            visuals.extreme_bg_color = pal.field;
-            visuals.faint_bg_color = pal.hover_row;
-            visuals.selection.bg_fill = pal.selected_row;
-            visuals.widgets.noninteractive.fg_stroke.color = pal.text;
-            visuals.widgets.inactive.fg_stroke.color = pal.text;
-            visuals.widgets.hovered.fg_stroke.color = pal.text;
-            visuals.widgets.active.fg_stroke.color = pal.text;
-            *ui.visuals_mut() = visuals;
-        }
+        ui.visuals_mut().override_text_color = Some(pal.text);
         match tab {
             Pane::Disasm => {
                 if self.app.session.is_none() {
@@ -1023,9 +985,9 @@ impl ReCraftApp {
         };
         visuals.panel_fill = pal.panel;
         visuals.window_fill = pal.panel;
-        visuals.extreme_bg_color = pal.chrome_field;
+        visuals.extreme_bg_color = pal.view;
         visuals.faint_bg_color = pal.tab_focused_bg;
-        visuals.override_text_color = Some(pal.chrome_text);
+        visuals.override_text_color = Some(pal.text);
         visuals.selection.bg_fill = pal.selected_row;
         ctx.set_theme(match self.theme {
             ThemeMode::Dark => egui::Theme::Dark,
@@ -5132,10 +5094,10 @@ mod tests {
         let mut app = ReCraftApp::default();
         assert_eq!(app.theme, ThemeMode::Light, "light is the default theme");
         assert_eq!(app.palette().panel, Palette::LIGHT.panel);
-        assert_ne!(
+        assert_eq!(
             app.palette().view,
-            Palette::LIGHT.panel,
-            "mixed theme keeps code views dark while the chrome stays light"
+            Color32::WHITE,
+            "full light theme uses white code views"
         );
         let ctx = egui::Context::default();
         app.apply_action(&ctx, Action::ToggleTheme);

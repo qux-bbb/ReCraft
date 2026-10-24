@@ -9,19 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Mixed IDA theme is now the **default**: light chrome (menu bar, toolbar, tabs, Functions
-  list, status bar) around dark code views (IDA View-A, Text View, Hex, Pseudocode, Output,
-  Graph overview), matching the reference screenshot. `Light` + `Dark` remain the two
-  switchable themes (`Options → Theme`, toolbar `◐/◑`, `Ctrl+T`); the light palette is the
-  mixed scheme and code-view widgets get dark visuals so buttons/scrollbars stay readable,
-  while the Functions list keeps dark text on the light panel. Screenshots updated
-  (`docs/images/ida-layout.png` default mixed, `docs/images/ida-layout-dark.png` dark).
-
-- Light/dark theme switching: **Options → Theme → Dark/Light**, a toolbar toggle
-  (`◐`/`◑`) and `Ctrl+T`. A semantic palette (chrome, disassembly/pseudo/hex colours,
-  dock tabs and the graph view) is applied at runtime; the choice is persisted together
-  with the dock layout (`SavedLayout` v5) and restored on startup. Adds tests for toggling
-  the palette and persisting the theme, plus demo notes.
+- Two full themes with **light as the default**: `Light` (light chrome and white views,
+  dark text, blue addresses, green comments) and `Dark` (all-dark) — no mixed/partial
+  variant. Switch with **Options → Theme**, the toolbar `◐/◑` button or `Ctrl+T`; the
+  choice is persisted with the dock layout (`SavedLayout` v5) and restored on startup.
+  Screenshots: `docs/images/ida-layout.png` (default light) and
+  `docs/images/ida-layout-dark.png` (dark).
 
 - IDA-layout step 4 (graph view + polish): **IDA View-A now opens in graph mode** like the
   reference (Text View is the text document tab). Graph nodes use IDA-style chrome — dark
