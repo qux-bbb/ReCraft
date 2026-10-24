@@ -76,6 +76,22 @@ CI installer job 运行同一脚本。注意：这是开发机验证，发布前
   卸载后目录、快捷方式、注册表键均被删除。
 - 仍缺：**干净虚拟机复验**与**代码签名**（见限制）。
 
+## 签名决定（v0.1：暂不签名）
+
+v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后续路径：
+
+- 常规 OV 证书 $150–300/年（且 2023 起强制硬件令牌/HSM），EV $400+/年且 2024 起不再
+  绕过 SmartScreen；Azure Artifact Signing（原 Trusted Signing）约 $9.99/月，但个人开发者
+  仅限美国/加拿大，当前不可用。
+- 开源项目有免费通道：**SignPath Foundation**（免费 OSS 签名，OV 级、HSM、CI 集成，需
+  公开仓库+申请审核）；Certum 开源证书对 GitHub ≥1k Star 且中国国籍申请人免费。
+  这两条作为后续（公开仓库、申请通过后）的签名路径。
+- 在此之前以 `SHA256SUMS.txt` 作为完整性凭据，并在 README/Release Notes 说明 SmartScreen
+  操作（更多信息 → 仍要运行）。
+
+签名恢复时需：`signtool` 签 `recraft.exe`、`recraft-ui.exe`、`setup.exe`，NSIS 卸载器用
+`!uninstfinalize` 一并签，然后重打 zip/安装器并更新校验和；本仓库打包脚本无需改动。
+
 ## 发布清单
 
 1. `cargo test --workspace`、`scripts/e2e.ps1`、`scripts/bench-large.ps1` 全绿。

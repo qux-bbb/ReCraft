@@ -167,6 +167,25 @@ pwsh -File scripts/verify-installer.ps1       # install -> CLI/GUI -> uninstall,
 See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip,
 the NSIS installer (installer job) and checksums as artifacts.
 
+### Installing (unsigned preview builds)
+
+v0.1 preview binaries are **not code-signed** (a deliberate decision; see
+[`docs/RELEASE.md`](docs/RELEASE.md)). Windows SmartScreen will show "Unknown publisher"
+until the project adopts a trusted OSS signing service:
+
+1. Download `recraft-v0.1.0-windows-x64.zip` or `recraft-0.1.0-setup.exe` together with
+   `SHA256SUMS.txt`.
+2. Verify the download before running:
+   ```powershell
+   Get-FileHash .\recraft-0.1.0-setup.exe -Algorithm SHA256
+   # compare with the matching line in SHA256SUMS.txt
+   ```
+3. If SmartScreen appears: **More info → Run anyway**. The installer is per-user
+   (`%LOCALAPPDATA%\ReCraft`, no elevation) and the portable zip needs no installation.
+
+Signed builds (and the exact certificate identity) will be announced when available;
+until then checksums are the integrity reference.
+
 ### Demo
 
 ```powershell

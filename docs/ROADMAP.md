@@ -32,7 +32,8 @@
 1. **安装器**：NSIS 3.13 安装器已生成并在本机通过安装→CLI/GUI 启动→卸载全流程
    （`scripts/verify-installer.ps1`，CI installer job）；发布前用同一脚本在干净
    Win10/Win11 复验（不再需要提权，安装为 per-user）。
-2. **代码签名**：需证书；当前 SmartScreen 会提示。
+2. **代码签名**：v0.1 决定暂不签名（SHA-256 校验 + SmartScreen 操作说明）；后续可申请
+   SignPath Foundation（免费 OSS）或购买 OV 证书，再重打发布产物。
 3. **i18n 选型偏差**：DESIGN 指定 fluent/rust-i18n，实现为自研 `t()` 双语表（功能等价，
    EN + zh-CN 完整）。
 4. **UI 渲染快照 / README 截图**：无头 egui 交互测试已覆盖，截图类素材尚未生成。

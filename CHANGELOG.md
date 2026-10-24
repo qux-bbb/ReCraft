@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- v0.1 previews ship **unsigned by decision** (code signing deferred): README gains an
+  "Installing (unsigned preview builds)" section (SHA-256 verification, SmartScreen
+  "More info → Run anyway", per-user installer), `docs/RELEASE.md` records the decision,
+  free OSS paths (SignPath Foundation, Certum ≥1k-star policy) and the exact signing
+  steps for when it resumes; M4/ROADMAP mark signing as deferred rather than blocking.
+
 - NSIS installer generated and validated end to end (DESIGN §13): NSIS 3.13 was installed
   successfully in this session (`winget install NSIS.NSIS`), `scripts/package.ps1` now
   writes checksums after the installer so `SHA256SUMS.txt` covers `setup.exe`, and the
