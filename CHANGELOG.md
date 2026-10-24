@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-layout step 2 (theme + fonts): installs IDA-like typography on the first frame —
+  Consolas for monospace text, Segoe UI for the UI and Microsoft YaHei as CJK fallback
+  (system font files are optional; egui's defaults remain as fallback). Unifies the dark
+  palette (panel `#1e1e1e`, view `#141414`, text `#d4d4d4`), IDA's blue current-line
+  highlight (`#264f78`), subtler hover tint, compact 15 px code rows at 12.5 px Consolas,
+  smaller UI text styles/button padding, and dock tab/chrome colors matching the new
+  palette (including visible tab close buttons). Falls back cleanly when the font files are
+  absent (e.g. CI), so headless tests keep passing (30 UI tests).
+
 - IDA-layout step 1 (reference-screenshot alignment, not pixel-perfect): replaced the
   generic tool column with an IDA-style workspace — menu bar (File/Edit/Jump/Search/View/
   Options/Windows/Help), toolbar (back/forward, Text/Graph toggle, Analyze, AI, language,

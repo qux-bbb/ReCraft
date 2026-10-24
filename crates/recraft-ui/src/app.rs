@@ -25,16 +25,21 @@ use recraft_decompile::{PseudoLine, pseudocode_l0};
 use crate::i18n::{Lang, tr};
 
 const DISASM_ROWS: usize = 400;
-const MONO_SIZE: f32 = 13.0;
+const MONO_SIZE: f32 = 12.5;
+const ROW_HEIGHT: f32 = 15.0;
 
+/// IDA dark-theme palette: near-black views on a slightly lighter chrome.
+const C_PANEL: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1e);
+const C_VIEW: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
+const C_TEXT: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd4);
 const C_ADDR: Color32 = Color32::from_rgb(0xc9, 0xb4, 0x58);
 const C_BYTES: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
 const C_MNEMONIC: Color32 = Color32::from_rgb(0x7e, 0x9e, 0xd0);
 const C_NAME: Color32 = Color32::from_rgb(0xd7, 0xd7, 0x87);
 const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0x99, 0x55);
 /// IDA-style current-line highlight and hover tint.
-const C_SELECTED_ROW: Color32 = Color32::from_rgb(0x2f, 0x46, 0x5f);
-const C_HOVER_ROW: Color32 = Color32::from_rgb(0x22, 0x2a, 0x35);
+const C_SELECTED_ROW: Color32 = Color32::from_rgb(0x26, 0x4f, 0x78);
+const C_HOVER_ROW: Color32 = Color32::from_rgb(0x2a, 0x30, 0x38);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HexUnit {
@@ -424,6 +429,8 @@ pub struct ReCraftApp {
     dock: Option<egui_dock::DockState<Pane>>,
     layout_saved: Option<String>,
     frame_count: u64,
+    /// Fonts/theme installed on the first frame (Consolas/Segoe UI when available).
+    ui_ready: bool,
     /// Output-window log (analysis/eval/status messages), oldest first.
     log: Vec<String>,
     status: String,
@@ -491,6 +498,7 @@ impl Default for ReCraftApp {
             dock: None,
             layout_saved: None,
             frame_count: 0,
+            ui_ready: false,
             log: Vec::new(),
             status: String::new(),
             is_error: false,
@@ -852,6 +860,92 @@ impl ReCraftApp {
     }
 
     // ------------------------------------------------------------- refresh --
+
+    /// Install IDA-like fonts (Consolas for monospace, Segoe UI for UI text) and the
+    /// dark palette on the first frame. Missing font files simply keep egui's defaults.
+    fn install_style(&mut self, ctx: &egui::Context) {
+        if self.ui_ready {
+            return;
+        }
+        self.ui_ready = true;
+        let mut fonts = egui::FontDefinitions::default();
+        let candidates = [
+            ("consolas", "C:\\Windows\\Fonts\\consola.ttf"),
+            ("consolas_bold", "C:\\Windows\\Fonts\\consolab.ttf"),
+            ("segoeui", "C:\\Windows\\Fonts\\segoeui.ttf"),
+        ];
+        let mut loaded = false;
+        for (name, path) in candidates {
+            if let Ok(bytes) = std::fs::read(path) {
+                fonts
+                    .font_data
+                    .insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
+                loaded = true;
+            }
+        }
+        // CJK fallback (IDA's UI is English but ReCraft ships a Chinese UI too).
+        for (name, path) in [
+            ("cjk", "C:\\Windows\\Fonts\\msyh.ttc"),
+            ("cjk", "C:\\Windows\\Fonts\\simhei.ttf"),
+            ("cjk", "C:\\Windows\\Fonts\\simsun.ttc"),
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                let mut data = egui::FontData::from_owned(bytes);
+                data.index = 0;
+                fonts.font_data.insert(name.to_owned(), data.into());
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                    fonts
+                        .families
+                        .entry(family)
+                        .or_default()
+                        .push(name.to_owned());
+                }
+                loaded = true;
+                break;
+            }
+        }
+        for (name, family) in [
+            ("consolas", egui::FontFamily::Monospace),
+            ("segoeui", egui::FontFamily::Proportional),
+        ] {
+            if fonts.font_data.contains_key(name) {
+                fonts
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .insert(0, name.to_owned());
+            }
+        }
+        if loaded {
+            ctx.set_fonts(fonts);
+        }
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = C_PANEL;
+        visuals.window_fill = C_PANEL;
+        visuals.extreme_bg_color = C_VIEW;
+        visuals.faint_bg_color = Color32::from_rgb(0x26, 0x26, 0x26);
+        visuals.override_text_color = Some(C_TEXT);
+        visuals.selection.bg_fill = C_SELECTED_ROW;
+        ctx.set_visuals(visuals);
+        ctx.all_styles_mut(|style| {
+            use egui::{FontFamily, FontId, TextStyle};
+            style
+                .text_styles
+                .insert(TextStyle::Body, FontId::proportional(13.0));
+            style
+                .text_styles
+                .insert(TextStyle::Button, FontId::proportional(13.0));
+            style
+                .text_styles
+                .insert(TextStyle::Small, FontId::proportional(11.0));
+            style.text_styles.insert(
+                TextStyle::Monospace,
+                FontId::new(MONO_SIZE, FontFamily::Monospace),
+            );
+            style.spacing.item_spacing = egui::vec2(6.0, 3.0);
+            style.spacing.button_padding = egui::vec2(6.0, 2.0);
+        });
+    }
 
     fn tick(&mut self) {
         self.poll_analysis();
@@ -1651,18 +1745,21 @@ impl ReCraftApp {
             egui::CentralPanel::default().show(ui, |ui| {
                 let mut style = egui_dock::Style::from_egui(ui.style().as_ref());
                 // IDA-ish chrome: dark tab bars, subtle separators, compact tabs.
-                style.tab_bar.bg_fill = Color32::from_rgb(0x1b, 0x1f, 0x27);
+                style.tab_bar.bg_fill = C_PANEL;
                 style.tab_bar.hline_color = Color32::from_rgb(0x2c, 0x32, 0x3c);
                 style.tab_bar.height = 22.0;
-                style.tab.active.bg_fill = Color32::from_rgb(0x26, 0x2c, 0x36);
-                style.tab.focused.bg_fill = Color32::from_rgb(0x2f, 0x36, 0x42);
-                style.tab.inactive.bg_fill = Color32::from_rgb(0x1b, 0x1f, 0x27);
-                style.tab.active.text_color = Color32::from_rgb(0xd8, 0xdc, 0xe4);
+                style.tab.active.bg_fill = Color32::from_rgb(0x2a, 0x2a, 0x2a);
+                style.tab.focused.bg_fill = Color32::from_rgb(0x33, 0x33, 0x33);
+                style.tab.inactive.bg_fill = C_PANEL;
+                style.tab.active.text_color = C_TEXT;
                 style.tab.inactive.text_color = Color32::from_rgb(0x90, 0x98, 0xa6);
-                style.tab.tab_body.bg_fill = Color32::from_rgb(0x14, 0x17, 0x1d);
+                style.tab.tab_body.bg_fill = C_VIEW;
                 style.separator.width = 2.0;
                 style.separator.color_idle = Color32::from_rgb(0x2c, 0x32, 0x3c);
                 style.separator.color_hovered = Color32::from_rgb(0x5a, 0x7a, 0x9a);
+                style.buttons.close_tab_bg_fill = Color32::TRANSPARENT;
+                style.buttons.close_tab_color = Color32::from_rgb(0x90, 0x98, 0xa6);
+                style.buttons.close_tab_active_color = Color32::WHITE;
                 egui_dock::DockArea::new(&mut state)
                     .style(style)
                     .draggable_tabs(true)
@@ -2716,7 +2813,7 @@ impl ReCraftApp {
                     // One full-row hit area, like IDA: the whole line is selectable and
                     // double-click follows the operand instead of only the address cell.
                     let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, 16.0), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), Sense::click());
                     if index == self.selected {
                         ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
                     } else if response.hovered() {
@@ -2990,7 +3087,7 @@ impl ReCraftApp {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 for line in lines {
                     let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, 16.0), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), Sense::click());
                     if synced == Some(line.addr) {
                         ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
                     } else if response.hovered() {
@@ -3656,6 +3753,7 @@ impl ReCraftApp {
 
     fn update_inner(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
+        self.install_style(&ctx);
         self.tick();
         let title = match self.project.as_ref() {
             Some(path) => format!(
