@@ -47,6 +47,10 @@ struct Palette {
     addr: Color32,
     bytes: Color32,
     mnemonic: Color32,
+    /// Numeric literals inside operands (IDA colours immediates separately).
+    number: Color32,
+    /// Registers inside operands.
+    register: Color32,
     name: Color32,
     comment: Color32,
     selected_row: Color32,
@@ -74,6 +78,8 @@ impl Palette {
         addr: Color32::from_rgb(0xc9, 0xb4, 0x58),
         bytes: Color32::from_rgb(0x85, 0x85, 0x85),
         mnemonic: Color32::from_rgb(0x7e, 0x9e, 0xd0),
+        number: Color32::from_rgb(0xb5, 0xce, 0xa8),
+        register: Color32::from_rgb(0xc5, 0x86, 0xc0),
         name: Color32::from_rgb(0xd7, 0xd7, 0x87),
         comment: Color32::from_rgb(0x6a, 0x99, 0x55),
         selected_row: Color32::from_rgb(0x26, 0x4f, 0x78),
@@ -101,6 +107,8 @@ impl Palette {
         addr: Color32::from_rgb(0x1a, 0x3f, 0x8f),
         bytes: Color32::from_rgb(0x60, 0x60, 0x60),
         mnemonic: Color32::from_rgb(0x00, 0x50, 0xa0),
+        number: Color32::from_rgb(0x0f, 0x6f, 0x9f),
+        register: Color32::from_rgb(0x7a, 0x3e, 0x9d),
         name: Color32::from_rgb(0x80, 0x50, 0x00),
         comment: Color32::from_rgb(0x00, 0x78, 0x00),
         selected_row: Color32::from_rgb(0xcc, 0xe4, 0xff),
@@ -2923,10 +2931,10 @@ impl ReCraftApp {
                         append(&mut job, mnemonic, pal.mnemonic, &mono);
                         append(&mut job, " ", pal.text, &mono);
                         if let Some((operands, comment)) = operands.split_once(';') {
-                            append(&mut job, operands, pal.text, &mono);
+                            append_operands(&mut job, operands, pal, &mono);
                             append(&mut job, &format!("; {comment}"), pal.comment, &mono);
                         } else {
-                            append(&mut job, operands, pal.text, &mono);
+                            append_operands(&mut job, operands, pal, &mono);
                         }
                         let galley = painter.layout_job(job);
                         painter.galley(
@@ -3098,7 +3106,8 @@ impl ReCraftApp {
                         pal.mnemonic,
                         &mono,
                     );
-                    append(&mut job, &format!("{:<36}", line.operands), pal.text, &mono);
+                    let operands = format!("{:<36}", line.operands);
+                    append_operands(&mut job, &operands, pal, &mono);
                     append(
                         &mut job,
                         line.comment.as_deref().unwrap_or(""),
@@ -4068,6 +4077,105 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
             ..Default::default()
         },
     );
+}
+
+/// Semantic class of an operand token, so the text view can colour operands the way
+/// IDA does (registers, immediates, symbol names, strings).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OperandKind {
+    Register,
+    Number,
+    Name,
+    String,
+    Other,
+}
+
+fn classify_operand(token: &str) -> OperandKind {
+    if token.len() >= 2
+        && ((token.starts_with('"') && token.ends_with('"'))
+            || (token.starts_with('\'') && token.ends_with('\'')))
+    {
+        return OperandKind::String;
+    }
+    let lower = token.to_ascii_lowercase();
+    const REGISTERS: [&str; 33] = [
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12",
+        "r13", "r14", "r15", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "ax", "bx",
+        "cx", "dx", "al", "bl", "cl", "dl", "xmm0",
+    ];
+    if REGISTERS.contains(&lower.as_str()) || lower.starts_with("xmm") {
+        return OperandKind::Register;
+    }
+    const NAME_PREFIXES: [&str; 12] = [
+        "sub_", "loc_", "off_", "unk_", "byte_", "word_", "dword_", "qword_", "asc_", "stru_",
+        "flt_", "dbl_",
+    ];
+    if NAME_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) {
+        return OperandKind::Name;
+    }
+    let numeric = token.starts_with('#')
+        || token.starts_with('-')
+        || token.starts_with('+')
+        || token
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_digit());
+    if numeric
+        && token.chars().all(|ch| {
+            ch.is_ascii_hexdigit() || matches!(ch, 'x' | 'X' | 'h' | 'H' | '#' | '-' | '+')
+        })
+    {
+        return OperandKind::Number;
+    }
+    OperandKind::Other
+}
+
+/// Append an operand string, colouring registers/numbers/symbols/strings separately while
+/// keeping punctuation and padding as normal text.
+fn append_operands(job: &mut LayoutJob, text: &str, pal: Palette, mono: &FontId) {
+    let mut token = String::new();
+    let mut quote: Option<char> = None;
+    for ch in text.chars() {
+        if let Some(open) = quote {
+            token.push(ch);
+            if ch == open {
+                append(job, &token, pal.comment, mono);
+                token.clear();
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            if !token.is_empty() {
+                append_operand_token(job, &token, pal, mono);
+                token.clear();
+            }
+            quote = Some(ch);
+            token.push(ch);
+        } else if ch.is_alphanumeric() || matches!(ch, '_' | '.' | '$' | '@') {
+            token.push(ch);
+        } else {
+            if !token.is_empty() {
+                append_operand_token(job, &token, pal, mono);
+                token.clear();
+            }
+            append(job, &ch.to_string(), pal.text, mono);
+        }
+    }
+    if !token.is_empty() {
+        append_operand_token(job, &token, pal, mono);
+    }
+}
+
+fn append_operand_token(job: &mut LayoutJob, token: &str, pal: Palette, mono: &FontId) {
+    let color = match classify_operand(token) {
+        OperandKind::Register => pal.register,
+        OperandKind::Number => pal.number,
+        OperandKind::Name => pal.name,
+        OperandKind::String => pal.comment,
+        OperandKind::Other => pal.text,
+    };
+    append(job, token, color, mono);
 }
 
 /// Default screen position/size for detached tool windows.
@@ -5086,6 +5194,25 @@ mod tests {
         assert!(
             load_layout_from(&dir.path().join("missing.json")).is_none(),
             "missing layout falls back to defaults"
+        );
+    }
+
+    #[test]
+    fn operand_tokens_are_classified_like_ida() {
+        assert_eq!(classify_operand("rsp"), OperandKind::Register);
+        assert_eq!(classify_operand("xmm3"), OperandKind::Register);
+        assert_eq!(classify_operand("0x140001f98"), OperandKind::Number);
+        assert_eq!(classify_operand("0x28"), OperandKind::Number);
+        assert_eq!(classify_operand("sub_140001f98"), OperandKind::Name);
+        assert_eq!(classify_operand("loc_140001234"), OperandKind::Name);
+        assert_eq!(classify_operand("\"hello\""), OperandKind::String);
+        assert_eq!(classify_operand("foo"), OperandKind::Other);
+        let mut job = LayoutJob::default();
+        let mono = FontId::monospace(12.0);
+        append_operands(&mut job, "rsp, 0x28 ; note", Palette::DARK, &mono);
+        assert!(
+            job.sections.len() >= 3,
+            "operands must use several coloured sections"
         );
     }
 

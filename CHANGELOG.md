@@ -9,12 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Two full themes with **light as the default**: `Light` (light chrome and white views,
-  dark text, blue addresses, green comments) and `Dark` (all-dark) — no mixed/partial
-  variant. Switch with **Options → Theme**, the toolbar `◐/◑` button or `Ctrl+T`; the
-  choice is persisted with the dock layout (`SavedLayout` v5) and restored on startup.
-  Screenshots: `docs/images/ida-layout.png` (default light) and
-  `docs/images/ida-layout-dark.png` (dark).
+- Text View operand syntax colours: registers (purple), numeric literals/immediates
+  (teal), symbol names such as `sub_`/`loc_` (brown) and quoted strings (green) are
+  coloured separately instead of the whole operand string using one colour; both themes
+  have their own variants. Operand classification is unit-tested
+  (`operand_tokens_are_classified_like_ida`). Screenshot: `docs/images/text-view.png`.
 
 - IDA-layout step 4 (graph view + polish): **IDA View-A now opens in graph mode** like the
   reference (Text View is the text document tab). Graph nodes use IDA-style chrome — dark
