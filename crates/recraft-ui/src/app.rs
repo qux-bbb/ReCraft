@@ -38,6 +38,13 @@ enum ThemeMode {
     Light,
 }
 
+/// Navigation-band colours, shared with the legend so they always agree.
+const NAV_FUNCTION: Color32 = Color32::from_rgb(0x3a, 0x5a, 0x7a);
+const NAV_INSTRUCTION: Color32 = Color32::from_rgb(0x2f, 0x6a, 0x6a);
+const NAV_DATA: Color32 = Color32::from_rgb(0x4a, 0x6a, 0x3a);
+const NAV_UNEXPLORED: Color32 = Color32::from_rgb(0x5a, 0x5a, 0x5a);
+const NAV_EXTERNAL: Color32 = Color32::from_rgb(0x7a, 0x3a, 0x6a);
+
 /// Semantic palette shared by the chrome, code views and graph view.
 #[derive(Clone, Copy)]
 struct Palette {
@@ -1635,23 +1642,11 @@ impl ReCraftApp {
             self.navigation_band(ui, action);
             ui.horizontal_wrapped(|ui| {
                 for (color, label) in [
-                    (
-                        Color32::from_rgb(0x3a, 0x5a, 0x7a),
-                        self.t("Regular function", "常规函数"),
-                    ),
-                    (
-                        Color32::from_rgb(0x2f, 0x6a, 0x6a),
-                        self.t("Instruction", "指令"),
-                    ),
-                    (Color32::from_rgb(0x4a, 0x6a, 0x3a), self.t("Data", "数据")),
-                    (
-                        Color32::from_rgb(0x3a, 0x3a, 0x3a),
-                        self.t("Unexplored", "未探索"),
-                    ),
-                    (
-                        Color32::from_rgb(0x7a, 0x3a, 0x6a),
-                        self.t("External symbol", "外部符号"),
-                    ),
+                    (NAV_FUNCTION, self.t("Regular function", "常规函数")),
+                    (NAV_INSTRUCTION, self.t("Instruction", "指令")),
+                    (NAV_DATA, self.t("Data", "数据")),
+                    (NAV_UNEXPLORED, self.t("Unexplored", "未探索")),
+                    (NAV_EXTERNAL, self.t("External symbol", "外部符号")),
                 ] {
                     ui.colored_label(color, "■");
                     ui.weak(label);
@@ -3231,6 +3226,8 @@ impl ReCraftApp {
 
     /// IDA-style navigation band: segment map of the image with a marker for the current
     /// disassembly position; clicking jumps proportionally.
+    /// IDA-style navigation band: segment background, function-density overlay, external
+    /// symbol ticks, current-position marker and a hover tooltip. Colours match the legend.
     fn navigation_band(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         let Some(session) = self.session.as_ref() else {
@@ -3253,22 +3250,25 @@ impl ReCraftApp {
             .max(base + 1);
         let span = (end - base) as f32;
         let width = ui.available_width().max(120.0);
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 12.0), Sense::click());
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(width, 12.0), Sense::click());
         let painter = ui.painter();
         painter.rect_filled(rect, 2.0, pal.view);
+        let x_of = |addr: u64| {
+            rect.left()
+                + ((addr.saturating_sub(base) as f32 / span) * rect.width())
+                    .clamp(0.0, rect.width())
+        };
+        // Segment background: executable = instructions, readable = data, rest unexplored.
         for segment in segments {
-            let x0 = rect.left()
-                + ((segment.range.start.get().saturating_sub(base) as f32 / span) * rect.width());
-            let x1 = rect.left()
-                + ((segment.range.end.get().saturating_sub(base) as f32 / span) * rect.width())
-                    .max(x0 + 1.0);
             let color = if segment.perm.is_executable() {
-                Color32::from_rgb(0x33, 0x55, 0x77)
+                NAV_INSTRUCTION
             } else if segment.perm.is_readable() {
-                Color32::from_rgb(0x33, 0x44, 0x33)
+                NAV_DATA
             } else {
-                Color32::from_rgb(0x44, 0x33, 0x33)
+                NAV_UNEXPLORED
             };
+            let x0 = x_of(segment.range.start.get());
+            let x1 = x_of(segment.range.end.get()).max(x0 + 1.0);
             painter.rect_filled(
                 egui::Rect::from_min_max(
                     egui::pos2(x0, rect.top()),
@@ -3276,6 +3276,32 @@ impl ReCraftApp {
                 ),
                 0.0,
                 color,
+            );
+        }
+        // Function density: upper strip per discovered function.
+        let function_bottom = rect.top() + rect.height() * 0.55;
+        for function in &self.functions {
+            let x0 = x_of(function.start.get());
+            let x1 = x_of(function.end.get()).max(x0 + 1.0);
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, rect.top()),
+                    egui::pos2(x1.min(rect.right()), function_bottom),
+                ),
+                0.0,
+                NAV_FUNCTION,
+            );
+        }
+        // External symbols (imports/IAT) as thin magenta ticks.
+        for import in &self.imports {
+            let x = x_of(import.iat.get());
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x - 0.5, rect.top()),
+                    egui::pos2(x + 0.5, rect.bottom()),
+                ),
+                0.0,
+                NAV_EXTERNAL,
             );
         }
         let current = self.disasm_start.get().clamp(base, end);
@@ -3288,8 +3314,33 @@ impl ReCraftApp {
                 egui::pos2(marker + 1.0, rect.bottom()),
             ),
             0.0,
-            Color32::from_rgb(0xe0, 0xd0, 0x80),
+            pal.addr,
         );
+        if let Some(position) = response.hover_pos() {
+            let fraction = ((position.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+            let addr = Address::new(base + (fraction * span as f64) as u64);
+            let segment = session
+                .segment_containing(addr)
+                .map(|segment| segment.name.as_str())
+                .unwrap_or("?");
+            let function = self
+                .functions
+                .iter()
+                .enumerate()
+                .find(|(_, function)| addr >= function.start && addr < function.end)
+                .map(|(index, function)| {
+                    self.function_labels
+                        .get(index)
+                        .filter(|name| !name.is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| format!("sub_{:x}", function.start.get()))
+                });
+            let label = match function {
+                Some(name) => format!("{:#x} · {segment} · {name}", addr.get()),
+                None => format!("{:#x} · {segment}", addr.get()),
+            };
+            response = response.on_hover_text(label);
+        }
         if response.clicked()
             && let Some(position) = response.interact_pointer_pos()
         {

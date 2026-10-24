@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Text View operand syntax colours: registers (purple), numeric literals/immediates
+- Navigation band now reflects real content and matches the legend: executable segments
+  are teal (instructions), readable data segments green, unexplored areas grey; discovered
+  functions overlay the top half in the blue "Regular function" colour, import/IAT
+  addresses appear as magenta "External symbol" ticks, the marker uses the current
+  address-colour, and hovering shows address · segment · function. The legend reuses the
+  same `NAV_*` constants, so band and legend can no longer drift apart.
   (teal), symbol names such as `sub_`/`loc_` (brown) and quoted strings (green) are
   coloured separately instead of the whole operand string using one colour; both themes
   have their own variants. Operand classification is unit-tested
