@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usability pass 2 — bottom **hex dump** panel (DESIGN §8 follow-up): follows the selected
+  disassembly/pseudo address (16-byte rows, address gutter, ASCII column), byte/word
+  display toggle (little-endian 16-bit words), click to select a byte/word, double-click
+  to navigate the disassembly there, "Follow selection" button to re-anchor, and a top-bar
+  **Hex** checkbox to show/hide it. Headless tests cover row alignment, selection sync and
+  byte/word rendering.
+
 - Usability pass 1 (post-preview feedback): a first-run **welcome panel** with quick
   actions (Open project / Import PE), persisted **recent projects** (up to 8, stored in
   `%LOCALAPPDATA%\ReCraft\recent.txt`, missing files pruned) and a shortcut cheat sheet;

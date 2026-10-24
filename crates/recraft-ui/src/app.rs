@@ -31,6 +31,17 @@ const C_MNEMONIC: Color32 = Color32::from_rgb(0x62, 0xa8, 0xe0);
 const C_NAME: Color32 = Color32::from_rgb(0xd0, 0xa0, 0x60);
 const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0xb0, 0x6a);
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HexUnit {
+    Byte,
+    Word,
+}
+
+/// Start of the 16-byte hex row containing `addr`.
+fn hex_row_start(addr: Address) -> Address {
+    Address::new(addr.get() & !0xf)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Disasm,
@@ -238,6 +249,11 @@ pub struct ReCraftApp {
     goto: Option<String>,
     palette: Option<PaletteState>,
     recent: Vec<PathBuf>,
+    show_hex: bool,
+    hex_unit: HexUnit,
+    hex_start: Address,
+    hex_cursor: Option<Address>,
+    hex_synced: Option<Address>,
     history: Vec<Address>,
     history_pos: usize,
 }
@@ -282,6 +298,11 @@ impl Default for ReCraftApp {
             goto: None,
             palette: None,
             recent: Vec::new(),
+            show_hex: true,
+            hex_unit: HexUnit::Byte,
+            hex_start: Address::ZERO,
+            hex_cursor: None,
+            hex_synced: None,
             history: Vec::new(),
             history_pos: 0,
         }
@@ -495,6 +516,25 @@ impl ReCraftApp {
         if self.tab == Tab::Graph {
             self.refresh_cfg();
         }
+        self.sync_hex();
+    }
+
+    /// Anchor the hex pane on the current disassembly selection (unless the user picked
+    /// an explicit hex position).
+    fn sync_hex(&mut self) {
+        let anchor = match self.tab {
+            Tab::Disasm => self.disasm_rows.get(self.selected).map(|line| line.addr),
+            Tab::Pseudo | Tab::Graph => Some(self.pseudo_start),
+        };
+        let Some(anchor) = anchor else {
+            return;
+        };
+        if self.hex_synced == Some(anchor) {
+            return;
+        }
+        self.hex_start = hex_row_start(anchor);
+        self.hex_cursor = Some(anchor);
+        self.hex_synced = Some(anchor);
     }
 
     fn poll_analysis(&mut self) {
@@ -799,6 +839,9 @@ impl ReCraftApp {
                     *action = Action::Analyze;
                 }
                 ui.separator();
+                let hex_label = self.t("Hex", "十六进制");
+                ui.checkbox(&mut self.show_hex, hex_label);
+                ui.separator();
                 if ui
                     .button(if self.lang == Lang::En {
                         "中文"
@@ -840,6 +883,165 @@ impl ReCraftApp {
                 ));
             });
         });
+    }
+
+    fn hex_panel(&mut self, root: &mut egui::Ui, action: &mut Action) {
+        egui::Panel::bottom("recraft_hex")
+            .resizable(true)
+            .default_size(190.0)
+            .show(root, |ui| self.hex_view(ui, action));
+    }
+
+    /// Bottom hex dump: follows the current selection, click selects a byte, double-click
+    /// navigates the disassembly there. Byte/word display toggle.
+    fn hex_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let byte_label = self.t("Bytes", "字节");
+        let word_label = self.t("Words", "字");
+        let follow_label = self.t("Follow selection", "跟随选中");
+        let empty_label = self.t("No readable bytes here.", "该地址没有可读字节。");
+        let address_label = self.t("Address", "地址");
+        let mut unit = self.hex_unit;
+        ui.horizontal(|ui| {
+            ui.strong(self.t("Hex", "十六进制"));
+            ui.selectable_value(&mut unit, HexUnit::Byte, byte_label);
+            ui.selectable_value(&mut unit, HexUnit::Word, word_label);
+            ui.separator();
+            ui.weak(format!("{:#x}", self.hex_start.get()));
+            if ui.button(follow_label).clicked() {
+                self.hex_synced = None;
+                self.sync_hex();
+            }
+        });
+        self.hex_unit = unit;
+        let start = self.hex_start;
+        let cursor = self.hex_cursor;
+        let (mut buffer, read) = {
+            let Some(session) = self.session.as_mut() else {
+                return;
+            };
+            let mut buffer = vec![0u8; 16 * 16];
+            let read = session.read_at(start, &mut buffer).unwrap_or(0);
+            (buffer, read)
+        };
+        buffer.truncate(read);
+        if read == 0 {
+            ui.weak(empty_label);
+            return;
+        }
+        let rows = buffer.len().div_ceil(16);
+        let mut clicked = None;
+        let mut navigated = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let columns = match unit {
+                    HexUnit::Byte => 18,
+                    HexUnit::Word => 10,
+                };
+                egui::Grid::new("hex_grid")
+                    .num_columns(columns)
+                    .striped(true)
+                    .spacing([8.0, 1.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(address_label).monospace().strong());
+                        match unit {
+                            HexUnit::Byte => {
+                                for offset in 0..16 {
+                                    ui.label(
+                                        RichText::new(format!("{offset:02x}")).monospace().weak(),
+                                    );
+                                }
+                            }
+                            HexUnit::Word => {
+                                for word in 0..8 {
+                                    ui.label(
+                                        RichText::new(format!("{:04x}", word * 2))
+                                            .monospace()
+                                            .weak(),
+                                    );
+                                }
+                            }
+                        }
+                        ui.label(RichText::new("ASCII").monospace().strong());
+                        ui.end_row();
+                        for row in 0..rows {
+                            let row_addr = Address::new(start.get() + (row as u64) * 16);
+                            ui.label(
+                                RichText::new(format!("{:#012x}", row_addr.get()))
+                                    .monospace()
+                                    .color(C_ADDR),
+                            );
+                            match unit {
+                                HexUnit::Byte => {
+                                    for column in 0..16 {
+                                        let address = Address::new(row_addr.get() + column as u64);
+                                        if let Some(byte) = buffer.get(row * 16 + column) {
+                                            let response = ui.selectable_label(
+                                                cursor == Some(address),
+                                                RichText::new(format!("{byte:02x}")).monospace(),
+                                            );
+                                            if response.clicked() {
+                                                clicked = Some(address);
+                                            }
+                                            if response.double_clicked() {
+                                                navigated = Some(address);
+                                            }
+                                        } else {
+                                            ui.label(RichText::new("  ").monospace());
+                                        }
+                                    }
+                                }
+                                HexUnit::Word => {
+                                    for word in 0..8 {
+                                        let index = row * 16 + word * 2;
+                                        let address =
+                                            Address::new(row_addr.get() + (word as u64) * 2);
+                                        if let (Some(low), Some(high)) =
+                                            (buffer.get(index), buffer.get(index + 1))
+                                        {
+                                            let value = u16::from_le_bytes([*low, *high]);
+                                            let selected = cursor.is_some_and(|cursor| {
+                                                cursor.get() >= address.get()
+                                                    && cursor.get() < address.get() + 2
+                                            });
+                                            let response = ui.selectable_label(
+                                                selected,
+                                                RichText::new(format!("{value:04x}")).monospace(),
+                                            );
+                                            if response.clicked() {
+                                                clicked = Some(address);
+                                            }
+                                            if response.double_clicked() {
+                                                navigated = Some(address);
+                                            }
+                                        } else {
+                                            ui.label(RichText::new("    ").monospace());
+                                        }
+                                    }
+                                }
+                            }
+                            let ascii: String = buffer[row * 16..buffer.len().min(row * 16 + 16)]
+                                .iter()
+                                .map(|byte| {
+                                    if (0x20..=0x7e).contains(byte) {
+                                        *byte as char
+                                    } else {
+                                        '.'
+                                    }
+                                })
+                                .collect();
+                            ui.label(RichText::new(ascii).monospace().color(C_BYTES));
+                            ui.end_row();
+                        }
+                    });
+            });
+        if let Some(address) = clicked {
+            self.hex_cursor = Some(address);
+        }
+        if let Some(address) = navigated {
+            self.hex_synced = None;
+            *action = Action::Navigate(address);
+        }
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -1875,6 +2077,9 @@ impl ReCraftApp {
         let mut action = self.handle_keys(&ctx);
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
+        if self.show_hex && self.session.is_some() {
+            self.hex_panel(root, &mut action);
+        }
         self.side_panel(root, &mut action);
         self.central(root, &mut action);
         self.edit_window(&ctx, &mut action);
@@ -2317,6 +2522,66 @@ mod tests {
         let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
         output.textures_delta.clear();
         assert!(app.session.is_none());
+    }
+
+    #[test]
+    fn hex_view_aligns_and_follows_selection() {
+        assert_eq!(hex_row_start(Address::new(0x1234)).get(), 0x1230);
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("hex.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.tick();
+        let selected = app.disasm_rows[app.selected].addr;
+        assert_eq!(app.hex_start, hex_row_start(selected));
+        assert_eq!(app.hex_cursor, Some(selected));
+
+        let target = Address::new(selected.get() + 0x40);
+        app.navigate(target);
+        app.tick();
+        assert_eq!(app.hex_start, hex_row_start(target));
+        assert_eq!(app.hex_cursor, Some(target));
+    }
+
+    #[test]
+    fn hex_panel_renders_bytes_and_words() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("hex-render.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.tick();
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let run = |app: &mut ReCraftApp| {
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        };
+        run(&mut app);
+        app.hex_unit = HexUnit::Word;
+        run(&mut app);
+        assert!(app.show_hex);
     }
 
     #[test]
