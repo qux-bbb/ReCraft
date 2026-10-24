@@ -89,6 +89,58 @@ struct EditState {
     just_opened: bool,
 }
 
+/// Recent-project list location (per-user, no elevation).
+fn recent_store_path() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|dir| PathBuf::from(dir).join("ReCraft").join("recent.txt"))
+}
+
+fn load_recent() -> Vec<PathBuf> {
+    let Some(path) = recent_store_path() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .take(8)
+        .collect()
+}
+
+fn save_recent(recent: &[PathBuf]) {
+    let Some(path) = recent_store_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text = recent
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(path, text);
+}
+
+fn push_recent(recent: &mut Vec<PathBuf>, path: &Path) {
+    recent.retain(|existing| existing != path);
+    recent.insert(0, path.to_path_buf());
+    recent.truncate(8);
+}
+
+/// Split operand text into candidate hex addresses / symbol tokens.
+fn follow_tokens(operands: &str) -> Vec<String> {
+    operands
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Selected rename suggestion in the AI panel (index into `ai_proposals`).
 type AiSelection = Option<usize>;
 
@@ -143,6 +195,8 @@ enum Action {
     AiClear,
     TogglePalette,
     PaletteCommand(usize),
+    Follow,
+    OpenRecent(usize),
 }
 
 pub struct ReCraftApp {
@@ -183,6 +237,7 @@ pub struct ReCraftApp {
     edit: Option<EditState>,
     goto: Option<String>,
     palette: Option<PaletteState>,
+    recent: Vec<PathBuf>,
     history: Vec<Address>,
     history_pos: usize,
 }
@@ -226,6 +281,7 @@ impl Default for ReCraftApp {
             edit: None,
             goto: None,
             palette: None,
+            recent: Vec::new(),
             history: Vec::new(),
             history_pos: 0,
         }
@@ -236,7 +292,10 @@ impl ReCraftApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        let mut app = Self::default();
+        let mut app = Self {
+            recent: load_recent(),
+            ..Self::default()
+        };
         if let Some(path) = initial {
             app.open_path(&path);
         } else {
@@ -275,6 +334,7 @@ impl ReCraftApp {
                 Ok(session) => {
                     self.session = Some(session);
                     self.project = Some(path.to_path_buf());
+                    self.remember_recent(path);
                     self.after_open();
                 }
                 Err(error) => self.set_error(error),
@@ -298,12 +358,41 @@ impl ReCraftApp {
             Ok(session) => {
                 self.session = Some(session);
                 self.project = Some(project.to_path_buf());
+                self.remember_recent(project);
                 let message = format!("imported {} bytes -> {}", bytes.len(), project.display());
                 self.after_open();
                 self.set_status(message);
             }
             Err(error) => self.set_error(error),
         }
+    }
+
+    /// Track the last opened projects (persisted under `%LOCALAPPDATA%\ReCraft`).
+    fn remember_recent(&mut self, path: &Path) {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        push_recent(&mut self.recent, &path);
+        save_recent(&self.recent);
+    }
+
+    /// Resolve the first mapped address referenced by an instruction's operand text.
+    fn follow_target(&self, line: &DisasmLine) -> Option<Address> {
+        let session = self.session.as_ref()?;
+        for token in follow_tokens(&line.operands) {
+            let address = if let Some(hex) = token
+                .strip_prefix("0x")
+                .or_else(|| token.strip_prefix("0X"))
+            {
+                u64::from_str_radix(hex, 16).ok().map(Address::new)
+            } else {
+                session.addr_of_name(&token).ok().flatten()
+            };
+            if let Some(address) = address
+                && session.segment_containing(address).is_some()
+            {
+                return Some(address);
+            }
+        }
+        None
     }
 
     fn after_open(&mut self) {
@@ -1131,6 +1220,10 @@ impl ReCraftApp {
         let pseudo_label = self.t("Pseudo-C (L0)", "伪代码 (L0)");
         let graph_label = self.t("Graph", "控制流图");
         egui::CentralPanel::default().show(ui, |ui| {
+            if self.session.is_none() {
+                self.welcome(ui, action);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Disasm, disasm_label);
                 ui.selectable_value(&mut self.tab, Tab::Pseudo, pseudo_label);
@@ -1160,7 +1253,54 @@ impl ReCraftApp {
         });
     }
 
-    fn disasm_view(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
+    /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
+    fn welcome(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        ui.add_space(24.0);
+        ui.heading(self.t(
+            "ReCraft — reassembly & decompilation workbench",
+            "ReCraft —— 反汇编与反编译工作台",
+        ));
+        ui.add_space(4.0);
+        ui.label(self.t(
+            "Drop a .rcraft project or a PE file anywhere in this window, or:",
+            "把 .rcraft 项目或 PE 文件拖进窗口，或：",
+        ));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(self.t("Open project…", "打开项目…")).clicked() {
+                *action = Action::Open;
+            }
+            if ui.button(self.t("Import PE…", "导入 PE…")).clicked() {
+                *action = Action::Import;
+            }
+        });
+        if !self.recent.is_empty() {
+            ui.add_space(16.0);
+            ui.separator();
+            ui.label(self.t("Recent projects", "最近打开"));
+            let recent = self.recent.clone();
+            for (index, path) in recent.iter().enumerate() {
+                let label = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                let response = ui
+                    .selectable_label(false, label)
+                    .on_hover_text(path.display().to_string());
+                if response.clicked() {
+                    *action = Action::OpenRecent(index);
+                }
+            }
+        }
+        ui.add_space(16.0);
+        ui.separator();
+        ui.weak(self.t(
+            "Shortcuts: Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo-C · Esc back · Enter follow",
+            "快捷键：Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Esc 后退 · Enter 跟随",
+        ));
+    }
+
+    fn disasm_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if self.disasm_rows.is_empty() {
             ui.weak(self.t(
                 "No disassembly. Import a PE file first.",
@@ -1196,6 +1336,10 @@ impl ReCraftApp {
                             let response = ui.selectable_label(index == self.selected, address);
                             if response.clicked() {
                                 clicked_row = Some(index);
+                            }
+                            if response.double_clicked() {
+                                clicked_row = Some(index);
+                                *action = Action::Follow;
                             }
                             let bytes = line
                                 .bytes()
@@ -1488,6 +1632,8 @@ impl ReCraftApp {
                 action = Action::ToggleTab;
             } else if input.key_pressed(Key::X) {
                 action = Action::ShowXrefs;
+            } else if input.key_pressed(Key::Enter) && self.tab == Tab::Disasm {
+                action = Action::Follow;
             } else if input.key_pressed(Key::Escape) {
                 action = Action::Back;
             } else if input.key_pressed(Key::ArrowDown) {
@@ -1519,6 +1665,25 @@ impl ReCraftApp {
                     .add_filter("Windows executable", &["exe", "dll", "sys"])
                     .pick_file()
                 {
+                    self.open_path(&path);
+                }
+            }
+            Action::Follow => {
+                let Some(line) = self.disasm_rows.get(self.selected).cloned() else {
+                    return;
+                };
+                if let Some(target) = self.follow_target(&line) {
+                    self.navigate(target);
+                    self.tab = Tab::Disasm;
+                } else {
+                    self.set_status(
+                        self.t("no followable target", "没有可跟随的目标")
+                            .to_owned(),
+                    );
+                }
+            }
+            Action::OpenRecent(index) => {
+                if let Some(path) = self.recent.get(index).cloned() {
                     self.open_path(&path);
                 }
             }
@@ -2067,6 +2232,91 @@ mod tests {
             SideTab::Xrefs,
             "X should open the xrefs panel"
         );
+    }
+
+    #[test]
+    fn follow_tokens_extracts_addresses_and_symbols() {
+        assert_eq!(
+            follow_tokens("call 0x140001000"),
+            vec!["call", "0x140001000"]
+        );
+        let tokens = follow_tokens("mov rax, qword ptr [rip + 0x2a0]");
+        assert!(tokens.contains(&"0x2a0".to_owned()));
+        assert!(follow_tokens("call sub_140001234").contains(&"sub_140001234".to_owned()));
+        assert!(follow_tokens("ret").len() == 1);
+    }
+
+    #[test]
+    fn recent_projects_dedupe_and_cap() {
+        let mut recent = Vec::new();
+        for index in 0..10 {
+            push_recent(&mut recent, &PathBuf::from(format!("C:/x/p{index}.rcraft")));
+        }
+        assert_eq!(recent.len(), 8);
+        assert_eq!(recent[0], PathBuf::from("C:/x/p9.rcraft"));
+        push_recent(&mut recent, &PathBuf::from("C:/x/p5.rcraft"));
+        assert_eq!(recent.len(), 8);
+        assert_eq!(recent[0], PathBuf::from("C:/x/p5.rcraft"));
+        assert_eq!(
+            recent
+                .iter()
+                .filter(|path| path.as_path() == std::path::Path::new("C:/x/p5.rcraft"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn follow_navigates_to_operand_target() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("follow.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        // Drive the resolver from a synthetic call line: the sample PE's entry stub may
+        // contain no absolute references of its own.
+        let target = app.session.as_ref().expect("session").entry_point();
+        let mut line = app
+            .disasm_rows
+            .first()
+            .cloned()
+            .expect("at least one disassembly row");
+        line.operands = format!("call {:#x}", target.get());
+        app.disasm_rows[0] = line;
+        let resolved = app.follow_target(&app.disasm_rows[0]);
+        assert_eq!(resolved, Some(target), "call operand should resolve");
+        app.selected = 0;
+        app.disasm_start = Address::ZERO;
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::Follow);
+        assert_eq!(
+            app.disasm_start, target,
+            "follow should navigate to the operand"
+        );
+        assert!(matches!(app.tab, Tab::Disasm));
+    }
+
+    #[test]
+    fn welcome_panel_renders_without_a_session() {
+        let mut app = ReCraftApp::default();
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(app.session.is_none());
     }
 
     #[test]

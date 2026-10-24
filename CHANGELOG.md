@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usability pass 1 (post-preview feedback): a first-run **welcome panel** with quick
+  actions (Open project / Import PE), persisted **recent projects** (up to 8, stored in
+  `%LOCALAPPDATA%\ReCraft\recent.txt`, missing files pruned) and a shortcut cheat sheet;
+  disassembly **follow** navigation via double-click or Enter (resolves the first mapped
+  hex address / symbol in the operand text, falls back to a status hint when there is
+  none, still recorded in the back history). Headless tests cover token extraction,
+  recent dedupe/cap, follow navigation and welcome rendering.
+
 - v0.1 previews ship **unsigned by decision** (code signing deferred): README gains an
   "Installing (unsigned preview builds)" section (SHA-256 verification, SmartScreen
   "More info → Run anyway", per-user installer), `docs/RELEASE.md` records the decision,
