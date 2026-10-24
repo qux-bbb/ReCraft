@@ -62,10 +62,12 @@ applied 3 proposal(s) through the command bus (undoable)
    Text View、Hex View-1、Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、
    Local Types、AI）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex
    同步提示）。图形视图支持节点块/箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
+   **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在深色/浅色主题间切换，选择随布局一起保存。
+   ![IDA-style layout](images/ida-layout.png)
+   ![Light theme](images/ida-layout-light.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
    `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types。
-   ![IDA-style layout](images/ida-layout.png)
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
    伪代码与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
    工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在伪代码里同步高亮，

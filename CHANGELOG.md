@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Light/dark theme switching: **Options → Theme → Dark/Light**, a toolbar toggle
+  (`◐`/`◑`) and `Ctrl+T`. A semantic palette (chrome, disassembly/pseudo/hex colours,
+  dock tabs and the graph view) is applied at runtime, with an IDA classic light scheme
+  (white views, grey chrome, blue addresses, green comments) next to the existing dark
+  theme. The choice is persisted together with the dock layout
+  (`SavedLayout` v5) and restored on startup; the light theme fixes previously hard-coded
+  dark colours in the Output pane and graph/overview chrome. Adds tests for toggling the
+  palette and persisting the theme, plus `docs/images/ida-layout-light.png` and demo notes.
+
 - IDA-layout step 4 (graph view + polish): **IDA View-A now opens in graph mode** like the
   reference (Text View is the text document tab). Graph nodes use IDA-style chrome — dark
   bodies, teal frames, light header bars with the block address and an `entry` marker —

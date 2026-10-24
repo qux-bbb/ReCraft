@@ -28,18 +28,97 @@ const DISASM_ROWS: usize = 400;
 const MONO_SIZE: f32 = 12.5;
 const ROW_HEIGHT: f32 = 15.0;
 
-/// IDA dark-theme palette: near-black views on a slightly lighter chrome.
-const C_PANEL: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1e);
-const C_VIEW: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
-const C_TEXT: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd4);
-const C_ADDR: Color32 = Color32::from_rgb(0xc9, 0xb4, 0x58);
-const C_BYTES: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
-const C_MNEMONIC: Color32 = Color32::from_rgb(0x7e, 0x9e, 0xd0);
-const C_NAME: Color32 = Color32::from_rgb(0xd7, 0xd7, 0x87);
-const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0x99, 0x55);
-/// IDA-style current-line highlight and hover tint.
-const C_SELECTED_ROW: Color32 = Color32::from_rgb(0x26, 0x4f, 0x78);
-const C_HOVER_ROW: Color32 = Color32::from_rgb(0x2a, 0x30, 0x38);
+/// Which colour scheme the workspace uses. Persisted with the dock layout.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ThemeMode {
+    #[default]
+    Dark,
+    Light,
+}
+
+/// Semantic palette shared by the chrome, code views and graph view.
+#[derive(Clone, Copy)]
+struct Palette {
+    panel: Color32,
+    view: Color32,
+    text: Color32,
+    addr: Color32,
+    bytes: Color32,
+    mnemonic: Color32,
+    name: Color32,
+    comment: Color32,
+    selected_row: Color32,
+    hover_row: Color32,
+    tab_active_bg: Color32,
+    tab_focused_bg: Color32,
+    tab_inactive_text: Color32,
+    grid_line: Color32,
+    graph_node: Color32,
+    graph_border: Color32,
+    graph_selected_border: Color32,
+    graph_header: Color32,
+    graph_header_text: Color32,
+    edge_jump: Color32,
+    edge_taken: Color32,
+    edge_not_taken: Color32,
+    edge_jump_table: Color32,
+}
+
+impl Palette {
+    const DARK: Self = Self {
+        panel: Color32::from_rgb(0x1e, 0x1e, 0x1e),
+        view: Color32::from_rgb(0x14, 0x14, 0x14),
+        text: Color32::from_rgb(0xd4, 0xd4, 0xd4),
+        addr: Color32::from_rgb(0xc9, 0xb4, 0x58),
+        bytes: Color32::from_rgb(0x85, 0x85, 0x85),
+        mnemonic: Color32::from_rgb(0x7e, 0x9e, 0xd0),
+        name: Color32::from_rgb(0xd7, 0xd7, 0x87),
+        comment: Color32::from_rgb(0x6a, 0x99, 0x55),
+        selected_row: Color32::from_rgb(0x26, 0x4f, 0x78),
+        hover_row: Color32::from_rgb(0x2a, 0x30, 0x38),
+        tab_active_bg: Color32::from_rgb(0x2a, 0x2a, 0x2a),
+        tab_focused_bg: Color32::from_rgb(0x33, 0x33, 0x33),
+        tab_inactive_text: Color32::from_rgb(0x90, 0x98, 0xa6),
+        grid_line: Color32::from_rgb(0x2c, 0x32, 0x3c),
+        graph_node: Color32::from_rgb(0x0d, 0x10, 0x12),
+        graph_border: Color32::from_rgb(0x4a, 0x8f, 0x8f),
+        graph_selected_border: Color32::from_rgb(0xc9, 0xb4, 0x58),
+        graph_header: Color32::from_rgb(0x9c, 0xc8, 0xc8),
+        graph_header_text: Color32::from_rgb(0x14, 0x2a, 0x2a),
+        edge_jump: Color32::from_rgb(0x5a, 0x9a, 0x9a),
+        edge_taken: Color32::from_rgb(0x6a, 0xb0, 0x6a),
+        edge_not_taken: Color32::from_rgb(0xc0, 0x6a, 0x6a),
+        edge_jump_table: Color32::from_rgb(0xa0, 0x8a, 0xc0),
+    };
+
+    /// IDA's classic light scheme: white views, grey chrome, blue addresses.
+    const LIGHT: Self = Self {
+        panel: Color32::from_rgb(0xf0, 0xf0, 0xf0),
+        view: Color32::from_rgb(0xff, 0xff, 0xff),
+        text: Color32::from_rgb(0x1e, 0x1e, 0x1e),
+        addr: Color32::from_rgb(0x1a, 0x3f, 0x8f),
+        bytes: Color32::from_rgb(0x60, 0x60, 0x60),
+        mnemonic: Color32::from_rgb(0x00, 0x50, 0xa0),
+        name: Color32::from_rgb(0x80, 0x50, 0x00),
+        comment: Color32::from_rgb(0x00, 0x78, 0x00),
+        selected_row: Color32::from_rgb(0xcc, 0xe4, 0xff),
+        hover_row: Color32::from_rgb(0xee, 0xf3, 0xf8),
+        tab_active_bg: Color32::from_rgb(0xff, 0xff, 0xff),
+        tab_focused_bg: Color32::from_rgb(0xe4, 0xec, 0xf4),
+        tab_inactive_text: Color32::from_rgb(0x40, 0x48, 0x50),
+        grid_line: Color32::from_rgb(0xc0, 0xc6, 0xcc),
+        graph_node: Color32::from_rgb(0xff, 0xff, 0xff),
+        graph_border: Color32::from_rgb(0x3a, 0x8f, 0x8f),
+        graph_selected_border: Color32::from_rgb(0xb0, 0x7a, 0x00),
+        graph_header: Color32::from_rgb(0xc8, 0xe4, 0xe4),
+        graph_header_text: Color32::from_rgb(0x10, 0x30, 0x30),
+        edge_jump: Color32::from_rgb(0x1f, 0x6f, 0x6f),
+        edge_taken: Color32::from_rgb(0x1f, 0x7a, 0x1f),
+        edge_not_taken: Color32::from_rgb(0xa0, 0x20, 0x20),
+        edge_jump_table: Color32::from_rgb(0x6a, 0x3f, 0x9f),
+    };
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HexUnit {
@@ -259,16 +338,17 @@ struct EditState {
     just_opened: bool,
 }
 
-/// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`).
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
-/// resurrecting the old arrangement.
-const LAYOUT_VERSION: u32 = 4;
+/// resurrecting the old arrangement. The theme is stored alongside the dock state.
+const LAYOUT_VERSION: u32 = 5;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
     version: u32,
     dock: egui_dock::DockState<Pane>,
+    #[serde(default)]
+    theme: ThemeMode,
 }
 
 fn layout_store_path() -> Option<PathBuf> {
@@ -276,15 +356,16 @@ fn layout_store_path() -> Option<PathBuf> {
         .map(|dir| PathBuf::from(dir).join("ReCraft").join("layout.json"))
 }
 
-fn load_layout_from(path: &Path) -> Option<egui_dock::DockState<Pane>> {
+fn load_layout_from(path: &Path) -> Option<SavedLayout> {
     let text = std::fs::read_to_string(path).ok()?;
     let saved: SavedLayout = serde_json::from_str(&text).ok()?;
-    (saved.version == LAYOUT_VERSION).then_some(saved.dock)
+    (saved.version == LAYOUT_VERSION).then_some(saved)
 }
 
 fn save_layout_to(
     path: &Path,
     state: &egui_dock::DockState<Pane>,
+    theme: ThemeMode,
 ) -> std::result::Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -292,6 +373,7 @@ fn save_layout_to(
     let saved = SavedLayout {
         version: LAYOUT_VERSION,
         dock: state.clone(),
+        theme,
     };
     let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
     // `egui` serializes NaN coordinates as null; skip until the dock has been laid out.
@@ -420,6 +502,8 @@ enum Action {
     ShowStructs,
     FocusPane(Pane),
     ResetLayout,
+    SetTheme(ThemeMode),
+    ToggleTheme,
 }
 
 pub struct ReCraftApp {
@@ -432,6 +516,9 @@ pub struct ReCraftApp {
     frame_count: u64,
     /// Fonts/theme installed on the first frame (Consolas/Segoe UI when available).
     ui_ready: bool,
+    /// Active colour scheme (dark by default; light is IDA's classic look).
+    theme: ThemeMode,
+    applied_theme: Option<ThemeMode>,
     /// Output-window log (analysis/eval/status messages), oldest first.
     log: Vec<String>,
     status: String,
@@ -502,6 +589,8 @@ impl Default for ReCraftApp {
             layout_saved: None,
             frame_count: 0,
             ui_ready: false,
+            theme: ThemeMode::Dark,
+            applied_theme: None,
             log: Vec::new(),
             status: String::new(),
             is_error: false,
@@ -865,13 +954,64 @@ impl ReCraftApp {
 
     // ------------------------------------------------------------- refresh --
 
-    /// Install IDA-like fonts (Consolas for monospace, Segoe UI for UI text) and the
-    /// dark palette on the first frame. Missing font files simply keep egui's defaults.
+    /// Install IDA-like fonts once, then apply the active (dark or light) palette.
+    /// Missing font files simply keep egui's defaults.
     fn install_style(&mut self, ctx: &egui::Context) {
-        if self.ui_ready {
-            return;
+        if !self.ui_ready {
+            self.ui_ready = true;
+            self.install_fonts(ctx);
         }
-        self.ui_ready = true;
+        if self.applied_theme != Some(self.theme) {
+            self.applied_theme = Some(self.theme);
+            self.apply_theme(ctx);
+        }
+    }
+
+    fn palette(&self) -> Palette {
+        match self.theme {
+            ThemeMode::Dark => Palette::DARK,
+            ThemeMode::Light => Palette::LIGHT,
+        }
+    }
+
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        let pal = self.palette();
+        let mut visuals = match self.theme {
+            ThemeMode::Dark => egui::Visuals::dark(),
+            ThemeMode::Light => egui::Visuals::light(),
+        };
+        visuals.panel_fill = pal.panel;
+        visuals.window_fill = pal.panel;
+        visuals.extreme_bg_color = pal.view;
+        visuals.faint_bg_color = pal.tab_focused_bg;
+        visuals.override_text_color = Some(pal.text);
+        visuals.selection.bg_fill = pal.selected_row;
+        ctx.set_theme(match self.theme {
+            ThemeMode::Dark => egui::Theme::Dark,
+            ThemeMode::Light => egui::Theme::Light,
+        });
+        ctx.set_visuals(visuals);
+        ctx.all_styles_mut(|style| {
+            use egui::{FontFamily, FontId, TextStyle};
+            style
+                .text_styles
+                .insert(TextStyle::Body, FontId::proportional(13.0));
+            style
+                .text_styles
+                .insert(TextStyle::Button, FontId::proportional(13.0));
+            style
+                .text_styles
+                .insert(TextStyle::Small, FontId::proportional(11.0));
+            style.text_styles.insert(
+                TextStyle::Monospace,
+                FontId::new(MONO_SIZE, FontFamily::Monospace),
+            );
+            style.spacing.item_spacing = egui::vec2(6.0, 3.0);
+            style.spacing.button_padding = egui::vec2(6.0, 2.0);
+        });
+    }
+
+    fn install_fonts(&mut self, ctx: &egui::Context) {
         let mut fonts = egui::FontDefinitions::default();
         let candidates = [
             ("consolas", "C:\\Windows\\Fonts\\consola.ttf"),
@@ -923,32 +1063,6 @@ impl ReCraftApp {
         if loaded {
             ctx.set_fonts(fonts);
         }
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = C_PANEL;
-        visuals.window_fill = C_PANEL;
-        visuals.extreme_bg_color = C_VIEW;
-        visuals.faint_bg_color = Color32::from_rgb(0x26, 0x26, 0x26);
-        visuals.override_text_color = Some(C_TEXT);
-        visuals.selection.bg_fill = C_SELECTED_ROW;
-        ctx.set_visuals(visuals);
-        ctx.all_styles_mut(|style| {
-            use egui::{FontFamily, FontId, TextStyle};
-            style
-                .text_styles
-                .insert(TextStyle::Body, FontId::proportional(13.0));
-            style
-                .text_styles
-                .insert(TextStyle::Button, FontId::proportional(13.0));
-            style
-                .text_styles
-                .insert(TextStyle::Small, FontId::proportional(11.0));
-            style.text_styles.insert(
-                TextStyle::Monospace,
-                FontId::new(MONO_SIZE, FontFamily::Monospace),
-            );
-            style.spacing.item_spacing = egui::vec2(6.0, 3.0);
-            style.spacing.button_padding = egui::vec2(6.0, 2.0);
-        });
     }
 
     fn tick(&mut self) {
@@ -1386,6 +1500,22 @@ impl ReCraftApp {
                     }
                 });
                 ui.menu_button("Options", |ui| {
+                    ui.menu_button("Theme", |ui| {
+                        if ui
+                            .selectable_label(self.theme == ThemeMode::Dark, "Dark")
+                            .clicked()
+                        {
+                            *action = Action::SetTheme(ThemeMode::Dark);
+                            ui.close();
+                        }
+                        if ui
+                            .selectable_label(self.theme == ThemeMode::Light, "Light")
+                            .clicked()
+                        {
+                            *action = Action::SetTheme(ThemeMode::Light);
+                            ui.close();
+                        }
+                    });
                     if ui
                         .button(if self.lang == Lang::En {
                             "中文"
@@ -1458,6 +1588,16 @@ impl ReCraftApp {
                 ui.separator();
                 if ui.button("AI").clicked() {
                     *action = Action::FocusPane(Pane::Ai);
+                }
+                if ui
+                    .button(match self.theme {
+                        ThemeMode::Dark => "◐",
+                        ThemeMode::Light => "◑",
+                    })
+                    .on_hover_text(self.t("Toggle theme (Ctrl+T)", "切换主题 (Ctrl+T)"))
+                    .clicked()
+                {
+                    *action = Action::ToggleTheme;
                 }
                 ui.separator();
                 if ui
@@ -1552,6 +1692,7 @@ impl ReCraftApp {
     /// Bottom hex dump: follows the current selection, click selects a byte, double-click
     /// navigates the disassembly there. Byte/word display toggle.
     fn hex_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         let byte_label = self.t("Bytes", "字节");
         let word_label = self.t("Words", "字");
         let follow_label = self.t("Follow selection", "跟随选中");
@@ -1626,7 +1767,7 @@ impl ReCraftApp {
                             ui.label(
                                 RichText::new(format!("{:#012x}", row_addr.get()))
                                     .monospace()
-                                    .color(C_ADDR),
+                                    .color(pal.addr),
                             );
                             match unit {
                                 HexUnit::Byte => {
@@ -1687,7 +1828,7 @@ impl ReCraftApp {
                                     }
                                 })
                                 .collect();
-                            ui.label(RichText::new(ascii).monospace().color(C_BYTES));
+                            ui.label(RichText::new(ascii).monospace().color(pal.bytes));
                             ui.end_row();
                         }
                     });
@@ -1744,6 +1885,7 @@ impl ReCraftApp {
     /// Draw the dock area. The state is temporarily moved out so the tab viewer can borrow
     /// the rest of the app mutably (egui_dock needs `&mut DockState` for tab drag/drop).
     fn dock_area(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         self.ensure_dock();
         let Some(mut state) = self.dock.take() else {
             return;
@@ -1752,22 +1894,22 @@ impl ReCraftApp {
             let mut viewer = DockViewer { app: self, action };
             egui::CentralPanel::default().show(ui, |ui| {
                 let mut style = egui_dock::Style::from_egui(ui.style().as_ref());
-                // IDA-ish chrome: dark tab bars, subtle separators, compact tabs.
-                style.tab_bar.bg_fill = C_PANEL;
-                style.tab_bar.hline_color = Color32::from_rgb(0x2c, 0x32, 0x3c);
+                // IDA-ish chrome: themed tab bars, subtle separators, compact tabs.
+                style.tab_bar.bg_fill = pal.panel;
+                style.tab_bar.hline_color = pal.grid_line;
                 style.tab_bar.height = 22.0;
-                style.tab.active.bg_fill = Color32::from_rgb(0x2a, 0x2a, 0x2a);
-                style.tab.focused.bg_fill = Color32::from_rgb(0x33, 0x33, 0x33);
-                style.tab.inactive.bg_fill = C_PANEL;
-                style.tab.active.text_color = C_TEXT;
-                style.tab.inactive.text_color = Color32::from_rgb(0x90, 0x98, 0xa6);
-                style.tab.tab_body.bg_fill = C_VIEW;
+                style.tab.active.bg_fill = pal.tab_active_bg;
+                style.tab.focused.bg_fill = pal.tab_focused_bg;
+                style.tab.inactive.bg_fill = pal.panel;
+                style.tab.active.text_color = pal.text;
+                style.tab.inactive.text_color = pal.tab_inactive_text;
+                style.tab.tab_body.bg_fill = pal.view;
                 style.separator.width = 2.0;
-                style.separator.color_idle = Color32::from_rgb(0x2c, 0x32, 0x3c);
-                style.separator.color_hovered = Color32::from_rgb(0x5a, 0x7a, 0x9a);
+                style.separator.color_idle = pal.grid_line;
+                style.separator.color_hovered = pal.edge_jump;
                 style.buttons.close_tab_bg_fill = Color32::TRANSPARENT;
-                style.buttons.close_tab_color = Color32::from_rgb(0x90, 0x98, 0xa6);
-                style.buttons.close_tab_active_color = Color32::WHITE;
+                style.buttons.close_tab_color = pal.tab_inactive_text;
+                style.buttons.close_tab_active_color = pal.text;
                 egui_dock::DockArea::new(&mut state)
                     .style(style)
                     .draggable_tabs(true)
@@ -1797,7 +1939,8 @@ impl ReCraftApp {
         }
     }
 
-    /// Persist the dock layout to `%LOCALAPPDATA%\ReCraft\layout.json` when it changes.
+    /// Persist the dock layout and theme to `%LOCALAPPDATA%\ReCraft\layout.json` when they
+    /// change.
     fn persist_layout_if_changed(&mut self) {
         self.frame_count = self.frame_count.wrapping_add(1);
         if self.frame_count % 30 != 0 || cfg!(test) {
@@ -1806,7 +1949,13 @@ impl ReCraftApp {
         let Some(state) = self.dock.as_ref() else {
             return;
         };
-        let Ok(text) = serde_json::to_string(state) else {
+        let theme = self.theme;
+        let saved = SavedLayout {
+            version: LAYOUT_VERSION,
+            dock: state.clone(),
+            theme,
+        };
+        let Ok(text) = serde_json::to_string(&saved) else {
             return;
         };
         if self.layout_saved.as_deref() == Some(text.as_str()) {
@@ -1815,16 +1964,17 @@ impl ReCraftApp {
         let Some(path) = layout_store_path() else {
             return;
         };
-        if save_layout_to(&path, state).is_ok() {
+        if save_layout_to(&path, state, theme).is_ok() {
             self.layout_saved = Some(text);
         }
     }
 
     fn restore_layout(&mut self) {
         if let Some(path) = layout_store_path()
-            && let Some(state) = load_layout_from(&path)
+            && let Some(saved) = load_layout_from(&path)
         {
-            self.dock = Some(state);
+            self.theme = saved.theme;
+            self.dock = Some(saved.dock);
         }
     }
 
@@ -1910,6 +2060,7 @@ impl ReCraftApp {
 
     /// Miniature CFG map under the Functions window (IDA's "Graph overview").
     fn graph_overview(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         let Some((start, end)) = self.current_function() else {
             ui.weak(self.t("no function selected", "没有选中函数"));
             return;
@@ -1939,7 +2090,7 @@ impl ReCraftApp {
         let height = ui.available_height().max(80.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, Color32::from_rgb(0x0e, 0x10, 0x14));
+        painter.rect_filled(rect, 2.0, pal.view);
         let columns = layers.len().max(1) as f32;
         let rows = layers.values().map(Vec::len).max().unwrap_or(1).max(1) as f32;
         let cell_w = rect.width() / columns;
@@ -1965,11 +2116,7 @@ impl ReCraftApp {
                 painter.rect_filled(
                     block_rect,
                     1.0,
-                    if current {
-                        C_ADDR
-                    } else {
-                        Color32::from_rgb(0x3a, 0x5a, 0x7a)
-                    },
+                    if current { pal.addr } else { pal.edge_jump },
                 );
                 let response = ui.interact(
                     block_rect,
@@ -1985,6 +2132,7 @@ impl ReCraftApp {
 
     /// Output window: analysis/status log lines (IDA's Output pane).
     fn output_pane(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
+        let pal = self.palette();
         if self.log.is_empty() {
             ui.weak(self.t("No messages yet.", "还没有消息。"));
             return;
@@ -1997,7 +2145,7 @@ impl ReCraftApp {
                     let color = if line.starts_with("error:") {
                         Color32::from_rgb(0xe0, 0x6a, 0x6a)
                     } else {
-                        Color32::from_gray(0xc8)
+                        pal.text
                     };
                     ui.label(RichText::new(line).monospace().size(11.0).color(color));
                 }
@@ -2005,6 +2153,7 @@ impl ReCraftApp {
     }
 
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         if self.functions.is_empty() {
             ui.weak(self.t(
                 "No functions yet — press Analyze (F5).",
@@ -2061,7 +2210,7 @@ impl ReCraftApp {
                                 continue;
                             }
                             shown += 1;
-                            ui.label(RichText::new("ƒ").color(C_NAME));
+                            ui.label(RichText::new("ƒ").color(pal.name));
                             let response = ui.selectable_label(false, name).on_hover_text(format!(
                                 "{:#012x} .. {:#012x}",
                                 function.start.get(),
@@ -2594,6 +2743,7 @@ impl ReCraftApp {
     /// coloured edges with arrowheads, entry marker, zoom controls and a status line.
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Graph;
+        let pal = self.palette();
         let Some(cfg) = self.cfg.clone() else {
             ui.weak(self.t(
                 "No control-flow graph — run Analyze (F5) and put the cursor inside a function.",
@@ -2606,11 +2756,11 @@ impl ReCraftApp {
             return;
         }
         let edge_color = |kind: recraft_analysis::EdgeKind| match kind {
-            recraft_analysis::EdgeKind::Fallthrough => Color32::from_rgb(0x5a, 0x9a, 0x9a),
-            recraft_analysis::EdgeKind::Taken => Color32::from_rgb(0x6a, 0xb0, 0x6a),
-            recraft_analysis::EdgeKind::NotTaken => Color32::from_rgb(0xc0, 0x6a, 0x6a),
-            recraft_analysis::EdgeKind::Unconditional => Color32::from_rgb(0x5a, 0x9a, 0x9a),
-            recraft_analysis::EdgeKind::JumpTable => Color32::from_rgb(0xa0, 0x8a, 0xc0),
+            recraft_analysis::EdgeKind::Fallthrough => pal.edge_jump,
+            recraft_analysis::EdgeKind::Taken => pal.edge_taken,
+            recraft_analysis::EdgeKind::NotTaken => pal.edge_not_taken,
+            recraft_analysis::EdgeKind::Unconditional => pal.edge_jump,
+            recraft_analysis::EdgeKind::JumpTable => pal.edge_jump_table,
         };
         ui.horizontal(|ui| {
             for (label, color) in [
@@ -2730,11 +2880,11 @@ impl ReCraftApp {
                     let current = selected
                         .is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
                     // IDA-style frame: dark body, teal border, light header bar.
-                    painter.rect_filled(rect, 4.0, Color32::from_rgb(0x0d, 0x10, 0x12));
+                    painter.rect_filled(rect, 4.0, pal.graph_node);
                     let border = if current {
-                        C_ADDR
+                        pal.graph_selected_border
                     } else {
-                        Color32::from_rgb(0x4a, 0x8f, 0x8f)
+                        pal.graph_border
                     };
                     painter.rect_stroke(
                         rect,
@@ -2744,13 +2894,13 @@ impl ReCraftApp {
                     );
                     let header =
                         egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
-                    painter.rect_filled(header, 4.0, Color32::from_rgb(0x9c, 0xc8, 0xc8));
+                    painter.rect_filled(header, 4.0, pal.graph_header);
                     painter.text(
                         header.min + egui::vec2(6.0, 1.0),
                         egui::Align2::LEFT_TOP,
                         format!("{:#x}", block.start.get()),
                         FontId::monospace(text_size * 0.92),
-                        Color32::from_rgb(0x14, 0x2a, 0x2a),
+                        pal.graph_header_text,
                     );
                     if is_entry {
                         painter.text(
@@ -2758,7 +2908,7 @@ impl ReCraftApp {
                             egui::Align2::RIGHT_CENTER,
                             "entry",
                             FontId::proportional(text_size * 0.85),
-                            Color32::from_rgb(0x14, 0x4a, 0x2a),
+                            pal.comment,
                         );
                     }
                     for (line_index, insn) in block.insns.iter().take(max_lines).enumerate() {
@@ -2767,19 +2917,19 @@ impl ReCraftApp {
                             Some((mnemonic, rest)) => (mnemonic, rest),
                             None => (insn.text.as_str(), ""),
                         };
-                        append(&mut job, mnemonic, C_MNEMONIC, &mono);
-                        append(&mut job, " ", C_TEXT, &mono);
+                        append(&mut job, mnemonic, pal.mnemonic, &mono);
+                        append(&mut job, " ", pal.text, &mono);
                         if let Some((operands, comment)) = operands.split_once(';') {
-                            append(&mut job, operands, C_TEXT, &mono);
-                            append(&mut job, &format!("; {comment}"), C_COMMENT, &mono);
+                            append(&mut job, operands, pal.text, &mono);
+                            append(&mut job, &format!("; {comment}"), pal.comment, &mono);
                         } else {
-                            append(&mut job, operands, C_TEXT, &mono);
+                            append(&mut job, operands, pal.text, &mono);
                         }
                         let galley = painter.layout_job(job);
                         painter.galley(
                             rect.min + egui::vec2(pad, header_h + pad + line_index as f32 * line_h),
                             galley,
-                            C_TEXT,
+                            pal.text,
                         );
                     }
                     if block.insns.len() > max_lines {
@@ -2868,6 +3018,7 @@ impl ReCraftApp {
 
     fn disasm_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Disasm;
+        let pal = self.palette();
         if self.disasm_rows.is_empty() {
             ui.weak(self.t(
                 "No disassembly. Import a PE file first.",
@@ -2912,9 +3063,9 @@ impl ReCraftApp {
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click());
                     if index == self.selected {
-                        ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
+                        ui.painter().rect_filled(rect, 1.0, pal.selected_row);
                     } else if response.hovered() {
-                        ui.painter().rect_filled(rect, 1.0, C_HOVER_ROW);
+                        ui.painter().rect_filled(rect, 1.0, pal.hover_row);
                     }
                     if let Some(name) = line.name.as_deref() {
                         ui.painter().text(
@@ -2922,7 +3073,7 @@ impl ReCraftApp {
                             egui::Align2::LEFT_TOP,
                             format!("{name}:"),
                             mono.clone(),
-                            C_NAME,
+                            pal.name,
                         );
                     }
                     let bytes = line
@@ -2934,21 +3085,21 @@ impl ReCraftApp {
                     append(
                         &mut job,
                         &format!("{:#012x}  ", line.addr.get()),
-                        C_ADDR,
+                        pal.addr,
                         &mono,
                     );
-                    append(&mut job, &format!("{bytes:<46}"), C_BYTES, &mono);
+                    append(&mut job, &format!("{bytes:<46}"), pal.bytes, &mono);
                     append(
                         &mut job,
                         &format!("{:<9}", line.mnemonic),
-                        C_MNEMONIC,
+                        pal.mnemonic,
                         &mono,
                     );
-                    append(&mut job, &format!("{:<36}", line.operands), C_TEXT, &mono);
+                    append(&mut job, &format!("{:<36}", line.operands), pal.text, &mono);
                     append(
                         &mut job,
                         line.comment.as_deref().unwrap_or(""),
-                        C_COMMENT,
+                        pal.comment,
                         &mono,
                     );
                     let galley = ui.painter().layout_job(job);
@@ -3054,7 +3205,7 @@ impl ReCraftApp {
                 ui.weak(format!("100.00%   {:#x}", line.addr.get()));
                 if let Some(name) = line.name.as_deref() {
                     ui.separator();
-                    ui.label(RichText::new(name).color(C_NAME));
+                    ui.label(RichText::new(name).color(pal.name));
                 }
                 if let Some((start, _)) = self.current_function() {
                     ui.separator();
@@ -3069,6 +3220,7 @@ impl ReCraftApp {
     /// IDA-style navigation band: segment map of the image with a marker for the current
     /// disassembly position; clicking jumps proportionally.
     fn navigation_band(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         let Some(session) = self.session.as_ref() else {
             return;
         };
@@ -3091,7 +3243,7 @@ impl ReCraftApp {
         let width = ui.available_width().max(120.0);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 12.0), Sense::click());
         let painter = ui.painter();
-        painter.rect_filled(rect, 2.0, Color32::from_rgb(0x18, 0x1c, 0x24));
+        painter.rect_filled(rect, 2.0, pal.view);
         for segment in segments {
             let x0 = rect.left()
                 + ((segment.range.start.get().saturating_sub(base) as f32 / span) * rect.width());
@@ -3136,6 +3288,7 @@ impl ReCraftApp {
 
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Pseudo;
+        let pal = self.palette();
         let mono = FontId::monospace(MONO_SIZE);
         let l1_label = self.t("L1 (structured)", "L1（结构化）");
         let l2_label = self.t("L2 (vars)", "L2（变量）");
@@ -3184,15 +3337,15 @@ impl ReCraftApp {
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), Sense::click());
                     if synced == Some(line.addr) {
-                        ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
+                        ui.painter().rect_filled(rect, 1.0, pal.selected_row);
                     } else if response.hovered() {
-                        ui.painter().rect_filled(rect, 1.0, C_HOVER_ROW);
+                        ui.painter().rect_filled(rect, 1.0, pal.hover_row);
                     }
                     let mut job = LayoutJob::default();
                     append(
                         &mut job,
                         &format!("{:#012x}  ", line.addr.get()),
-                        C_ADDR,
+                        pal.addr,
                         &mono,
                     );
                     append(&mut job, &line.text, Color32::LIGHT_GRAY, &mono);
@@ -3415,6 +3568,9 @@ impl ReCraftApp {
             if input.modifiers.command && input.key_pressed(Key::O) {
                 action = Action::Open;
             }
+            if input.modifiers.command && input.key_pressed(Key::T) {
+                action = Action::ToggleTheme;
+            }
             if input.key_pressed(Key::F5) {
                 action = Action::Analyze;
             }
@@ -3542,6 +3698,25 @@ impl ReCraftApp {
                     let _ = std::fs::remove_file(path);
                 }
                 self.set_status(self.t("layout reset", "布局已重置").to_owned());
+            }
+            Action::SetTheme(theme) => {
+                self.theme = theme;
+                self.layout_saved = None;
+                self.set_status(match theme {
+                    ThemeMode::Dark => self.t("dark theme", "深色主题").to_owned(),
+                    ThemeMode::Light => self.t("light theme", "浅色主题").to_owned(),
+                });
+            }
+            Action::ToggleTheme => {
+                self.theme = match self.theme {
+                    ThemeMode::Dark => ThemeMode::Light,
+                    ThemeMode::Light => ThemeMode::Dark,
+                };
+                self.layout_saved = None;
+                self.set_status(match self.theme {
+                    ThemeMode::Dark => self.t("dark theme", "深色主题").to_owned(),
+                    ThemeMode::Light => self.t("light theme", "浅色主题").to_owned(),
+                });
             }
             Action::ApplyData(op) => {
                 let Some(line) = self.disasm_rows.get(self.selected).cloned() else {
@@ -4890,14 +5065,15 @@ mod tests {
         output.textures_delta.clear();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("layout.json");
-        save_layout_to(&file, app.dock.as_ref().unwrap()).unwrap();
+        save_layout_to(&file, app.dock.as_ref().unwrap(), ThemeMode::Light).unwrap();
         let loaded = load_layout_from(&file).expect("layout reload");
+        assert_eq!(loaded.theme, ThemeMode::Light, "theme must persist");
         assert!(
-            loaded.find_tab(&Pane::Disasm).is_some(),
+            loaded.dock.find_tab(&Pane::Disasm).is_some(),
             "primary view must survive a layout reload"
         );
         assert!(
-            loaded.find_tab(&Pane::Functions).is_none(),
+            loaded.dock.find_tab(&Pane::Functions).is_none(),
             "closed panes must stay closed after reload"
         );
         // Stale layout versions and malformed files fall back to the default layout.
@@ -4908,6 +5084,22 @@ mod tests {
             load_layout_from(&dir.path().join("missing.json")).is_none(),
             "missing layout falls back to defaults"
         );
+    }
+
+    #[test]
+    fn theme_toggle_switches_palette() {
+        let mut app = ReCraftApp::default();
+        assert_eq!(app.theme, ThemeMode::Dark);
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::ToggleTheme);
+        assert_eq!(app.theme, ThemeMode::Light);
+        assert_ne!(
+            app.palette().view,
+            Palette::DARK.view,
+            "light palette must use a different view background"
+        );
+        app.apply_action(&ctx, Action::SetTheme(ThemeMode::Dark));
+        assert_eq!(app.theme, ThemeMode::Dark);
     }
 
     #[test]
