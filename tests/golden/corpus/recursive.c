@@ -1,6 +1,6 @@
 // L1 structure recovery (3 blocks)
 void recursive_l1(void) {
-    *(u64*)((rsp - 8)) = rbx;
+    var_n8 = rbx;
     ebx = ecx;
     if ((ecx > 1 /* signed */)) {
         ecx = (ecx - 1);

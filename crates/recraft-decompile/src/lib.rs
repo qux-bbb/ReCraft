@@ -408,9 +408,6 @@ impl Printer<'_> {
             Expr::Bin { op, lhs, rhs } => (op, *lhs, *rhs),
             _ => return None,
         };
-        if *op != recraft_ir::BinOp::Add {
-            return None;
-        }
         let base_of = |id: ExprId, exprs: &[Expr]| match &exprs[id as usize] {
             Expr::Reg(view) if matches!(view.base, Reg::Rsp | Reg::Rbp) => Some(view.base),
             _ => None,
@@ -419,12 +416,23 @@ impl Printer<'_> {
             Expr::Const(value) => Some(value as i64),
             _ => None,
         };
-        if let Some(base) = base_of(lhs, self.exprs) {
-            const_of(rhs, self.exprs).map(|offset| (base, offset))
-        } else if let Some(base) = base_of(rhs, self.exprs) {
-            const_of(lhs, self.exprs).map(|offset| (base, offset))
-        } else {
-            None
+        match op {
+            // `[rsp + N]` / `[rbp + N]`
+            recraft_ir::BinOp::Add => {
+                if let Some(base) = base_of(lhs, self.exprs) {
+                    const_of(rhs, self.exprs).map(|offset| (base, offset))
+                } else if let Some(base) = base_of(rhs, self.exprs) {
+                    const_of(lhs, self.exprs).map(|offset| (base, offset))
+                } else {
+                    None
+                }
+            }
+            // `[rsp - N]` / `[rbp - N]` (e.g. the saved-register slot of a `push`)
+            recraft_ir::BinOp::Sub => {
+                let base = base_of(lhs, self.exprs)?;
+                const_of(rhs, self.exprs).map(|offset| (base, -offset))
+            }
+            _ => None,
         }
     }
 

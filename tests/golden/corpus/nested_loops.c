@@ -1,7 +1,7 @@
 // L1 structure recovery (16 blocks)
 void nested_loops_l1(void) {
-    *(u64*)((rsp - 8)) = rbx;
-    *(u64*)((rsp - 8)) = rsi;
+    var_n8 = rbx;
+    var_n8 = rsi;
     esi = 0;
     r11d = 0;
     ebx = ecx;
