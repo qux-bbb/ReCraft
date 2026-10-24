@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Single **Code View** pane (replaces the separate "IDA View-A" and "Text View" tabs):
+  one dock tab with an internal **Graph/Text** mode stored as `view_mode`. The toolbar
+  `Graph`/`Text` buttons and **Space** switch the mode of the same view instead of
+  switching tabs; double-clicking a graph block switches the same view to Text and
+  navigates. Navigation from lists/Hex focuses Code View in Text mode. Saved layouts now
+  record one view plus the mode (`SavedLayout` v7); the pane enum is simplified to one
+  `View` pane and the old Graph tab is gone.
+
 - Multi-window evaluation (ADR-012): added `examples/viewport_spike.rs`, which opens a
   second **real OS window** via `Context::show_viewport_immediate` + `ViewportBuilder`.
   Verified on Windows 10 + the pinned Glow backend: two native top-level windows, child
@@ -25,15 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the font size automatically, and the zoom factor is persisted with the layout
   (`SavedLayout` v6). Adds `zoom_actions_clamp_and_reset` and a persistence assertion;
   screenshot `docs/images/zoom.png`.
+
+- Graph overview is now a real minimap: it reuses the graph view's CFG layout
   (`graph_layout`), draws scaled node rectangles with their edges, highlights the block
   containing the current address, and draws the graph view's visible viewport box when the
   graph pane has been laid out. Clicking a node jumps to that block. A unit test covers the
   shared layout geometry, and the screenshot is `docs/images/graph-overview.png`.
+
+- Navigation band now reflects real content and matches the legend: executable segments
   are teal (instructions), readable data segments green, unexplored areas grey; discovered
   functions overlay the top half in the blue "Regular function" colour, import/IAT
   addresses appear as magenta "External symbol" ticks, the marker uses the current
   address-colour, and hovering shows address · segment · function. The legend reuses the
   same `NAV_*` constants, so band and legend can no longer drift apart.
+
+- Text View operand syntax colours: registers (purple), numeric literals/immediates
   (teal), symbol names such as `sub_`/`loc_` (brown) and quoted strings (green) are
   coloured separately instead of the whole operand string using one colour; both themes
   have their own variants. Operand classification is unit-tested

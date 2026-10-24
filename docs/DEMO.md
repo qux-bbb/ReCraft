@@ -58,20 +58,22 @@ applied 3 proposal(s) through the command bus (undoable)
 2. `F5` 运行分析（后台线程，可取消）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
-   图标）及其下方 **Graph overview**；右侧**文档标签区**（**IDA View-A 图形视图（默认）**、
-   Text View、Hex View-1、Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、
-   Local Types、AI）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex
-   同步提示）。图形视图支持节点块/箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
+   图标）及其下方 **Graph overview**；右侧**文档标签区**（**Code View**、Hex View-1、
+   Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、Local Types、AI）；底部
+   **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex 同步提示）。
+   **Code View 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
+   **空格键**切换，不会切换标签页；Graph 中双击基本块会切到 Text 并定位。图形支持节点块/
+   箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
    **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在**全浅色/全深色**主题间切换；默认是**全浅色**，
    选择随布局一起保存。
    ![Default light theme](images/ida-layout.png)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
-   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；**`Ctrl+=` / `Ctrl+-` /
-   `Ctrl+0`** 缩放/重置代码视图字号（Text/Pseudocode/Hex）。
-   **Text View** 操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
-   ![Text View operand colours](images/text-view.png)
+   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`Space` 切换 Code View
+   的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号（Text/Pseudocode/Hex）。
+   **Text 模式**操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
+   ![Text mode operand colours](images/text-view.png)
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
 3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。

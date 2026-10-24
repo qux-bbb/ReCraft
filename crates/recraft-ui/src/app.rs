@@ -31,6 +31,15 @@ const ZOOM_MIN: f32 = 0.75;
 const ZOOM_MAX: f32 = 2.0;
 const ZOOM_STEP: f32 = 0.1;
 
+/// Display mode of the single code view: graph or text listing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ViewMode {
+    #[default]
+    Graph,
+    Text,
+}
+
 /// Which colour scheme the workspace uses. Persisted with the dock layout.
 /// `Light` is a full light theme (light chrome and light views) and is the default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -154,7 +163,6 @@ fn hex_row_start(addr: Address) -> Address {
 enum Tab {
     Disasm,
     Pseudo,
-    Graph,
 }
 
 /// Docked panes (IDA-style dockable tabs, backed by `egui_dock`).
@@ -163,9 +171,8 @@ enum Tab {
 )]
 #[serde(rename_all = "snake_case")]
 enum Pane {
-    Disasm,
+    View,
     Pseudo,
-    Graph,
     Hex,
     Functions,
     Strings,
@@ -181,10 +188,9 @@ enum Pane {
 }
 
 impl Pane {
-    fn all() -> [Pane; 15] {
+    fn all() -> [Pane; 14] {
         [
-            Pane::Disasm,
-            Pane::Graph,
+            Pane::View,
             Pane::Hex,
             Pane::Pseudo,
             Pane::Imports,
@@ -203,10 +209,8 @@ impl Pane {
 
     fn title(self) -> (&'static str, &'static str) {
         match self {
-            // IDA-style document/panel names from the reference screenshot.
-            // Like IDA, the primary "IDA View-A" starts in graph mode; text is a tab.
-            Pane::Graph => ("IDA View-A", "IDA View-A"),
-            Pane::Disasm => ("Text View", "文本视图"),
+            // A single view with an internal Graph/Text mode (no separate IDA-style tabs).
+            Pane::View => ("Code View", "代码视图"),
             Pane::Pseudo => ("Pseudocode", "伪代码"),
             Pane::Hex => ("Hex View-1", "十六进制"),
             Pane::Functions => ("Functions", "函数"),
@@ -262,15 +266,16 @@ impl egui_dock::TabViewer for DockViewer<'_> {
         let pal = self.app.palette();
         ui.visuals_mut().override_text_color = Some(pal.text);
         match tab {
-            Pane::Disasm => {
+            Pane::View => {
                 if self.app.session.is_none() {
                     self.app.welcome(ui, self.action);
+                } else if self.app.view_mode == ViewMode::Graph {
+                    self.app.graph_view(ui, self.action);
                 } else {
                     self.app.disasm_view(ui, self.action);
                 }
             }
             Pane::Pseudo => self.app.pseudo_view(ui, self.action),
-            Pane::Graph => self.app.graph_view(ui, self.action),
             Pane::Hex => self.app.hex_view(ui, self.action),
             Pane::Functions => self.app.functions_list(ui, self.action),
             Pane::Strings => self.app.strings_list(ui, self.action),
@@ -295,7 +300,7 @@ impl egui_dock::TabViewer for DockViewer<'_> {
         // the Views menu.
         !matches!(
             tab,
-            Pane::Disasm | Pane::Graph | Pane::Functions | Pane::Output | Pane::GraphOverview
+            Pane::View | Pane::Functions | Pane::Output | Pane::GraphOverview
         )
     }
 }
@@ -362,7 +367,7 @@ struct EditState {
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
 /// resurrecting the old arrangement. The theme is stored alongside the dock state.
-const LAYOUT_VERSION: u32 = 6;
+const LAYOUT_VERSION: u32 = 7;
 
 fn default_zoom() -> f32 {
     1.0
@@ -376,6 +381,8 @@ struct SavedLayout {
     theme: ThemeMode,
     #[serde(default = "default_zoom")]
     zoom: f32,
+    #[serde(default)]
+    view_mode: ViewMode,
 }
 
 fn layout_store_path() -> Option<PathBuf> {
@@ -394,6 +401,7 @@ fn save_layout_to(
     state: &egui_dock::DockState<Pane>,
     theme: ThemeMode,
     zoom: f32,
+    view_mode: ViewMode,
 ) -> std::result::Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -403,6 +411,7 @@ fn save_layout_to(
         dock: state.clone(),
         theme,
         zoom,
+        view_mode,
     };
     let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
     // `egui` serializes NaN coordinates as null; skip until the dock has been laid out.
@@ -481,7 +490,11 @@ const PALETTE_COMMANDS: &[(&str, &str, Action)] = &[
     ("Analyze (F5)", "分析 (F5)", Action::Analyze),
     ("Undo (Ctrl+Z)", "撤销 (Ctrl+Z)", Action::Undo),
     ("Redo (Ctrl+Y)", "重做 (Ctrl+Y)", Action::Redo),
-    ("Switch view (Space)", "切换视图 (Space)", Action::ToggleTab),
+    (
+        "Switch Graph/Text (Space)",
+        "切换 图形/文本 (Space)",
+        Action::ToggleViewMode,
+    ),
     ("Go to address (G)", "跳转到地址 (G)", Action::GotoDialog),
     ("Rename (N)", "改名 (N)", Action::EditName),
     ("Comment (;)", "注释 (;)", Action::EditComment),
@@ -504,7 +517,8 @@ enum Action {
     Undo,
     Redo,
     ToggleLang,
-    ToggleTab,
+    ToggleViewMode,
+    SetViewMode(ViewMode),
     GotoDialog,
     EditName,
     EditComment,
@@ -584,6 +598,8 @@ pub struct ReCraftApp {
     cfg_dirty: bool,
     /// Graph-view zoom factor (0.5..=2.0), adjusted by the on-pane +/- controls.
     graph_zoom: f32,
+    /// Graph or text mode of the single Code View pane.
+    view_mode: ViewMode,
     /// Code-view font/row scale (0.75..=2.0), shared by Text/Pseudocode/Hex views.
     mono_zoom: f32,
     /// Last visible graph-canvas rectangle (for the overview viewport box).
@@ -656,6 +672,7 @@ impl Default for ReCraftApp {
             cfg: None,
             cfg_for: None,
             graph_zoom: 1.0,
+            view_mode: ViewMode::Graph,
             mono_zoom: 1.0,
             graph_visible: None,
             cfg_dirty: false,
@@ -1132,7 +1149,7 @@ impl ReCraftApp {
             self.refresh_imports();
         }
         self.refresh_xrefs();
-        if self.tab == Tab::Graph {
+        if self.view_mode == ViewMode::Graph {
             self.refresh_cfg();
         }
         self.sync_hex();
@@ -1141,9 +1158,12 @@ impl ReCraftApp {
     /// Anchor the hex pane on the current disassembly selection (unless the user picked
     /// an explicit hex position).
     fn sync_hex(&mut self) {
-        let anchor = match self.tab {
-            Tab::Disasm => self.disasm_rows.get(self.selected).map(|line| line.addr),
-            Tab::Pseudo | Tab::Graph => Some(self.pseudo_start),
+        let anchor = if self.tab == Tab::Pseudo
+            || (self.tab == Tab::Disasm && self.view_mode == ViewMode::Graph)
+        {
+            Some(self.pseudo_start)
+        } else {
+            self.disasm_rows.get(self.selected).map(|line| line.addr)
         };
         let Some(anchor) = anchor else {
             return;
@@ -1638,12 +1658,12 @@ impl ReCraftApp {
                     *action = Action::Forward;
                 }
                 ui.separator();
-                let graph_active = matches!(self.tab, Tab::Graph);
+                let graph_active = self.view_mode == ViewMode::Graph;
                 if ui.selectable_label(!graph_active, "Text").clicked() {
-                    *action = Action::FocusPane(Pane::Disasm);
+                    *action = Action::SetViewMode(ViewMode::Text);
                 }
                 if ui.selectable_label(graph_active, "Graph").clicked() {
-                    *action = Action::FocusPane(Pane::Graph);
+                    *action = Action::SetViewMode(ViewMode::Graph);
                 }
                 ui.separator();
                 if let Some(job) = self.analysis.as_ref() {
@@ -1906,16 +1926,15 @@ impl ReCraftApp {
         }
     }
 
-    /// Build the default IDA-like dock layout once: Functions + Graph overview on the
-    /// left, document tabs (IDA View-A/Hex/Pseudocode/Imports/…) filling the right and an
+    /// Build the default dock layout once: Functions + Graph overview on the left,
+    /// document tabs (Code View/Hex/Pseudocode/Imports/…) filling the right and an
     /// Output window across the bottom.
     fn ensure_dock(&mut self) {
         if self.dock.is_some() {
             return;
         }
         let mut state = egui_dock::DockState::new(vec![
-            Pane::Graph,
-            Pane::Disasm,
+            Pane::View,
             Pane::Hex,
             Pane::Pseudo,
             Pane::Imports,
@@ -1936,10 +1955,6 @@ impl ReCraftApp {
             let [left, _docs] = surface.split_left(top, 0.22, vec![Pane::Functions]);
             let [_functions, _overview] =
                 surface.split_below(left, 0.74, vec![Pane::GraphOverview]);
-        }
-        // IDA shows the graph by default; Text remains one click away.
-        if let Some(path) = state.find_tab(&Pane::Graph) {
-            let _ = state.set_active_tab(path);
         }
         self.dock = Some(state);
     }
@@ -2013,11 +2028,13 @@ impl ReCraftApp {
         };
         let theme = self.theme;
         let zoom = self.mono_zoom;
+        let view_mode = self.view_mode;
         let saved = SavedLayout {
             version: LAYOUT_VERSION,
             dock: state.clone(),
             theme,
             zoom,
+            view_mode,
         };
         let Ok(text) = serde_json::to_string(&saved) else {
             return;
@@ -2028,7 +2045,7 @@ impl ReCraftApp {
         let Some(path) = layout_store_path() else {
             return;
         };
-        if save_layout_to(&path, state, theme, zoom).is_ok() {
+        if save_layout_to(&path, state, theme, zoom, view_mode).is_ok() {
             self.layout_saved = Some(text);
         }
     }
@@ -2039,6 +2056,7 @@ impl ReCraftApp {
         {
             self.theme = saved.theme;
             self.mono_zoom = saved.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+            self.view_mode = saved.view_mode;
             self.dock = Some(saved.dock);
         }
     }
@@ -2823,7 +2841,7 @@ impl ReCraftApp {
     /// IDA-style graph view: basic-block nodes with teal frames and headers, curved
     /// coloured edges with arrowheads, entry marker, zoom controls and a status line.
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        self.tab = Tab::Graph;
+        self.tab = Tab::Disasm;
         let pal = self.palette();
         let Some(cfg) = self.cfg.clone() else {
             ui.weak(self.t(
@@ -3747,7 +3765,7 @@ impl ReCraftApp {
             } else if input.key_pressed(Key::Semicolon) {
                 action = Action::EditComment;
             } else if input.key_pressed(Key::Space) {
-                action = Action::ToggleTab;
+                action = Action::ToggleViewMode;
             } else if input.key_pressed(Key::X) {
                 action = Action::ShowXrefs;
             } else if input.modifiers.command {
@@ -3805,7 +3823,8 @@ impl ReCraftApp {
                 if let Some(target) = self.follow_target(&line) {
                     self.navigate(target);
                     self.tab = Tab::Disasm;
-                    self.focus_pane(Pane::Disasm);
+                    self.view_mode = ViewMode::Text;
+                    self.focus_pane(Pane::View);
                 } else {
                     self.set_status(
                         self.t("no followable target", "没有可跟随的目标")
@@ -3821,7 +3840,8 @@ impl ReCraftApp {
             Action::NavigateToDisasm(addr) => {
                 self.navigate(addr);
                 self.tab = Tab::Disasm;
-                self.focus_pane(Pane::Disasm);
+                self.view_mode = ViewMode::Text;
+                self.focus_pane(Pane::View);
             }
             Action::SyncDisasm(addr) => {
                 self.disasm_start = addr;
@@ -4095,18 +4115,18 @@ impl ReCraftApp {
             Action::ToggleLang => {
                 self.lang = self.lang.toggle();
             }
-            Action::ToggleTab => {
-                let pane = match self.tab {
-                    Tab::Disasm => Pane::Pseudo,
-                    Tab::Pseudo => Pane::Graph,
-                    Tab::Graph => Pane::Disasm,
+            Action::ToggleViewMode => {
+                self.view_mode = match self.view_mode {
+                    ViewMode::Graph => ViewMode::Text,
+                    ViewMode::Text => ViewMode::Graph,
                 };
-                self.focus_pane(pane);
-                self.tab = match pane {
-                    Pane::Pseudo => Tab::Pseudo,
-                    Pane::Graph => Tab::Graph,
-                    _ => Tab::Disasm,
-                };
+                self.tab = Tab::Disasm;
+                self.focus_pane(Pane::View);
+            }
+            Action::SetViewMode(mode) => {
+                self.view_mode = mode;
+                self.tab = Tab::Disasm;
+                self.focus_pane(Pane::View);
             }
             Action::GotoDialog => {
                 if self.session.is_some() {
@@ -4621,7 +4641,7 @@ mod tests {
             Pane::Structs,
             Pane::Hex,
             Pane::Pseudo,
-            Pane::Graph,
+            Pane::View,
             Pane::Exports,
             Pane::GraphOverview,
             Pane::Output,
@@ -4647,8 +4667,9 @@ mod tests {
         assert!(!app.strings.is_empty(), "strings panel data missing");
         assert!(!app.imports.is_empty(), "imports panel data missing");
 
-        // Graph tab: build and render the CFG for the entry function.
-        app.tab = Tab::Graph;
+        // Code View: build and render the CFG for the entry function.
+        app.tab = Tab::Disasm;
+        app.view_mode = ViewMode::Graph;
         app.cfg_dirty = true;
         app.cfg_for = None;
         for frame in 0..2 {
@@ -5298,7 +5319,8 @@ mod tests {
             .as_mut()
             .and_then(|state| state.find_active_focused())
             .map(|(_, tab)| *tab);
-        assert_eq!(active, Some(Pane::Disasm));
+        assert_eq!(active, Some(Pane::View));
+        assert_eq!(app.view_mode, ViewMode::Text);
         assert_eq!(app.disasm_start, target);
     }
 
@@ -5353,15 +5375,23 @@ mod tests {
         output.textures_delta.clear();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("layout.json");
-        save_layout_to(&file, app.dock.as_ref().unwrap(), ThemeMode::Light, 1.2).unwrap();
+        save_layout_to(
+            &file,
+            app.dock.as_ref().unwrap(),
+            ThemeMode::Light,
+            1.2,
+            ViewMode::Text,
+        )
+        .unwrap();
         let loaded = load_layout_from(&file).expect("layout reload");
         assert_eq!(loaded.theme, ThemeMode::Light, "theme must persist");
         assert!(
             (loaded.zoom - 1.2).abs() < f32::EPSILON,
             "zoom must persist"
         );
+        assert_eq!(loaded.view_mode, ViewMode::Text, "view mode must persist");
         assert!(
-            loaded.dock.find_tab(&Pane::Disasm).is_some(),
+            loaded.dock.find_tab(&Pane::View).is_some(),
             "primary view must survive a layout reload"
         );
         assert!(
@@ -5376,6 +5406,19 @@ mod tests {
             load_layout_from(&dir.path().join("missing.json")).is_none(),
             "missing layout falls back to defaults"
         );
+    }
+
+    #[test]
+    fn view_mode_toggles_between_graph_and_text() {
+        let mut app = ReCraftApp::default();
+        let ctx = egui::Context::default();
+        assert_eq!(app.view_mode, ViewMode::Graph);
+        app.apply_action(&ctx, Action::ToggleViewMode);
+        assert_eq!(app.view_mode, ViewMode::Text);
+        app.apply_action(&ctx, Action::SetViewMode(ViewMode::Graph));
+        assert_eq!(app.view_mode, ViewMode::Graph);
+        app.apply_action(&ctx, Action::SetViewMode(ViewMode::Text));
+        assert_eq!(app.view_mode, ViewMode::Text);
     }
 
     #[test]
