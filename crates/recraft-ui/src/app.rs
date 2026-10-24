@@ -25,11 +25,11 @@ use crate::i18n::{Lang, tr};
 const DISASM_ROWS: usize = 400;
 const MONO_SIZE: f32 = 13.0;
 
-const C_ADDR: Color32 = Color32::from_rgb(0x6a, 0x8f, 0xb5);
+const C_ADDR: Color32 = Color32::from_rgb(0xc9, 0xb4, 0x58);
 const C_BYTES: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
-const C_MNEMONIC: Color32 = Color32::from_rgb(0x62, 0xa8, 0xe0);
-const C_NAME: Color32 = Color32::from_rgb(0xd0, 0xa0, 0x60);
-const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0xb0, 0x6a);
+const C_MNEMONIC: Color32 = Color32::from_rgb(0x7e, 0x9e, 0xd0);
+const C_NAME: Color32 = Color32::from_rgb(0xd7, 0xd7, 0x87);
+const C_COMMENT: Color32 = Color32::from_rgb(0x6a, 0x99, 0x55);
 /// IDA-style current-line highlight and hover tint.
 const C_SELECTED_ROW: Color32 = Color32::from_rgb(0x2f, 0x46, 0x5f);
 const C_HOVER_ROW: Color32 = Color32::from_rgb(0x22, 0x2a, 0x35);
@@ -237,6 +237,7 @@ enum Action {
     AiPolish,
     AiQuery,
     NavigateToDisasm(Address),
+    SyncDisasm(Address),
     Forward,
 }
 
@@ -1015,6 +1016,14 @@ impl ReCraftApp {
                 ui.separator();
                 if let Some(line) = self.disasm_rows.get(self.selected) {
                     ui.label(format!("{:#x}", line.addr.get()));
+                    if let Some(name) = line.name.as_deref() {
+                        ui.separator();
+                        ui.label(RichText::new(name).color(C_NAME));
+                    }
+                }
+                if let Some((start, end)) = self.current_function() {
+                    ui.separator();
+                    ui.weak(format!("fn {:#x}..{:#x}", start.get(), end.get()));
                 }
                 ui.separator();
                 ui.weak(self.t(
@@ -1177,6 +1186,8 @@ impl ReCraftApp {
             });
         if let Some(address) = clicked {
             self.hex_cursor = Some(address);
+            // Hex clicks move the disassembly cursor too (IDA-style linkage).
+            *action = Action::SyncDisasm(address);
         }
         if let Some(address) = navigated {
             self.hex_synced = None;
@@ -1913,6 +1924,7 @@ impl ReCraftApp {
         let redo_menu = self.t("Redo", "重做");
         let mut clicked_row = None;
         let mut follow = false;
+        self.navigation_band(ui, action);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2028,6 +2040,74 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA-style navigation band: segment map of the image with a marker for the current
+    /// disassembly position; clicking jumps proportionally.
+    fn navigation_band(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let segments = session.segments();
+        if segments.is_empty() {
+            return;
+        }
+        let base = segments
+            .iter()
+            .map(|segment| segment.range.start.get())
+            .min()
+            .unwrap_or(0);
+        let end = segments
+            .iter()
+            .map(|segment| segment.range.end.get())
+            .max()
+            .unwrap_or(base + 1)
+            .max(base + 1);
+        let span = (end - base) as f32;
+        let width = ui.available_width().max(120.0);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 12.0), Sense::click());
+        let painter = ui.painter();
+        painter.rect_filled(rect, 2.0, Color32::from_rgb(0x18, 0x1c, 0x24));
+        for segment in segments {
+            let x0 = rect.left()
+                + ((segment.range.start.get().saturating_sub(base) as f32 / span) * rect.width());
+            let x1 = rect.left()
+                + ((segment.range.end.get().saturating_sub(base) as f32 / span) * rect.width())
+                    .max(x0 + 1.0);
+            let color = if segment.perm.is_executable() {
+                Color32::from_rgb(0x33, 0x55, 0x77)
+            } else if segment.perm.is_readable() {
+                Color32::from_rgb(0x33, 0x44, 0x33)
+            } else {
+                Color32::from_rgb(0x44, 0x33, 0x33)
+            };
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, rect.top()),
+                    egui::pos2(x1.min(rect.right()), rect.bottom()),
+                ),
+                0.0,
+                color,
+            );
+        }
+        let current = self.disasm_start.get().clamp(base, end);
+        let marker = rect.left()
+            + (((current.saturating_sub(base)) as f32 / span) * rect.width())
+                .clamp(0.0, rect.width());
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(marker - 1.0, rect.top()),
+                egui::pos2(marker + 1.0, rect.bottom()),
+            ),
+            0.0,
+            Color32::from_rgb(0xe0, 0xd0, 0x80),
+        );
+        if response.clicked()
+            && let Some(position) = response.interact_pointer_pos()
+        {
+            let fraction = ((position.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+            *action = Action::SyncDisasm(Address::new(base + (fraction * span as f64) as u64));
+        }
+    }
+
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let mono = FontId::monospace(MONO_SIZE);
         let l1_label = self.t("L1 (structured)", "L1（结构化）");
@@ -2050,7 +2130,10 @@ impl ReCraftApp {
                 self.pseudo_dirty = true;
             }
             ui.separator();
-            ui.weak(self.t("click a line to jump to disassembly", "点击行跳转到反汇编"));
+            ui.weak(self.t(
+                "click selects/syncs · double-click jumps to disassembly",
+                "单击选中并同步 · 双击跳到反汇编",
+            ));
         });
         if self.pseudo_dirty {
             return;
@@ -2062,12 +2145,22 @@ impl ReCraftApp {
             ));
             return;
         };
+        let synced = self.disasm_rows.get(self.selected).map(|line| line.addr);
         let mut clicked = None;
+        let mut jumped = None;
+        let width = ui.available_width().max(120.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 for line in lines {
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(width, 16.0), Sense::click());
+                    if synced == Some(line.addr) {
+                        ui.painter().rect_filled(rect, 1.0, C_SELECTED_ROW);
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(rect, 1.0, C_HOVER_ROW);
+                    }
                     let mut job = LayoutJob::default();
                     append(
                         &mut job,
@@ -2076,14 +2169,26 @@ impl ReCraftApp {
                         &mono,
                     );
                     append(&mut job, &line.text, Color32::LIGHT_GRAY, &mono);
-                    let response = ui.add(egui::Label::new(job).sense(Sense::click()));
+                    let galley = ui.painter().layout_job(job);
+                    ui.painter().galley(
+                        rect.left_top() + egui::vec2(4.0, 1.0),
+                        galley,
+                        Color32::WHITE,
+                    );
                     if response.clicked() {
                         clicked = Some(line.addr);
                     }
+                    if response.double_clicked() {
+                        jumped = Some(line.addr);
+                    }
                 }
             });
+        // Single click syncs the disassembly cursor without leaving pseudo-C; double-click
+        // jumps into the disassembly tab (IDA-like select vs. follow).
         if let Some(addr) = clicked {
-            // Pseudo-code lines reverse-jump into the disassembly view.
+            *action = Action::SyncDisasm(addr);
+        }
+        if let Some(addr) = jumped {
             *action = Action::NavigateToDisasm(addr);
         }
     }
@@ -2353,6 +2458,13 @@ impl ReCraftApp {
             Action::NavigateToDisasm(addr) => {
                 self.navigate(addr);
                 self.tab = Tab::Disasm;
+            }
+            Action::SyncDisasm(addr) => {
+                self.disasm_start = addr;
+                self.selected = 0;
+                self.disasm_dirty = true;
+                self.pseudo_start = addr;
+                self.pseudo_dirty = true;
             }
             Action::Analyze => {
                 if self.analysis.is_some() {
@@ -3396,6 +3508,29 @@ mod tests {
         assert_eq!(app.disasm_start, third);
         app.apply_action(&ctx, Action::Forward);
         assert_eq!(app.disasm_start, third, "history end is a no-op");
+    }
+
+    #[test]
+    fn sync_disasm_keeps_the_current_tab() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("sync.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let target = Address::new(app.disasm_start.get() + 0x10);
+        app.tab = Tab::Pseudo;
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::SyncDisasm(target));
+        assert!(matches!(app.tab, Tab::Pseudo), "sync must not switch tabs");
+        assert_eq!(app.disasm_start, target);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.pseudo_start, target);
     }
 
     #[test]

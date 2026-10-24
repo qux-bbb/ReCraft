@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-style step 5 — view linkage and appearance: the disassembly gains an IDA-style
+  **navigation band** (segment map with a current-position marker, click to jump); the
+  pseudo-C view highlights the line matching the current disassembly address, single-click
+  syncs the disassembly cursor (`Action::SyncDisasm`, stays in pseudo-C) while
+  double-click jumps to the disassembly tab; hex-byte clicks also sync the disassembly
+  cursor; palette moved toward IDA colours (gold addresses, soft-blue mnemonics, pale-yellow
+  names, green comments) and the status bar shows the selected name and enclosing function
+  range. Test covers SyncDisasm semantics; demo walkthrough updated.
+
 - IDA-style step 4 — detached tool windows: Functions/Strings/Imports/Xrefs/Names/Segments
   (and AI) are now independent movable/resizable/closable egui windows instead of tabs in
   one fixed left panel; the top bar gains a **Views** menu to toggle each window, `X` opens
