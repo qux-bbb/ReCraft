@@ -9,11 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Default document tabs now follow the requested order: **Disassembly, Decompile, Hex,
+  Strings, Local Types, Imports, Exports, AI**; **Names, Xrefs and Segments are hidden by
+  default** and remain reachable from the Views menu. `Hex View-1` was renamed to **Hex**.
+  The saved-layout version is bumped to 8 so existing layouts fall back to this new
+  default; tests now assert the expected default tabs and the hidden panes.
+
 - Renamed the two primary views to match their function: the merged view is now
   **Disassembly / 反汇编** (Graph and Text modes inside one tab) and the pseudocode pane is
   now **Decompile / 反编译**. Updated menus, tabs, welcome shortcuts (Space = Graph/Text),
-  demo docs and screenshots (`docs/images/decompile.png` added). No layout version change:
-  pane ids are unchanged, only their display names.
+  demo docs and screenshots (`docs/images/decompile.png` added). Pane ids are unchanged,
+  only their display names.
 
 - Single **Code View** pane (replaces the separate "IDA View-A" and "Text View" tabs):
   one dock tab with an internal **Graph/Text** mode stored as `view_mode`. The toolbar

@@ -190,17 +190,20 @@ enum Pane {
 impl Pane {
     fn all() -> [Pane; 14] {
         [
+            // Default document tabs, in tab order.
             Pane::View,
-            Pane::Hex,
             Pane::Pseudo,
+            Pane::Hex,
+            Pane::Strings,
+            Pane::Structs,
             Pane::Imports,
             Pane::Exports,
-            Pane::Strings,
+            Pane::Ai,
+            // Hidden by default, reachable from the Views menu.
             Pane::Names,
             Pane::Xrefs,
             Pane::Segments,
-            Pane::Structs,
-            Pane::Ai,
+            // Panels.
             Pane::Functions,
             Pane::GraphOverview,
             Pane::Output,
@@ -209,11 +212,10 @@ impl Pane {
 
     fn title(self) -> (&'static str, &'static str) {
         match self {
-            // A single view with an internal Graph/Text mode (no separate IDA-style tabs).
-            // A single disassembly view with an internal Graph/Text mode.
+            // Disassembly is one view with an internal Graph/Text mode.
             Pane::View => ("Disassembly", "反汇编"),
             Pane::Pseudo => ("Decompile", "反编译"),
-            Pane::Hex => ("Hex View-1", "十六进制"),
+            Pane::Hex => ("Hex", "Hex"),
             Pane::Functions => ("Functions", "函数"),
             Pane::Strings => ("Strings", "字符串"),
             Pane::Imports => ("Imports", "导入"),
@@ -368,7 +370,7 @@ struct EditState {
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
 /// resurrecting the old arrangement. The theme is stored alongside the dock state.
-const LAYOUT_VERSION: u32 = 7;
+const LAYOUT_VERSION: u32 = 8;
 
 fn default_zoom() -> f32 {
     1.0
@@ -1936,15 +1938,12 @@ impl ReCraftApp {
         }
         let mut state = egui_dock::DockState::new(vec![
             Pane::View,
-            Pane::Hex,
             Pane::Pseudo,
+            Pane::Hex,
+            Pane::Strings,
+            Pane::Structs,
             Pane::Imports,
             Pane::Exports,
-            Pane::Strings,
-            Pane::Names,
-            Pane::Xrefs,
-            Pane::Segments,
-            Pane::Structs,
             Pane::Ai,
         ]);
         {
@@ -5286,14 +5285,32 @@ mod tests {
     }
 
     #[test]
-    fn dock_default_layout_contains_every_pane() {
+    fn dock_default_layout_has_the_requested_tabs() {
         let mut app = ReCraftApp::default();
         app.ensure_dock();
         let state = app.dock.as_ref().expect("dock state");
-        for pane in Pane::all() {
+        for pane in [
+            Pane::View,
+            Pane::Pseudo,
+            Pane::Hex,
+            Pane::Strings,
+            Pane::Structs,
+            Pane::Imports,
+            Pane::Exports,
+            Pane::Ai,
+            Pane::Functions,
+            Pane::GraphOverview,
+            Pane::Output,
+        ] {
             assert!(
                 state.find_tab(&pane).is_some(),
                 "default layout is missing {pane:?}"
+            );
+        }
+        for hidden in [Pane::Names, Pane::Xrefs, Pane::Segments] {
+            assert!(
+                state.find_tab(&hidden).is_none(),
+                "{hidden:?} should be hidden by default"
             );
         }
     }
