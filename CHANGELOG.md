@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Real docking, step 2 (navigation parity in the dock): every tool pane keeps
+  double-click-to-follow — Functions/Strings/Imports/Xrefs/Names/Segments jump into the
+  disassembly with the target line highlighted, Hex double-click and Graph block
+  double-click now focus the Disassembly pane too, and navigation from any pane focuses
+  the Disassembly dock tab (not just switches the logical view). `focus_pane` now also
+  sets the focused node/surface so `Views` reliably activates the tab, re-docks closed
+  panes, and the default layout is asserted to contain all 12 panes. Tests cover default
+  layout completeness, navigation focus and re-opening a closed pane (28 UI tests).
+
 - Real docking, step 1 (goal: IDA-style dockable workspace): added **egui_dock 0.21.1**
   (egui 0.36-compatible, MIT) and replaced the floating tool windows with a single
   dock-state workspace — center tabs (Disassembly/Pseudo-C/Graph), a left tool column

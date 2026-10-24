@@ -1375,7 +1375,7 @@ impl ReCraftApp {
         }
         if let Some(address) = navigated {
             self.hex_synced = None;
-            *action = Action::Navigate(address);
+            *action = Action::NavigateToDisasm(address);
         }
     }
 
@@ -1438,7 +1438,10 @@ impl ReCraftApp {
             return;
         };
         if let Some(path) = state.find_tab(&pane) {
-            let _ = state.set_active_tab(path);
+            let node_path = path.node_path();
+            if state.set_active_tab(path).is_ok() {
+                state.set_focused_node_and_surface(node_path);
+            }
         } else {
             state.push_to_focused_leaf(pane);
         }
@@ -2156,6 +2159,9 @@ impl ReCraftApp {
                     let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click());
                     if response.clicked() {
                         *action = Action::Navigate(block.start);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(block.start);
                     }
                     if response.hovered() {
                         let tooltip = block
@@ -3457,6 +3463,11 @@ mod tests {
             Pane::Xrefs,
             Pane::Names,
             Pane::Segments,
+            Pane::Ai,
+            Pane::Structs,
+            Pane::Hex,
+            Pane::Pseudo,
+            Pane::Graph,
         ] {
             app.focus_pane(pane);
             for frame in 0..2 {
@@ -4093,6 +4104,73 @@ mod tests {
         assert_eq!(field.kind, "i32");
         assert!(parse_struct_field_spec("nope").is_err());
         assert!(parse_struct_field_spec("0:a:b:c").is_err());
+    }
+
+    #[test]
+    fn dock_default_layout_contains_every_pane() {
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        let state = app.dock.as_ref().expect("dock state");
+        for pane in Pane::all() {
+            assert!(
+                state.find_tab(&pane).is_some(),
+                "default layout is missing {pane:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn navigation_focuses_the_disassembly_pane() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("dock-nav.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.ensure_dock();
+        let target = Address::new(app.disasm_start.get() + 0x20);
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::NavigateToDisasm(target));
+        let active = app
+            .dock
+            .as_mut()
+            .and_then(|state| state.find_active_focused())
+            .map(|(_, tab)| *tab);
+        assert_eq!(active, Some(Pane::Disasm));
+        assert_eq!(app.disasm_start, target);
+    }
+
+    #[test]
+    fn views_menu_reopens_a_closed_pane() {
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        let path = app
+            .dock
+            .as_ref()
+            .and_then(|state| state.find_tab(&Pane::Functions))
+            .expect("Functions pane");
+        app.dock.as_mut().unwrap().remove_tab(path);
+        assert!(
+            app.dock
+                .as_ref()
+                .unwrap()
+                .find_tab(&Pane::Functions)
+                .is_none()
+        );
+        app.focus_pane(Pane::Functions);
+        assert!(
+            app.dock
+                .as_ref()
+                .unwrap()
+                .find_tab(&Pane::Functions)
+                .is_some(),
+            "Views menu focus must re-dock a closed pane"
+        );
     }
 
     #[test]
