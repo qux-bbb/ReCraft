@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usability pass 2 — offline natural-language **Query box** in the AI panel: `urls`,
+  `callers of <api/function>` and `text <substring>` intents reuse `answer_query`, results
+  show kind/address/text/functions and clicking an item reverse-jumps into the
+  disassembly; Clear resets the answer too. Keeps offline NL query available without CLI.
+
 - Usability pass 2 — navigation enhancements: **Functions** side list gains a filter box
   (case-insensitive name/address substring) and shows resolved function names instead of
   bare ranges (hover keeps the exact range; double-click jumps to disassembly);

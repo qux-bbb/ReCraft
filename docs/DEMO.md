@@ -63,6 +63,7 @@ applied 3 proposal(s) through the command bus (undoable)
    显示引用类型，双击直接跟随到反汇编。
 5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
    选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），证据链接可跳转。
+   **Query** 可输入 `urls` / `callers of CreateFileW` / `text http` 做离线检索（点击结果跳转）；
    **Explain** 离线解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量
    （保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），启用后 **Polish** 在后台线程润色。
 6. **Strings/Xrefs/Imports** 页签展示引用与 API 分类；UI 支持 EN/zh-CN 切换。

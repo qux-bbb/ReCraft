@@ -216,6 +216,7 @@ enum Action {
     OpenRecent(usize),
     AiExplain,
     AiPolish,
+    AiQuery,
     NavigateToDisasm(Address),
 }
 
@@ -259,6 +260,8 @@ pub struct ReCraftApp {
     ai_status: String,
     ai_settings: recraft_ai::ProviderSettings,
     ai_explanation: Option<String>,
+    ai_query: String,
+    ai_answer: Option<recraft_ai::QueryAnswer>,
     ai_job: Option<AiJob>,
     edit: Option<EditState>,
     goto: Option<String>,
@@ -313,6 +316,8 @@ impl Default for ReCraftApp {
             ai_status: String::new(),
             ai_settings: recraft_ai::ProviderSettings::default(),
             ai_explanation: None,
+            ai_query: String::new(),
+            ai_answer: None,
             ai_job: None,
             edit: None,
             goto: None,
@@ -1308,8 +1313,49 @@ impl ReCraftApp {
             }
         });
         self.ai_settings_ui(ui);
+        let query_hint = self.t(
+            "ask: urls | callers of CreateFileW | text http",
+            "问：urls｜谁调用 CreateFileW｜text http",
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.ai_query)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(query_hint),
+            );
+            if ui.button(self.t("Query", "查询")).clicked() {
+                *action = Action::AiQuery;
+            }
+        });
         if !self.ai_status.is_empty() {
             ui.weak(&self.ai_status);
+        }
+        if let Some(answer) = self.ai_answer.clone() {
+            ui.separator();
+            ui.weak(format!(
+                "{} · {} match(es){}",
+                answer.intent,
+                answer.items.len(),
+                if answer.truncated { " (truncated)" } else { "" }
+            ));
+            egui::ScrollArea::vertical()
+                .id_salt("ai_answer")
+                .max_height(160.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for item in answer.items.iter().take(20) {
+                        let label = format!("[{}] {}  {}", item.kind, item.addr, item.text);
+                        let response = ui.selectable_label(false, label);
+                        if response.clicked()
+                            && let Some(addr) = parse_query_addr(&item.addr)
+                        {
+                            *action = Action::NavigateToDisasm(addr);
+                        }
+                        if !item.functions.is_empty() {
+                            ui.weak(format!("  {}", item.functions.join(", ")));
+                        }
+                    }
+                });
         }
         if let Some(text) = self.ai_explanation.clone() {
             ui.separator();
@@ -2135,6 +2181,26 @@ impl ReCraftApp {
                 self.ai_selected = None;
                 self.ai_status.clear();
                 self.ai_explanation = None;
+                self.ai_answer = None;
+            }
+            Action::AiQuery => {
+                let text = self.ai_query.trim().to_owned();
+                if text.is_empty() {
+                    self.ai_status = self.t("type a question first", "先输入问题").to_owned();
+                    return;
+                }
+                let Some(session) = self.session.as_mut() else {
+                    self.set_status(self.t("open a project first", "先打开项目").to_owned());
+                    return;
+                };
+                match recraft_ai::answer_query(session, &text) {
+                    Ok(answer) => {
+                        self.ai_status =
+                            format!("{} · {} match(es)", answer.intent, answer.items.len());
+                        self.ai_answer = Some(answer);
+                    }
+                    Err(error) => self.set_error(error),
+                }
             }
             Action::AiExplain => {
                 let Some((start, _)) = self.current_function() else {
@@ -2359,6 +2425,16 @@ fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
             ..Default::default()
         },
     );
+}
+
+/// Parse the `addr` string of an offline query result (`0x...` hex or decimal).
+fn parse_query_addr(raw: &str) -> Option<Address> {
+    let raw = raw.trim();
+    if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).ok().map(Address::new)
+    } else {
+        raw.parse::<u64>().ok().map(Address::new)
+    }
 }
 
 /// Function-list filter: match name or address hex substring (case-insensitive input).
@@ -3001,6 +3077,43 @@ mod tests {
         app.apply_action(&ctx, Action::NavigateToDisasm(target));
         assert!(matches!(app.tab, Tab::Disasm));
         assert_eq!(app.disasm_start, target);
+    }
+
+    #[test]
+    fn offline_query_ui_answers_and_links_addresses() {
+        assert_eq!(
+            parse_query_addr("0x140001000").map(|addr| addr.get()),
+            Some(0x140001000)
+        );
+        assert_eq!(
+            parse_query_addr("4198400").map(|addr| addr.get()),
+            Some(4198400)
+        );
+        assert_eq!(parse_query_addr("nope"), None);
+
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("query.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.ai_query = "urls".to_owned();
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::AiQuery);
+        assert!(
+            app.ai_answer.is_some(),
+            "offline query should answer, status: {}",
+            app.ai_status
+        );
+        app.apply_action(&ctx, Action::AiClear);
+        assert!(app.ai_answer.is_none());
     }
 
     #[test]

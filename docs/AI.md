@@ -107,6 +107,8 @@ recraft ai polish notepad.rcraft --addr entry [--json] [--no-cache]
   应用后从列表移除并刷新反汇编/函数列表。
 - **Explain**：离线解释当前光标所在函数（summary/API/字符串/调用），结果显示在面板内，
   不依赖网络与配置。
+- **Query（离线 NL 查询）**：输入 `urls`、`callers of CreateFileW`、`text http` 等自然语言，
+  复用 `answer_query` 意图解析；结果显示 kind/地址/文本与相关函数，点击条目反跳反汇编。
 - **Polish**：对当前函数构建润色 prompt 并调用已启用的 provider；未启用时提示先配置。
   请求在后台线程执行，UI 不阻塞；结果只做展示（不写回伪代码）。
 - **Provider settings**：UI 内直接编辑 provider 类型、endpoint、model、API key 环境变量名与
