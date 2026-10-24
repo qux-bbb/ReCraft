@@ -62,9 +62,10 @@ applied 3 proposal(s) through the command bus (undoable)
    Text View、Hex View-1、Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、
    Local Types、AI）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex
    同步提示）。图形视图支持节点块/箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
-   **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在深色/浅色主题间切换，选择随布局一起保存。
-   ![IDA-style layout](images/ida-layout.png)
-   ![Light theme](images/ida-layout-light.png)
+   **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在深色/浅色主题间切换；默认是**浅色混合主题**
+   （浅色菜单/工具栏/标签/列表 + 深色代码视图），选择随布局一起保存。
+   ![Default mixed theme](images/ida-layout.png)
+   ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
    `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types。
