@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Navigating to a known string address now opens the Disassembly in **data view**: the
+  string is rendered as `db '…',0` (or `dw` for UTF-16LE) with its resolved name and a
+  `; DATA XREF: …` comment, and the following strings in the same region are listed as
+  further data rows instead of being decoded as instructions. This matches IDA's
+  Strings → double-click behaviour without showing garbage disassembly. Adds
+  `string_address_renders_data_rows`.
+
 - Strings view is now IDA-like: four columns **Address (segment:address) / Length (hex) /
   Type (C or C16) / String**, zebra rows and a persistent selection that follows the
   disassembly cursor. The full stored string is decoded according to its encoding

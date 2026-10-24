@@ -18,7 +18,8 @@ use egui::{Color32, FontId, Key, RichText, Sense};
 
 use recraft_common::{Address, AddressRange};
 use recraft_core::{
-    CodeData, Command, CommentKind, DisasmLine, FunctionInfo, Session, StructDef, StructField,
+    CodeData, Command, CommentKind, DisasmLine, Flags, FunctionInfo, Session, StructDef,
+    StructField,
 };
 use recraft_decompile::{PseudoLine, pseudocode_l0};
 
@@ -318,6 +319,7 @@ struct ImportRow {
 }
 
 /// One row of the Strings view: metadata from the project DB plus the decoded text.
+#[derive(Clone)]
 struct StringRow {
     addr: Address,
     /// Byte length including the terminator, as stored by analysis.
@@ -326,6 +328,10 @@ struct StringRow {
     kind: i64,
     segment: String,
     text: String,
+    /// First 15 bytes, for the `db` rows shown when navigating here.
+    raw: Vec<u8>,
+    /// Resolved symbol name at the address, if any.
+    name: Option<String>,
 }
 
 /// Decode stored string bytes according to the analysis encoding id.
@@ -1286,7 +1292,70 @@ impl ReCraftApp {
         }
     }
 
+    /// When the cursor sits exactly on a known string, render the surrounding strings
+    /// as data lines (`db '…',0`) like IDA's data view instead of decoding bytes as code.
+    fn string_data_rows(&mut self, count: usize) -> Option<Vec<DisasmLine>> {
+        let start = self.disasm_start;
+        let index = self.strings.iter().position(|row| row.addr == start)?;
+        let rows: Vec<StringRow> = self.strings[index..]
+            .iter()
+            .filter(|row| row.addr >= start)
+            .take(count)
+            .cloned()
+            .collect();
+        let session = self.session.as_mut()?;
+        let mut lines = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut raw = [0u8; 15];
+            let copied = row.raw.len().min(15);
+            raw[..copied].copy_from_slice(&row.raw[..copied]);
+            let comment = match session.xrefs_to(row.addr) {
+                Ok(xrefs) if !xrefs.is_empty() => {
+                    let mut from = Vec::new();
+                    for xref in xrefs.iter().take(3) {
+                        let name = session
+                            .name_at(xref.from)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| format!("{:#x}", xref.from.get()));
+                        from.push(name);
+                    }
+                    Some(format!("; DATA XREF: {}", from.join(", ")))
+                }
+                _ => None,
+            };
+            let escaped = row.text.replace('\\', "\\\\").replace('\'', "\\'");
+            let (mnemonic, operands) = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+                ("dw", format!("'{escaped}',0"))
+            } else {
+                ("db", format!("'{escaped}',0"))
+            };
+            lines.push(DisasmLine {
+                addr: row.addr,
+                len: row.len.min(254) as u8,
+                raw,
+                mnemonic: mnemonic.to_owned(),
+                operands,
+                name: row.name.clone(),
+                comment,
+                flags: Flags::data(),
+            });
+        }
+        Some(lines)
+    }
+
     fn refresh_disasm(&mut self) {
+        if self.strings_dirty {
+            self.refresh_strings();
+        }
+        if let Some(rows) = self.string_data_rows(DISASM_ROWS) {
+            self.disasm_rows = rows;
+            self.disasm_dirty = false;
+            if self.selected >= self.disasm_rows.len() {
+                self.selected = self.disasm_rows.len().saturating_sub(1);
+            }
+            return;
+        }
         let Some(session) = self.session.as_mut() else {
             self.disasm_rows.clear();
             self.disasm_dirty = false;
@@ -1405,6 +1474,8 @@ impl ReCraftApp {
                             .map(|segment| segment.name.clone())
                             .unwrap_or_default(),
                         text: decode_string(&bytes, row.enc),
+                        raw: bytes.iter().take(15).copied().collect(),
+                        name: session.name_at(row.addr).ok().flatten(),
                     });
                 }
                 self.strings = strings;
@@ -5011,6 +5082,43 @@ mod tests {
         let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
         output.textures_delta.clear();
         assert!(app.session.is_none());
+    }
+
+    #[test]
+    fn string_address_renders_data_rows() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("strings.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        app.refresh_strings();
+        let row = app
+            .strings
+            .iter()
+            .find(|row| !is_string_noise(&row.segment, &row.text) && !row.text.is_empty())
+            .cloned()
+            .expect("sample has at least one string");
+        app.navigate(row.addr);
+        app.tick();
+        let line = app.disasm_rows.first().expect("data rows");
+        assert_eq!(line.addr, row.addr);
+        assert_eq!(line.mnemonic, "db");
+        assert!(
+            line.operands.contains(&row.text),
+            "operand should quote the string, got {:?}",
+            line.operands
+        );
+        assert!(line.flags.is_data(), "string rows are data, not code");
     }
 
     #[test]
