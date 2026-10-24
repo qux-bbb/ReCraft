@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IDA-style step 6 — data/type operations: `C` (code), `D` (data), `A` (ASCII data),
+  `U` (undefine) and `P` (create function) on the current disassembly line, mirrored in
+  the right-click menu together with remove-function, Edit prototype… and Structures…;
+  all go through journaled commands (undoable) and refresh every view. New **Structures**
+  window lists user layouts, defines/updates them from `0:tag:u32, 16:value:i32` field
+  specs and binds a layout to the selected function's argument slot (reuses
+  `DefineStruct`/`ApplyType`); prototype editing is available from the row menu via the
+  existing edit dialog. `A` marks the range as data — string extraction remains derived,
+  so it lists printable runs rather than storing a user string. Tests cover flag marks,
+  struct definition/argument binding, prototype set/clear and the field parser.
+
 - IDA-style step 5 — view linkage and appearance: the disassembly gains an IDA-style
   **navigation band** (segment map with a current-position marker, click to jump); the
   pseudo-C view highlights the line matching the current disassembly address, single-click

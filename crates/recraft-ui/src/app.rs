@@ -16,8 +16,10 @@ use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Key, RichText, Sense};
 
-use recraft_common::Address;
-use recraft_core::{Command, CommentKind, DisasmLine, FunctionInfo, Session};
+use recraft_common::{Address, AddressRange};
+use recraft_core::{
+    CodeData, Command, CommentKind, DisasmLine, FunctionInfo, Session, StructDef, StructField,
+};
 use recraft_decompile::{PseudoLine, pseudocode_l0};
 
 use crate::i18n::{Lang, tr};
@@ -62,6 +64,7 @@ enum ToolWindow {
     Names,
     Segments,
     Ai,
+    Structs,
 }
 
 impl ToolWindow {
@@ -74,6 +77,7 @@ impl ToolWindow {
             ToolWindow::Names => ("Names", "名字"),
             ToolWindow::Segments => ("Segments", "段"),
             ToolWindow::Ai => ("AI", "AI"),
+            ToolWindow::Structs => ("Structures", "结构体"),
         }
     }
 }
@@ -116,6 +120,18 @@ struct AiJob {
 enum EditKind {
     Rename,
     Comment,
+    Prototype,
+}
+
+/// IDA-style data operations on the current address.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DataOp {
+    Code,
+    Data,
+    Ascii,
+    Unknown,
+    DefineFunction,
+    UndefineFunction,
 }
 
 struct EditState {
@@ -239,6 +255,9 @@ enum Action {
     NavigateToDisasm(Address),
     SyncDisasm(Address),
     Forward,
+    ApplyData(DataOp),
+    EditPrototype,
+    ShowStructs,
 }
 
 pub struct ReCraftApp {
@@ -286,6 +305,10 @@ pub struct ReCraftApp {
     ai_query: String,
     ai_answer: Option<recraft_ai::QueryAnswer>,
     ai_job: Option<AiJob>,
+    struct_name: String,
+    struct_size: u64,
+    struct_fields: String,
+    struct_slot: u8,
     edit: Option<EditState>,
     goto: Option<String>,
     palette: Option<PaletteState>,
@@ -344,6 +367,10 @@ impl Default for ReCraftApp {
             ai_query: String::new(),
             ai_answer: None,
             ai_job: None,
+            struct_name: String::new(),
+            struct_size: 16,
+            struct_fields: String::new(),
+            struct_slot: 0,
             edit: None,
             goto: None,
             palette: None,
@@ -505,6 +532,94 @@ impl ReCraftApp {
         self.history.push(addr);
     }
 
+    fn run_data_op(&mut self, op: DataOp, addr: Address, len: usize) {
+        let range = AddressRange::new(addr, Address::new(addr.get() + len as u64));
+        let function_end = self.suggest_function_end(addr);
+        let undefine_start = self
+            .current_function()
+            .map(|(start, _)| start)
+            .unwrap_or(addr);
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let result = match op {
+            DataOp::Code | DataOp::Data | DataOp::Ascii | DataOp::Unknown => {
+                let kind = match op {
+                    DataOp::Code => CodeData::Code,
+                    DataOp::Data | DataOp::Ascii => CodeData::Data,
+                    DataOp::Unknown => CodeData::Unknown,
+                    _ => CodeData::Unknown,
+                };
+                session.execute(Command::SetCodeData { range, kind })
+            }
+            DataOp::DefineFunction => session.execute(Command::DefineFunc {
+                start: addr,
+                end: function_end,
+            }),
+            DataOp::UndefineFunction => session.execute(Command::UndefineFunc {
+                start: undefine_start,
+            }),
+        };
+        match result {
+            Ok(_) => {
+                self.disasm_dirty = true;
+                self.pseudo_dirty = true;
+                self.functions_dirty = true;
+                self.strings_dirty = true;
+                self.imports_dirty = true;
+                self.xrefs_dirty = true;
+                self.cfg_dirty = true;
+                self.set_status(format!(
+                    "{} at {:#x}",
+                    match op {
+                        DataOp::Code => "code",
+                        DataOp::Data => "data",
+                        DataOp::Ascii => "ascii data",
+                        DataOp::Unknown => "undefined",
+                        DataOp::DefineFunction => "function",
+                        DataOp::UndefineFunction => "function removed",
+                    },
+                    addr.get()
+                ));
+            }
+            Err(error) => self.set_error(error),
+        }
+    }
+
+    /// Estimate the end of a new function: stop at the next known function start or at a
+    /// return/unconditional jump, whichever comes first (bounded linear scan).
+    fn suggest_function_end(&mut self, addr: Address) -> Address {
+        let limit = self
+            .functions
+            .iter()
+            .filter(|function| function.start > addr)
+            .map(|function| function.start.get())
+            .min();
+        let Some(session) = self.session.as_mut() else {
+            return Address::new(addr.get() + 1);
+        };
+        let Ok(lines) = session.disasm(addr, 256) else {
+            return Address::new(addr.get() + 1);
+        };
+        let mut end = addr.get() + 1;
+        for line in lines {
+            let next = line.addr.get() + u64::from(line.len).max(1);
+            if line.addr >= addr {
+                end = next;
+            }
+            if limit.is_some_and(|limit| end >= limit) {
+                break;
+            }
+            if line.mnemonic.starts_with("ret") || line.mnemonic == "jmp" {
+                break;
+            }
+        }
+        if let Some(limit) = limit {
+            end = end.min(limit);
+        }
+        Address::new(end.max(addr.get() + 1))
+    }
+
     fn back(&mut self) {
         if self.history_pos == 0 || self.history.is_empty() {
             return;
@@ -545,6 +660,10 @@ impl ReCraftApp {
             EditKind::Comment => session.execute(Command::SetComment {
                 addr: edit.addr,
                 kind: CommentKind::Regular,
+                text: if text.is_empty() { None } else { Some(text) },
+            }),
+            EditKind::Prototype => session.execute(Command::SetPrototype {
+                addr: edit.addr,
                 text: if text.is_empty() { None } else { Some(text) },
             }),
         };
@@ -936,6 +1055,7 @@ impl ReCraftApp {
                         ToolWindow::Names,
                         ToolWindow::Segments,
                         ToolWindow::Ai,
+                        ToolWindow::Structs,
                     ] {
                         let (en, zh) = tool.title();
                         let mut open = self.window_open(tool);
@@ -1027,8 +1147,8 @@ impl ReCraftApp {
                 }
                 ui.separator();
                 ui.weak(self.t(
-                    "Right-click row menu · Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
-                    "右键行菜单 · Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Ctrl+Z 撤销 · Esc 后退",
+                    "Right-click row menu · C/D/A/U/P marks · Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo · Ctrl+Z undo · Esc back",
+                    "右键行菜单 · C/D/A/U/P 标记 · Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Ctrl+Z 撤销 · Esc 后退",
                 ));
             });
         });
@@ -1205,6 +1325,7 @@ impl ReCraftApp {
             ToolWindow::Names,
             ToolWindow::Segments,
             ToolWindow::Ai,
+            ToolWindow::Structs,
         ];
         for tool in tools {
             if !self.window_open(tool) {
@@ -1227,6 +1348,7 @@ impl ReCraftApp {
                     ToolWindow::Names => self.names_list(ui, action),
                     ToolWindow::Segments => self.segments_list(ui, action),
                     ToolWindow::Ai => self.ai_panel(ui, action),
+                    ToolWindow::Structs => self.structs_panel(ui, action),
                 });
             if !open {
                 self.set_window(tool, false);
@@ -1459,6 +1581,152 @@ impl ReCraftApp {
                 }
             });
     }
+    /// Structures window: list user layouts, define one, bind it to a function argument.
+    fn structs_panel(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
+        let structs: Vec<StructDef> = {
+            let Some(session) = self.session.as_ref() else {
+                ui.weak(self.t("no project", "无项目"));
+                return;
+            };
+            session.structs().unwrap_or_default()
+        };
+        if structs.is_empty() {
+            ui.weak(self.t(
+                "No structures yet — define one below.",
+                "还没有结构体——在下面定义一个。",
+            ));
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("structs_list")
+            .max_height(140.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for def in &structs {
+                    let fields = def
+                        .fields
+                        .iter()
+                        .map(|field| format!("{:#x}:{}:{}", field.offset, field.name, field.kind))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    ui.label(format!("{}  ({} bytes)  {}", def.name, def.size, fields));
+                }
+            });
+        ui.separator();
+        ui.strong(self.t("Define structure", "定义结构体"));
+        egui::Grid::new("struct_form")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(self.t("name", "名字"));
+                ui.add(egui::TextEdit::singleline(&mut self.struct_name).desired_width(260.0));
+                ui.end_row();
+                ui.label(self.t("size", "大小"));
+                ui.add(egui::DragValue::new(&mut self.struct_size).range(1..=65536));
+                ui.end_row();
+                ui.label(self.t("fields", "字段"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.struct_fields)
+                        .desired_width(260.0)
+                        .hint_text("0:tag:u32, 16:value:i32"),
+                );
+                ui.end_row();
+            });
+        if ui.button(self.t("Define / update", "定义/更新")).clicked() {
+            self.define_struct_from_form();
+        }
+        ui.separator();
+        ui.strong(self.t("Apply to selected function argument", "绑定到当前函数参数"));
+        ui.horizontal(|ui| {
+            ui.label(self.t("slot", "参数槽"));
+            ui.add(egui::DragValue::new(&mut self.struct_slot).range(0..=7));
+            ui.label(self.t("type", "类型"));
+            ui.add(egui::TextEdit::singleline(&mut self.struct_name).desired_width(140.0));
+            if ui.button(self.t("Apply", "应用")).clicked() {
+                self.apply_struct_to_slot();
+            }
+        });
+        ui.weak(self.t(
+            "Both operations are journaled; Ctrl+Z undoes them.",
+            "这两个操作都走 journal；Ctrl+Z 可撤销。",
+        ));
+    }
+
+    fn define_struct_from_form(&mut self) {
+        let name = self.struct_name.trim().to_owned();
+        if name.is_empty() {
+            self.set_status(
+                self.t("structure name is required", "结构体名字不能为空")
+                    .to_owned(),
+            );
+            return;
+        }
+        let mut fields = Vec::new();
+        for spec in self.struct_fields.split(',') {
+            let spec = spec.trim();
+            if spec.is_empty() {
+                continue;
+            }
+            match parse_struct_field_spec(spec) {
+                Ok(field) => fields.push(field),
+                Err(error) => {
+                    self.set_error(recraft_common::Error::unsupported(error));
+                    return;
+                }
+            }
+        }
+        let def = StructDef {
+            name: name.clone(),
+            size: self.struct_size,
+            fields,
+        };
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match session.execute(Command::DefineStruct { def }) {
+            Ok(_) => {
+                self.disasm_dirty = true;
+                self.pseudo_dirty = true;
+                self.functions_dirty = true;
+                self.set_status(format!("structure {name} defined/updated"));
+            }
+            Err(error) => self.set_error(error),
+        }
+    }
+
+    fn apply_struct_to_slot(&mut self) {
+        let Some((start, _)) = self.current_function() else {
+            self.set_status(
+                self.t(
+                    "put the cursor inside a function first",
+                    "先把光标放到函数内",
+                )
+                .to_owned(),
+            );
+            return;
+        };
+        let name = self.struct_name.trim().to_owned();
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let struct_name = if name.is_empty() { None } else { Some(name) };
+        match session.execute(Command::ApplyType {
+            func: start,
+            slot: self.struct_slot,
+            struct_name,
+        }) {
+            Ok(_) => {
+                self.disasm_dirty = true;
+                self.pseudo_dirty = true;
+                self.set_status(format!(
+                    "argument slot {} of {:#x} bound",
+                    self.struct_slot,
+                    start.get()
+                ));
+            }
+            Err(error) => self.set_error(error),
+        }
+    }
+
     fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let suggest = self.t("Suggest names", "建议命名");
         let apply_label = self.t("Apply selected", "应用选中");
@@ -2017,6 +2285,51 @@ impl ReCraftApp {
                             ui.close();
                         }
                         ui.separator();
+                        if ui
+                            .button(self.t("Mark as code (C)", "标记为代码 (C)"))
+                            .clicked()
+                        {
+                            *action = Action::ApplyData(DataOp::Code);
+                            ui.close();
+                        }
+                        if ui
+                            .button(self.t("Mark as data (D)", "标记为数据 (D)"))
+                            .clicked()
+                        {
+                            *action = Action::ApplyData(DataOp::Data);
+                            ui.close();
+                        }
+                        if ui
+                            .button(self.t("Mark as string (A)", "标记为字符串 (A)"))
+                            .clicked()
+                        {
+                            *action = Action::ApplyData(DataOp::Ascii);
+                            ui.close();
+                        }
+                        if ui.button(self.t("Undefine (U)", "取消定义 (U)")).clicked() {
+                            *action = Action::ApplyData(DataOp::Unknown);
+                            ui.close();
+                        }
+                        if ui
+                            .button(self.t("Create function (P)", "创建函数 (P)"))
+                            .clicked()
+                        {
+                            *action = Action::ApplyData(DataOp::DefineFunction);
+                            ui.close();
+                        }
+                        if ui.button(self.t("Remove function", "删除函数")).clicked() {
+                            *action = Action::ApplyData(DataOp::UndefineFunction);
+                            ui.close();
+                        }
+                        if ui.button(self.t("Edit prototype…", "编辑原型…")).clicked() {
+                            *action = Action::EditPrototype;
+                            ui.close();
+                        }
+                        if ui.button(self.t("Structures…", "结构体…")).clicked() {
+                            *action = Action::ShowStructs;
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button(copy_menu).clicked() {
                             ui.ctx().copy_text(format!("{:#x}", line.addr.get()));
                             ui.close();
@@ -2204,6 +2517,7 @@ impl ReCraftApp {
         let title = match edit.kind {
             EditKind::Rename => self.t("Rename", "改名").to_owned(),
             EditKind::Comment => self.t("Comment", "注释").to_owned(),
+            EditKind::Prototype => self.t("Prototype", "原型").to_owned(),
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -2400,6 +2714,18 @@ impl ReCraftApp {
                 action = Action::ToggleTab;
             } else if input.key_pressed(Key::X) {
                 action = Action::ShowXrefs;
+            } else if input.modifiers.command {
+                // leave Ctrl/Cmd chords (copy, paste, …) to the platform.
+            } else if self.tab == Tab::Disasm && input.key_pressed(Key::C) {
+                action = Action::ApplyData(DataOp::Code);
+            } else if self.tab == Tab::Disasm && input.key_pressed(Key::D) {
+                action = Action::ApplyData(DataOp::Data);
+            } else if self.tab == Tab::Disasm && input.key_pressed(Key::A) {
+                action = Action::ApplyData(DataOp::Ascii);
+            } else if self.tab == Tab::Disasm && input.key_pressed(Key::U) {
+                action = Action::ApplyData(DataOp::Unknown);
+            } else if self.tab == Tab::Disasm && input.key_pressed(Key::P) {
+                action = Action::ApplyData(DataOp::DefineFunction);
             } else if input.key_pressed(Key::Enter) && self.tab == Tab::Disasm {
                 action = Action::Follow;
             } else if input.key_pressed(Key::Escape) {
@@ -2465,6 +2791,38 @@ impl ReCraftApp {
                 self.disasm_dirty = true;
                 self.pseudo_start = addr;
                 self.pseudo_dirty = true;
+            }
+            Action::ShowStructs => {
+                self.set_window(ToolWindow::Structs, true);
+            }
+            Action::ApplyData(op) => {
+                let Some(line) = self.disasm_rows.get(self.selected).cloned() else {
+                    return;
+                };
+                self.run_data_op(op, line.addr, usize::from(line.len).max(1));
+            }
+            Action::EditPrototype => {
+                let Some((start, _)) = self.current_function() else {
+                    self.set_status(
+                        self.t(
+                            "put the cursor inside a function first",
+                            "先把光标放到函数内",
+                        )
+                        .to_owned(),
+                    );
+                    return;
+                };
+                let text = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.prototype_at(start).ok().flatten())
+                    .unwrap_or_default();
+                self.edit = Some(EditState {
+                    kind: EditKind::Prototype,
+                    addr: start,
+                    text,
+                    just_opened: true,
+                });
             }
             Action::Analyze => {
                 if self.analysis.is_some() {
@@ -2781,6 +3139,7 @@ fn tool_default_pos(tool: ToolWindow) -> egui::Pos2 {
         ToolWindow::Names => egui::pos2(700.0, 430.0),
         ToolWindow::Segments => egui::pos2(1030.0, 90.0),
         ToolWindow::Ai => egui::pos2(1030.0, 430.0),
+        ToolWindow::Structs => egui::pos2(700.0, 520.0),
     }
 }
 
@@ -2793,7 +3152,29 @@ fn tool_default_size(tool: ToolWindow) -> egui::Vec2 {
         ToolWindow::Names => egui::vec2(320.0, 300.0),
         ToolWindow::Segments => egui::vec2(320.0, 260.0),
         ToolWindow::Ai => egui::vec2(360.0, 420.0),
+        ToolWindow::Structs => egui::vec2(420.0, 360.0),
     }
+}
+
+/// Parse `offset:name:kind` (hex offsets) for the structures editor.
+fn parse_struct_field_spec(spec: &str) -> std::result::Result<StructField, String> {
+    let mut parts = spec.split(':');
+    let offset = parts.next().ok_or("missing offset")?;
+    let name = parts.next().ok_or("missing field name")?;
+    let kind = parts.next().ok_or("missing field kind")?;
+    if parts.next().is_some() {
+        return Err(format!("too many ':' in field spec: {spec}"));
+    }
+    let offset = u64::from_str_radix(offset.trim().trim_start_matches("0x"), 16)
+        .map_err(|_| format!("bad offset: {offset}"))?;
+    if name.trim().is_empty() || kind.trim().is_empty() {
+        return Err(format!("empty name/kind in field spec: {spec}"));
+    }
+    Ok(StructField {
+        offset,
+        name: name.trim().to_owned(),
+        kind: kind.trim().to_owned(),
+    })
 }
 
 /// Parse the `addr` string of an offline query result (`0x...` hex or decimal).
@@ -3531,6 +3912,147 @@ mod tests {
         assert_eq!(app.disasm_start, target);
         assert_eq!(app.selected, 0);
         assert_eq!(app.pseudo_start, target);
+    }
+
+    #[test]
+    fn data_ops_mark_flags_and_undo() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("dataops.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.tick();
+        let line = app.disasm_rows[app.selected].clone();
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::ApplyData(DataOp::Data));
+        let flags = app.session.as_mut().unwrap().flags_at(line.addr).unwrap();
+        assert_eq!(flags.kind, CodeData::Data, "D should mark data");
+        app.apply_action(&ctx, Action::ApplyData(DataOp::Code));
+        let flags = app.session.as_mut().unwrap().flags_at(line.addr).unwrap();
+        assert_eq!(flags.kind, CodeData::Code, "C should mark code");
+        app.apply_action(&ctx, Action::ApplyData(DataOp::Unknown));
+        let flags = app.session.as_mut().unwrap().flags_at(line.addr).unwrap();
+        assert_eq!(flags.kind, CodeData::Unknown, "U should undefine");
+    }
+
+    #[test]
+    fn struct_form_defines_and_binds_argument_types() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("structs.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_functions();
+        app.tick();
+        if app.functions.is_empty() {
+            return;
+        }
+        app.struct_name = "Probe".to_owned();
+        app.struct_size = 24;
+        app.struct_fields = "0:tag:u32, 16:value:i32".to_owned();
+        app.define_struct_from_form();
+        let structs = app.session.as_ref().unwrap().structs().unwrap();
+        assert!(
+            structs
+                .iter()
+                .any(|def| def.name == "Probe" && def.fields.len() == 2),
+            "struct form did not persist: {structs:?}"
+        );
+        let func = app.functions[0].start;
+        app.disasm_start = func;
+        app.selected = 0;
+        app.refresh_disasm();
+        let target = app
+            .current_function()
+            .map(|(start, _)| start)
+            .expect("cursor inside the first function");
+        app.struct_name = "Probe".to_owned();
+        app.struct_slot = 1;
+        app.apply_struct_to_slot();
+        assert!(
+            app.status.contains("bound"),
+            "apply failed with status: {}",
+            app.status
+        );
+        let bound = app.session.as_ref().unwrap().arg_type(target, 1).unwrap();
+        assert_eq!(bound.as_deref(), Some("Probe"));
+    }
+
+    #[test]
+    fn prototype_edit_sets_and_clears() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proto.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_functions();
+        app.tick();
+        if app.functions.is_empty() {
+            return;
+        }
+        let start = app.functions[0].start;
+        app.run_edit(EditState {
+            kind: EditKind::Prototype,
+            addr: start,
+            text: "int probe(int a, int b);".to_owned(),
+            just_opened: false,
+        });
+        assert_eq!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .prototype_at(start)
+                .unwrap()
+                .as_deref(),
+            Some("int probe(int a, int b);")
+        );
+        app.run_edit(EditState {
+            kind: EditKind::Prototype,
+            addr: start,
+            text: String::new(),
+            just_opened: false,
+        });
+        assert!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .prototype_at(start)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn struct_field_spec_parser() {
+        let field = parse_struct_field_spec("0x10:value:i32").unwrap();
+        assert_eq!(field.offset, 16);
+        assert_eq!(field.name, "value");
+        assert_eq!(field.kind, "i32");
+        assert!(parse_struct_field_spec("nope").is_err());
+        assert!(parse_struct_field_spec("0:a:b:c").is_err());
     }
 
     #[test]

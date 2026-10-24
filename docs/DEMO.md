@@ -64,6 +64,9 @@ applied 3 proposal(s) through the command bus (undoable)
    伪代码**单击**同步光标、**双击**跳到反汇编。
 4. 底部 **Hex** 面板跟随选中地址（可切 Bytes/Words、点击选字节、双击跳转、Follow
    selection 回到当前函数）；**Enter/双击地址**跟随操作数目标，`Esc` 回退。
+   **数据/类型操作**：反汇编行按 `C`（代码）/`D`（数据）/`A`（字符串数据）/`U`（取消定义）/
+   `P`（建函数），或右键菜单选择；**右键 → Structures…** 打开结构体窗口，可定义
+   `0:tag:u32, 16:value:i32` 布局并绑定到当前函数参数槽；右键 **Edit prototype…** 编辑函数原型。
    左侧 **Functions** 有过滤框（名字/地址）；**Pseudo** 行点击反跳反汇编；**Xrefs**
    显示引用类型，双击直接跟随到反汇编。
 5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
