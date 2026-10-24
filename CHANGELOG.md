@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Renamed the two primary views to match their function: the merged view is now
+  **Disassembly / 反汇编** (Graph and Text modes inside one tab) and the pseudocode pane is
+  now **Decompile / 反编译**. Updated menus, tabs, welcome shortcuts (Space = Graph/Text),
+  demo docs and screenshots (`docs/images/decompile.png` added). No layout version change:
+  pane ids are unchanged, only their display names.
+
 - Single **Code View** pane (replaces the separate "IDA View-A" and "Text View" tabs):
   one dock tab with an internal **Graph/Text** mode stored as `view_mode`. The toolbar
   `Graph`/`Text` buttons and **Space** switch the mode of the same view instead of

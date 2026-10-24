@@ -58,10 +58,10 @@ applied 3 proposal(s) through the command bus (undoable)
 2. `F5` 运行分析（后台线程，可取消）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
-   图标）及其下方 **Graph overview**；右侧**文档标签区**（**Code View**、Hex View-1、
-   Pseudocode、Imports、Exports、Strings、Names、Xrefs、Segments、Local Types、AI）；底部
+   图标）及其下方 **Graph overview**；右侧**文档标签区**（**Disassembly**、Hex View-1、
+   **Decompile**、Imports、Exports、Strings、Names、Xrefs、Segments、Local Types、AI）；底部
    **Output** 窗口；最下方为 **AU/状态栏**（地址、字节、函数、与 Hex 同步提示）。
-   **Code View 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
+   **Disassembly 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
    **空格键**切换，不会切换标签页；Graph 中双击基本块会切到 Text 并定位。图形支持节点块/
    箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
    **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在**全浅色/全深色**主题间切换；默认是**全浅色**，
@@ -70,22 +70,25 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
-   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`Space` 切换 Code View
-   的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号（Text/Pseudocode/Hex）。
+   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`Space` 切换
+   Disassembly 的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
+   （Text/Decompile/Hex）。
    **Text 模式**操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
    ![Text mode operand colours](images/text-view.png)
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
-3. 点击函数 → 中间 **Pseudo** 页签，勾选 **L2** 看结构化伪代码与签名；**Graph** 页签看 CFG。
-   伪代码与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
-   工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在伪代码里同步高亮，
-   伪代码**单击**同步光标、**双击**跳到反汇编。
+3. 点击函数 → 中间 **Decompile** 页签，勾选 **L2** 看结构化反编译与签名；**Disassembly**
+   的 **Graph** 模式看 CFG。
+   反编译与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
+   工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在反编译里同步高亮，
+   反编译**单击**同步光标、**双击**跳到反汇编。
+   ![Decompile view](images/decompile.png)
 4. 底部 **Hex** 面板跟随选中地址（可切 Bytes/Words、点击选字节、双击跳转、Follow
    selection 回到当前函数）；**Enter/双击地址**跟随操作数目标，`Esc` 回退。
    **数据/类型操作**：反汇编行按 `C`（代码）/`D`（数据）/`A`（字符串数据）/`U`（取消定义）/
    `P`（建函数），或右键菜单选择；**右键 → Structures…** 打开结构体窗口，可定义
    `0:tag:u32, 16:value:i32` 布局并绑定到当前函数参数槽；右键 **Edit prototype…** 编辑函数原型。
-   左侧 **Functions** 有过滤框（名字/地址）；**Pseudo** 行点击反跳反汇编；**Xrefs**
+   左侧 **Functions** 有过滤框（名字/地址）；**Decompile** 行点击反跳反汇编；**Xrefs**
    显示引用类型，双击直接跟随到反汇编。
 5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
    选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），证据链接可跳转。

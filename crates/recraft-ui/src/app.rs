@@ -210,8 +210,9 @@ impl Pane {
     fn title(self) -> (&'static str, &'static str) {
         match self {
             // A single view with an internal Graph/Text mode (no separate IDA-style tabs).
-            Pane::View => ("Code View", "代码视图"),
-            Pane::Pseudo => ("Pseudocode", "伪代码"),
+            // A single disassembly view with an internal Graph/Text mode.
+            Pane::View => ("Disassembly", "反汇编"),
+            Pane::Pseudo => ("Decompile", "反编译"),
             Pane::Hex => ("Hex View-1", "十六进制"),
             Pane::Functions => ("Functions", "函数"),
             Pane::Strings => ("Strings", "字符串"),
@@ -3099,8 +3100,8 @@ impl ReCraftApp {
         ui.add_space(16.0);
         ui.separator();
         ui.weak(self.t(
-            "Shortcuts: Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space pseudo-C · Esc back · Enter follow",
-            "快捷键：Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格伪代码 · Esc 后退 · Enter 跟随",
+            "Shortcuts: Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space graph/text · Esc back · Enter follow",
+            "快捷键：Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格 图形/文本 · Esc 后退 · Enter 跟随",
         ));
     }
 
@@ -3473,8 +3474,8 @@ impl ReCraftApp {
         }
         let Some(lines) = self.pseudo.as_ref() else {
             ui.weak(self.t(
-                "No pseudo-C. Press Space after opening a project.",
-                "没有伪代码。打开项目后按空格。",
+                "No decompilation for this address.",
+                "该地址没有可用的反编译结果。",
             ));
             return;
         };
