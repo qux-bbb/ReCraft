@@ -80,11 +80,6 @@ try {
     $exeHash = (Get-FileHash -LiteralPath (Join-Path $stage 'recraft.exe') -Algorithm SHA256).Hash
     $uiHash = (Get-FileHash -LiteralPath (Join-Path $stage 'recraft-ui.exe') -Algorithm SHA256).Hash
     $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
-    @(
-        "$zipHash  $zipName"
-        "$exeHash  recraft.exe"
-        "$uiHash  recraft-ui.exe"
-    ) | Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii
 
     $installer = $null
     if (-not $NoInstaller) {
@@ -108,6 +103,19 @@ try {
             Write-Host '[package] makensis not found; skipped installer (zip is the portable artifact)'
         }
     }
+
+    # Checksums are written after the optional installer so it can be covered too.
+    $sums = @(
+        "$zipHash  $zipName"
+        "$exeHash  recraft.exe"
+        "$uiHash  recraft-ui.exe"
+    )
+    if ($installer) {
+        $setupName = Split-Path -Leaf $installer
+        $setupHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+        $sums += "$setupHash  $setupName"
+    }
+    $sums | Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii
 
     Write-Host ('[package] staged: {0}' -f $stage)
     Write-Host ('[package] SHA256: {0}' -f (Join-Path $dist 'SHA256SUMS.txt'))

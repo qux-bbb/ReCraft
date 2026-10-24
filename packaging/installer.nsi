@@ -35,7 +35,13 @@ Section "ReCraft (required)"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayName" "ReCraft ${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "Publisher" "ReCraft contributors"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayIcon" "$INSTDIR\recraft-ui.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "InstallLocation" "$INSTDIR"
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "NoModify" 1
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "NoRepair" 1
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
 SectionEnd
 
 Section "Uninstall"

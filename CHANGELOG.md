@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- NSIS installer generated and validated end to end (DESIGN §13): NSIS 3.13 was installed
+  successfully in this session (`winget install NSIS.NSIS`), `scripts/package.ps1` now
+  writes checksums after the installer so `SHA256SUMS.txt` covers `setup.exe`, and the
+  installer writes `Publisher`/`DisplayIcon`/`InstallLocation`/`QuietUninstallString`/
+  `NoModify`/`NoRepair` alongside the per-user install (no elevation). New
+  `scripts/verify-installer.ps1` performs silent install into a temp directory, asserts
+  files/Start-Menu shortcut/uninstall registry entry, runs the installed CLI (notepad:
+  502 functions, 99.4% coverage), launches the GUI and checks its window, then silently
+  uninstalls and verifies the directory/shortcut/registry are gone (with cleanup in a
+  `finally`). Verified locally on Windows 10 both with a custom `/D=` directory and the
+  default `%LOCALAPPDATA%\ReCraft`; `verify-package.ps1` also checks the installer hash
+  and PE header, and CI gained an `installer` job (choco NSIS → -RequireInstaller →
+  verify-package → verify-installer → artifact). ZIP is now 33 entries / 10.3 MiB,
+  setup.exe 10.3 MiB.
+
 - ADR records for every decision in DESIGN §16: `docs/adr/` now contains ADR-001 and
   ADR-003…ADR-011 (headless core, SQLite container/flags, user-vs-derived data, own
   decompiler ladder, no-IDAPython/own API, AGPL+commercial+CLA, MCP propose/apply,

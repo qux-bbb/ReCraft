@@ -160,10 +160,12 @@ cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 pwsh -File scripts/package.ps1 -NoInstaller   # release build + green zip + SHA256SUMS
 # dist/recraft-v0.1.0-windows-x64.zip, dist/ReCraft-0.1.0/, dist/SHA256SUMS.txt
 pwsh -File scripts/package.ps1                # also builds the NSIS installer if makensis exists
+# dist/recraft-0.1.0-setup.exe (per-user install to %LOCALAPPDATA%\ReCraft)
+pwsh -File scripts/verify-installer.ps1       # install -> CLI/GUI -> uninstall, fully scripted
 ```
 
-See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip +
-checksums as an artifact.
+See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip,
+the NSIS installer (installer job) and checksums as artifacts.
 
 ### Demo
 

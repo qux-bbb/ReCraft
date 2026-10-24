@@ -51,6 +51,25 @@ try {
     if ($expected -ne $zipHash) { throw "zip hash mismatch: $expected != $zipHash" }
     Write-Host "[verify] SHA256SUMS matches $(Split-Path -Leaf $Zip)"
 
+    # Optional NSIS installer: when present it must be listed and hash-clean too.
+    $setup = Get-ChildItem -LiteralPath $dist -Filter 'recraft-*-setup.exe' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($setup) {
+        $setupHash = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash
+        $setupLine = Get-Content -LiteralPath $sumFile | Where-Object { $_ -match [regex]::Escape($setup.Name) }
+        if (-not $setupLine) { throw 'installer hash not listed in SHA256SUMS.txt' }
+        $expectedSetup = ($setupLine -split '\s+')[0]
+        if ($expectedSetup -ne $setupHash) {
+            throw "installer hash mismatch: $expectedSetup != $setupHash"
+        }
+        $magic = [System.IO.File]::ReadAllBytes($setup.FullName)[0..1]
+        if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw 'installer is not a PE executable' }
+        Write-Host "[verify] installer SHA256 + PE header OK ($($setup.Name), $([math]::Round($setup.Length / 1MB, 1)) MiB)"
+    } else {
+        Write-Host '[verify] no installer in dist (zip-only build)'
+    }
+
     $extract = Join-Path $work 'pkg'
     Expand-Archive -LiteralPath $Zip -DestinationPath $extract -Force
     $required = @(
