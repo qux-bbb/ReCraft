@@ -1931,7 +1931,7 @@ impl ReCraftApp {
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("recraft_bottom").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.weak("AU: idle");
+                ui.weak(self.t("status_au_idle"));
                 ui.separator();
                 let color = if self.is_error {
                     Color32::from_rgb(0xe0, 0x6a, 0x6a)
@@ -3240,33 +3240,48 @@ impl ReCraftApp {
         ui.horizontal(|ui| {
             for (label, color) in [
                 (
-                    "fallthrough",
+                    self.t("graph_edge_fallthrough"),
                     edge_color(recraft_analysis::EdgeKind::Fallthrough),
                 ),
-                ("taken", edge_color(recraft_analysis::EdgeKind::Taken)),
                 (
-                    "not taken",
+                    self.t("graph_edge_taken"),
+                    edge_color(recraft_analysis::EdgeKind::Taken),
+                ),
+                (
+                    self.t("graph_edge_not_taken"),
                     edge_color(recraft_analysis::EdgeKind::NotTaken),
                 ),
                 (
-                    "jump",
+                    self.t("graph_edge_jump"),
                     edge_color(recraft_analysis::EdgeKind::Unconditional),
                 ),
                 (
-                    "jump table",
+                    self.t("graph_edge_jump_table"),
                     edge_color(recraft_analysis::EdgeKind::JumpTable),
                 ),
             ] {
                 ui.colored_label(color, label);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                if ui
+                    .small_button("+")
+                    .on_hover_text(self.t("graph_zoom_in"))
+                    .clicked()
+                {
                     self.graph_zoom = (self.graph_zoom + 0.1).min(2.0);
                 }
-                if ui.small_button("-").on_hover_text("Zoom out").clicked() {
+                if ui
+                    .small_button("-")
+                    .on_hover_text(self.t("graph_zoom_out"))
+                    .clicked()
+                {
                     self.graph_zoom = (self.graph_zoom - 0.1).max(0.5);
                 }
-                if ui.small_button("Fit").on_hover_text("Reset zoom").clicked() {
+                if ui
+                    .small_button(self.t("graph_fit"))
+                    .on_hover_text(self.t("graph_zoom_reset"))
+                    .clicked()
+                {
                     self.graph_zoom = 1.0;
                 }
                 ui.monospace(format!("{:.2}%", self.graph_zoom * 100.0));
@@ -3369,7 +3384,7 @@ impl ReCraftApp {
                         painter.text(
                             header.right_center() - egui::vec2(4.0, 0.0),
                             egui::Align2::RIGHT_CENTER,
-                            "entry",
+                            self.t("graph_entry").as_str(),
                             FontId::proportional(text_size * 0.85),
                             pal.comment,
                         );
