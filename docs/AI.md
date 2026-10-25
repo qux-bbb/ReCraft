@@ -141,8 +141,7 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   `OpenCode Go`、`Custom OpenAI-compatible`。选内模式会自动填 endpoint 和模型列表；
   `API key` 输入框会**按当前用户加密保存**（Windows DPAPI，写入 `ai-settings.json`
   的 `api_key_sealed`；其他平台用 `plain:` 前缀的 base64 仅作混淆），点 **Save** 后下次
-  启动自动加载；环境变量方式仍可用。模型下拉来自
-  `recraft_ai::{DEEPSEEK_MODELS, OPENCODE_GO_MODELS}`。
+  启动自动加载；旁边的 **Show/Hide** 可查看明文，**Copy** 可复制。环境变量方式仍可用。
 
   ![AI provider modes](images/ai-modes.png)
 - **已验证的兼容端点**（都是 OpenAI-compatible，`RECRAFT_AI_PROVIDER=openai`；endpoint

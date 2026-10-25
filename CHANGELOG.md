@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The AI settings API-key field has **Show/Hide** and **Copy** controls, so the saved
+  (DPAPI-decrypted) key can be inspected or copied without editing `ai-settings.json`.
 - AI provider settings now offer built-in **DeepSeek** and **OpenCode Go** modes plus
   `Offline` / `Custom`; selecting a mode fills its endpoint and model list, and the
   settings panel accepts an API key directly. The key is persisted **sealed for the current

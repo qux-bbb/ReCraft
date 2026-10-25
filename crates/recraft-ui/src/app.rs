@@ -704,6 +704,7 @@ pub struct ReCraftApp {
     ai_status: String,
     ai_mode: AiMode,
     ai_api_key: String,
+    ai_show_key: bool,
     ai_settings: recraft_ai::ProviderSettings,
     ai_explanation: Option<String>,
     ai_query: String,
@@ -778,6 +779,7 @@ impl Default for ReCraftApp {
             ai_status: String::new(),
             ai_mode: AiMode::Offline,
             ai_api_key: String::new(),
+            ai_show_key: false,
             ai_settings: recraft_ai::ProviderSettings::default(),
             ai_explanation: None,
             ai_query: String::new(),
@@ -3102,10 +3104,21 @@ impl ReCraftApp {
                         ui.label(self.t("API key", "API key"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.ai_api_key)
-                                .password(true)
-                                .desired_width(340.0)
+                                .password(!self.ai_show_key)
+                                .desired_width(320.0)
                                 .hint_text("sk-…"),
                         );
+                        let reveal = if self.ai_show_key {
+                            self.t("Hide", "隐藏")
+                        } else {
+                            self.t("Show", "显示")
+                        };
+                        if ui.button(reveal).clicked() {
+                            self.ai_show_key = !self.ai_show_key;
+                        }
+                        if ui.button(self.t("Copy", "复制")).clicked() {
+                            ui.ctx().copy_text(self.ai_api_key.clone());
+                        }
                     });
                     ui.weak(self.t(
                         "The key is encrypted for this user (DPAPI) and reused on startup.",
