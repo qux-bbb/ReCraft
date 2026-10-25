@@ -811,6 +811,9 @@ impl ReCraftApp {
             ..Self::default()
         };
         app.ai_mode = AiMode::from_settings(&app.ai_settings);
+        if app.ai_mode.preset().is_some() {
+            app.ai_settings.max_tokens = app.ai_settings.max_tokens.max(65536);
+        }
         app.restore_layout();
         if let Some(path) = initial {
             app.open_path(&path);
@@ -3112,12 +3115,12 @@ impl ReCraftApp {
                     ui.label(self.t("max tokens", "最大 token"));
                     ui.add(
                         egui::DragValue::new(&mut self.ai_settings.max_tokens)
-                            .range(1024..=32768)
-                            .speed(256),
+                            .range(1024..=65536)
+                            .speed(512),
                     );
                     ui.weak(self.t(
-                        "reasoning models usually need 32768",
-                        "推理模型通常需要 32768",
+                        "reasoning models usually need 32768–65536",
+                        "推理模型通常需要 32768–65536",
                     ));
                 });
                 if ui.button(self.t("Save settings", "保存设置")).clicked() {
@@ -4399,8 +4402,8 @@ impl ReCraftApp {
                 };
                 let settings = {
                     let mut settings = self.ai_settings.clone();
-                    // Reasoning models may spend most of the budget on hidden reasoning.
-                    settings.max_tokens = settings.max_tokens.max(32768);
+                    // deepseek-v4-pro can spend ~64k tokens on hidden reasoning.
+                    settings.max_tokens = settings.max_tokens.max(65536);
                     settings
                 };
                 let Some(session) = self.session.as_mut() else {

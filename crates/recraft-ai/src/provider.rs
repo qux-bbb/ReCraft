@@ -108,8 +108,8 @@ impl ProviderPreset {
             settings.model = self.default_model().to_owned();
         }
         // Reasoning models spend a large part of the budget on `reasoning_content`
-        // before emitting the answer; 1k tokens is not enough for a function rewrite.
-        settings.max_tokens = settings.max_tokens.max(32768);
+        // before emitting the answer; deepseek-v4-pro needs ~64k for this task.
+        settings.max_tokens = settings.max_tokens.max(65536);
         settings.enabled = false;
     }
 }
@@ -151,7 +151,7 @@ impl Default for ProviderSettings {
             model: "gpt-4o-mini".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
             api_key: None,
-            max_tokens: 32768,
+            max_tokens: 65536,
             enabled: false,
         }
     }
@@ -717,10 +717,10 @@ impl Provider for OpenAiCompatibleProvider {
         let text = crate::transport::parse_openai_response(&response.body)?;
         if text.trim().is_empty() {
             return Err(Error::internal(format!(
-                "openai returned an empty completion (max_tokens={}); reasoning models \
-                 can consume the whole budget on reasoning_content — raise \
-                 RECRAFT_AI_MAX_TOKENS (try 8192–16384) or pick a non-reasoning model",
-                self.settings.max_tokens
+                "openai returned an empty completion (model={}, max_tokens={}); reasoning \
+                 models can consume the whole budget on reasoning_content — raise \
+                 RECRAFT_AI_MAX_TOKENS (up to 65536) or pick a non-reasoning model",
+                self.settings.model, self.settings.max_tokens
             )));
         }
         Ok(text)
@@ -915,6 +915,10 @@ mod tests {
         ProviderPreset::OpenCodeGo.apply(&mut settings);
         assert_eq!(settings.endpoint, OPENCODE_GO_ENDPOINT);
         assert_eq!(settings.model, "deepseek-v4.1-flash");
+        assert!(
+            settings.max_tokens >= 65536,
+            "reasoning models need a large polish budget"
+        );
     }
 
     #[test]
