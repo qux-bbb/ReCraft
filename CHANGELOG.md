@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- OpenCode Go / reasoning-model polish now works end-to-end: the prompt uses **L2** (locals,
+  strings, call names) with an explicit source-reconstruction instruction, the polish
+  budget defaults to **32768** tokens (reasoning consumes most of it before the answer),
+  and an empty completion now reports an actionable "raise RECRAFT_AI_MAX_TOKENS" error.
+  HTTPS errors include the response body (first 800 chars) instead of only the status code.
+  Verified against a real OpenCode Go key with `deepseek-v4.1-flash`; the produced source is
+  recorded in `docs/cases/crackme_win_x64.md` (section 4b).
 - The AI panel is now vertically scrollable, shows the request status and polished
   result **above** the provider settings, and requests a repaint while a background
   polish job is running. Previously a slow/large response could be clipped below the

@@ -717,8 +717,13 @@ mod tests {
         let settings = ProviderSettings::default();
         let prompt = build_polish_prompt(&mut session, entry, &settings).unwrap();
         assert_eq!(prompt.system, POLISH_SYSTEM);
-        assert!(prompt.user.contains("pseudo-code:"), "{}", prompt.user);
+        assert!(prompt.user.contains("pseudo-code (L2):"), "{}", prompt.user);
         assert!(prompt.user.contains("function: 0x"), "{}", prompt.user);
+        assert!(
+            prompt.user.contains("recover the original source"),
+            "{}",
+            prompt.user
+        );
     }
 
     #[test]

@@ -152,6 +152,9 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
     model 例如 `deepseek-v4.1-flash` / `deepseek-v4-pro` / `kimi-k3`；key 是 Console 里
     复制的 Go API key。DeepSeek 模型需要在 Privacy 里把 Regions 设为 `Global`。
     请求会带 `User-Agent: recraft/<version>` 和稳定的 `x-opencode-session` 头。
+    推理模型会把大量预算花在 `reasoning_content`：polish 默认上限 **32768** token
+    （`RECRAFT_AI_MAX_TOKENS` 可覆盖）；预算不足时会明确报
+    "empty completion … raise RECRAFT_AI_MAX_TOKENS"。
   - 其他 OpenAI 兼容网关同理（如 `https://api.openai.com`）。
 - **prompt 组装**：`build_explain_prompt`（函数摘要 + API 标签 + 引用字符串 + L2 伪代码）与
   `build_rename_prompt`（候选函数列表），都经过：

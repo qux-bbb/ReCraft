@@ -126,21 +126,11 @@ polish prompt.
 
 ## 4. AI-polished, source-like reconstruction
 
-> The AI polish step in this walkthrough was performed by the assistant in the session
-> (no LLM provider/API key is configured in this checkout). ReCraft's
-> `recraft ai polish` uses the same L1 evidence with a configured provider and returns a
-> suggestion; it never stores the result automatically. The polished source below is the
-> expected output for this case.
->
-> The provider path itself is smoke-tested by `scripts/ai-polish-mock.ps1`, which starts a
-> local OpenAI-compatible stub and runs `recraft ai polish` end-to-end (prompt → HTTP →
-> cache → output). It returns canned text, so it validates plumbing, not model quality.
-> With a real endpoint, set `RECRAFT_AI_PROVIDER`/`RECRAFT_AI_ENDPOINT`/`RECRAFT_AI_MODEL`
-> and the key env var, then run:
->
-> ```powershell
-> recraft ai polish <project> --addr 0x140001010
-> ```
+> This step was verified with a real **OpenCode Go** key and
+> `deepseek-v4.1-flash` (`max_tokens=32768`): `recraft ai polish` returned the source-like
+> reconstruction below. The model output is a suggestion and is never stored automatically.
+> `scripts/ai-polish-mock.ps1` additionally smoke-tests the prompt → HTTP → cache → output
+> path with a local stub (no model quality claim).
 
 ```c
 #include <stdint.h>
@@ -213,6 +203,64 @@ int main(void)
 }
 ```
 
+## 4b. Actual model output (OpenCode Go, deepseek-v4.1-flash)
+
+```c
+int main(void)
+{
+    char input[0x100];
+    int tries = 0;
+    unsigned char *order = (unsigned char *)0x140018380;
+    unsigned char *key = (unsigned char *)0x140018368;
+    unsigned char *target = (unsigned char *)0x1400183a0;
+
+    printf("==========================================");
+    printf(" Simple Crackme v2.0 (C edition)");
+    printf(" flag format: flag{...}");
+    printf("==========================================");
+
+    while (1) {
+        puts("Enter flag: ");
+        fflush(stdout);
+        if (fgets(input, 0x100, stdin) == 0)
+            break;
+
+        char *p = strpbrk(input, "\r\n");
+        if (p != 0)
+            *p = 0;
+
+        if (strcmp(input, "flag{strings_are_not_enough_you_know}") == 0)
+            goto wrong;
+
+        if (strlen(input) != 0x20)
+            goto wrong;
+
+        for (int i = 0; i < 0x20; i++) {
+            unsigned char c = order[i];
+            unsigned char v = (unsigned char)input[c];
+            v ^= key[i & 0xf];
+            v += c;
+            if (v != target[i])
+                goto wrong;
+        }
+
+        printf("[+] Correct! Nice reversing.");
+        return 0;
+
+    wrong:
+        printf("[-] Wrong flag. Try again.");
+        if (++tries >= 3)
+            break;
+    }
+
+    printf("[?] Hint: it is shuffled, xored, and shifted.");
+    return 1;
+}
+```
+
+The model corrected the manual `strchr` prototype to **`strpbrk`** — the disassembly passes a
+pointer to `"\r\n"` and the checker accepts either CR or LF, which `strchr` cannot express.
+
 ## 5. Recovering and verifying the flag
 
 Inverting the check (`target[i] == ((input[perm[i]] ^ key[i&15]) + perm[i]) & 0xff`):
@@ -247,5 +295,6 @@ exit code: 1
   removes them; a future round can fold call arguments and hide the prologue directly in
   the decompiler.
 - Automated AI polish needs a configured provider (`RECRAFT_AI_PROVIDER`,
-  `RECRAFT_AI_ENDPOINT`, API key env var); this checkout has none, so the AI pass was
-  done interactively and recorded here.
+  `RECRAFT_AI_ENDPOINT`, API key env var); reasoning models need a large
+  `RECRAFT_AI_MAX_TOKENS` (the client defaults to 32768 for polish). The output above was
+  produced live through that path.

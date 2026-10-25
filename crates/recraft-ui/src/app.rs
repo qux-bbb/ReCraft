@@ -3110,7 +3110,15 @@ impl ReCraftApp {
                 }
                 ui.horizontal(|ui| {
                     ui.label(self.t("max tokens", "最大 token"));
-                    ui.add(egui::DragValue::new(&mut self.ai_settings.max_tokens).range(64..=8192));
+                    ui.add(
+                        egui::DragValue::new(&mut self.ai_settings.max_tokens)
+                            .range(1024..=32768)
+                            .speed(256),
+                    );
+                    ui.weak(self.t(
+                        "reasoning models usually need 32768",
+                        "推理模型通常需要 32768",
+                    ));
                 });
                 if ui.button(self.t("Save settings", "保存设置")).clicked() {
                     self.ai_settings.api_key = (!self.ai_api_key.trim().is_empty())
@@ -4389,7 +4397,12 @@ impl ReCraftApp {
                         .to_owned();
                     return;
                 };
-                let settings = self.ai_settings.clone();
+                let settings = {
+                    let mut settings = self.ai_settings.clone();
+                    // Reasoning models may spend most of the budget on hidden reasoning.
+                    settings.max_tokens = settings.max_tokens.max(32768);
+                    settings
+                };
                 let Some(session) = self.session.as_mut() else {
                     return;
                 };

@@ -85,7 +85,11 @@ impl Transport for UreqTransport {
                 "provider transport only supports POST requests",
             ));
         }
-        let mut builder = ureq::post(request.url.as_str());
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut builder = agent.post(request.url.as_str());
         for (name, value) in &request.headers {
             builder = builder.header(name.as_str(), value.as_str());
         }

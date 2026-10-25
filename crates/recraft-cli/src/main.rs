@@ -1325,7 +1325,9 @@ fn cmd_ai_polish(project: &Path, addr: Option<&str>, as_json: bool, no_cache: bo
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
-    let settings = recraft_ai::ProviderSettings::from_env();
+    let mut settings = recraft_ai::ProviderSettings::from_env();
+    // Reasoning models spend most of this budget on hidden reasoning before the answer.
+    settings.max_tokens = settings.max_tokens.max(32768);
     if !settings.enabled || settings.kind == recraft_ai::ProviderKind::Heuristic {
         return Err(recraft_common::Error::unsupported(
             "pseudo-code polish needs an LLM provider; set RECRAFT_AI_PROVIDER, \

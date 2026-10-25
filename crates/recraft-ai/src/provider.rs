@@ -107,6 +107,9 @@ impl ProviderPreset {
         if !self.models().contains(&settings.model.as_str()) {
             settings.model = self.default_model().to_owned();
         }
+        // Reasoning models spend a large part of the budget on `reasoning_content`
+        // before emitting the answer; 1k tokens is not enough for a function rewrite.
+        settings.max_tokens = settings.max_tokens.max(32768);
         settings.enabled = false;
     }
 }
@@ -148,7 +151,7 @@ impl Default for ProviderSettings {
             model: "gpt-4o-mini".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
             api_key: None,
-            max_tokens: 1024,
+            max_tokens: 32768,
             enabled: false,
         }
     }
@@ -369,10 +372,14 @@ snake_case names for the listed functions. Base every suggestion on the supplied
 calls, strings and pseudo-code, and keep the evidence addresses in your rationale.";
 
 /// System prompt for pseudo-code polishing (DESIGN §9.2: post-processing, never stored).
-pub const POLISH_SYSTEM: &str = "You polish pseudo-C produced by a disassembler. Preserve \
-every operation, memory access and control-flow edge exactly; do not invent variables, \
-types, calls or semantics. You may improve names and formatting. Output only the polished \
-function, without markdown fences or commentary.";
+pub const POLISH_SYSTEM: &str = "You are a reverse-engineering decompiler. Reconstruct the \
+most likely original C source from the supplied pseudo-C. You MUST preserve every memory \
+access, call, constant, comparison and control-flow edge; do not invent or delete behavior, \
+and do not substitute a different library function for one that appears in the input. \
+You MAY recover meaningful local variable names and types (e.g. a stack buffer passed to \
+fgets becomes `char input[0x100]`), fold argument setup into calls, replace goto labels with \
+while/for/if/else when the edges are equivalent, and remove prologue/epilogue register saves. \
+Output only the reconstructed C function(s), without markdown fences or commentary.";
 
 /// Redact URLs, IPv4 addresses and e-mail addresses before context leaves the process.
 /// Line structure is preserved so the prompt stays readable for review.
@@ -473,9 +480,29 @@ pub fn build_polish_prompt(
     settings: &ProviderSettings,
 ) -> Result<PromptRequest> {
     let budget = TokenBudget::new(settings.max_tokens);
-    let pseudo = recraft_decompile::pseudocode_l1(session, addr)?;
-    let mut user = format!("function: {:#x}\npseudo-code:\n", addr.get());
-    for line in pseudo.lines.iter().take(120) {
+    let functions = session.functions()?;
+    let function = functions
+        .iter()
+        .find(|function| addr >= function.start && addr < function.end)
+        .copied();
+    let (start, end) = function
+        .map(|function| (function.start, function.end))
+        .unwrap_or((addr, addr));
+    let pseudo = recraft_decompile::pseudocode_l2(session, start)
+        .or_else(|_| recraft_decompile::pseudocode_l1(session, start))?;
+    let prototype = session.prototype_at(start)?;
+    let mut user = String::new();
+    user.push_str(&format!("function: {:#x}..{:#x}\n", start.get(), end.get()));
+    if let Some(prototype) = prototype {
+        user.push_str(&format!("known prototype: {prototype}\n"));
+    }
+    user.push_str(
+        "task: recover the original source. Name stack buffers from their use, reuse \
+         argument names, turn register moves into expressions, and structure branches/loops. \
+         Keep every external call and constant; do not add a flag or a different algorithm.\n",
+    );
+    user.push_str("pseudo-code (L2):\n");
+    for line in pseudo.lines.iter().take(240) {
         user.push_str(&line.text);
         user.push('\n');
     }
@@ -684,10 +711,19 @@ impl Provider for OpenAiCompatibleProvider {
             return Err(Error::internal(format!(
                 "openai HTTP {}: {}",
                 response.status,
-                response.body.chars().take(400).collect::<String>()
+                response.body.chars().take(800).collect::<String>()
             )));
         }
-        crate::transport::parse_openai_response(&response.body)
+        let text = crate::transport::parse_openai_response(&response.body)?;
+        if text.trim().is_empty() {
+            return Err(Error::internal(format!(
+                "openai returned an empty completion (max_tokens={}); reasoning models \
+                 can consume the whole budget on reasoning_content — raise \
+                 RECRAFT_AI_MAX_TOKENS (try 8192–16384) or pick a non-reasoning model",
+                self.settings.max_tokens
+            )));
+        }
+        Ok(text)
     }
 }
 
