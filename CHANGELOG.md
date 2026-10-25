@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Polish now lets the model use canonical C runtime names when the call shape uniquely
+  identifies them (`fgets`, `strcmp`, `strlen`, `strpbrk`, `printf`/`puts`, …), emits
+  self-contained `extern` declarations for referenced tables, and strips Markdown code
+  fences from provider replies. Previously it preserved every `sub_XXX` call even when the
+  arguments made the CRT function obvious, so polished code looked less source-like.
 - Polish now feeds the **authoritative disassembly** (addresses, bytes, mnemonics and
   branch targets) alongside L2 and instructs the model not to trust pseudo-code block
   order. This fixes outputs that hoisted the 32-round check outside the input loop or

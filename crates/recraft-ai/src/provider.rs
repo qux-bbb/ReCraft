@@ -389,7 +389,14 @@ behavior, and do not substitute a different library function for one that appear
 input. You MAY recover meaningful local variable names and types (e.g. a stack buffer passed \
 to fgets becomes `char input[0x100]`), fold argument setup into calls, replace goto labels \
 with while/for/if/else when the edges are equivalent, and remove prologue/epilogue register \
-saves. Output only the reconstructed C function(s), without markdown fences or commentary.";
+saves. You MAY also replace a `sub_XXX` call with the canonical C runtime name when its \
+arguments and usage uniquely identify it (for example a buffer + size + stream passed to a \
+function whose result is tested is fgets; two strings whose result is compared to zero is \
+strcmp; one string whose length is compared to a constant is strlen). Keep `sub_XXX` when \
+the evidence is ambiguous, and never invent a non-standard function. \
+Output only the reconstructed C function(s), without markdown fences or commentary. \
+Declare every external array/global you reference (e.g. `extern unsigned char table[];`) \
+so the snippet is self-contained.";
 
 /// Redact URLs, IPv4 addresses and e-mail addresses before context leaves the process.
 /// Line structure is preserved so the prompt stays readable for review.
@@ -752,8 +759,21 @@ impl Provider for OpenAiCompatibleProvider {
                 self.settings.model, self.settings.max_tokens
             )));
         }
-        Ok(text)
+        Ok(strip_code_fences(&text))
     }
+}
+
+/// Remove a leading/trailing Markdown code fence the model may add despite instructions.
+fn strip_code_fences(text: &str) -> String {
+    let mut text = text.trim();
+    if let Some(rest) = text.strip_prefix("```") {
+        // Drop the fence line (with optional language tag).
+        text = rest.split_once('\n').map_or("", |(_, body)| body);
+    }
+    if let Some(rest) = text.trim_end().strip_suffix("```") {
+        text = rest;
+    }
+    text.trim().to_owned()
 }
 
 /// Stable per-process session id for OpenCode Go's routing/cache hint header.
