@@ -137,6 +137,15 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   `load()` 优先读该文件，缺省回退环境变量，并按当前环境重算 `enabled`。
 - **配置项**：`RECRAFT_AI_PROVIDER`、`RECRAFT_AI_ENDPOINT`、`RECRAFT_AI_MODEL`、
   `RECRAFT_AI_API_KEY_ENV`、`RECRAFT_AI_MAX_TOKENS`。
+- **已验证的兼容端点**（都是 OpenAI-compatible，`RECRAFT_AI_PROVIDER=openai`；endpoint
+  填 base，不要带 `/v1`）：
+  - **DeepSeek 官方**：`RECRAFT_AI_ENDPOINT=https://api.deepseek.com`，
+    `RECRAFT_AI_MODEL=deepseek-chat`（或 `deepseek-reasoner`），key 为 DeepSeek API key。
+  - **OpenCode Go**：`RECRAFT_AI_ENDPOINT=https://opencode.ai/inference/go/openai`，
+    model 例如 `deepseek-v4.1-flash` / `deepseek-v4-pro` / `kimi-k3`；key 是 Console 里
+    复制的 Go API key。DeepSeek 模型需要在 Privacy 里把 Regions 设为 `Global`。
+    请求会带 `User-Agent: recraft/<version>` 和稳定的 `x-opencode-session` 头。
+  - 其他 OpenAI 兼容网关同理（如 `https://api.openai.com`）。
 - **prompt 组装**：`build_explain_prompt`（函数摘要 + API 标签 + 引用字符串 + L2 伪代码）与
   `build_rename_prompt`（候选函数列表），都经过：
   - **脱敏**：URL → `<url>`、IPv4 → `<ip>`、邮箱 → `<email>`（`redact`，保留行结构）；

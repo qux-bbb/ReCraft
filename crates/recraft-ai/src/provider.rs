@@ -578,6 +578,13 @@ impl Provider for OpenAiCompatibleProvider {
         })
         .to_string();
         let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
+        headers.push((
+            "User-Agent".to_owned(),
+            format!("recraft/{}", env!("CARGO_PKG_VERSION")),
+        ));
+        if self.settings.endpoint.contains("opencode.ai") {
+            headers.push(("x-opencode-session".to_owned(), opencode_session_id()));
+        }
         if let Some(key) = &self.api_key {
             headers.push(("Authorization".to_owned(), format!("Bearer {key}")));
         }
@@ -596,6 +603,21 @@ impl Provider for OpenAiCompatibleProvider {
         }
         crate::transport::parse_openai_response(&response.body)
     }
+}
+
+/// Stable per-process session id for OpenCode Go's routing/cache hint header.
+fn opencode_session_id() -> String {
+    use std::sync::OnceLock;
+    static SESSION: OnceLock<String> = OnceLock::new();
+    SESSION
+        .get_or_init(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default();
+            format!("recraft-{:x}-{nanos:x}", std::process::id())
+        })
+        .clone()
 }
 
 /// Build the provider selected by `settings`; disabled settings stay offline.
@@ -802,6 +824,42 @@ mod tests {
                 .headers
                 .iter()
                 .any(|(name, value)| name == "Authorization" && value == "Bearer sk-test")
+        );
+        assert!(
+            recorded[0]
+                .headers
+                .iter()
+                .any(|(name, value)| name == "User-Agent" && value.starts_with("recraft/"))
+        );
+    }
+
+    #[test]
+    fn opencode_go_requests_include_session_header() {
+        let mut transport = crate::transport::MockTransport::new();
+        let requests = transport.requests_handle();
+        transport.push(200, r#"{"choices":[{"message":{"content":"ok"}}]}"#);
+        let settings = test_settings(
+            ProviderKind::OpenAiCompatible,
+            "https://opencode.ai/inference/go/openai",
+        );
+        let mut provider = OpenAiCompatibleProvider::new(
+            settings,
+            Box::new(transport),
+            Some("sk-opencode".to_owned()),
+        );
+        let request = PromptRequest::new(TokenBudget::new(128), "system", "user");
+        assert_eq!(provider.complete(&request).unwrap(), "ok");
+
+        let recorded = requests.lock().unwrap();
+        assert_eq!(
+            recorded[0].url,
+            "https://opencode.ai/inference/go/openai/v1/chat/completions"
+        );
+        assert!(
+            recorded[0]
+                .headers
+                .iter()
+                .any(|(name, _)| name == "x-opencode-session")
         );
     }
 
