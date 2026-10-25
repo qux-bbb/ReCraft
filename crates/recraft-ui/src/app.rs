@@ -149,6 +149,15 @@ impl Palette {
     };
 }
 
+/// Rounded card used by the AI panel sections.
+fn card_frame(pal: Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(pal.panel)
+        .stroke(egui::Stroke::new(1.0, pal.grid_line))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::same(8))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HexUnit {
     Byte,
@@ -2893,6 +2902,7 @@ impl ReCraftApp {
     }
 
     fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         let suggest = self.t("ui_suggest_names");
         let apply_label = self.t("ui_apply_selected");
         let explain_label = self.t("ui_explain");
@@ -2902,47 +2912,133 @@ impl ReCraftApp {
             .ai_selected
             .and_then(|index| self.ai_proposals.get(index))
             .is_some();
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(suggest).clicked() {
-                *action = Action::AiSuggest;
-            }
-            if ui
-                .add_enabled(has_selection, egui::Button::new(apply_label))
-                .clicked()
-            {
-                *action = Action::AiApply;
-            }
-            if ui.button(explain_label).clicked() {
-                *action = Action::AiExplain;
-            }
-            if ui.button(polish_label).clicked() {
-                *action = Action::AiPolish;
-            }
-            if ui.button(clear).clicked() {
-                *action = Action::AiClear;
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("AI").size(19.0).strong().color(pal.mnemonic));
+            ui.label(
+                RichText::new(self.t("ai_assistant"))
+                    .size(12.0)
+                    .color(pal.tab_inactive_text),
+            );
+            if self.ai_job.is_some() {
+                ui.spinner();
+                ui.weak(self.t("ai_working"));
             }
         });
-        // Show immediate feedback and the model answer above the (collapsible) settings,
-        // so a slow provider request never looks like a dead button.
+        ui.add_space(6.0);
+
+        // Status is shown as a compact banner so slow requests never look like a dead
+        // button and errors stay readable above the controls.
         if !self.ai_status.is_empty() {
-            ui.weak(&self.ai_status);
-        }
-        if let Some(text) = self.ai_explanation.clone() {
-            egui::ScrollArea::vertical()
-                .id_salt("ai_explanation")
-                .max_height(240.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.label(RichText::new(text).monospace().size(11.0));
+            card_frame(pal).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    let dot = if self.ai_job.is_some() {
+                        pal.mnemonic
+                    } else if self.is_error {
+                        Color32::from_rgb(0xc0, 0x50, 0x50)
+                    } else {
+                        pal.comment
+                    };
+                    ui.label(RichText::new("●").color(dot));
+                    ui.label(RichText::new(&self.ai_status).color(pal.text));
                 });
-            ui.separator();
+            });
+            ui.add_space(8.0);
         }
-        self.ai_settings_ui(ui);
+
+        card_frame(pal).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                RichText::new(self.t("ai_actions"))
+                    .strong()
+                    .size(13.0)
+                    .color(pal.text),
+            );
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(suggest).clicked() {
+                    *action = Action::AiSuggest;
+                }
+                if ui.button(explain_label).clicked() {
+                    *action = Action::AiExplain;
+                }
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(polish_label).strong().color(pal.text))
+                            .fill(pal.selected_row),
+                    )
+                    .clicked()
+                {
+                    *action = Action::AiPolish;
+                }
+                if ui
+                    .add_enabled(has_selection, egui::Button::new(apply_label.as_str()))
+                    .clicked()
+                {
+                    *action = Action::AiApply;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(clear).clicked() {
+                        *action = Action::AiClear;
+                    }
+                });
+            });
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(self.t("ai_result"))
+                    .strong()
+                    .size(13.0)
+                    .color(pal.text),
+            );
+            if self.ai_explanation.is_some() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(self.t("ui_copy")).clicked()
+                        && let Some(text) = self.ai_explanation.as_ref()
+                    {
+                        ui.ctx().copy_text(text.clone());
+                    }
+                });
+            }
+        });
+        ui.add_space(4.0);
+        match self.ai_explanation.clone() {
+            Some(text) => {
+                card_frame(pal).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    egui::ScrollArea::vertical()
+                        .id_salt("ai_explanation")
+                        .max_height(240.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(text).monospace().size(11.0).color(pal.text));
+                        });
+                });
+            }
+            None => {
+                card_frame(pal).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.weak(self.t("ai_no_result"));
+                });
+            }
+        }
+
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(self.t("ai_ask_database"))
+                .strong()
+                .size(13.0)
+                .color(pal.text),
+        );
+        ui.add_space(4.0);
         let query_hint = self.t("ui_ask_urls_callers_of_createfilew_text_http");
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.ai_query)
-                    .desired_width(f32::INFINITY)
+                    .desired_width((ui.available_width() - 80.0).max(80.0))
                     .hint_text(query_hint),
             );
             if ui.button(self.t("ui_query")).clicked() {
@@ -2950,7 +3046,7 @@ impl ReCraftApp {
             }
         });
         if let Some(answer) = self.ai_answer.clone() {
-            ui.separator();
+            ui.add_space(4.0);
             let count = answer.items.len().to_string();
             let truncated = if answer.truncated {
                 self.t("ui_truncated_suffix")
@@ -2965,54 +3061,96 @@ impl ReCraftApp {
                     ("truncated", &truncated),
                 ],
             ));
-            egui::ScrollArea::vertical()
-                .id_salt("ai_answer")
-                .max_height(160.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for item in answer.items.iter().take(20) {
-                        let label = format!("[{}] {}  {}", item.kind, item.addr, item.text);
-                        let response = ui.selectable_label(false, label);
-                        if response.clicked()
-                            && let Some(addr) = parse_query_addr(&item.addr)
-                        {
-                            *action = Action::NavigateToDisasm(addr);
+            card_frame(pal).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                egui::ScrollArea::vertical()
+                    .id_salt("ai_answer")
+                    .max_height(160.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for item in answer.items.iter().take(20) {
+                            let label = format!("[{}] {}  {}", item.kind, item.addr, item.text);
+                            let response = ui.selectable_label(false, label);
+                            if response.clicked()
+                                && let Some(addr) = parse_query_addr(&item.addr)
+                            {
+                                *action = Action::NavigateToDisasm(addr);
+                            }
+                            if !item.functions.is_empty() {
+                                ui.weak(format!("  {}", item.functions.join(", ")));
+                            }
                         }
-                        if !item.functions.is_empty() {
-                            ui.weak(format!("  {}", item.functions.join(", ")));
-                        }
-                    }
-                });
+                    });
+            });
         }
-        if self.ai_proposals.is_empty() {
-            ui.weak(self.t("ui_no_suggestions_yet_run_analyze_then_press_suggest_names"));
-            return;
-        }
-        ui.separator();
-        for (index, proposal) in self.ai_proposals.iter().enumerate() {
-            let selected = self.ai_selected == Some(index);
-            let label = format!(
-                "{:.2}  {:#012x} -> {}",
-                proposal.confidence,
-                proposal.target.get(),
-                proposal.value
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{} ({})",
+                    self.t("ai_suggestions"),
+                    self.ai_proposals.len()
+                ))
+                .strong()
+                .size(13.0)
+                .color(pal.text),
             );
-            if ui.selectable_label(selected, label).clicked() {
-                self.ai_selected = if selected { None } else { Some(index) };
-            }
-            ui.weak(format!(
-                "{} ({} evidence)",
-                proposal.rationale,
-                proposal.evidence.len()
-            ));
-            if let Some(evidence) = proposal.evidence.first()
-                && ui
-                    .link(format!("evidence {:#x}", evidence.addr.get()))
-                    .clicked()
-            {
-                *action = Action::Navigate(evidence.addr);
-            }
+        });
+        ui.add_space(4.0);
+        if self.ai_proposals.is_empty() {
+            card_frame(pal).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.weak(self.t("ui_no_suggestions_yet_run_analyze_then_press_suggest_names"));
+            });
+        } else {
+            card_frame(pal).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                for (index, proposal) in self.ai_proposals.iter().enumerate() {
+                    let selected = self.ai_selected == Some(index);
+                    let label = format!(
+                        "{:.0}%  {:#012x}  →  {}",
+                        proposal.confidence * 100.0,
+                        proposal.target.get(),
+                        proposal.value
+                    );
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 22.0],
+                            egui::Button::selectable(
+                                selected,
+                                RichText::new(label).monospace().color(pal.text),
+                            ),
+                        )
+                        .clicked()
+                    {
+                        self.ai_selected = if selected { None } else { Some(index) };
+                    }
+                    ui.label(
+                        RichText::new(&proposal.rationale)
+                            .size(11.0)
+                            .color(pal.tab_inactive_text),
+                    );
+                    if let Some(evidence) = proposal.evidence.first()
+                        && ui
+                            .link(format!(
+                                "{} {:#x}",
+                                self.t("ai_evidence"),
+                                evidence.addr.get()
+                            ))
+                            .clicked()
+                    {
+                        *action = Action::Navigate(evidence.addr);
+                    }
+                    if index + 1 < self.ai_proposals.len() {
+                        ui.separator();
+                    }
+                }
+            });
         }
+
+        ui.add_space(8.0);
+        self.ai_settings_ui(ui);
     }
 
     /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a

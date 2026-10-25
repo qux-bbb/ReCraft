@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Redesigned the AI pane as a compact assistant dashboard: a title/status header, rounded
+  action/result/query/suggestion cards, full-width readable result area with a copy button,
+  a dedicated query row whose button stays visible, confidence badges and per-proposal
+  evidence links, and a primary-styled Polish button. Provider settings remain a
+  collapsible section at the bottom.
 - UI localization migrated from inline `t(en, zh)` pairs to **Fluent**. `en-US.ftl` and
   `zh-CN.ftl` are embedded with `include_str!`; all 148 static UI pairs, menu bar, pane
   titles (including `Hex` → 十六进制), command-palette labels, graph legend/zoom controls
