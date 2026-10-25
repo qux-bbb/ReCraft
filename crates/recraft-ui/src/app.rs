@@ -1699,10 +1699,24 @@ impl ReCraftApp {
         let cancel_label = self.t("ui_cancel");
         let analyzing_label = self.t("ui_analyzing");
         let no_project = self.t("ui_no_project");
+        let file_menu = self.t("menu_file");
+        let edit_menu = self.t("menu_edit");
+        let jump_menu = self.t("menu_jump");
+        let search_menu = self.t("menu_search");
+        let view_menu = self.t("menu_view");
+        let options_menu = self.t("menu_options");
+        let windows_menu = self.t("menu_windows");
+        let help_menu = self.t("menu_help");
+        let theme_menu = self.t("menu_theme");
+        let dark_label = self.t("theme_dark");
+        let light_label = self.t("theme_light");
+        let about_label = self.t("menu_about");
+        let text_label = self.t("view_text");
+        let graph_label = self.t("view_graph");
         egui::Panel::top("recraft_top").show(ui, |ui| {
             // IDA-style menu bar.
             ui.horizontal(|ui| {
-                ui.menu_button("File", |ui| {
+                ui.menu_button(file_menu.as_str(), |ui| {
                     if ui.button(open_label).clicked() {
                         *action = Action::Open;
                         ui.close();
@@ -1712,7 +1726,7 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("Edit", |ui| {
+                ui.menu_button(edit_menu.as_str(), |ui| {
                     if ui.button(undo_label).clicked() {
                         *action = Action::Undo;
                         ui.close();
@@ -1722,7 +1736,7 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("Jump", |ui| {
+                ui.menu_button(jump_menu.as_str(), |ui| {
                     if ui.button(goto_label).clicked() {
                         *action = Action::GotoDialog;
                         ui.close();
@@ -1741,7 +1755,7 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("Search", |ui| {
+                ui.menu_button(search_menu.as_str(), |ui| {
                     for pane in [Pane::Strings, Pane::Names, Pane::Imports, Pane::Exports] {
                         if ui.button(self.t(pane.key())).clicked() {
                             *action = Action::FocusPane(pane);
@@ -1749,7 +1763,7 @@ impl ReCraftApp {
                         }
                     }
                 });
-                ui.menu_button("View", |ui| {
+                ui.menu_button(view_menu.as_str(), |ui| {
                     self.pane_menu_items(ui, action);
                     ui.separator();
                     if ui.button(self.t("ui_zoom_in_ctrl")).clicked() {
@@ -1770,17 +1784,17 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("Options", |ui| {
-                    ui.menu_button("Theme", |ui| {
+                ui.menu_button(options_menu.as_str(), |ui| {
+                    ui.menu_button(theme_menu.as_str(), |ui| {
                         if ui
-                            .selectable_label(self.theme == ThemeMode::Dark, "Dark")
+                            .selectable_label(self.theme == ThemeMode::Dark, dark_label.as_str())
                             .clicked()
                         {
                             *action = Action::SetTheme(ThemeMode::Dark);
                             ui.close();
                         }
                         if ui
-                            .selectable_label(self.theme == ThemeMode::Light, "Light")
+                            .selectable_label(self.theme == ThemeMode::Light, light_label.as_str())
                             .clicked()
                         {
                             *action = Action::SetTheme(ThemeMode::Light);
@@ -1803,7 +1817,7 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("Windows", |ui| {
+                ui.menu_button(windows_menu.as_str(), |ui| {
                     self.pane_menu_items(ui, action);
                     ui.separator();
                     if ui.button(reset_label.as_str()).clicked() {
@@ -1811,8 +1825,8 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("Help", |ui| {
-                    if ui.button("About ReCraft").clicked() {
+                ui.menu_button(help_menu.as_str(), |ui| {
+                    if ui.button(about_label.as_str()).clicked() {
                         self.set_status(format!("ReCraft {}", env!("CARGO_PKG_VERSION")));
                         ui.close();
                     }
@@ -1840,10 +1854,16 @@ impl ReCraftApp {
                 }
                 ui.separator();
                 let graph_active = self.view_mode == ViewMode::Graph;
-                if ui.selectable_label(!graph_active, "Text").clicked() {
+                if ui
+                    .selectable_label(!graph_active, text_label.as_str())
+                    .clicked()
+                {
                     *action = Action::SetViewMode(ViewMode::Text);
                 }
-                if ui.selectable_label(graph_active, "Graph").clicked() {
+                if ui
+                    .selectable_label(graph_active, graph_label.as_str())
+                    .clicked()
+                {
                     *action = Action::SetViewMode(ViewMode::Graph);
                 }
                 ui.separator();
