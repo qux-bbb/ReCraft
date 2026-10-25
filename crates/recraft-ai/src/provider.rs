@@ -380,13 +380,16 @@ calls, strings and pseudo-code, and keep the evidence addresses in your rational
 
 /// System prompt for pseudo-code polishing (DESIGN §9.2: post-processing, never stored).
 pub const POLISH_SYSTEM: &str = "You are a reverse-engineering decompiler. Reconstruct the \
-most likely original C source from the supplied pseudo-C. You MUST preserve every memory \
-access, call, constant, comparison and control-flow edge; do not invent or delete behavior, \
-and do not substitute a different library function for one that appears in the input. \
-You MAY recover meaningful local variable names and types (e.g. a stack buffer passed to \
-fgets becomes `char input[0x100]`), fold argument setup into calls, replace goto labels with \
-while/for/if/else when the edges are equivalent, and remove prologue/epilogue register saves. \
-Output only the reconstructed C function(s), without markdown fences or commentary.";
+most likely original C source from the supplied pseudo-C and disassembly. The disassembly \
+and its branch targets are AUTHORITATIVE: the pseudo-code may flatten or mis-order blocks. \
+Keep every reachable block on the correct path; never move a check outside the loop that \
+contains it, and never merge an early exit with the success path. You MUST preserve every \
+memory access, call, constant, comparison and control-flow edge; do not invent or delete \
+behavior, and do not substitute a different library function for one that appears in the \
+input. You MAY recover meaningful local variable names and types (e.g. a stack buffer passed \
+to fgets becomes `char input[0x100]`), fold argument setup into calls, replace goto labels \
+with while/for/if/else when the edges are equivalent, and remove prologue/epilogue register \
+saves. Output only the reconstructed C function(s), without markdown fences or commentary.";
 
 /// Redact URLs, IPv4 addresses and e-mail addresses before context leaves the process.
 /// Line structure is preserved so the prompt stays readable for review.
@@ -506,9 +509,28 @@ pub fn build_polish_prompt(
     user.push_str(
         "task: recover the original source. Name stack buffers from their use, reuse \
          argument names, turn register moves into expressions, and structure branches/loops. \
-         Keep every external call and constant; do not add a flag or a different algorithm.\n",
+         Keep every external call and constant; do not add a flag or a different algorithm. \
+         The pseudo-code below may be structurally wrong; rebuild the flow from the \
+         disassembly branch targets and keep loop bodies inside the loop.\n",
     );
-    user.push_str("pseudo-code (L2):\n");
+    user.push_str("disassembly (authoritative control flow):\n");
+    let rows = session.disasm(start, 256)?;
+    for line in rows.iter().filter(|line| line.addr < end) {
+        let bytes = line
+            .bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        user.push_str(&format!(
+            "{:#x}  {:<30} {:<8} {}\n",
+            line.addr.get(),
+            bytes,
+            line.mnemonic,
+            line.operands
+        ));
+    }
+    user.push_str("pseudo-code (L2, may be mis-structured):\n");
     for line in pseudo.lines.iter().take(240) {
         user.push_str(&line.text);
         user.push('\n');

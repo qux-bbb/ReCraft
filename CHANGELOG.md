@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Polish now feeds the **authoritative disassembly** (addresses, bytes, mnemonics and
+  branch targets) alongside L2 and instructs the model not to trust pseudo-code block
+  order. This fixes outputs that hoisted the 32-round check outside the input loop or
+  merged early exits with the success path. Re-running on the crackme now keeps the
+  validation inside `while`, `wrong:` inside the loop and the hint after it.
 - OpenCode Go / reasoning-model polish now works end-to-end: the prompt uses **L2** (locals,
   strings, call names) with an explicit source-reconstruction instruction, the polish
   budget defaults to **65536** tokens (reasoning consumes most of it before the answer;

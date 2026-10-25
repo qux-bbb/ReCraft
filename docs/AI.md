@@ -156,8 +156,9 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
     （`RECRAFT_AI_MAX_TOKENS` 可覆盖）；预算不足时会明确报
     "empty completion … raise RECRAFT_AI_MAX_TOKENS"。
   - 其他 OpenAI 兼容网关同理（如 `https://api.openai.com`）。
-- **prompt 组装**：`build_explain_prompt`（函数摘要 + API 标签 + 引用字符串 + L2 伪代码）与
-  `build_rename_prompt`（候选函数列表），都经过：
+- **prompt 组装**：`build_polish_prompt` 同时提供 **反汇编（权威控制流）** 与 L2 伪代码，
+  并明确要求模型以分支目标为准，不要照抄伪代码的块顺序；`build_explain_prompt`（函数摘要 +
+  API 标签 + 引用字符串 + L2 伪代码）与 `build_rename_prompt`（候选函数列表），都经过：
   - **脱敏**：URL → `<url>`、IPv4 → `<ip>`、邮箱 → `<email>`（`redact`，保留行结构）；
   - **token 预算**：约 4 字符/token，超限截断并标注 `…[truncated]`；
   - **缓存**：`PromptCache`（prompt hash → response）；**审计**：`AuditLog`
