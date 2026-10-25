@@ -405,9 +405,13 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 
 ### 8.4 i18n
 
-- `fluent`（Apache-2.0）或 `rust-i18n`；字符串全部外置，禁止硬编码
-- 英文默认，zh-CN 完整翻译；文档双语（README 英文 + 中文）
-- 字体：内置 Noto Sans Mono CJK 子集 + 系统回退
+- 实现：**Fluent**（`fluent` + `unic-langid`，Apache-2.0/MIT）；资源
+  `crates/recraft-ui/locales/en-US.ftl`、`zh-CN.ftl` 通过 `include_str!` 编译进二进制
+- 字符串外置：UI 构造器使用 `t("message.id")` / `t_args("message.id", ...)`，禁止新增
+  `t(en, zh)` 内联对；英文默认，zh-CN 与 en 的 message id 必须一致（单测校验）
+- 缺失消息回退：当前语言 → 另一语言 → key 本身；参数用 Fluent `{ $name }`
+- 语言切换：顶部菜单 / 命令面板；当前实现重启回到英文，持久化列为后续项
+- 文档双语（README 英文 + 中文）；字体仍用系统 CJK 回退
 
 ---
 

@@ -23,7 +23,7 @@ use recraft_core::{
 };
 use recraft_decompile::{PseudoLine, pseudocode_l0};
 
-use crate::i18n::{Lang, tr};
+use crate::i18n::{I18n, Lang};
 
 const DISASM_ROWS: usize = 400;
 const MONO_SIZE: f32 = 12.5;
@@ -211,23 +211,23 @@ impl Pane {
         ]
     }
 
-    fn title(self) -> (&'static str, &'static str) {
+    fn key(self) -> &'static str {
         match self {
             // Disassembly is one view with an internal Graph/Text mode.
-            Pane::View => ("Disassembly", "反汇编"),
-            Pane::Pseudo => ("Decompile", "反编译"),
-            Pane::Hex => ("Hex", "Hex"),
-            Pane::Functions => ("Functions", "函数"),
-            Pane::Strings => ("Strings", "字符串"),
-            Pane::Imports => ("Imports", "导入"),
-            Pane::Exports => ("Exports", "导出"),
-            Pane::Xrefs => ("Xrefs", "交叉引用"),
-            Pane::Names => ("Names", "名字"),
-            Pane::Segments => ("Segments", "段"),
-            Pane::Structs => ("Local Types", "本地类型"),
-            Pane::Ai => ("AI", "AI"),
-            Pane::GraphOverview => ("Graph overview", "图形概览"),
-            Pane::Output => ("Output", "输出"),
+            Pane::View => "pane_disassembly",
+            Pane::Pseudo => "pane_decompile",
+            Pane::Hex => "pane_hex",
+            Pane::Functions => "pane_functions",
+            Pane::Strings => "pane_strings",
+            Pane::Imports => "pane_imports",
+            Pane::Exports => "pane_exports",
+            Pane::Xrefs => "pane_xrefs",
+            Pane::Names => "pane_names",
+            Pane::Segments => "pane_segments",
+            Pane::Structs => "pane_local_types",
+            Pane::Ai => "pane_ai",
+            Pane::GraphOverview => "pane_graph_overview",
+            Pane::Output => "pane_output",
         }
     }
 
@@ -262,8 +262,7 @@ impl egui_dock::TabViewer for DockViewer<'_> {
     }
 
     fn title(&mut self, tab: &mut Pane) -> egui::WidgetText {
-        let (en, zh) = tab.title();
-        self.app.t(en, zh).into()
+        self.app.t(tab.key()).into()
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Pane) {
@@ -576,27 +575,19 @@ struct PaletteState {
 }
 
 /// Commands offered by the palette, in display order.
-const PALETTE_COMMANDS: &[(&str, &str, Action)] = &[
-    ("Open project…", "打开项目…", Action::Open),
-    ("Import PE file…", "导入 PE 文件…", Action::Import),
-    ("Analyze (F5)", "分析 (F5)", Action::Analyze),
-    ("Undo (Ctrl+Z)", "撤销 (Ctrl+Z)", Action::Undo),
-    ("Redo (Ctrl+Y)", "重做 (Ctrl+Y)", Action::Redo),
-    (
-        "Switch Graph/Text (Space)",
-        "切换 图形/文本 (Space)",
-        Action::ToggleViewMode,
-    ),
-    ("Go to address (G)", "跳转到地址 (G)", Action::GotoDialog),
-    ("Rename (N)", "改名 (N)", Action::EditName),
-    ("Comment (;)", "注释 (;)", Action::EditComment),
-    ("Cross references (X)", "交叉引用 (X)", Action::ShowXrefs),
-    ("AI name suggestions", "AI 命名建议", Action::AiSuggest),
-    (
-        "Toggle language (EN/中文)",
-        "切换语言 (EN/中文)",
-        Action::ToggleLang,
-    ),
+const PALETTE_COMMANDS: &[(&str, Action)] = &[
+    ("ui_open_project", Action::Open),
+    ("palette_import_pe_file", Action::Import),
+    ("palette_analyze", Action::Analyze),
+    ("palette_undo", Action::Undo),
+    ("palette_redo", Action::Redo),
+    ("palette_toggle_view_mode", Action::ToggleViewMode),
+    ("palette_goto_address", Action::GotoDialog),
+    ("palette_rename", Action::EditName),
+    ("palette_comment", Action::EditComment),
+    ("palette_cross_references", Action::ShowXrefs),
+    ("palette_ai_suggest", Action::AiSuggest),
+    ("palette_toggle_language", Action::ToggleLang),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -648,6 +639,7 @@ pub struct ReCraftApp {
     session: Option<Session>,
     project: Option<PathBuf>,
     lang: Lang,
+    i18n: I18n,
     tab: Tab,
     dock: Option<egui_dock::DockState<Pane>>,
     layout_saved: Option<String>,
@@ -732,6 +724,7 @@ impl Default for ReCraftApp {
             session: None,
             project: None,
             lang: Lang::En,
+            i18n: I18n::new(),
             tab: Tab::Disasm,
             dock: None,
             layout_saved: None,
@@ -821,17 +814,17 @@ impl ReCraftApp {
         if let Some(path) = initial {
             app.open_path(&path);
         } else {
-            app.set_status(tr(
-                Lang::En,
-                "Drop a .rcraft project or a PE file anywhere in this window.",
-                "把 .rcraft 项目或 PE 文件拖进窗口。",
-            ));
+            app.set_status(app.t("ui_drop_project"));
         }
         app
     }
 
-    fn t(&self, en: &'static str, zh: &'static str) -> &'static str {
-        tr(self.lang, en, zh)
+    fn t(&self, key: &str) -> String {
+        self.i18n.text(self.lang, key)
+    }
+
+    fn t_args(&self, key: &str, args: &[(&str, &str)]) -> String {
+        self.i18n.text_args(self.lang, key, args)
     }
 
     fn set_status(&mut self, message: impl Into<String>) {
@@ -1312,7 +1305,7 @@ impl ReCraftApp {
                 ));
             }
             AnalysisMessage::Cancelled => {
-                self.set_status(self.t("analysis cancelled", "分析已取消").to_owned());
+                self.set_status(self.t("ui_analysis_cancelled").to_owned());
             }
             AnalysisMessage::Failed(error) => {
                 self.set_error(recraft_common::Error::internal(error));
@@ -1659,8 +1652,7 @@ impl ReCraftApp {
     /// Focus/Show entries shared by the View and Windows menus.
     fn pane_menu_items(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         for pane in Pane::all() {
-            let (en, zh) = pane.title();
-            let button = ui.button(self.t(en, zh));
+            let button = ui.button(self.t(pane.key()));
             let button = if let Some(shortcut) = pane.shortcut() {
                 button.on_hover_text(shortcut)
             } else {
@@ -1674,19 +1666,19 @@ impl ReCraftApp {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let open_label = self.t("Open project…", "打开项目…");
-        let import_label = self.t("Import PE…", "导入 PE…");
-        let undo_label = self.t("Undo", "撤销");
-        let redo_label = self.t("Redo", "重做");
-        let goto_label = self.t("Go to address…", "跳转到地址…");
-        let xrefs_label = self.t("Cross references", "交叉引用");
-        let back_label = self.t("Back", "后退");
-        let forward_label = self.t("Forward", "前进");
-        let reset_label = self.t("Reset layout", "重置布局");
-        let analyze_label = self.t("Analyze functions", "分析函数");
-        let cancel_label = self.t("Cancel", "取消");
-        let analyzing_label = self.t("analyzing", "分析中");
-        let no_project = self.t("<no project>", "<未打开项目>");
+        let open_label = self.t("ui_open_project");
+        let import_label = self.t("ui_import_pe");
+        let undo_label = self.t("ui_undo");
+        let redo_label = self.t("ui_redo");
+        let goto_label = self.t("ui_go_to_address");
+        let xrefs_label = self.t("ui_cross_references");
+        let back_label = self.t("ui_back");
+        let forward_label = self.t("ui_forward");
+        let reset_label = self.t("ui_reset_layout");
+        let analyze_label = self.t("ui_analyze_functions");
+        let cancel_label = self.t("ui_cancel");
+        let analyzing_label = self.t("ui_analyzing");
+        let no_project = self.t("ui_no_project");
         egui::Panel::top("recraft_top").show(ui, |ui| {
             // IDA-style menu bar.
             ui.horizontal(|ui| {
@@ -1720,19 +1712,18 @@ impl ReCraftApp {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button(back_label).clicked() {
+                    if ui.button(back_label.as_str()).clicked() {
                         *action = Action::Back;
                         ui.close();
                     }
-                    if ui.button(forward_label).clicked() {
+                    if ui.button(forward_label.as_str()).clicked() {
                         *action = Action::Forward;
                         ui.close();
                     }
                 });
                 ui.menu_button("Search", |ui| {
                     for pane in [Pane::Strings, Pane::Names, Pane::Imports, Pane::Exports] {
-                        let (en, zh) = pane.title();
-                        if ui.button(self.t(en, zh)).clicked() {
+                        if ui.button(self.t(pane.key())).clicked() {
                             *action = Action::FocusPane(pane);
                             ui.close();
                         }
@@ -1741,29 +1732,20 @@ impl ReCraftApp {
                 ui.menu_button("View", |ui| {
                     self.pane_menu_items(ui, action);
                     ui.separator();
-                    if ui
-                        .button(self.t("Zoom in\tCtrl+=", "放大\tCtrl+="))
-                        .clicked()
-                    {
+                    if ui.button(self.t("ui_zoom_in_ctrl")).clicked() {
                         *action = Action::ZoomIn;
                         ui.close();
                     }
-                    if ui
-                        .button(self.t("Zoom out\tCtrl+-", "缩小\tCtrl+-"))
-                        .clicked()
-                    {
+                    if ui.button(self.t("ui_zoom_out_ctrl")).clicked() {
                         *action = Action::ZoomOut;
                         ui.close();
                     }
-                    if ui
-                        .button(self.t("Reset zoom\tCtrl+0", "重置缩放\tCtrl+0"))
-                        .clicked()
-                    {
+                    if ui.button(self.t("ui_reset_zoom_ctrl_0")).clicked() {
                         *action = Action::ZoomReset;
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button(reset_label).clicked() {
+                    if ui.button(reset_label.as_str()).clicked() {
                         *action = Action::ResetLayout;
                         ui.close();
                     }
@@ -1804,7 +1786,7 @@ impl ReCraftApp {
                 ui.menu_button("Windows", |ui| {
                     self.pane_menu_items(ui, action);
                     ui.separator();
-                    if ui.button(reset_label).clicked() {
+                    if ui.button(reset_label.as_str()).clicked() {
                         *action = Action::ResetLayout;
                         ui.close();
                     }
@@ -1821,7 +1803,7 @@ impl ReCraftApp {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(self.history_pos > 0, egui::Button::new("◀"))
-                    .on_hover_text(back_label)
+                    .on_hover_text(back_label.as_str())
                     .clicked()
                 {
                     *action = Action::Back;
@@ -1831,7 +1813,7 @@ impl ReCraftApp {
                         self.history_pos + 1 < self.history.len(),
                         egui::Button::new("▶"),
                     )
-                    .on_hover_text(forward_label)
+                    .on_hover_text(forward_label.as_str())
                     .clicked()
                 {
                     *action = Action::Forward;
@@ -1863,7 +1845,7 @@ impl ReCraftApp {
                         ThemeMode::Dark => "◐",
                         ThemeMode::Light => "◑",
                     })
-                    .on_hover_text(self.t("Toggle theme (Ctrl+T)", "切换主题 (Ctrl+T)"))
+                    .on_hover_text(self.t("ui_toggle_theme_ctrl_t"))
                     .clicked()
                 {
                     *action = Action::ToggleTheme;
@@ -1893,11 +1875,11 @@ impl ReCraftApp {
             self.navigation_band(ui, action);
             ui.horizontal_wrapped(|ui| {
                 for (color, label) in [
-                    (NAV_FUNCTION, self.t("Regular function", "常规函数")),
-                    (NAV_INSTRUCTION, self.t("Instruction", "指令")),
-                    (NAV_DATA, self.t("Data", "数据")),
-                    (NAV_UNEXPLORED, self.t("Unexplored", "未探索")),
-                    (NAV_EXTERNAL, self.t("External symbol", "外部符号")),
+                    (NAV_FUNCTION, self.t("ui_regular_function")),
+                    (NAV_INSTRUCTION, self.t("ui_instruction")),
+                    (NAV_DATA, self.t("ui_data")),
+                    (NAV_UNEXPLORED, self.t("ui_unexplored")),
+                    (NAV_EXTERNAL, self.t("ui_external_symbol")),
                 ] {
                     ui.colored_label(color, "■");
                     ui.weak(label);
@@ -1920,7 +1902,7 @@ impl ReCraftApp {
                     ui.colored_label(color, &self.status);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak(self.t("(Synchronized with Hex View-1)", "（与 Hex View-1 同步）"));
+                    ui.weak(self.t("ui_synchronized_with_hex_view_1"));
                     ui.separator();
                     if let Some((start, _)) = self.current_function() {
                         let name = self
@@ -1954,14 +1936,14 @@ impl ReCraftApp {
             egui::TextStyle::Monospace,
             FontId::monospace(self.mono_size()),
         );
-        let byte_label = self.t("Bytes", "字节");
-        let word_label = self.t("Words", "字");
-        let follow_label = self.t("Follow selection", "跟随选中");
-        let empty_label = self.t("No readable bytes here.", "该地址没有可读字节。");
-        let address_label = self.t("Address", "地址");
+        let byte_label = self.t("ui_bytes");
+        let word_label = self.t("ui_words");
+        let follow_label = self.t("ui_follow_selection");
+        let empty_label = self.t("ui_no_readable_bytes_here");
+        let address_label = self.t("ui_address");
         let mut unit = self.hex_unit;
         ui.horizontal(|ui| {
-            ui.strong(self.t("Hex", "十六进制"));
+            ui.strong(self.t("ui_hex"));
             ui.selectable_value(&mut unit, HexUnit::Byte, byte_label);
             ui.selectable_value(&mut unit, HexUnit::Word, word_label);
             ui.separator();
@@ -2239,7 +2221,7 @@ impl ReCraftApp {
 
     fn segments_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let Some(session) = self.session.as_ref() else {
-            ui.weak(self.t("no project", "无项目"));
+            ui.weak(self.t("ui_no_project_2"));
             return;
         };
         egui::ScrollArea::vertical()
@@ -2271,7 +2253,7 @@ impl ReCraftApp {
     fn exports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let exports: Vec<(String, Address, Option<String>)> = {
             let Some(session) = self.session.as_ref() else {
-                ui.weak(self.t("no project", "无项目"));
+                ui.weak(self.t("ui_no_project_2"));
                 return;
             };
             let image = session.image();
@@ -2289,7 +2271,7 @@ impl ReCraftApp {
                 .collect()
         };
         if exports.is_empty() {
-            ui.weak(self.t("No exports.", "没有导出。"));
+            ui.weak(self.t("ui_no_exports"));
             return;
         }
         egui::ScrollArea::vertical()
@@ -2300,9 +2282,9 @@ impl ReCraftApp {
                     .striped(true)
                     .spacing([12.0, 2.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new(self.t("Name", "名字")).strong());
-                        ui.label(RichText::new(self.t("Address", "地址")).strong());
-                        ui.label(RichText::new(self.t("Forwarder", "转发")).strong());
+                        ui.label(RichText::new(self.t("ui_name")).strong());
+                        ui.label(RichText::new(self.t("ui_address")).strong());
+                        ui.label(RichText::new(self.t("ui_forwarder")).strong());
                         ui.end_row();
                         for (name, address, forwarder) in &exports {
                             let response = ui.selectable_label(false, name);
@@ -2321,7 +2303,7 @@ impl ReCraftApp {
     fn graph_overview(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         let Some((start, end)) = self.current_function() else {
-            ui.weak(self.t("no function selected", "没有选中函数"));
+            ui.weak(self.t("ui_no_function_selected"));
             return;
         };
         if (self.cfg_for != Some(start) || self.cfg_dirty)
@@ -2333,7 +2315,7 @@ impl ReCraftApp {
             self.cfg_dirty = false;
         }
         let Some(cfg) = self.cfg.clone() else {
-            ui.weak(self.t("no graph", "没有图形"));
+            ui.weak(self.t("ui_no_graph"));
             return;
         };
         if cfg.blocks.is_empty() {
@@ -2409,7 +2391,7 @@ impl ReCraftApp {
     fn output_pane(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
         let pal = self.palette();
         if self.log.is_empty() {
-            ui.weak(self.t("No messages yet.", "还没有消息。"));
+            ui.weak(self.t("ui_no_messages_yet"));
             return;
         }
         egui::ScrollArea::vertical()
@@ -2430,14 +2412,11 @@ impl ReCraftApp {
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         if self.functions.is_empty() {
-            ui.weak(self.t(
-                "No functions yet — press Analyze (F5).",
-                "还没有函数——按 Analyze（F5）。",
-            ));
+            ui.weak(self.t("ui_no_functions_yet_press_analyze_f5"));
         } else {
-            let hint = self.t("name or address…", "名字或地址…");
+            let hint = self.t("ui_name_or_address");
             ui.horizontal(|ui| {
-                ui.weak(self.t("filter", "过滤"));
+                ui.weak(self.t("ui_filter"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.function_filter)
                         .desired_width(f32::INFINITY)
@@ -2472,8 +2451,8 @@ impl ReCraftApp {
                     .spacing([10.0, 2.0])
                     .show(ui, |ui| {
                         ui.label("");
-                        ui.label(RichText::new(self.t("Function name", "函数名")).strong());
-                        ui.label(RichText::new(self.t("Segment", "段")).strong());
+                        ui.label(RichText::new(self.t("ui_function_name")).strong());
+                        ui.label(RichText::new(self.t("ui_segment")).strong());
                         ui.end_row();
                         for (index, function) in self.functions.iter().enumerate() {
                             let name = self
@@ -2508,7 +2487,7 @@ impl ReCraftApp {
                         }
                     });
                 if shown == 0 && !self.functions.is_empty() {
-                    ui.weak(self.t("(no match)", "（无匹配）"));
+                    ui.weak(self.t("ui_no_match"));
                 }
             });
     }
@@ -2516,15 +2495,12 @@ impl ReCraftApp {
     fn strings_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         if self.strings.is_empty() {
-            ui.weak(self.t(
-                "No strings yet — run Analyze (F5).",
-                "还没有字符串——运行 Analyze（F5）。",
-            ));
+            ui.weak(self.t("ui_no_strings_yet_run_analyze_f5"));
         }
-        let hint = self.t("substring…", "子串…");
-        let hide_label = self.t("Hide headers/section names", "隐藏头部/节名");
+        let hint = self.t("ui_substring");
+        let hide_label = self.t("ui_hide_headers_section_names");
         ui.horizontal(|ui| {
-            ui.weak(self.t("filter", "过滤"));
+            ui.weak(self.t("ui_filter"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.string_filter)
                     .desired_width(260.0)
@@ -2552,10 +2528,10 @@ impl ReCraftApp {
         let (header, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
         let painter = ui.painter_at(header);
         for (x, text) in [
-            (4.0, self.t("Address", "地址")),
-            (addr_w, self.t("Length", "长度")),
-            (addr_w + len_w, self.t("Type", "类型")),
-            (addr_w + len_w + type_w, self.t("String", "字符串")),
+            (4.0, self.t("ui_address")),
+            (addr_w, self.t("ui_length")),
+            (addr_w + len_w, self.t("ui_type")),
+            (addr_w + len_w + type_w, self.t("ui_string")),
         ] {
             painter.text(
                 egui::pos2(header.left() + x, header.center().y),
@@ -2577,7 +2553,7 @@ impl ReCraftApp {
                         continue;
                     }
                     if shown >= 2000 {
-                        ui.weak(self.t("(first 2000 matches)", "（仅显示前 2000 条）"));
+                        ui.weak(self.t("ui_first_2000_matches"));
                         break;
                     }
                     let is_selected = row.addr == selected;
@@ -2644,10 +2620,7 @@ impl ReCraftApp {
 
     fn imports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if self.imports.is_empty() {
-            ui.weak(self.t(
-                "No imports (or open a project first).",
-                "没有导入（或先打开项目）。",
-            ));
+            ui.weak(self.t("ui_no_imports_or_open_a_project_first"));
         }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -2671,26 +2644,21 @@ impl ReCraftApp {
 
     fn xrefs_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let Some(addr) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
-            ui.weak(self.t("no selection", "没有选中行"));
+            ui.weak(self.t("ui_no_selection"));
             return;
         };
-        ui.weak(format!(
-            "{} {:#x}",
-            self.t("references to", "引用目标"),
-            addr.get()
-        ));
+        ui.weak(format!("{} {:#x}", self.t("ui_references_to"), addr.get()));
         if self.xrefs.is_empty() {
-            ui.weak(self.t("no references", "没有引用"));
+            ui.weak(self.t("ui_no_references"));
         }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (from, kind) in &self.xrefs {
                     let label = format!("<- {:#012x}  {kind}", from.get());
-                    let response = ui.selectable_label(false, label).on_hover_text(self.t(
-                        "double-click to follow into disassembly",
-                        "双击跟随到反汇编",
-                    ));
+                    let response = ui
+                        .selectable_label(false, label)
+                        .on_hover_text(self.t("ui_double_click_to_follow_into_disassembly"));
                     if response.clicked() {
                         *action = Action::Navigate(*from);
                     }
@@ -2703,14 +2671,11 @@ impl ReCraftApp {
 
     fn names_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if self.names.is_empty() {
-            ui.weak(self.t(
-                "No names yet — open a project and run Analyze.",
-                "还没有名字——打开项目并运行 Analyze。",
-            ));
+            ui.weak(self.t("ui_no_names_yet_open_a_project_and_run_analyze"));
         }
-        let hint = self.t("name or address…", "名字或地址…");
+        let hint = self.t("ui_name_or_address");
         ui.horizontal(|ui| {
-            ui.weak(self.t("filter", "过滤"));
+            ui.weak(self.t("ui_filter"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.names_filter)
                     .desired_width(f32::INFINITY)
@@ -2740,16 +2705,13 @@ impl ReCraftApp {
     fn structs_panel(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
         let structs: Vec<StructDef> = {
             let Some(session) = self.session.as_ref() else {
-                ui.weak(self.t("no project", "无项目"));
+                ui.weak(self.t("ui_no_project_2"));
                 return;
             };
             session.structs().unwrap_or_default()
         };
         if structs.is_empty() {
-            ui.weak(self.t(
-                "No structures yet — define one below.",
-                "还没有结构体——在下面定义一个。",
-            ));
+            ui.weak(self.t("ui_no_structures_yet_define_one_below"));
         }
         egui::ScrollArea::vertical()
             .id_salt("structs_list")
@@ -2767,18 +2729,18 @@ impl ReCraftApp {
                 }
             });
         ui.separator();
-        ui.strong(self.t("Define structure", "定义结构体"));
+        ui.strong(self.t("ui_define_structure"));
         egui::Grid::new("struct_form")
             .num_columns(2)
             .spacing([8.0, 2.0])
             .show(ui, |ui| {
-                ui.label(self.t("name", "名字"));
+                ui.label(self.t("ui_name_2"));
                 ui.add(egui::TextEdit::singleline(&mut self.struct_name).desired_width(260.0));
                 ui.end_row();
-                ui.label(self.t("size", "大小"));
+                ui.label(self.t("ui_size"));
                 ui.add(egui::DragValue::new(&mut self.struct_size).range(1..=65536));
                 ui.end_row();
-                ui.label(self.t("fields", "字段"));
+                ui.label(self.t("ui_fields"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.struct_fields)
                         .desired_width(260.0)
@@ -2786,33 +2748,27 @@ impl ReCraftApp {
                 );
                 ui.end_row();
             });
-        if ui.button(self.t("Define / update", "定义/更新")).clicked() {
+        if ui.button(self.t("ui_define_update")).clicked() {
             self.define_struct_from_form();
         }
         ui.separator();
-        ui.strong(self.t("Apply to selected function argument", "绑定到当前函数参数"));
+        ui.strong(self.t("ui_apply_to_selected_function_argument"));
         ui.horizontal(|ui| {
-            ui.label(self.t("slot", "参数槽"));
+            ui.label(self.t("ui_slot"));
             ui.add(egui::DragValue::new(&mut self.struct_slot).range(0..=7));
-            ui.label(self.t("type", "类型"));
+            ui.label(self.t("ui_type_2"));
             ui.add(egui::TextEdit::singleline(&mut self.struct_name).desired_width(140.0));
-            if ui.button(self.t("Apply", "应用")).clicked() {
+            if ui.button(self.t("ui_apply")).clicked() {
                 self.apply_struct_to_slot();
             }
         });
-        ui.weak(self.t(
-            "Both operations are journaled; Ctrl+Z undoes them.",
-            "这两个操作都走 journal；Ctrl+Z 可撤销。",
-        ));
+        ui.weak(self.t("ui_both_operations_are_journaled_ctrl_z_undoes_them"));
     }
 
     fn define_struct_from_form(&mut self) {
         let name = self.struct_name.trim().to_owned();
         if name.is_empty() {
-            self.set_status(
-                self.t("structure name is required", "结构体名字不能为空")
-                    .to_owned(),
-            );
+            self.set_status(self.t("ui_structure_name_is_required").to_owned());
             return;
         }
         let mut fields = Vec::new();
@@ -2851,11 +2807,8 @@ impl ReCraftApp {
     fn apply_struct_to_slot(&mut self) {
         let Some((start, _)) = self.current_function() else {
             self.set_status(
-                self.t(
-                    "put the cursor inside a function first",
-                    "先把光标放到函数内",
-                )
-                .to_owned(),
+                self.t("ui_put_the_cursor_inside_a_function_first")
+                    .to_owned(),
             );
             return;
         };
@@ -2891,11 +2844,11 @@ impl ReCraftApp {
     }
 
     fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let suggest = self.t("Suggest names", "建议命名");
-        let apply_label = self.t("Apply selected", "应用选中");
-        let explain_label = self.t("Explain", "解释");
-        let polish_label = self.t("Polish", "润色");
-        let clear = self.t("Clear", "清空");
+        let suggest = self.t("ui_suggest_names");
+        let apply_label = self.t("ui_apply_selected");
+        let explain_label = self.t("ui_explain");
+        let polish_label = self.t("ui_polish");
+        let clear = self.t("ui_clear");
         let has_selection = self
             .ai_selected
             .and_then(|index| self.ai_proposals.get(index))
@@ -2936,27 +2889,32 @@ impl ReCraftApp {
             ui.separator();
         }
         self.ai_settings_ui(ui);
-        let query_hint = self.t(
-            "ask: urls | callers of CreateFileW | text http",
-            "问：urls｜谁调用 CreateFileW｜text http",
-        );
+        let query_hint = self.t("ui_ask_urls_callers_of_createfilew_text_http");
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.ai_query)
                     .desired_width(f32::INFINITY)
                     .hint_text(query_hint),
             );
-            if ui.button(self.t("Query", "查询")).clicked() {
+            if ui.button(self.t("ui_query")).clicked() {
                 *action = Action::AiQuery;
             }
         });
         if let Some(answer) = self.ai_answer.clone() {
             ui.separator();
-            ui.weak(format!(
-                "{} · {} match(es){}",
-                answer.intent,
-                answer.items.len(),
-                if answer.truncated { " (truncated)" } else { "" }
+            let count = answer.items.len().to_string();
+            let truncated = if answer.truncated {
+                self.t("ui_truncated_suffix")
+            } else {
+                String::new()
+            };
+            ui.weak(self.t_args(
+                "ui_query_matches",
+                &[
+                    ("intent", &answer.intent),
+                    ("count", &count),
+                    ("truncated", &truncated),
+                ],
             ));
             egui::ScrollArea::vertical()
                 .id_salt("ai_answer")
@@ -2978,10 +2936,7 @@ impl ReCraftApp {
                 });
         }
         if self.ai_proposals.is_empty() {
-            ui.weak(self.t(
-                "No suggestions yet — run Analyze, then press Suggest names.",
-                "还没有建议——先运行 Analyze，再点“建议命名”。",
-            ));
+            ui.weak(self.t("ui_no_suggestions_yet_run_analyze_then_press_suggest_names"));
             return;
         }
         ui.separator();
@@ -3014,12 +2969,12 @@ impl ReCraftApp {
     /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a
     /// session-only API key (persisted settings never contain the key).
     fn ai_settings_ui(&mut self, ui: &mut egui::Ui) {
-        let title = self.t("Provider settings", "Provider 设置");
+        let title = self.t("ui_provider_settings");
         egui::CollapsingHeader::new(title)
             .default_open(self.ai_mode != AiMode::Offline)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(self.t("mode", "模式"));
+                    ui.label(self.t("ui_mode"));
                     egui::ComboBox::from_id_salt("ai_mode")
                         .selected_text(self.ai_mode.label())
                         .show_ui(ui, |ui| {
@@ -3055,11 +3010,11 @@ impl ReCraftApp {
                 });
                 if let Some(preset) = self.ai_mode.preset() {
                     ui.horizontal(|ui| {
-                        ui.label(self.t("endpoint", "接口地址"));
+                        ui.label(self.t("ui_endpoint"));
                         ui.weak(preset.endpoint());
                     });
                     ui.horizontal(|ui| {
-                        ui.label(self.t("model", "模型"));
+                        ui.label(self.t("ui_model"));
                         egui::ComboBox::from_id_salt("ai_model")
                             .selected_text(self.ai_settings.model.clone())
                             .show_ui(ui, |ui| {
@@ -3074,7 +3029,7 @@ impl ReCraftApp {
                     });
                 } else if self.ai_mode == AiMode::Custom {
                     ui.horizontal(|ui| {
-                        ui.label(self.t("endpoint", "接口地址"));
+                        ui.label(self.t("ui_endpoint"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.ai_settings.endpoint)
                                 .desired_width(f32::INFINITY)
@@ -3082,26 +3037,25 @@ impl ReCraftApp {
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label(self.t("model", "模型"));
+                        ui.label(self.t("ui_model"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.ai_settings.model)
                                 .desired_width(220.0),
                         );
-                        ui.label(self.t("key env", "密钥环境变量"));
+                        ui.label(self.t("ui_key_env"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.ai_settings.api_key_env)
                                 .desired_width(180.0),
                         );
                     });
                 } else {
-                    ui.weak(self.t(
-                        "Offline: explain/suggest use local heuristics; polish needs a model.",
-                        "离线：解释/建议使用本地启发式；润色需要模型。",
-                    ));
+                    ui.weak(
+                        self.t("ui_offline_explain_suggest_use_local_heuristics_polish_needs_a_m"),
+                    );
                 }
                 if self.ai_mode != AiMode::Offline {
                     ui.horizontal(|ui| {
-                        ui.label(self.t("API key", "API key"));
+                        ui.label(self.t("ui_api_key"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.ai_api_key)
                                 .password(!self.ai_show_key)
@@ -3109,35 +3063,31 @@ impl ReCraftApp {
                                 .hint_text("sk-…"),
                         );
                         let reveal = if self.ai_show_key {
-                            self.t("Hide", "隐藏")
+                            self.t("ui_hide")
                         } else {
-                            self.t("Show", "显示")
+                            self.t("ui_show")
                         };
                         if ui.button(reveal).clicked() {
                             self.ai_show_key = !self.ai_show_key;
                         }
-                        if ui.button(self.t("Copy", "复制")).clicked() {
+                        if ui.button(self.t("ui_copy")).clicked() {
                             ui.ctx().copy_text(self.ai_api_key.clone());
                         }
                     });
-                    ui.weak(self.t(
-                        "The key is encrypted for this user (DPAPI) and reused on startup.",
-                        "密钥按当前用户加密保存（DPAPI），下次启动自动使用。",
-                    ));
+                    ui.weak(
+                        self.t("ui_the_key_is_encrypted_for_this_user_dpapi_and_reused_on_startu"),
+                    );
                 }
                 ui.horizontal(|ui| {
-                    ui.label(self.t("max tokens", "最大 token"));
+                    ui.label(self.t("ui_max_tokens"));
                     ui.add(
                         egui::DragValue::new(&mut self.ai_settings.max_tokens)
                             .range(1024..=65536)
                             .speed(512),
                     );
-                    ui.weak(self.t(
-                        "reasoning models usually need 32768–65536",
-                        "推理模型通常需要 32768–65536",
-                    ));
+                    ui.weak(self.t("ui_reasoning_models_usually_need_32768_65536"));
                 });
-                if ui.button(self.t("Save settings", "保存设置")).clicked() {
+                if ui.button(self.t("ui_save_settings")).clicked() {
                     self.ai_settings.api_key = (!self.ai_api_key.trim().is_empty())
                         .then(|| self.ai_api_key.trim().to_owned());
                     self.ai_settings.refresh_enabled();
@@ -3145,7 +3095,7 @@ impl ReCraftApp {
                         Ok(()) => {
                             self.ai_status = format!(
                                 "{}{}",
-                                self.t("settings saved · ", "设置已保存 · "),
+                                self.t("ui_settings_saved"),
                                 self.ai_settings.describe()
                             );
                         }
@@ -3155,18 +3105,18 @@ impl ReCraftApp {
                 let env_key = std::env::var(&self.ai_settings.api_key_env)
                     .is_ok_and(|value| !value.is_empty());
                 let key_state = if !self.ai_api_key.trim().is_empty() {
-                    self.t("API key saved", "API key 已保存")
+                    self.t("ui_api_key_saved")
                 } else if env_key {
-                    self.t("env key detected", "检测到环境变量密钥")
+                    self.t("ui_env_key_detected")
                 } else {
-                    self.t("no API key", "未提供 API key")
+                    self.t("ui_no_api_key")
                 };
                 ui.weak(format!(
                     "{key_state} · {}",
                     if self.ai_settings.enabled {
-                        self.t("enabled", "已启用")
+                        self.t("ui_enabled")
                     } else {
-                        self.t("offline", "离线")
+                        self.t("ui_offline")
                     }
                 ));
             });
@@ -3215,14 +3165,11 @@ impl ReCraftApp {
         self.tab = Tab::Disasm;
         let pal = self.palette();
         let Some(cfg) = self.cfg.clone() else {
-            ui.weak(self.t(
-                "No control-flow graph — run Analyze (F5) and put the cursor inside a function.",
-                "没有控制流图——运行 Analyze（F5），把光标放到函数内。",
-            ));
+            ui.weak(self.t("ui_no_control_flow_graph_run_analyze_f5_and_put_the_cursor_insid"));
             return;
         };
         if cfg.blocks.is_empty() {
-            ui.weak(self.t("function has no decodable blocks", "函数没有可解码的基本块"));
+            ui.weak(self.t("ui_function_has_no_decodable_blocks"));
             return;
         }
         let edge_color = |kind: recraft_analysis::EdgeKind| match kind {
@@ -3424,35 +3371,29 @@ impl ReCraftApp {
             ui.separator();
             ui.weak(format!("{} blocks", cfg.blocks.len()));
             ui.separator();
-            ui.weak(self.t("(Synchronized with Hex View-1)", "（与 Hex View-1 同步）"));
+            ui.weak(self.t("ui_synchronized_with_hex_view_1"));
         });
     }
 
     /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
     fn welcome(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         ui.add_space(24.0);
-        ui.heading(self.t(
-            "ReCraft — reassembly & decompilation workbench",
-            "ReCraft —— 反汇编与反编译工作台",
-        ));
+        ui.heading(self.t("ui_recraft_reassembly_decompilation_workbench"));
         ui.add_space(4.0);
-        ui.label(self.t(
-            "Drop a .rcraft project or a PE file anywhere in this window, or:",
-            "把 .rcraft 项目或 PE 文件拖进窗口，或：",
-        ));
+        ui.label(self.t("ui_drop_a_rcraft_project_or_a_pe_file_anywhere_in_this_window_or"));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button(self.t("Open project…", "打开项目…")).clicked() {
+            if ui.button(self.t("ui_open_project")).clicked() {
                 *action = Action::Open;
             }
-            if ui.button(self.t("Import PE…", "导入 PE…")).clicked() {
+            if ui.button(self.t("ui_import_pe")).clicked() {
                 *action = Action::Import;
             }
         });
         if !self.recent.is_empty() {
             ui.add_space(16.0);
             ui.separator();
-            ui.label(self.t("Recent projects", "最近打开"));
+            ui.label(self.t("ui_recent_projects"));
             let recent = self.recent.clone();
             for (index, path) in recent.iter().enumerate() {
                 let label = path
@@ -3469,30 +3410,24 @@ impl ReCraftApp {
         }
         ui.add_space(16.0);
         ui.separator();
-        ui.weak(self.t(
-            "Shortcuts: Ctrl+P palette · G goto · N rename · ; comment · X xrefs · Space graph/text · Esc back · Enter follow",
-            "快捷键：Ctrl+P 命令面板 · G 跳转 · N 改名 · ; 注释 · X 交叉引用 · 空格 图形/文本 · Esc 后退 · Enter 跟随",
-        ));
+        ui.weak(self.t("ui_shortcuts_ctrl_p_palette_g_goto_n_rename_comment_x_xrefs_spac"));
     }
 
     fn disasm_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Disasm;
         let pal = self.palette();
         if self.disasm_rows.is_empty() {
-            ui.weak(self.t(
-                "No disassembly. Import a PE file first.",
-                "没有反汇编。先导入 PE 文件。",
-            ));
+            ui.weak(self.t("ui_no_disassembly_import_a_pe_file_first"));
             return;
         }
         let mono = FontId::monospace(self.mono_size());
-        let follow_menu = self.t("Follow operand", "跟随操作数");
-        let rename_menu = self.t("Rename…", "改名…");
-        let comment_menu = self.t("Comment…", "注释…");
-        let xrefs_menu = self.t("Cross references", "交叉引用");
-        let copy_menu = self.t("Copy address", "复制地址");
-        let undo_menu = self.t("Undo", "撤销");
-        let redo_menu = self.t("Redo", "重做");
+        let follow_menu = self.t("ui_follow_operand");
+        let rename_menu = self.t("ui_rename");
+        let comment_menu = self.t("ui_comment");
+        let xrefs_menu = self.t("ui_cross_references");
+        let copy_menu = self.t("ui_copy_address");
+        let undo_menu = self.t("ui_undo");
+        let redo_menu = self.t("ui_redo");
         let mut clicked_row = None;
         let mut follow = false;
         egui::ScrollArea::both()
@@ -3500,11 +3435,11 @@ impl ReCraftApp {
             .show(ui, |ui| {
                 let header = format!(
                     "{:<14}{:<46}{:<9}{:<36}{}",
-                    self.t("Address", "地址"),
-                    self.t("Bytes", "字节"),
-                    self.t("Mnemonic", "助记符"),
-                    self.t("Operands", "操作数"),
-                    self.t("Comment", "注释"),
+                    self.t("ui_address"),
+                    self.t("ui_bytes"),
+                    self.t("ui_mnemonic"),
+                    self.t("ui_operands"),
+                    self.t("ui_comment_2"),
                 );
                 ui.add(
                     egui::Label::new(
@@ -3584,77 +3519,65 @@ impl ReCraftApp {
                         follow = true;
                     }
                     response.context_menu(|ui| {
-                        if ui.button(follow_menu).clicked() {
+                        if ui.button(follow_menu.as_str()).clicked() {
                             *action = Action::Follow;
                             ui.close();
                         }
-                        if ui.button(rename_menu).clicked() {
+                        if ui.button(rename_menu.as_str()).clicked() {
                             *action = Action::EditName;
                             ui.close();
                         }
-                        if ui.button(comment_menu).clicked() {
+                        if ui.button(comment_menu.as_str()).clicked() {
                             *action = Action::EditComment;
                             ui.close();
                         }
-                        if ui.button(xrefs_menu).clicked() {
+                        if ui.button(xrefs_menu.as_str()).clicked() {
                             *action = Action::ShowXrefs;
                             ui.close();
                         }
                         ui.separator();
-                        if ui
-                            .button(self.t("Mark as code (C)", "标记为代码 (C)"))
-                            .clicked()
-                        {
+                        if ui.button(self.t("ui_mark_as_code_c")).clicked() {
                             *action = Action::ApplyData(DataOp::Code);
                             ui.close();
                         }
-                        if ui
-                            .button(self.t("Mark as data (D)", "标记为数据 (D)"))
-                            .clicked()
-                        {
+                        if ui.button(self.t("ui_mark_as_data_d")).clicked() {
                             *action = Action::ApplyData(DataOp::Data);
                             ui.close();
                         }
-                        if ui
-                            .button(self.t("Mark as string (A)", "标记为字符串 (A)"))
-                            .clicked()
-                        {
+                        if ui.button(self.t("ui_mark_as_string_a")).clicked() {
                             *action = Action::ApplyData(DataOp::Ascii);
                             ui.close();
                         }
-                        if ui.button(self.t("Undefine (U)", "取消定义 (U)")).clicked() {
+                        if ui.button(self.t("ui_undefine_u")).clicked() {
                             *action = Action::ApplyData(DataOp::Unknown);
                             ui.close();
                         }
-                        if ui
-                            .button(self.t("Create function (P)", "创建函数 (P)"))
-                            .clicked()
-                        {
+                        if ui.button(self.t("ui_create_function_p")).clicked() {
                             *action = Action::ApplyData(DataOp::DefineFunction);
                             ui.close();
                         }
-                        if ui.button(self.t("Remove function", "删除函数")).clicked() {
+                        if ui.button(self.t("ui_remove_function")).clicked() {
                             *action = Action::ApplyData(DataOp::UndefineFunction);
                             ui.close();
                         }
-                        if ui.button(self.t("Edit prototype…", "编辑原型…")).clicked() {
+                        if ui.button(self.t("ui_edit_prototype")).clicked() {
                             *action = Action::EditPrototype;
                             ui.close();
                         }
-                        if ui.button(self.t("Structures…", "结构体…")).clicked() {
+                        if ui.button(self.t("ui_structures")).clicked() {
                             *action = Action::ShowStructs;
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button(copy_menu).clicked() {
+                        if ui.button(copy_menu.as_str()).clicked() {
                             ui.ctx().copy_text(format!("{:#x}", line.addr.get()));
                             ui.close();
                         }
-                        if ui.button(undo_menu).clicked() {
+                        if ui.button(undo_menu.as_str()).clicked() {
                             *action = Action::Undo;
                             ui.close();
                         }
-                        if ui.button(redo_menu).clicked() {
+                        if ui.button(redo_menu.as_str()).clicked() {
                             *action = Action::Redo;
                             ui.close();
                         }
@@ -3680,7 +3603,7 @@ impl ReCraftApp {
                     ui.weak(format!("fn {:#x}", start.get()));
                 }
                 ui.separator();
-                ui.weak(self.t("(Synchronized with Hex View-1)", "（与 Hex View-1 同步）"));
+                ui.weak(self.t("ui_synchronized_with_hex_view_1"));
             });
         }
     }
@@ -3814,8 +3737,8 @@ impl ReCraftApp {
         self.tab = Tab::Pseudo;
         let pal = self.palette();
         let mono = FontId::monospace(self.mono_size());
-        let l1_label = self.t("L1 (structured)", "L1（结构化）");
-        let l2_label = self.t("L2 (vars)", "L2（变量）");
+        let l1_label = self.t("ui_l1_structured");
+        let l2_label = self.t("ui_l2_vars");
         let mut l1 = self.pseudo_l1;
         let mut l2 = self.pseudo_l2;
         ui.horizontal(|ui| {
@@ -3834,19 +3757,13 @@ impl ReCraftApp {
                 self.pseudo_dirty = true;
             }
             ui.separator();
-            ui.weak(self.t(
-                "click selects/syncs · double-click jumps to disassembly",
-                "单击选中并同步 · 双击跳到反汇编",
-            ));
+            ui.weak(self.t("ui_click_selects_syncs_double_click_jumps_to_disassembly"));
         });
         if self.pseudo_dirty {
             return;
         }
         let Some(lines) = self.pseudo.as_ref() else {
-            ui.weak(self.t(
-                "No decompilation for this address.",
-                "该地址没有可用的反编译结果。",
-            ));
+            ui.weak(self.t("ui_no_decompilation_for_this_address"));
             return;
         };
         let synced = self.disasm_rows.get(self.selected).map(|line| line.addr);
@@ -3906,9 +3823,9 @@ impl ReCraftApp {
         let mut commit = false;
         let mut cancel = false;
         let title = match edit.kind {
-            EditKind::Rename => self.t("Rename", "改名").to_owned(),
-            EditKind::Comment => self.t("Comment", "注释").to_owned(),
-            EditKind::Prototype => self.t("Prototype", "原型").to_owned(),
+            EditKind::Rename => self.t("ui_rename_2").to_owned(),
+            EditKind::Comment => self.t("ui_comment_2").to_owned(),
+            EditKind::Prototype => self.t("ui_prototype").to_owned(),
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -3918,17 +3835,17 @@ impl ReCraftApp {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut edit.text)
                         .desired_width(360.0)
-                        .hint_text(self.t("empty deletes", "留空则删除")),
+                        .hint_text(self.t("ui_empty_deletes")),
                 );
                 if edit.just_opened {
                     response.request_focus();
                     edit.just_opened = false;
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(self.t("OK", "确定")).clicked() {
+                    if ui.button(self.t("ui_ok")).clicked() {
                         commit = true;
                     }
-                    if ui.button(self.t("Cancel", "取消")).clicked() {
+                    if ui.button(self.t("ui_cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -3955,24 +3872,23 @@ impl ReCraftApp {
         let filtered: Vec<usize> = PALETTE_COMMANDS
             .iter()
             .enumerate()
-            .filter(|(_, (en, zh, _))| {
-                query.is_empty() || en.to_lowercase().contains(&query) || zh.contains(&query)
+            .filter(|(_, (key, _))| {
+                let en = self.i18n.text(Lang::En, key).to_lowercase();
+                let zh = self.i18n.text(Lang::Zh, key);
+                query.is_empty() || en.contains(&query) || zh.contains(&query)
             })
             .map(|(index, _)| index)
             .collect();
-        let labels: Vec<(usize, &'static str)> = filtered
+        let labels: Vec<(usize, String)> = filtered
             .iter()
-            .map(|&index| {
-                (
-                    index,
-                    tr(lang, PALETTE_COMMANDS[index].0, PALETTE_COMMANDS[index].1),
-                )
-            })
+            .map(|&index| (index, self.i18n.text(lang, PALETTE_COMMANDS[index].0)))
             .collect();
+        let title = self.i18n.text(lang, "ui_command_palette");
+        let hint = self.i18n.text(lang, "ui_type_command");
         state.selected = state.selected.min(labels.len().saturating_sub(1));
         let mut chosen: Option<usize> = None;
         let mut open = true;
-        egui::Window::new(tr(lang, "Command palette", "命令面板"))
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .default_width(420.0)
@@ -3981,7 +3897,7 @@ impl ReCraftApp {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.query)
                         .desired_width(400.0)
-                        .hint_text(tr(lang, "Type a command…", "输入命令…")),
+                        .hint_text(hint),
                 );
                 if state.query.is_empty() && !response.has_focus() {
                     response.request_focus();
@@ -4000,12 +3916,12 @@ impl ReCraftApp {
                 egui::ScrollArea::vertical()
                     .max_height(260.0)
                     .show(ui, |ui| {
-                        for (position, &(index, label)) in labels.iter().enumerate() {
+                        for (position, (index, label)) in labels.iter().enumerate() {
                             if ui
                                 .selectable_label(position == state.selected, label)
                                 .clicked()
                             {
-                                chosen = Some(index);
+                                chosen = Some(*index);
                             }
                         }
                     });
@@ -4023,7 +3939,7 @@ impl ReCraftApp {
         };
         let mut submit = None;
         let mut open = true;
-        egui::Window::new(self.t("Go to address / symbol", "跳转到地址/符号"))
+        egui::Window::new(self.t("ui_go_to_address_symbol"))
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
@@ -4036,10 +3952,10 @@ impl ReCraftApp {
                     submit = Some(buffer.clone());
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(self.t("Go", "跳转")).clicked() {
+                    if ui.button(self.t("ui_go")).clicked() {
                         submit = Some(buffer.clone());
                     }
-                    if ui.button(self.t("Cancel", "取消")).clicked() {
+                    if ui.button(self.t("ui_cancel")).clicked() {
                         open = false;
                     }
                 });
@@ -4197,10 +4113,7 @@ impl ReCraftApp {
                     self.view_mode = ViewMode::Text;
                     self.focus_pane(Pane::View);
                 } else {
-                    self.set_status(
-                        self.t("no followable target", "没有可跟随的目标")
-                            .to_owned(),
-                    );
+                    self.set_status(self.t("ui_no_followable_target").to_owned());
                 }
             }
             Action::OpenRecent(index) => {
@@ -4234,14 +4147,14 @@ impl ReCraftApp {
                 if let Some(path) = layout_store_path() {
                     let _ = std::fs::remove_file(path);
                 }
-                self.set_status(self.t("layout reset", "布局已重置").to_owned());
+                self.set_status(self.t("ui_layout_reset").to_owned());
             }
             Action::SetTheme(theme) => {
                 self.theme = theme;
                 self.layout_saved = None;
                 self.set_status(match theme {
-                    ThemeMode::Dark => self.t("dark theme", "深色主题").to_owned(),
-                    ThemeMode::Light => self.t("light theme", "浅色主题").to_owned(),
+                    ThemeMode::Dark => self.t("ui_dark_theme").to_owned(),
+                    ThemeMode::Light => self.t("ui_light_theme").to_owned(),
                 });
             }
             Action::ToggleTheme => {
@@ -4251,8 +4164,8 @@ impl ReCraftApp {
                 };
                 self.layout_saved = None;
                 self.set_status(match self.theme {
-                    ThemeMode::Dark => self.t("dark theme", "深色主题").to_owned(),
-                    ThemeMode::Light => self.t("light theme", "浅色主题").to_owned(),
+                    ThemeMode::Dark => self.t("ui_dark_theme").to_owned(),
+                    ThemeMode::Light => self.t("ui_light_theme").to_owned(),
                 });
             }
             Action::ZoomIn => {
@@ -4276,11 +4189,8 @@ impl ReCraftApp {
             Action::EditPrototype => {
                 let Some((start, _)) = self.current_function() else {
                     self.set_status(
-                        self.t(
-                            "put the cursor inside a function first",
-                            "先把光标放到函数内",
-                        )
-                        .to_owned(),
+                        self.t("ui_put_the_cursor_inside_a_function_first")
+                            .to_owned(),
                     );
                     return;
                 };
@@ -4301,7 +4211,7 @@ impl ReCraftApp {
                     return;
                 }
                 let Some(project) = self.project.clone() else {
-                    self.set_status(self.t("no project", "无项目").to_owned());
+                    self.set_status(self.t("ui_no_project_2").to_owned());
                     return;
                 };
                 let (sender, receiver) = mpsc::channel();
@@ -4316,12 +4226,12 @@ impl ReCraftApp {
                     cancel,
                     started: Instant::now(),
                 });
-                self.set_status(self.t("analyzing…", "分析中…").to_owned());
+                self.set_status(self.t("ui_analyzing_2").to_owned());
             }
             Action::CancelAnalysis => {
                 if let Some(job) = self.analysis.as_ref() {
                     job.cancel.store(true, Ordering::Relaxed);
-                    self.set_status(self.t("cancelling…", "正在取消…").to_owned());
+                    self.set_status(self.t("ui_cancelling").to_owned());
                 }
             }
             Action::AiSuggest => {
@@ -4335,15 +4245,12 @@ impl ReCraftApp {
                         self.ai_proposals = proposals;
                         self.ai_selected = None;
                         self.set_status(
-                            self.t(
-                                "AI suggestions ready — review before applying",
-                                "AI 建议已生成——应用前请 review",
-                            )
-                            .to_owned(),
+                            self.t("ui_ai_suggestions_ready_review_before_applying")
+                                .to_owned(),
                         );
                     }
                     Some(Err(error)) => self.set_error(error),
-                    None => self.set_status(self.t("no project", "无项目").to_owned()),
+                    None => self.set_status(self.t("ui_no_project_2").to_owned()),
                 }
             }
             Action::AiApply => {
@@ -4359,17 +4266,24 @@ impl ReCraftApp {
             Action::AiQuery => {
                 let text = self.ai_query.trim().to_owned();
                 if text.is_empty() {
-                    self.ai_status = self.t("type a question first", "先输入问题").to_owned();
+                    self.ai_status = self.t("ui_type_a_question_first").to_owned();
                     return;
                 }
                 let Some(session) = self.session.as_mut() else {
-                    self.set_status(self.t("open a project first", "先打开项目").to_owned());
+                    self.set_status(self.t("ui_open_a_project_first").to_owned());
                     return;
                 };
                 match recraft_ai::answer_query(session, &text) {
                     Ok(answer) => {
-                        self.ai_status =
-                            format!("{} · {} match(es)", answer.intent, answer.items.len());
+                        let count = answer.items.len().to_string();
+                        self.ai_status = self.t_args(
+                            "ui_query_matches",
+                            &[
+                                ("intent", &answer.intent),
+                                ("count", &count),
+                                ("truncated", ""),
+                            ],
+                        );
                         self.ai_answer = Some(answer);
                     }
                     Err(error) => self.set_error(error),
@@ -4377,13 +4291,11 @@ impl ReCraftApp {
             }
             Action::AiExplain => {
                 let Some((start, _)) = self.current_function() else {
-                    self.ai_status = self
-                        .t("put the cursor inside a function", "把光标放到函数内")
-                        .to_owned();
+                    self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
                     return;
                 };
                 let Some(session) = self.session.as_mut() else {
-                    self.set_status(self.t("open a project first", "先打开项目").to_owned());
+                    self.set_status(self.t("ui_open_a_project_first").to_owned());
                     return;
                 };
                 match recraft_ai::explain(session, start) {
@@ -4400,18 +4312,11 @@ impl ReCraftApp {
                 }
                 self.ai_settings.refresh_enabled();
                 if !self.ai_settings.enabled {
-                    self.ai_status = self
-                        .t(
-                            "enable a provider above (endpoint + API key env) to use polish",
-                            "先在上方启用 provider（接口地址 + API key 环境变量）再润色",
-                        )
-                        .to_owned();
+                    self.ai_status = self.t("ui_enable_provider_for_polish").to_owned();
                     return;
                 }
                 let Some((start, _)) = self.current_function() else {
-                    self.ai_status = self
-                        .t("put the cursor inside a function", "把光标放到函数内")
-                        .to_owned();
+                    self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
                     return;
                 };
                 let settings = {
@@ -4442,7 +4347,7 @@ impl ReCraftApp {
                     receiver,
                     started: Instant::now(),
                 });
-                self.ai_status = self.t("calling provider…", "正在请求模型…").to_owned();
+                self.ai_status = self.t("ui_calling_provider").to_owned();
                 self.set_status(self.ai_status.clone());
                 ctx.request_repaint();
             }
@@ -4455,7 +4360,7 @@ impl ReCraftApp {
             }
             Action::PaletteCommand(index) => {
                 self.palette = None;
-                if let Some((_, _, command)) = PALETTE_COMMANDS.get(index) {
+                if let Some((_, command)) = PALETTE_COMMANDS.get(index) {
                     let command = *command;
                     self.apply_action(ctx, command);
                 }
@@ -4466,11 +4371,9 @@ impl ReCraftApp {
                     Some(Ok(Some(_))) => {
                         self.disasm_dirty = true;
                         self.pseudo_dirty = true;
-                        self.set_status(self.t("undo", "已撤销").to_owned());
+                        self.set_status(self.t("ui_undo_2").to_owned());
                     }
-                    Some(Ok(None)) => {
-                        self.set_status(self.t("nothing to undo", "没有可撤销的操作").to_owned())
-                    }
+                    Some(Ok(None)) => self.set_status(self.t("ui_nothing_to_undo").to_owned()),
                     Some(Err(error)) => self.set_error(error),
                     None => {}
                 }
@@ -4481,11 +4384,9 @@ impl ReCraftApp {
                     Some(Ok(Some(_))) => {
                         self.disasm_dirty = true;
                         self.pseudo_dirty = true;
-                        self.set_status(self.t("redo", "已重做").to_owned());
+                        self.set_status(self.t("ui_redo_2").to_owned());
                     }
-                    Some(Ok(None)) => {
-                        self.set_status(self.t("nothing to redo", "没有可重做的操作").to_owned())
-                    }
+                    Some(Ok(None)) => self.set_status(self.t("ui_nothing_to_redo").to_owned()),
                     Some(Err(error)) => self.set_error(error),
                     None => {}
                 }

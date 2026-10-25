@@ -34,11 +34,11 @@
    Win10/Win11 复验（不再需要提权，安装为 per-user）。
 2. **代码签名**：v0.1 决定暂不签名（SHA-256 校验 + SmartScreen 操作说明）；后续可申请
    SignPath Foundation（免费 OSS）或购买 OV 证书，再重打发布产物。
-3. **i18n 选型偏差**：DESIGN 指定 fluent/rust-i18n，实现为自研 `t()` 双语表（功能等价，
-   EN + zh-CN 完整）。
 4. **UI 渲染快照 / README 截图**：无头 egui 交互测试已覆盖，截图类素材尚未生成。
 5. **增强项（非 v1 门槛）**：真正 SSA/phi、共享外键/嵌套结构体布局、`cargo-fuzz`
    （当前用确定性畸形回归替代）。
+
+> i18n 选型偏差已关闭：UI 已迁移到 Fluent（`locales/*.ftl`）；语言选择持久化仍未实现。
 
 ## 后续优先项（预览后）
 

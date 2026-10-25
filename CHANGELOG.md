@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- UI localization migrated from inline `t(en, zh)` pairs to **Fluent**. `en-US.ftl` and
+  `zh-CN.ftl` are embedded with `include_str!`; all 148 static UI pairs, pane titles and
+  command-palette labels now use stable message IDs, with `t_args` for formatted status
+  text. Tests enforce identical message IDs across locales and fallback behavior.
 - The AI settings API-key field has **Show/Hide** and **Copy** controls, so the saved
   (DPAPI-decrypted) key can be inspected or copied without editing `ai-settings.json`.
 - AI provider settings now offer built-in **DeepSeek** and **OpenCode Go** modes plus

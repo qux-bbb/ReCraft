@@ -55,7 +55,8 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
   "find `main`", "follow the network callback".
 - **MCP-native AI**: function explanation, naming proposals, sample summaries,
   natural-language queries over the database. AI can only *propose* changes; a human applies them.
-- **Native egui UI**, dense IDA-like layout, modern look, English + 简体中文.
+- **Native egui UI**, dense IDA-like layout, modern look, English + 简体中文
+  (Fluent `.ftl` resources under `crates/recraft-ui/locales/`).
 
 ## Architecture
 
