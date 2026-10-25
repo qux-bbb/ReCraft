@@ -2019,36 +2019,37 @@ impl ReCraftApp {
                     HexUnit::Byte => 18,
                     HexUnit::Word => 10,
                 };
+                // IDA-like dense dump: 16-digit address, tight byte columns, ASCII tail.
+                ui.style_mut().spacing.button_padding = egui::vec2(0.0, 0.0);
                 egui::Grid::new("hex_grid")
                     .num_columns(columns)
-                    .striped(true)
-                    .spacing([8.0, 1.0])
+                    .striped(false)
+                    .min_col_width(0.0)
+                    .spacing([3.0, 0.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new(address_label).monospace().strong());
+                        ui.label(
+                            RichText::new(format!("{address_label}  "))
+                                .monospace()
+                                .strong(),
+                        );
                         match unit {
                             HexUnit::Byte => {
-                                for offset in 0..16 {
-                                    ui.label(
-                                        RichText::new(format!("{offset:02x}")).monospace().weak(),
-                                    );
+                                for _ in 0..16 {
+                                    ui.label(RichText::new(" ").monospace());
                                 }
                             }
                             HexUnit::Word => {
-                                for word in 0..8 {
-                                    ui.label(
-                                        RichText::new(format!("{:04x}", word * 2))
-                                            .monospace()
-                                            .weak(),
-                                    );
+                                for _ in 0..8 {
+                                    ui.label(RichText::new("    ").monospace());
                                 }
                             }
                         }
-                        ui.label(RichText::new("ASCII").monospace().strong());
+                        ui.label(RichText::new("  ASCII").monospace().strong());
                         ui.end_row();
                         for row in 0..rows {
                             let row_addr = Address::new(start.get() + (row as u64) * 16);
                             ui.label(
-                                RichText::new(format!("{:#012x}", row_addr.get()))
+                                RichText::new(format!("{:016X}  ", row_addr.get()))
                                     .monospace()
                                     .color(pal.addr),
                             );
@@ -2059,7 +2060,7 @@ impl ReCraftApp {
                                         if let Some(byte) = buffer.get(row * 16 + column) {
                                             let response = ui.selectable_label(
                                                 cursor == Some(address),
-                                                RichText::new(format!("{byte:02x}")).monospace(),
+                                                RichText::new(format!("{byte:02X}")).monospace(),
                                             );
                                             if response.clicked() {
                                                 clicked = Some(address);
@@ -2087,7 +2088,7 @@ impl ReCraftApp {
                                             });
                                             let response = ui.selectable_label(
                                                 selected,
-                                                RichText::new(format!("{value:04x}")).monospace(),
+                                                RichText::new(format!("{value:04X}")).monospace(),
                                             );
                                             if response.clicked() {
                                                 clicked = Some(address);
@@ -2111,7 +2112,11 @@ impl ReCraftApp {
                                     }
                                 })
                                 .collect();
-                            ui.label(RichText::new(ascii).monospace().color(pal.bytes));
+                            ui.label(
+                                RichText::new(format!("  {ascii}"))
+                                    .monospace()
+                                    .color(pal.bytes),
+                            );
                             ui.end_row();
                         }
                     });

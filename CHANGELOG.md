@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hex view now follows IDA's dump layout: 16-digit addresses without `0x`, tight
+  two-digit bytes (uppercase), no per-byte offset header, and the ASCII tail directly after
+  the bytes. Word mode keeps the same compact grid.
 - Decompile view text now uses the active palette's foreground color instead of hard-coded
   `LIGHT_GRAY`, which was nearly invisible on the white light theme. Both the code text and
   the painter fallback follow `pal.text`; verified with a light-theme screenshot.
