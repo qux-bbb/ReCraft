@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Decompile view text now uses the active palette's foreground color instead of hard-coded
+  `LIGHT_GRAY`, which was nearly invisible on the white light theme. Both the code text and
+  the painter fallback follow `pal.text`; verified with a light-theme screenshot.
 - L2 structuring no longer drops the rest of a loop body when several failure checks
   share one exit block. A shared exit is emitted as a labelled jump instead of being
   inlined at the first check. For nested loops whose inner exit leaves the parent loop

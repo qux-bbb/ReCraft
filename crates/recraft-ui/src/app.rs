@@ -3862,13 +3862,10 @@ impl ReCraftApp {
                         pal.addr,
                         &mono,
                     );
-                    append(&mut job, &line.text, Color32::LIGHT_GRAY, &mono);
+                    append(&mut job, &line.text, pal.text, &mono);
                     let galley = ui.painter().layout_job(job);
-                    ui.painter().galley(
-                        rect.left_top() + egui::vec2(4.0, 1.0),
-                        galley,
-                        Color32::WHITE,
-                    );
+                    ui.painter()
+                        .galley(rect.left_top() + egui::vec2(4.0, 1.0), galley, pal.text);
                     if response.clicked() {
                         clicked = Some(line.addr);
                     }
