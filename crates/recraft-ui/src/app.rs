@@ -2015,35 +2015,20 @@ impl ReCraftApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let columns = match unit {
-                    HexUnit::Byte => 18,
-                    HexUnit::Word => 10,
-                };
-                // IDA-like dense dump: 16-digit address, tight byte columns, ASCII tail.
+                // IDA-like dense dump: address, one tight byte-cell group, ASCII tail.
                 ui.style_mut().spacing.button_padding = egui::vec2(0.0, 0.0);
                 egui::Grid::new("hex_grid")
-                    .num_columns(columns)
+                    .num_columns(3)
                     .striped(false)
                     .min_col_width(0.0)
-                    .spacing([3.0, 0.0])
+                    .spacing([8.0, 0.0])
                     .show(ui, |ui| {
                         ui.label(
                             RichText::new(format!("{address_label}  "))
                                 .monospace()
                                 .strong(),
                         );
-                        match unit {
-                            HexUnit::Byte => {
-                                for _ in 0..16 {
-                                    ui.label(RichText::new(" ").monospace());
-                                }
-                            }
-                            HexUnit::Word => {
-                                for _ in 0..8 {
-                                    ui.label(RichText::new("    ").monospace());
-                                }
-                            }
-                        }
+                        ui.label(RichText::new(" ").monospace());
                         ui.label(RichText::new("  ASCII").monospace().strong());
                         ui.end_row();
                         for row in 0..rows {
@@ -2053,55 +2038,61 @@ impl ReCraftApp {
                                     .monospace()
                                     .color(pal.addr),
                             );
-                            match unit {
-                                HexUnit::Byte => {
-                                    for column in 0..16 {
-                                        let address = Address::new(row_addr.get() + column as u64);
-                                        if let Some(byte) = buffer.get(row * 16 + column) {
-                                            let response = ui.selectable_label(
-                                                cursor == Some(address),
-                                                RichText::new(format!("{byte:02X}")).monospace(),
-                                            );
-                                            if response.clicked() {
-                                                clicked = Some(address);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 3.0;
+                                match unit {
+                                    HexUnit::Byte => {
+                                        for column in 0..16 {
+                                            let address =
+                                                Address::new(row_addr.get() + column as u64);
+                                            if let Some(byte) = buffer.get(row * 16 + column) {
+                                                let response = ui.selectable_label(
+                                                    cursor == Some(address),
+                                                    RichText::new(format!("{byte:02X}"))
+                                                        .monospace(),
+                                                );
+                                                if response.clicked() {
+                                                    clicked = Some(address);
+                                                }
+                                                if response.double_clicked() {
+                                                    navigated = Some(address);
+                                                }
+                                            } else {
+                                                ui.label(RichText::new("  ").monospace());
                                             }
-                                            if response.double_clicked() {
-                                                navigated = Some(address);
+                                        }
+                                    }
+                                    HexUnit::Word => {
+                                        for word in 0..8 {
+                                            let index = row * 16 + word * 2;
+                                            let address =
+                                                Address::new(row_addr.get() + (word as u64) * 2);
+                                            if let (Some(low), Some(high)) =
+                                                (buffer.get(index), buffer.get(index + 1))
+                                            {
+                                                let value = u16::from_le_bytes([*low, *high]);
+                                                let selected = cursor.is_some_and(|cursor| {
+                                                    cursor.get() >= address.get()
+                                                        && cursor.get() < address.get() + 2
+                                                });
+                                                let response = ui.selectable_label(
+                                                    selected,
+                                                    RichText::new(format!("{value:04X}"))
+                                                        .monospace(),
+                                                );
+                                                if response.clicked() {
+                                                    clicked = Some(address);
+                                                }
+                                                if response.double_clicked() {
+                                                    navigated = Some(address);
+                                                }
+                                            } else {
+                                                ui.label(RichText::new("    ").monospace());
                                             }
-                                        } else {
-                                            ui.label(RichText::new("  ").monospace());
                                         }
                                     }
                                 }
-                                HexUnit::Word => {
-                                    for word in 0..8 {
-                                        let index = row * 16 + word * 2;
-                                        let address =
-                                            Address::new(row_addr.get() + (word as u64) * 2);
-                                        if let (Some(low), Some(high)) =
-                                            (buffer.get(index), buffer.get(index + 1))
-                                        {
-                                            let value = u16::from_le_bytes([*low, *high]);
-                                            let selected = cursor.is_some_and(|cursor| {
-                                                cursor.get() >= address.get()
-                                                    && cursor.get() < address.get() + 2
-                                            });
-                                            let response = ui.selectable_label(
-                                                selected,
-                                                RichText::new(format!("{value:04X}")).monospace(),
-                                            );
-                                            if response.clicked() {
-                                                clicked = Some(address);
-                                            }
-                                            if response.double_clicked() {
-                                                navigated = Some(address);
-                                            }
-                                        } else {
-                                            ui.label(RichText::new("    ").monospace());
-                                        }
-                                    }
-                                }
-                            }
+                            });
                             let ascii: String = buffer[row * 16..buffer.len().min(row * 16 + 16)]
                                 .iter()
                                 .map(|byte| {
