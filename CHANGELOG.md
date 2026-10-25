@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- L2 call sites no longer print redundant argument-register assignments when the call
+  already renders the captured value: `fgets((char*)(rsp + 0x20), 0x100, (void*)rax)` no
+  longer repeats `rcx = …; edx = …;`. Register-valued arguments keep their assignment so
+  semantics are unchanged; regression test updated (`recursive(rcx)`).
 - AI polish plumbing is now smoke-tested end-to-end: `scripts/ai-polish-mock.ps1` starts a
   local OpenAI-compatible stub (`scripts/ai_mock_server.py`), configures
   `RECRAFT_AI_PROVIDER=openai`, and runs `recraft ai polish` on the crackme project

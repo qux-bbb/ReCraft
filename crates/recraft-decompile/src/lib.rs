@@ -138,8 +138,53 @@ pub(crate) fn lift_block(
 
     let mut statements = Vec::new();
     let mut written = BTreeSet::new();
-    for item in &lifted {
-        for stmt in &item.stmts {
+    // Argument-register writes immediately consumed by a prototyped call are redundant:
+    // the call already renders its captured argument expressions.
+    let mut flat: Vec<(usize, usize)> = Vec::new();
+    for (item_index, item) in lifted.iter().enumerate() {
+        for stmt_index in 0..item.stmts.len() {
+            flat.push((item_index, stmt_index));
+        }
+    }
+    let is_arg_write = |stmt: &Stmt| {
+        matches!(
+            stmt,
+            Stmt::WriteReg { reg, .. } if crate::l2::X64_ARG_REGS.contains(&reg.base)
+        )
+    };
+    let mut skip: HashSet<(usize, usize)> = HashSet::new();
+    for (position, &(item_index, stmt_index)) in flat.iter().enumerate() {
+        let Stmt::WriteReg { reg, .. } = &lifted[item_index].stmts[stmt_index] else {
+            continue;
+        };
+        let Some(slot) = crate::l2::X64_ARG_REGS
+            .iter()
+            .position(|arg| *arg == reg.base)
+        else {
+            continue;
+        };
+        let mut next = position + 1;
+        while next < flat.len() && is_arg_write(&lifted[flat[next].0].stmts[flat[next].1]) {
+            next += 1;
+        }
+        let Some(&(call_item, call_stmt)) = flat.get(next) else {
+            continue;
+        };
+        if let Stmt::Call { target, args } = &lifted[call_item].stmts[call_stmt]
+            && let Some(proto) = call_protos.get(&target.get())
+            && slot < proto.params.len()
+            && args
+                .get(slot)
+                .is_some_and(|value| !matches!(exprs[*value as usize], Expr::Reg(_)))
+        {
+            skip.insert((item_index, stmt_index));
+        }
+    }
+    for (item_index, item) in lifted.iter().enumerate() {
+        for (stmt_index, stmt) in item.stmts.iter().enumerate() {
+            if skip.contains(&(item_index, stmt_index)) {
+                continue;
+            }
             if let Stmt::WriteReg { reg, .. } = stmt {
                 written.insert(reg.base);
             }

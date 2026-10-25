@@ -89,17 +89,14 @@ prototype-name improvements it reads like this (abridged):
 // prototype: int main(void)
 // L1 structure recovery (12 blocks)
 int32 main(void) {
-    rcx = "==========================================";
     printf((char*)"==========================================");
-    rcx = "  Simple Crackme v2.0  (C edition)";
     printf((char*)"  Simple Crackme v2.0  (C edition)");
     ...
     while (1) {
-        rcx = "Enter flag: ";
         puts((char*)"Enter flag: ");
-        ecx = 1;
         __acrt_iob_func(1);
-        ...
+        fflush((void*)rax);
+        __acrt_iob_func(rcx);
         fgets((char*)(rsp + 0x20), 0x100, (void*)rax);
         if (!((rax == 0))) break;
         strchr((char*)(rsp + 0x20), "\r\n");

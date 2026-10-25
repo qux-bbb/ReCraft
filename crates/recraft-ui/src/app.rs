@@ -5109,7 +5109,16 @@ mod tests {
             .cloned()
             .expect("sample has at least one string");
         app.navigate(row.addr);
+        app.apply_action(
+            &egui::Context::default(),
+            Action::NavigateToDisasm(row.addr),
+        );
         app.tick();
+        assert_eq!(
+            app.view_mode,
+            ViewMode::Text,
+            "string navigation opens text mode"
+        );
         let line = app.disasm_rows.first().expect("data rows");
         assert_eq!(line.addr, row.addr);
         assert_eq!(line.mnemonic, "db");
