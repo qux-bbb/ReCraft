@@ -433,6 +433,8 @@ struct SavedLayout {
     zoom: f32,
     #[serde(default)]
     view_mode: ViewMode,
+    #[serde(default)]
+    lang: Lang,
 }
 
 fn layout_store_path() -> Option<PathBuf> {
@@ -452,6 +454,7 @@ fn save_layout_to(
     theme: ThemeMode,
     zoom: f32,
     view_mode: ViewMode,
+    lang: Lang,
 ) -> std::result::Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -462,6 +465,7 @@ fn save_layout_to(
         theme,
         zoom,
         view_mode,
+        lang,
     };
     let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
     // `egui` serializes NaN coordinates as null; skip until the dock has been laid out.
@@ -835,7 +839,8 @@ impl ReCraftApp {
     }
 
     fn set_error(&mut self, error: impl std::fmt::Display) {
-        let message = format!("error: {error}");
+        let detail = error.to_string();
+        let message = self.t_args("ui_error_prefix", &[("error", &detail)]);
         self.log(&message);
         self.status = message;
         self.is_error = true;
@@ -862,7 +867,9 @@ impl ReCraftApp {
                     self.project = Some(path.to_path_buf());
                     self.remember_recent(path);
                     self.after_open();
-                    self.set_status(format!("loaded {}", path.display()));
+                    self.set_status(
+                        self.t_args("ui_loaded_path", &[("path", &path.display().to_string())]),
+                    );
                 }
                 Err(error) => self.set_error(error),
             }
@@ -878,7 +885,10 @@ impl ReCraftApp {
 
     fn import_pe(&mut self, source: &Path, project: &Path) {
         let Ok(bytes) = std::fs::read(source) else {
-            self.set_error(format!("cannot read {}", source.display()));
+            self.set_error(self.t_args(
+                "ui_cannot_read_path",
+                &[("path", &source.display().to_string())],
+            ));
             return;
         };
         match Session::create(project, &bytes, &mut |_, _| {}, &|| false) {
@@ -997,18 +1007,18 @@ impl ReCraftApp {
                 self.imports_dirty = true;
                 self.xrefs_dirty = true;
                 self.cfg_dirty = true;
-                self.set_status(format!(
-                    "{} at {:#x}",
-                    match op {
-                        DataOp::Code => "code",
-                        DataOp::Data => "data",
-                        DataOp::Ascii => "ascii data",
-                        DataOp::Unknown => "undefined",
-                        DataOp::DefineFunction => "function",
-                        DataOp::UndefineFunction => "function removed",
-                    },
-                    addr.get()
-                ));
+                let op_label = self.t(match op {
+                    DataOp::Code => "ui_op_code",
+                    DataOp::Data => "ui_op_data",
+                    DataOp::Ascii => "ui_op_ascii_data",
+                    DataOp::Unknown => "ui_op_undefined",
+                    DataOp::DefineFunction => "ui_op_function",
+                    DataOp::UndefineFunction => "ui_op_function_removed",
+                });
+                let addr_text = format!("{:#x}", addr.get());
+                self.set_status(
+                    self.t_args("ui_data_op_at", &[("op", &op_label), ("addr", &addr_text)]),
+                );
             }
             Err(error) => self.set_error(error),
         }
@@ -1099,7 +1109,10 @@ impl ReCraftApp {
             Ok(_) => {
                 self.disasm_dirty = true;
                 self.pseudo_dirty = true;
-                self.set_status(format!("changed {:#x}", edit.addr.get()));
+                self.set_status(self.t_args(
+                    "ui_changed_addr",
+                    &[("addr", &format!("{:#x}", edit.addr.get()))],
+                ));
             }
             Err(error) => self.set_error(error),
         }
@@ -1300,8 +1313,13 @@ impl ReCraftApp {
                 self.xrefs_for = None;
                 self.cfg_dirty = true;
                 self.cfg_for = None;
-                self.set_status(format!(
-                    "{functions} functions, {strings} strings in {elapsed_ms:.0} ms"
+                self.set_status(self.t_args(
+                    "ui_analysis_done",
+                    &[
+                        ("functions", &functions.to_string()),
+                        ("strings", &strings.to_string()),
+                        ("ms", &format!("{elapsed_ms:.0}")),
+                    ],
                 ));
             }
             AnalysisMessage::Cancelled => {
@@ -1322,19 +1340,19 @@ impl ReCraftApp {
             Ok(Ok(text)) => {
                 let elapsed = job.started.elapsed().as_millis();
                 self.ai_explanation = Some(text);
-                self.ai_status = format!("polish done in {elapsed} ms");
+                self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
                 self.set_status(self.ai_status.clone());
                 self.ai_job = None;
             }
             Ok(Err(error)) => {
                 self.ai_job = None;
-                self.ai_status = format!("polish failed: {error}");
+                self.ai_status = self.t_args("ui_polish_failed", &[("error", &error.to_string())]);
                 self.set_status(self.ai_status.clone());
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.ai_job = None;
-                self.ai_status = "polish worker stopped unexpectedly".to_owned();
+                self.ai_status = self.t("ui_polish_worker_stopped");
             }
         }
     }
@@ -1459,7 +1477,9 @@ impl ReCraftApp {
             Err(error) => {
                 self.pseudo = None;
                 self.pseudo_dirty = false;
-                self.set_status(format!("decompile: {error}"));
+                self.set_status(
+                    self.t_args("ui_decompile_error", &[("error", &error.to_string())]),
+                );
             }
         }
     }
@@ -2178,7 +2198,16 @@ impl ReCraftApp {
     /// change.
     fn persist_layout_if_changed(&mut self) {
         self.frame_count = self.frame_count.wrapping_add(1);
-        if self.frame_count % 30 != 0 || cfg!(test) {
+        if self.frame_count % 30 != 0 {
+            return;
+        }
+        self.save_layout_now();
+    }
+
+    /// Save immediately (language toggle, explicit layout reset) instead of waiting for
+    /// the periodic checkpoint.
+    fn save_layout_now(&mut self) {
+        if cfg!(test) {
             return;
         }
         let Some(state) = self.dock.as_ref() else {
@@ -2193,6 +2222,7 @@ impl ReCraftApp {
             theme,
             zoom,
             view_mode,
+            lang: self.lang,
         };
         let Ok(text) = serde_json::to_string(&saved) else {
             return;
@@ -2203,7 +2233,7 @@ impl ReCraftApp {
         let Some(path) = layout_store_path() else {
             return;
         };
-        if save_layout_to(&path, state, theme, zoom, view_mode).is_ok() {
+        if save_layout_to(&path, state, theme, zoom, view_mode, self.lang).is_ok() {
             self.layout_saved = Some(text);
         }
     }
@@ -2215,6 +2245,7 @@ impl ReCraftApp {
             self.theme = saved.theme;
             self.mono_zoom = saved.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
             self.view_mode = saved.view_mode;
+            self.lang = saved.lang;
             self.dock = Some(saved.dock);
         }
     }
@@ -2798,7 +2829,7 @@ impl ReCraftApp {
                 self.disasm_dirty = true;
                 self.pseudo_dirty = true;
                 self.functions_dirty = true;
-                self.set_status(format!("structure {name} defined/updated"));
+                self.set_status(self.t_args("ui_structure_defined", &[("name", &name)]));
             }
             Err(error) => self.set_error(error),
         }
@@ -2825,10 +2856,12 @@ impl ReCraftApp {
             Ok(_) => {
                 self.disasm_dirty = true;
                 self.pseudo_dirty = true;
-                self.set_status(format!(
-                    "argument slot {} of {:#x} bound",
-                    self.struct_slot,
-                    start.get()
+                self.set_status(self.t_args(
+                    "ui_argument_bound",
+                    &[
+                        ("slot", &self.struct_slot.to_string()),
+                        ("addr", &format!("{:#x}", start.get())),
+                    ],
                 ));
             }
             Err(error) => self.set_error(error),
@@ -3143,11 +3176,16 @@ impl ReCraftApp {
                 self.disasm_dirty = true;
                 self.ai_proposals.remove(index);
                 self.ai_selected = None;
-                self.ai_status = format!("renamed {:#x}", proposal.target.get());
-                self.set_status(format!(
-                    "applied 1 proposal ({:#x} -> {}); undo with Ctrl+Z",
-                    proposal.target.get(),
-                    proposal.value
+                self.ai_status = self.t_args(
+                    "ui_renamed_addr",
+                    &[("addr", &format!("{:#x}", proposal.target.get()))],
+                );
+                self.set_status(self.t_args(
+                    "ui_applied_proposal",
+                    &[
+                        ("addr", &format!("{:#x}", proposal.target.get())),
+                        ("name", &proposal.value),
+                    ],
                 ));
                 true
             }
@@ -4241,7 +4279,10 @@ impl ReCraftApp {
                     .map(|session| recraft_ai::suggest_names(session, 50));
                 match result {
                     Some(Ok(proposals)) => {
-                        self.ai_status = format!("{} suggestion(s)", proposals.len());
+                        self.ai_status = self.t_args(
+                            "ui_n_suggestions",
+                            &[("count", &proposals.len().to_string())],
+                        );
                         self.ai_proposals = proposals;
                         self.ai_selected = None;
                         self.set_status(
@@ -4393,6 +4434,7 @@ impl ReCraftApp {
             }
             Action::ToggleLang => {
                 self.lang = self.lang.toggle();
+                self.save_layout_now();
             }
             Action::ToggleViewMode => {
                 self.view_mode = match self.view_mode {
@@ -5729,10 +5771,12 @@ mod tests {
             ThemeMode::Light,
             1.2,
             ViewMode::Text,
+            Lang::Zh,
         )
         .unwrap();
         let loaded = load_layout_from(&file).expect("layout reload");
         assert_eq!(loaded.theme, ThemeMode::Light, "theme must persist");
+        assert_eq!(loaded.lang, Lang::Zh, "language must persist");
         assert!(
             (loaded.zoom - 1.2).abs() < f32::EPSILON,
             "zoom must persist"
