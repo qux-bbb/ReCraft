@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The AI panel is now vertically scrollable, shows the request status and polished
+  result **above** the provider settings, and requests a repaint while a background
+  polish job is running. Previously a slow/large response could be clipped below the
+  panel or only appear after an unrelated mouse/keyboard event (reported as "Polish does
+  nothing"). Adds `ai_job_result_updates_status_and_explanation`.
+
 ### Added
 
 - AI provider settings now offer built-in **DeepSeek** and **OpenCode Go** modes plus

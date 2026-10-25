@@ -1324,11 +1324,13 @@ impl ReCraftApp {
                 let elapsed = job.started.elapsed().as_millis();
                 self.ai_explanation = Some(text);
                 self.ai_status = format!("polish done in {elapsed} ms");
+                self.set_status(self.ai_status.clone());
                 self.ai_job = None;
             }
             Ok(Err(error)) => {
                 self.ai_job = None;
                 self.ai_status = format!("polish failed: {error}");
+                self.set_status(self.ai_status.clone());
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -2875,6 +2877,14 @@ impl ReCraftApp {
     }
 
     fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        // The panel can be shorter than its content (provider settings + result), so keep
+        // the whole body scrollable instead of clipping the status/result below the fold.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.ai_panel_inner(ui, action));
+    }
+
+    fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let suggest = self.t("Suggest names", "建议命名");
         let apply_label = self.t("Apply selected", "应用选中");
         let explain_label = self.t("Explain", "解释");
@@ -2904,6 +2914,21 @@ impl ReCraftApp {
                 *action = Action::AiClear;
             }
         });
+        // Show immediate feedback and the model answer above the (collapsible) settings,
+        // so a slow provider request never looks like a dead button.
+        if !self.ai_status.is_empty() {
+            ui.weak(&self.ai_status);
+        }
+        if let Some(text) = self.ai_explanation.clone() {
+            egui::ScrollArea::vertical()
+                .id_salt("ai_explanation")
+                .max_height(240.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.label(RichText::new(text).monospace().size(11.0));
+                });
+            ui.separator();
+        }
         self.ai_settings_ui(ui);
         let query_hint = self.t(
             "ask: urls | callers of CreateFileW | text http",
@@ -2919,9 +2944,6 @@ impl ReCraftApp {
                 *action = Action::AiQuery;
             }
         });
-        if !self.ai_status.is_empty() {
-            ui.weak(&self.ai_status);
-        }
         if let Some(answer) = self.ai_answer.clone() {
             ui.separator();
             ui.weak(format!(
@@ -2947,16 +2969,6 @@ impl ReCraftApp {
                             ui.weak(format!("  {}", item.functions.join(", ")));
                         }
                     }
-                });
-        }
-        if let Some(text) = self.ai_explanation.clone() {
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .id_salt("ai_explanation")
-                .max_height(220.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.label(RichText::new(text).monospace().size(11.0));
                 });
         }
         if self.ai_proposals.is_empty() {
@@ -4401,6 +4413,8 @@ impl ReCraftApp {
                     started: Instant::now(),
                 });
                 self.ai_status = self.t("calling provider…", "正在请求模型…").to_owned();
+                self.set_status(self.ai_status.clone());
+                ctx.request_repaint();
             }
             Action::TogglePalette => {
                 self.palette = if self.palette.is_some() {
@@ -4537,6 +4551,11 @@ impl ReCraftApp {
         let ctx = root.ctx().clone();
         self.install_style(&ctx);
         self.tick();
+        // Background AI requests must wake the UI when they complete; otherwise the
+        // polished text only appears after an unrelated mouse/keyboard event.
+        if self.ai_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         let title = match self.project.as_ref() {
             Some(path) => format!(
                 "ReCraft - {}  {}",
@@ -5821,6 +5840,27 @@ mod tests {
         ));
         assert!(is_string_noise(".rdata", ".rdata"));
         assert!(!is_string_noise(".rdata", "flag{strings_are_not_enough}"));
+    }
+
+    #[test]
+    fn ai_job_result_updates_status_and_explanation() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok("int main(void) {}".to_owned())).unwrap();
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+            }),
+            ..ReCraftApp::default()
+        };
+        app.tick();
+        assert_eq!(app.ai_explanation.as_deref(), Some("int main(void) {}"));
+        assert!(
+            app.ai_status.starts_with("polish done"),
+            "{}",
+            app.ai_status
+        );
+        assert!(app.ai_job.is_none());
     }
 
     #[test]
