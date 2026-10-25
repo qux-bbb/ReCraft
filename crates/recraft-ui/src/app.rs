@@ -295,7 +295,7 @@ impl egui_dock::TabViewer for DockViewer<'_> {
             Pane::Xrefs => self.app.xrefs_list(ui, self.action),
             Pane::Names => self.app.names_list(ui, self.action),
             Pane::Segments => self.app.segments_list(ui, self.action),
-            Pane::Ai => self.app.ai_panel(ui, self.action),
+            Pane::Ai => self.app.ai_panel(ui, self.action, AiPanelMode::Tab),
             Pane::Structs => self.app.structs_panel(ui, self.action),
             Pane::Exports => self.app.exports_list(ui, self.action),
             Pane::GraphOverview => self.app.graph_overview(ui, self.action),
@@ -432,6 +432,14 @@ fn default_zoom() -> f32 {
     1.0
 }
 
+fn default_ai_sidebar() -> bool {
+    true
+}
+
+fn default_ai_sidebar_width() -> f32 {
+    360.0
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
     version: u32,
@@ -444,6 +452,10 @@ struct SavedLayout {
     view_mode: ViewMode,
     #[serde(default)]
     lang: Lang,
+    #[serde(default = "default_ai_sidebar")]
+    ai_sidebar: bool,
+    #[serde(default = "default_ai_sidebar_width")]
+    ai_sidebar_width: f32,
 }
 
 fn layout_store_path() -> Option<PathBuf> {
@@ -457,26 +469,11 @@ fn load_layout_from(path: &Path) -> Option<SavedLayout> {
     (saved.version == LAYOUT_VERSION).then_some(saved)
 }
 
-fn save_layout_to(
-    path: &Path,
-    state: &egui_dock::DockState<Pane>,
-    theme: ThemeMode,
-    zoom: f32,
-    view_mode: ViewMode,
-    lang: Lang,
-) -> std::result::Result<(), String> {
+fn save_layout_to(path: &Path, saved: &SavedLayout) -> std::result::Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let saved = SavedLayout {
-        version: LAYOUT_VERSION,
-        dock: state.clone(),
-        theme,
-        zoom,
-        view_mode,
-        lang,
-    };
-    let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
+    let text = serde_json::to_string(saved).map_err(|error| error.to_string())?;
     // `egui` serializes NaN coordinates as null; skip until the dock has been laid out.
     if text.contains("\"x\":null") || text.contains("\"y\":null") {
         return Err("layout not laid out yet".to_owned());
@@ -540,6 +537,11 @@ fn follow_tokens(operands: &str) -> Vec<String> {
 type AiSelection = Option<usize>;
 
 /// Built-in AI endpoint choices exposed by the settings panel.
+enum AiPanelMode {
+    Tab,
+    Sidebar,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AiMode {
     Offline,
@@ -640,6 +642,9 @@ enum Action {
     EditPrototype,
     ShowStructs,
     FocusPane(Pane),
+    ToggleAiSidebar,
+    OpenAiSettings,
+    DockAi,
     ResetLayout,
     SetTheme(ThemeMode),
     ToggleTheme,
@@ -715,6 +720,9 @@ pub struct ReCraftApp {
     ai_query: String,
     ai_answer: Option<recraft_ai::QueryAnswer>,
     ai_job: Option<AiJob>,
+    ai_sidebar: bool,
+    ai_sidebar_width: f32,
+    ai_settings_open: bool,
     struct_name: String,
     struct_size: u64,
     struct_fields: String,
@@ -791,6 +799,9 @@ impl Default for ReCraftApp {
             ai_query: String::new(),
             ai_answer: None,
             ai_job: None,
+            ai_sidebar: true,
+            ai_sidebar_width: 360.0,
+            ai_settings_open: false,
             struct_name: String::new(),
             struct_size: 16,
             struct_fields: String::new(),
@@ -824,6 +835,7 @@ impl ReCraftApp {
             app.ai_settings.max_tokens = app.ai_settings.max_tokens.max(65536);
         }
         app.restore_layout();
+        app.sync_ai_tab_visibility();
         if let Some(path) = initial {
             app.open_path(&path);
         } else {
@@ -1811,6 +1823,17 @@ impl ReCraftApp {
                         }
                     });
                     if ui
+                        .selectable_label(self.ai_sidebar, self.t("ui_ai_sidebar"))
+                        .clicked()
+                    {
+                        *action = Action::ToggleAiSidebar;
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_provider_settings")).clicked() {
+                        *action = Action::OpenAiSettings;
+                        ui.close();
+                    }
+                    if ui
                         .button(if self.lang == Lang::En {
                             "中文"
                         } else {
@@ -2147,8 +2170,12 @@ impl ReCraftApp {
             Pane::Structs,
             Pane::Imports,
             Pane::Exports,
-            Pane::Ai,
         ]);
+        if !self.ai_sidebar {
+            // The AI tab is the "general view"; while the sidebar is open the tab is
+            // detached so the same controls are not rendered twice.
+            state.push_to_focused_leaf(Pane::Ai);
+        }
         {
             let surface = state.main_surface_mut();
             // Output window across the bottom (about 18% like the IDA reference).
@@ -2219,6 +2246,28 @@ impl ReCraftApp {
         }
     }
 
+    /// Keep the dock's AI tab in sync with the sidebar: detached while the sidebar is
+    /// open, re-attached when the user switches to the general view.
+    fn sync_ai_tab_visibility(&mut self) {
+        self.ensure_dock();
+        let Some(state) = self.dock.as_mut() else {
+            return;
+        };
+        if self.ai_sidebar {
+            let ai_was_active = state
+                .find_active_focused()
+                .is_some_and(|(_, tab)| *tab == Pane::Ai);
+            if let Some(path) = state.find_tab(&Pane::Ai) {
+                state.remove_tab(path);
+            }
+            if ai_was_active && let Some(view) = state.find_tab(&Pane::View) {
+                let _ = state.set_active_tab(view);
+            }
+        } else if state.find_tab(&Pane::Ai).is_none() {
+            state.push_to_focused_leaf(Pane::Ai);
+        }
+    }
+
     /// Persist the dock layout and theme to `%LOCALAPPDATA%\ReCraft\layout.json` when they
     /// change.
     fn persist_layout_if_changed(&mut self) {
@@ -2248,6 +2297,8 @@ impl ReCraftApp {
             zoom,
             view_mode,
             lang: self.lang,
+            ai_sidebar: self.ai_sidebar,
+            ai_sidebar_width: self.ai_sidebar_width,
         };
         let Ok(text) = serde_json::to_string(&saved) else {
             return;
@@ -2258,7 +2309,7 @@ impl ReCraftApp {
         let Some(path) = layout_store_path() else {
             return;
         };
-        if save_layout_to(&path, state, theme, zoom, view_mode, self.lang).is_ok() {
+        if save_layout_to(&path, &saved).is_ok() {
             self.layout_saved = Some(text);
         }
     }
@@ -2271,6 +2322,8 @@ impl ReCraftApp {
             self.mono_zoom = saved.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
             self.view_mode = saved.view_mode;
             self.lang = saved.lang;
+            self.ai_sidebar = saved.ai_sidebar;
+            self.ai_sidebar_width = saved.ai_sidebar_width.clamp(300.0, 620.0);
             self.dock = Some(saved.dock);
         }
     }
@@ -2893,15 +2946,15 @@ impl ReCraftApp {
         }
     }
 
-    fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+    fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action, mode: AiPanelMode) {
         // The panel can be shorter than its content (provider settings + result), so keep
         // the whole body scrollable instead of clipping the status/result below the fold.
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| self.ai_panel_inner(ui, action));
+            .show(ui, |ui| self.ai_panel_inner(ui, action, mode));
     }
 
-    fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+    fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action, mode: AiPanelMode) {
         let pal = self.palette();
         let suggest = self.t("ui_suggest_names");
         let apply_label = self.t("ui_apply_selected");
@@ -2924,6 +2977,42 @@ impl ReCraftApp {
                 ui.spinner();
                 ui.weak(self.t("ai_working"));
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button(RichText::new("⚙").size(15.0))
+                    .on_hover_text(self.t("ui_provider_settings"))
+                    .clicked()
+                {
+                    *action = Action::OpenAiSettings;
+                }
+                match mode {
+                    AiPanelMode::Sidebar => {
+                        if ui
+                            .button(RichText::new("×").size(15.0))
+                            .on_hover_text(self.t("ui_collapse"))
+                            .clicked()
+                        {
+                            *action = Action::ToggleAiSidebar;
+                        }
+                        if ui
+                            .button(self.t("ui_tab_short"))
+                            .on_hover_text(self.t("ui_open_in_tab"))
+                            .clicked()
+                        {
+                            *action = Action::DockAi;
+                        }
+                    }
+                    AiPanelMode::Tab => {
+                        if ui
+                            .button(self.t("ui_sidebar_short"))
+                            .on_hover_text(self.t("ui_open_in_sidebar"))
+                            .clicked()
+                        {
+                            *action = Action::ToggleAiSidebar;
+                        }
+                    }
+                }
+            });
         });
         ui.add_space(6.0);
 
@@ -3150,7 +3239,30 @@ impl ReCraftApp {
         }
 
         ui.add_space(8.0);
-        self.ai_settings_ui(ui);
+    }
+
+    fn ai_sidebar_ui(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let response = egui::Panel::right("ai_sidebar")
+            .resizable(false)
+            .exact_size(self.ai_sidebar_width)
+            .show(ui, |ui| {
+                ui.add_space(3.0);
+                self.ai_panel(ui, action, AiPanelMode::Sidebar);
+            });
+        self.ai_sidebar_width = response.response.rect.width().clamp(300.0, 620.0);
+    }
+
+    fn ai_settings_window(&mut self, ctx: &egui::Context) {
+        if !self.ai_settings_open {
+            return;
+        }
+        let mut open = self.ai_settings_open;
+        egui::Window::new(self.t("ui_provider_settings"))
+            .open(&mut open)
+            .resizable(true)
+            .default_width(560.0)
+            .show(ctx, |ui| self.ai_settings_ui(ui));
+        self.ai_settings_open = open;
     }
 
     /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a
@@ -4342,7 +4454,29 @@ impl ReCraftApp {
                 self.focus_pane(Pane::Structs);
             }
             Action::FocusPane(pane) => {
+                // Explicitly focusing the AI tab is the "general view" path; collapse the
+                // sidebar so the same controls are not shown twice.
+                if pane == Pane::Ai {
+                    self.ai_sidebar = false;
+                    self.sync_ai_tab_visibility();
+                }
                 self.focus_pane(pane);
+            }
+            Action::ToggleAiSidebar => {
+                self.ai_sidebar = !self.ai_sidebar;
+                self.sync_ai_tab_visibility();
+                self.layout_saved = None;
+                self.save_layout_now();
+            }
+            Action::OpenAiSettings => {
+                self.ai_settings_open = true;
+            }
+            Action::DockAi => {
+                self.ai_sidebar = false;
+                self.sync_ai_tab_visibility();
+                self.focus_pane(Pane::Ai);
+                self.layout_saved = None;
+                self.save_layout_now();
             }
             Action::ResetLayout => {
                 self.dock = None;
@@ -4709,7 +4843,11 @@ impl ReCraftApp {
         let mut action = self.handle_keys(&ctx);
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
+        if self.ai_sidebar {
+            self.ai_sidebar_ui(root, &mut action);
+        }
         self.dock_area(root, &mut action);
+        self.ai_settings_window(&ctx);
         self.edit_window(&ctx, &mut action);
         self.goto_window(&ctx, &mut action);
         self.palette_window(&ctx, &mut action);
@@ -5835,7 +5973,6 @@ mod tests {
             Pane::Structs,
             Pane::Imports,
             Pane::Exports,
-            Pane::Ai,
             Pane::Functions,
             Pane::GraphOverview,
             Pane::Output,
@@ -5845,12 +5982,22 @@ mod tests {
                 "default layout is missing {pane:?}"
             );
         }
+        assert!(
+            state.find_tab(&Pane::Ai).is_none(),
+            "the AI tab is detached while the sidebar is open"
+        );
         for hidden in [Pane::Names, Pane::Xrefs, Pane::Segments] {
             assert!(
                 state.find_tab(&hidden).is_none(),
                 "{hidden:?} should be hidden by default"
             );
         }
+        app.ai_sidebar = false;
+        app.sync_ai_tab_visibility();
+        assert!(
+            app.dock.as_ref().unwrap().find_tab(&Pane::Ai).is_some(),
+            "the AI general view is re-attached when the sidebar is closed"
+        );
     }
 
     #[test]
@@ -5909,6 +6056,19 @@ mod tests {
     }
 
     #[test]
+    fn ai_sidebar_toggles_and_docks_as_a_tab() {
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp::default();
+        assert!(app.ai_sidebar);
+        app.apply_action(&ctx, Action::ToggleAiSidebar);
+        assert!(!app.ai_sidebar);
+        app.apply_action(&ctx, Action::ToggleAiSidebar);
+        assert!(app.ai_sidebar);
+        app.apply_action(&ctx, Action::DockAi);
+        assert!(!app.ai_sidebar);
+    }
+
+    #[test]
     fn dock_layout_roundtrips_through_json() {
         let mut app = ReCraftApp::default();
         app.ensure_dock();
@@ -5933,11 +6093,16 @@ mod tests {
         let file = dir.path().join("layout.json");
         save_layout_to(
             &file,
-            app.dock.as_ref().unwrap(),
-            ThemeMode::Light,
-            1.2,
-            ViewMode::Text,
-            Lang::Zh,
+            &SavedLayout {
+                version: LAYOUT_VERSION,
+                dock: app.dock.as_ref().unwrap().clone(),
+                theme: ThemeMode::Light,
+                zoom: 1.2,
+                view_mode: ViewMode::Text,
+                lang: Lang::Zh,
+                ai_sidebar: true,
+                ai_sidebar_width: 360.0,
+            },
         )
         .unwrap();
         let loaded = load_layout_from(&file).expect("layout reload");
