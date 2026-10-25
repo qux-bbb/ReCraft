@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- AI provider settings now offer built-in **DeepSeek** and **OpenCode Go** modes plus
+  `Offline` / `Custom`; selecting a mode fills its endpoint and model list, and the
+  settings panel accepts an API key directly. The key is kept in memory for the session
+  only and is never serialized (`ProviderSettings::api_key` is runtime-only), while
+  persisted settings continue to store endpoint/model/key-env name. Provider requests
+  send `User-Agent: recraft/<version>` and, for OpenCode Go, a stable
+  `x-opencode-session` header.
 - L2 call sites no longer print redundant argument-register assignments when the call
   already renders the captured value: `fgets((char*)(rsp + 0x20), 0x100, (void*)rax)` no
   longer repeats `rcx = …; edx = …;`. Register-valued arguments keep their assignment so

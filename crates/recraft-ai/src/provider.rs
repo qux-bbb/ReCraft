@@ -51,17 +51,93 @@ impl ProviderKind {
     }
 }
 
+/// Built-in OpenAI-compatible providers offered by the desktop settings UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderPreset {
+    DeepSeek,
+    OpenCodeGo,
+}
+
+/// DeepSeek official API endpoint (the provider appends `/v1/chat/completions`).
+pub const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com";
+/// OpenCode Go OpenAI-compatible endpoint.
+pub const OPENCODE_GO_ENDPOINT: &str = "https://opencode.ai/inference/go/openai";
+/// Common DeepSeek model ids.
+pub const DEEPSEEK_MODELS: &[&str] = &["deepseek-chat", "deepseek-reasoner"];
+/// A subset of OpenCode Go model ids that are useful for code reasoning.
+pub const OPENCODE_GO_MODELS: &[&str] = &[
+    "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
+    "kimi-k3",
+    "glm-5.3-flash",
+    "qwen3.8-flash",
+    "minimax-m3.1-flash",
+];
+
+impl ProviderPreset {
+    pub const fn label(self) -> &'static str {
+        match self {
+            ProviderPreset::DeepSeek => "DeepSeek",
+            ProviderPreset::OpenCodeGo => "OpenCode Go",
+        }
+    }
+
+    pub const fn endpoint(self) -> &'static str {
+        match self {
+            ProviderPreset::DeepSeek => DEEPSEEK_ENDPOINT,
+            ProviderPreset::OpenCodeGo => OPENCODE_GO_ENDPOINT,
+        }
+    }
+
+    pub const fn models(self) -> &'static [&'static str] {
+        match self {
+            ProviderPreset::DeepSeek => DEEPSEEK_MODELS,
+            ProviderPreset::OpenCodeGo => OPENCODE_GO_MODELS,
+        }
+    }
+
+    pub fn default_model(self) -> &'static str {
+        self.models().first().copied().unwrap_or("deepseek-chat")
+    }
+
+    /// Apply the preset to settings, keeping the current model when it is valid.
+    pub fn apply(self, settings: &mut ProviderSettings) {
+        settings.kind = ProviderKind::OpenAiCompatible;
+        settings.endpoint = self.endpoint().to_owned();
+        if !self.models().contains(&settings.model.as_str()) {
+            settings.model = self.default_model().to_owned();
+        }
+        settings.enabled = false;
+    }
+}
+
 /// Provider configuration. Defaults are offline: heuristic, disabled, empty endpoint.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProviderSettings {
     pub kind: ProviderKind,
     pub endpoint: String,
     pub model: String,
     /// Name of the environment variable that holds the API key (never the key itself).
     pub api_key_env: String,
+    /// Session-only key entered in the UI; never serialized by [`Self::save`].
+    pub api_key: Option<String>,
     pub max_tokens: usize,
-    /// True only when a non-heuristic provider has an endpoint and its key env var is set.
+    /// True only when a non-heuristic provider has an endpoint and a key is available.
     pub enabled: bool,
+}
+
+impl std::fmt::Debug for ProviderSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderSettings")
+            .field("kind", &self.kind)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("api_key_env", &self.api_key_env)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("max_tokens", &self.max_tokens)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 impl Default for ProviderSettings {
@@ -71,6 +147,7 @@ impl Default for ProviderSettings {
             endpoint: String::new(),
             model: "gpt-4o-mini".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
+            api_key: None,
             max_tokens: 1024,
             enabled: false,
         }
@@ -194,9 +271,18 @@ impl ProviderSettings {
             && self.api_key_present();
     }
 
-    /// Whether the configured API-key environment variable is set and non-empty.
+    /// Whether a session key or the configured API-key environment variable is present.
     pub fn api_key_present(&self) -> bool {
-        std::env::var(&self.api_key_env).is_ok_and(|value| !value.is_empty())
+        self.api_key.as_deref().is_some_and(|key| !key.is_empty())
+            || std::env::var(&self.api_key_env).is_ok_and(|value| !value.is_empty())
+    }
+
+    /// The effective key (session key first, then the configured environment variable).
+    pub fn resolved_api_key(&self) -> Option<String> {
+        self.api_key
+            .clone()
+            .filter(|key| !key.is_empty())
+            .or_else(|| std::env::var(&self.api_key_env).ok())
     }
 
     /// One-line description safe to show in UI/CLI (never prints a key).
@@ -631,7 +717,7 @@ pub fn provider_from_settings(settings: &ProviderSettings) -> Box<dyn Provider> 
             crate::transport::transport_for(&settings.endpoint),
         )),
         ProviderKind::OpenAiCompatible => {
-            let api_key = std::env::var(&settings.api_key_env).ok();
+            let api_key = settings.resolved_api_key();
             Box::new(OpenAiCompatibleProvider::new(
                 settings.clone(),
                 crate::transport::transport_for(&settings.endpoint),
@@ -773,9 +859,54 @@ mod tests {
             endpoint: endpoint.to_owned(),
             model: "test-model".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
+            api_key: None,
             max_tokens: 256,
             enabled: true,
         }
+    }
+
+    #[test]
+    fn presets_fill_endpoint_and_known_model() {
+        let mut settings = ProviderSettings {
+            model: "custom-model".to_owned(),
+            ..ProviderSettings::default()
+        };
+        ProviderPreset::DeepSeek.apply(&mut settings);
+        assert_eq!(settings.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(settings.endpoint, DEEPSEEK_ENDPOINT);
+        assert_eq!(settings.model, "deepseek-chat");
+
+        ProviderPreset::OpenCodeGo.apply(&mut settings);
+        assert_eq!(settings.endpoint, OPENCODE_GO_ENDPOINT);
+        assert_eq!(settings.model, "deepseek-v4.1-flash");
+    }
+
+    #[test]
+    fn session_key_enables_provider_without_being_persisted() {
+        let mut settings = ProviderSettings {
+            kind: ProviderKind::OpenAiCompatible,
+            endpoint: DEEPSEEK_ENDPOINT.to_owned(),
+            model: "deepseek-chat".to_owned(),
+            api_key: Some("sk-session-secret".to_owned()),
+            ..ProviderSettings::default()
+        };
+        settings.refresh_enabled();
+        assert!(settings.enabled);
+        assert!(settings.api_key_present());
+        assert_eq!(
+            settings.resolved_api_key().as_deref(),
+            Some("sk-session-secret")
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-settings.json");
+        settings.save_to(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("sk-session-secret"),
+            "the key must never be written to disk: {text}"
+        );
+        assert!(text.contains(DEEPSEEK_ENDPOINT));
     }
 
     #[test]

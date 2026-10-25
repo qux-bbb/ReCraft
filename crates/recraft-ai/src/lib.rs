@@ -31,9 +31,10 @@ pub use cache::{
 };
 pub use eval::{CORPUS_CASES, EVAL_VERSION, EvalCase, EvalReport, ensure_eval, evaluate_explain};
 pub use provider::{
-    AuditEntry, AuditLog, EXPLAIN_SYSTEM, HeuristicProvider, OllamaProvider,
-    OpenAiCompatibleProvider, POLISH_SYSTEM, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest,
-    Provider, ProviderKind, ProviderSettings, RENAME_SYSTEM, TokenBudget, build_explain_prompt,
+    AuditEntry, AuditLog, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS, EXPLAIN_SYSTEM, HeuristicProvider,
+    OPENCODE_GO_ENDPOINT, OPENCODE_GO_MODELS, OllamaProvider, OpenAiCompatibleProvider,
+    POLISH_SYSTEM, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest, Provider, ProviderKind,
+    ProviderPreset, ProviderSettings, RENAME_SYSTEM, TokenBudget, build_explain_prompt,
     build_polish_prompt, build_rename_prompt, provider_from_settings, redact,
 };
 pub use query::{QueryAnswer, QueryItem, answer_query};

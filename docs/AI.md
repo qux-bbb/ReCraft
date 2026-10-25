@@ -137,6 +137,13 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   `load()` 优先读该文件，缺省回退环境变量，并按当前环境重算 `enabled`。
 - **配置项**：`RECRAFT_AI_PROVIDER`、`RECRAFT_AI_ENDPOINT`、`RECRAFT_AI_MODEL`、
   `RECRAFT_AI_API_KEY_ENV`、`RECRAFT_AI_MAX_TOKENS`。
+- **桌面端内置模式**（AI 面板 → Provider settings）：`Offline`、`DeepSeek`、
+  `OpenCode Go`、`Custom OpenAI-compatible`。选内模式会自动填 endpoint 和模型列表；
+  `API key` 输入框只在**本会话内存**中使用（不写入 `ai-settings.json`），重启后需重输，
+  或继续用环境变量/key 文件。模型下拉来自
+  `recraft_ai::{DEEPSEEK_MODELS, OPENCODE_GO_MODELS}`。
+
+  ![AI provider modes](images/ai-modes.png)
 - **已验证的兼容端点**（都是 OpenAI-compatible，`RECRAFT_AI_PROVIDER=openai`；endpoint
   填 base，不要带 `/v1`）：
   - **DeepSeek 官方**：`RECRAFT_AI_ENDPOINT=https://api.deepseek.com`，

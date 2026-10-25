@@ -527,6 +527,47 @@ fn follow_tokens(operands: &str) -> Vec<String> {
 /// Selected rename suggestion in the AI panel (index into `ai_proposals`).
 type AiSelection = Option<usize>;
 
+/// Built-in AI endpoint choices exposed by the settings panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiMode {
+    Offline,
+    DeepSeek,
+    OpenCodeGo,
+    Custom,
+}
+
+impl AiMode {
+    fn from_settings(settings: &recraft_ai::ProviderSettings) -> Self {
+        if settings.kind == recraft_ai::ProviderKind::Heuristic {
+            return Self::Offline;
+        }
+        if settings.endpoint.contains("api.deepseek.com") {
+            Self::DeepSeek
+        } else if settings.endpoint.contains("opencode.ai") {
+            Self::OpenCodeGo
+        } else {
+            Self::Custom
+        }
+    }
+
+    fn preset(self) -> Option<recraft_ai::ProviderPreset> {
+        match self {
+            Self::DeepSeek => Some(recraft_ai::ProviderPreset::DeepSeek),
+            Self::OpenCodeGo => Some(recraft_ai::ProviderPreset::OpenCodeGo),
+            Self::Offline | Self::Custom => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Offline => "Offline / heuristic",
+            Self::DeepSeek => "DeepSeek",
+            Self::OpenCodeGo => "OpenCode Go",
+            Self::Custom => "Custom OpenAI-compatible",
+        }
+    }
+}
+
 /// Fuzzy command palette state (DESIGN §8.1: menu / command palette).
 #[derive(Debug, Clone, Default)]
 struct PaletteState {
@@ -661,6 +702,8 @@ pub struct ReCraftApp {
     ai_proposals: Vec<recraft_ai::Proposal>,
     ai_selected: AiSelection,
     ai_status: String,
+    ai_mode: AiMode,
+    ai_api_key: String,
     ai_settings: recraft_ai::ProviderSettings,
     ai_explanation: Option<String>,
     ai_query: String,
@@ -733,6 +776,8 @@ impl Default for ReCraftApp {
             ai_proposals: Vec::new(),
             ai_selected: None,
             ai_status: String::new(),
+            ai_mode: AiMode::Offline,
+            ai_api_key: String::new(),
             ai_settings: recraft_ai::ProviderSettings::default(),
             ai_explanation: None,
             ai_query: String::new(),
@@ -765,6 +810,7 @@ impl ReCraftApp {
             ai_settings: recraft_ai::ProviderSettings::load(),
             ..Self::default()
         };
+        app.ai_mode = AiMode::from_settings(&app.ai_settings);
         app.restore_layout();
         if let Some(path) = initial {
             app.open_path(&path);
@@ -2947,44 +2993,116 @@ impl ReCraftApp {
         }
     }
 
-    /// Provider settings editor (persisted; the API key itself is never stored).
+    /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a
+    /// session-only API key (persisted settings never contain the key).
     fn ai_settings_ui(&mut self, ui: &mut egui::Ui) {
         let title = self.t("Provider settings", "Provider 设置");
         egui::CollapsingHeader::new(title)
-            .default_open(self.ai_settings.kind != recraft_ai::ProviderKind::Heuristic)
+            .default_open(self.ai_mode != AiMode::Offline)
             .show(ui, |ui| {
-                egui::ComboBox::from_id_salt("ai_provider_kind")
-                    .selected_text(self.ai_settings.kind.as_str())
-                    .show_ui(ui, |ui| {
-                        for kind in [
-                            recraft_ai::ProviderKind::Heuristic,
-                            recraft_ai::ProviderKind::OpenAiCompatible,
-                            recraft_ai::ProviderKind::Ollama,
-                        ] {
-                            ui.selectable_value(&mut self.ai_settings.kind, kind, kind.as_str());
-                        }
+                ui.horizontal(|ui| {
+                    ui.label(self.t("mode", "模式"));
+                    egui::ComboBox::from_id_salt("ai_mode")
+                        .selected_text(self.ai_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                AiMode::Offline,
+                                AiMode::DeepSeek,
+                                AiMode::OpenCodeGo,
+                                AiMode::Custom,
+                            ] {
+                                if ui
+                                    .selectable_label(self.ai_mode == mode, mode.label())
+                                    .clicked()
+                                {
+                                    self.ai_mode = mode;
+                                    match mode.preset() {
+                                        Some(preset) => preset.apply(&mut self.ai_settings),
+                                        None if mode == AiMode::Offline => {
+                                            self.ai_settings.kind =
+                                                recraft_ai::ProviderKind::Heuristic;
+                                        }
+                                        None => {
+                                            self.ai_settings.kind =
+                                                recraft_ai::ProviderKind::OpenAiCompatible;
+                                            if self.ai_settings.endpoint.is_empty() {
+                                                self.ai_settings.endpoint =
+                                                    "https://api.openai.com".to_owned();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                });
+                if let Some(preset) = self.ai_mode.preset() {
+                    ui.horizontal(|ui| {
+                        ui.label(self.t("endpoint", "接口地址"));
+                        ui.weak(preset.endpoint());
                     });
-                ui.horizontal(|ui| {
-                    ui.label(self.t("endpoint", "接口地址"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.ai_settings.endpoint)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("https://api.openai.com/v1/chat/completions"),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label(self.t("model", "模型"));
-                    ui.add(egui::TextEdit::singleline(&mut self.ai_settings.model));
-                    ui.label(self.t("key env", "密钥环境变量"));
-                    ui.add(egui::TextEdit::singleline(
-                        &mut self.ai_settings.api_key_env,
+                    ui.horizontal(|ui| {
+                        ui.label(self.t("model", "模型"));
+                        egui::ComboBox::from_id_salt("ai_model")
+                            .selected_text(self.ai_settings.model.clone())
+                            .show_ui(ui, |ui| {
+                                for model in preset.models() {
+                                    ui.selectable_value(
+                                        &mut self.ai_settings.model,
+                                        (*model).to_owned(),
+                                        *model,
+                                    );
+                                }
+                            });
+                    });
+                } else if self.ai_mode == AiMode::Custom {
+                    ui.horizontal(|ui| {
+                        ui.label(self.t("endpoint", "接口地址"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ai_settings.endpoint)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("https://api.example.com"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(self.t("model", "模型"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ai_settings.model)
+                                .desired_width(220.0),
+                        );
+                        ui.label(self.t("key env", "密钥环境变量"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ai_settings.api_key_env)
+                                .desired_width(180.0),
+                        );
+                    });
+                } else {
+                    ui.weak(self.t(
+                        "Offline: explain/suggest use local heuristics; polish needs a model.",
+                        "离线：解释/建议使用本地启发式；润色需要模型。",
                     ));
-                });
+                }
+                if self.ai_mode != AiMode::Offline {
+                    ui.horizontal(|ui| {
+                        ui.label(self.t("API key", "API key"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ai_api_key)
+                                .password(true)
+                                .desired_width(340.0)
+                                .hint_text("sk-…"),
+                        );
+                    });
+                    ui.weak(self.t(
+                        "The key stays in memory for this session and is never written to disk.",
+                        "密钥仅在本会话内存中使用，不写入磁盘。",
+                    ));
+                }
                 ui.horizontal(|ui| {
                     ui.label(self.t("max tokens", "最大 token"));
                     ui.add(egui::DragValue::new(&mut self.ai_settings.max_tokens).range(64..=8192));
                 });
                 if ui.button(self.t("Save settings", "保存设置")).clicked() {
+                    self.ai_settings.api_key = (!self.ai_api_key.trim().is_empty())
+                        .then(|| self.ai_api_key.trim().to_owned());
                     self.ai_settings.refresh_enabled();
                     match self.ai_settings.save() {
                         Ok(()) => {
@@ -2997,10 +3115,14 @@ impl ReCraftApp {
                         Err(error) => self.set_error(error),
                     }
                 }
-                let key_state = if self.ai_settings.api_key_present() {
-                    self.t("API key env is set", "API key 环境变量已设置")
+                let env_key = std::env::var(&self.ai_settings.api_key_env)
+                    .is_ok_and(|value| !value.is_empty());
+                let key_state = if !self.ai_api_key.trim().is_empty() {
+                    self.t("session key set", "会话密钥已输入")
+                } else if env_key {
+                    self.t("env key detected", "检测到环境变量密钥")
                 } else {
-                    self.t("API key env is not set", "API key 环境变量未设置")
+                    self.t("no API key", "未提供 API key")
                 };
                 ui.weak(format!(
                     "{key_state} · {}",
@@ -3011,6 +3133,9 @@ impl ReCraftApp {
                     }
                 ));
             });
+        self.ai_settings.api_key =
+            (!self.ai_api_key.trim().is_empty()).then(|| self.ai_api_key.trim().to_owned());
+        self.ai_settings.refresh_enabled();
     }
 
     /// Apply the selected AI proposal through the command bus (journaled/undoable).
@@ -5696,6 +5821,25 @@ mod tests {
         ));
         assert!(is_string_noise(".rdata", ".rdata"));
         assert!(!is_string_noise(".rdata", "flag{strings_are_not_enough}"));
+    }
+
+    #[test]
+    fn ai_modes_map_to_builtin_presets() {
+        use recraft_ai::ProviderPreset;
+        let mut settings = recraft_ai::ProviderSettings::default();
+        ProviderPreset::DeepSeek.apply(&mut settings);
+        assert_eq!(AiMode::from_settings(&settings), AiMode::DeepSeek);
+        ProviderPreset::OpenCodeGo.apply(&mut settings);
+        assert_eq!(AiMode::from_settings(&settings), AiMode::OpenCodeGo);
+        assert_eq!(settings.endpoint, recraft_ai::OPENCODE_GO_ENDPOINT);
+        assert!(settings.model.starts_with("deepseek-v4"));
+
+        settings.kind = recraft_ai::ProviderKind::Heuristic;
+        assert_eq!(AiMode::from_settings(&settings), AiMode::Offline);
+
+        settings.kind = recraft_ai::ProviderKind::OpenAiCompatible;
+        settings.endpoint = "https://example.test".to_owned();
+        assert_eq!(AiMode::from_settings(&settings), AiMode::Custom);
     }
 
     #[test]
