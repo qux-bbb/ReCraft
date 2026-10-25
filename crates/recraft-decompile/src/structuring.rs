@@ -537,6 +537,14 @@ impl Structurer {
     // -------------------------------------------------------------- emission --
 
     fn emit_all(&mut self, lines: &mut Vec<PseudoLine>) {
+        if self.needs_flat_fallback() {
+            lines.push(PseudoLine {
+                addr: self.blocks[self.entry].entry,
+                text: "// nested loop exits outside its parent loop; using labels".to_owned(),
+            });
+            self.emit_flat(lines);
+            return;
+        }
         self.emit_linear(lines, self.entry, 1, &BTreeSet::new());
         for index in 0..self.blocks.len() {
             if self.emitted[index] {
@@ -549,6 +557,82 @@ impl Structurer {
             });
             self.emit_simple(lines, index, 1);
             self.emit_raw_flow(lines, index, 1);
+        }
+    }
+
+    /// Flat labelled output is the safe fallback when an inner loop leaves its parent
+    /// loop into a different region: separate `while` bodies would put the parent's
+    /// continuation on the wrong path (seen on the crackme's validation loop).
+    fn needs_flat_fallback(&self) -> bool {
+        nested_loop_leaves_parent(&self.loop_blocks, &self.successors)
+    }
+
+    fn emit_flat(&mut self, lines: &mut Vec<PseudoLine>) {
+        for index in 0..self.blocks.len() {
+            if index != self.entry {
+                lines.push(PseudoLine {
+                    addr: self.blocks[index].entry,
+                    text: format!("{}loc_{:x}:", indent(1), self.blocks[index].entry.get()),
+                });
+            }
+            self.emitted[index] = true;
+            self.emit_simple(lines, index, 1);
+            let entry = self.blocks[index].entry;
+            match &self.blocks[index].flow {
+                Flow::Return => lines.push(PseudoLine {
+                    addr: entry,
+                    text: format!("{}return;", indent(1)),
+                }),
+                Flow::Goto(target) => {
+                    if self.blocks[index].goto_target.is_some() {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}goto loc_{:x};", indent(1), target.get()),
+                        });
+                    } else {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}return sub_{:x}();", indent(1), target.get()),
+                        });
+                    }
+                }
+                Flow::CondGoto { target, .. } => {
+                    let condition = self.blocks[index]
+                        .condition
+                        .clone()
+                        .unwrap_or_else(|| "/* cond */".to_owned());
+                    lines.push(PseudoLine {
+                        addr: entry,
+                        text: format!("{}if ({condition}) goto loc_{:x};", indent(1), target.get()),
+                    });
+                    if let Some(not_taken) = self.blocks[index].not_taken
+                        && not_taken != index + 1
+                    {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!(
+                                "{}goto loc_{:x};",
+                                indent(1),
+                                self.blocks[not_taken].entry.get()
+                            ),
+                        });
+                    }
+                }
+                Flow::Fallthrough => {
+                    if let Some(next) = self.blocks[index].not_taken
+                        && next != index + 1
+                    {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!(
+                                "{}goto loc_{:x};",
+                                indent(1),
+                                self.blocks[next].entry.get()
+                            ),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -784,6 +868,33 @@ impl Structurer {
                     }
                     // No reconvergence (both arms terminate): emit the taken arm as an
                     // early-exit `if` and continue with the fallthrough path.
+                    //
+                    // A target shared by several failure checks must not be inlined at
+                    // the first check: doing so consumes the block, and later checks fall
+                    // back to a raw `goto` that also *ends the current region*, pushing
+                    // the rest of the loop body outside the `while`. Emit a labelled jump
+                    // instead and keep following the fallthrough path.
+                    let shared_loop_exit = self.loop_stack.last().is_some_and(|(header, _)| {
+                        self.loop_blocks
+                            .get(header)
+                            .is_some_and(|body| body.contains(&taken))
+                    });
+                    if taken != not_taken
+                        && !self.emitted[taken]
+                        && shared_loop_exit
+                        && self.predecessors[taken].len() > 1
+                    {
+                        lines.push(PseudoLine {
+                            addr: self.blocks[current].entry,
+                            text: format!(
+                                "{}if ({condition}) goto loc_{:x};",
+                                indent(level),
+                                self.blocks[taken].entry.get()
+                            ),
+                        });
+                        current = not_taken;
+                        continue;
+                    }
                     if !self.emitted[taken] && taken != not_taken {
                         lines.push(PseudoLine {
                             addr: self.blocks[current].entry,
@@ -1283,6 +1394,24 @@ impl Structurer {
             }),
             Flow::Goto(target) => {
                 if self.blocks[block].goto_target.is_some() {
+                    // Labelled leftovers are emitted while a loop is still active; keep
+                    // its back edge as `continue` and its exit as `break`.
+                    if let Some(&(header, exit)) = self.loop_stack.last() {
+                        if Some(header) == self.blocks[block].goto_target {
+                            lines.push(PseudoLine {
+                                addr: entry,
+                                text: format!("{}continue;", indent(level)),
+                            });
+                            return;
+                        }
+                        if Some(exit) == self.blocks[block].goto_target {
+                            lines.push(PseudoLine {
+                                addr: entry,
+                                text: format!("{}break;", indent(level)),
+                            });
+                            return;
+                        }
+                    }
                     lines.push(PseudoLine {
                         addr: entry,
                         text: format!("{}goto loc_{:x};", indent(level), target.get()),
@@ -1299,6 +1428,36 @@ impl Structurer {
                     .condition
                     .clone()
                     .unwrap_or_else(|| "/* cond */".to_owned());
+                if let Some(&(header, exit)) = self.loop_stack.last() {
+                    if Some(header) == self.blocks[block].taken {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}if ({condition}) continue;", indent(level)),
+                        });
+                        return;
+                    }
+                    if Some(header) == self.blocks[block].not_taken {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}if ({}) continue;", indent(level), negate(&condition)),
+                        });
+                        return;
+                    }
+                    if Some(exit) == self.blocks[block].taken {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}if ({condition}) break;", indent(level)),
+                        });
+                        return;
+                    }
+                    if Some(exit) == self.blocks[block].not_taken {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}if ({}) break;", indent(level), negate(&condition)),
+                        });
+                        return;
+                    }
+                }
                 lines.push(PseudoLine {
                     addr: entry,
                     text: format!(
@@ -1311,6 +1470,33 @@ impl Structurer {
             _ => {}
         }
     }
+}
+
+/// True when a nested loop has an edge leaving the outermost loop that contains it.
+fn nested_loop_leaves_parent(
+    loops: &BTreeMap<usize, BTreeSet<usize>>,
+    successors: &[Vec<usize>],
+) -> bool {
+    for (header, body) in loops {
+        let mut top = body;
+        for other in loops.values() {
+            if other.len() > top.len() && other.contains(header) {
+                top = other;
+            }
+        }
+        if top.len() == body.len() {
+            continue;
+        }
+        for &block in body {
+            if successors
+                .get(block)
+                .is_some_and(|nexts| nexts.iter().any(|next| !top.contains(next)))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn indent(level: usize) -> String {
@@ -1393,6 +1579,25 @@ mod tests {
     fn render(session: &mut Session, name: &str) -> String {
         let start = function_start(session, name).unwrap_or_else(|| panic!("{name} missing"));
         pseudocode_l1(session, start).unwrap().text()
+    }
+
+    #[test]
+    fn nested_loop_leaving_parent_uses_flat_fallback() {
+        let mut loops = BTreeMap::new();
+        loops.insert(0, BTreeSet::from([0, 1, 2, 3, 4]));
+        loops.insert(2, BTreeSet::from([2, 3]));
+        let mut successors = vec![Vec::new(); 6];
+        successors[1] = vec![2];
+        successors[2] = vec![3];
+        successors[3] = vec![2, 5]; // inner latch leaves the outer loop to block 5
+        successors[4] = vec![0];
+        assert!(nested_loop_leaves_parent(&loops, &successors));
+
+        // A single loop exiting normally needs no fallback.
+        let mut single = BTreeMap::new();
+        single.insert(0, BTreeSet::from([0, 1]));
+        let successors = vec![vec![1], vec![0, 2], vec![]];
+        assert!(!nested_loop_leaves_parent(&single, &successors));
     }
 
     #[test]

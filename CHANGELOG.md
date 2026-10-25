@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- L2 structuring no longer drops the rest of a loop body when several failure checks
+  share one exit block. A shared exit is emitted as a labelled jump instead of being
+  inlined at the first check. For nested loops whose inner exit leaves the parent loop
+  (the crackme's `for`-style validation loop), the function now falls back to labelled
+  flat output instead of putting the success path after the hint; a regression test
+  covers `nested_loop_leaves_parent`.
 - Polish now lets the model use canonical C runtime names when the call shape uniquely
   identifies them (`fgets`, `strcmp`, `strlen`, `strpbrk`, `printf`/`puts`, …), emits
   self-contained `extern` declarations for referenced tables, and strips Markdown code
