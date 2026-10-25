@@ -811,6 +811,7 @@ impl ReCraftApp {
             ..Self::default()
         };
         app.ai_mode = AiMode::from_settings(&app.ai_settings);
+        app.ai_api_key = app.ai_settings.api_key.clone().unwrap_or_default();
         if app.ai_mode.preset().is_some() {
             app.ai_settings.max_tokens = app.ai_settings.max_tokens.max(65536);
         }
@@ -3107,8 +3108,8 @@ impl ReCraftApp {
                         );
                     });
                     ui.weak(self.t(
-                        "The key stays in memory for this session and is never written to disk.",
-                        "密钥仅在本会话内存中使用，不写入磁盘。",
+                        "The key is encrypted for this user (DPAPI) and reused on startup.",
+                        "密钥按当前用户加密保存（DPAPI），下次启动自动使用。",
                     ));
                 }
                 ui.horizontal(|ui| {
@@ -3141,7 +3142,7 @@ impl ReCraftApp {
                 let env_key = std::env::var(&self.ai_settings.api_key_env)
                     .is_ok_and(|value| !value.is_empty());
                 let key_state = if !self.ai_api_key.trim().is_empty() {
-                    self.t("session key set", "会话密钥已输入")
+                    self.t("API key saved", "API key 已保存")
                 } else if env_key {
                     self.t("env key detected", "检测到环境变量密钥")
                 } else {

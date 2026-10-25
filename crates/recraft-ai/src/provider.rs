@@ -122,7 +122,7 @@ pub struct ProviderSettings {
     pub model: String,
     /// Name of the environment variable that holds the API key (never the key itself).
     pub api_key_env: String,
-    /// Session-only key entered in the UI; never serialized by [`Self::save`].
+    /// API key entered in the UI. Persisted sealed as `api_key_sealed` (DPAPI on Windows).
     pub api_key: Option<String>,
     pub max_tokens: usize,
     /// True only when a non-heuristic provider has an endpoint and a key is available.
@@ -198,7 +198,7 @@ impl ProviderSettings {
     }
 
     /// Load persisted settings, falling back to environment-only configuration. `enabled`
-    /// is always recomputed from the current environment (keys are never stored).
+    /// is always recomputed from the current environment/key state.
     pub fn load() -> Self {
         match Self::settings_path().as_deref().and_then(Self::load_from) {
             Some(mut settings) => {
@@ -233,6 +233,9 @@ impl ProviderSettings {
         if let Some(max_tokens) = value.get("max_tokens").and_then(|value| value.as_u64()) {
             settings.max_tokens = max_tokens as usize;
         }
+        if let Some(sealed) = value.get("api_key_sealed").and_then(|value| value.as_str()) {
+            settings.api_key = crate::secret::open(sealed);
+        }
         Some(settings)
     }
 
@@ -244,21 +247,25 @@ impl ProviderSettings {
         self.save_to(&path)
     }
 
-    /// Persist to an explicit path (creates parent directories). The API key itself is
-    /// never written — only the name of the environment variable holding it.
+    /// Persist to an explicit path (creates parent directories). An entered API key is
+    /// sealed at rest (DPAPI on Windows, `plain:` fallback elsewhere); environment-variable
+    /// names are stored separately so env-based setups keep working.
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
                 Error::internal(format!("cannot create {}: {error}", parent.display()))
             })?;
         }
-        let value = serde_json::json!({
+        let mut value = serde_json::json!({
             "kind": self.kind.as_str(),
             "endpoint": self.endpoint,
             "model": self.model,
             "api_key_env": self.api_key_env,
             "max_tokens": self.max_tokens,
         });
+        if let Some(key) = self.api_key.as_deref().filter(|key| !key.is_empty()) {
+            value["api_key_sealed"] = serde_json::Value::String(crate::secret::seal(key)?);
+        }
         let text = serde_json::to_string_pretty(&value)
             .map_err(|error| Error::internal(format!("cannot encode settings: {error}")))?;
         std::fs::write(path, text).map_err(|error| {
@@ -922,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn session_key_enables_provider_without_being_persisted() {
+    fn api_key_is_sealed_and_roundtrips() {
         let mut settings = ProviderSettings {
             kind: ProviderKind::OpenAiCompatible,
             endpoint: DEEPSEEK_ENDPOINT.to_owned(),
@@ -944,9 +951,12 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
             !text.contains("sk-session-secret"),
-            "the key must never be written to disk: {text}"
+            "the key must not be stored in plaintext: {text}"
         );
-        assert!(text.contains(DEEPSEEK_ENDPOINT));
+        assert!(text.contains("api_key_sealed"), "{text}");
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(loaded.api_key.as_deref(), Some("sk-session-secret"));
+        assert!(loaded.api_key_present());
     }
 
     #[test]

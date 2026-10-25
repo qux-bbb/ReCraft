@@ -2878,6 +2878,7 @@ dependencies = [
 name = "recraft-ai"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "recraft-analysis",
  "recraft-common",
  "recraft-core",
@@ -2885,6 +2886,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

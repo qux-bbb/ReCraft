@@ -27,9 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - AI provider settings now offer built-in **DeepSeek** and **OpenCode Go** modes plus
   `Offline` / `Custom`; selecting a mode fills its endpoint and model list, and the
-  settings panel accepts an API key directly. The key is kept in memory for the session
-  only and is never serialized (`ProviderSettings::api_key` is runtime-only), while
-  persisted settings continue to store endpoint/model/key-env name. Provider requests
+  settings panel accepts an API key directly. The key is persisted **sealed for the current
+  user** (Windows DPAPI; `api_key_sealed` in `ai-settings.json`) and prefilled on startup;
+  persisted settings still store endpoint/model/key-env name. Provider requests
   send `User-Agent: recraft/<version>` and, for OpenCode Go, a stable
   `x-opencode-session` header.
 - L2 call sites no longer print redundant argument-register assignments when the call

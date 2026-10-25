@@ -139,8 +139,9 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   `RECRAFT_AI_API_KEY_ENV`、`RECRAFT_AI_MAX_TOKENS`。
 - **桌面端内置模式**（AI 面板 → Provider settings）：`Offline`、`DeepSeek`、
   `OpenCode Go`、`Custom OpenAI-compatible`。选内模式会自动填 endpoint 和模型列表；
-  `API key` 输入框只在**本会话内存**中使用（不写入 `ai-settings.json`），重启后需重输，
-  或继续用环境变量/key 文件。模型下拉来自
+  `API key` 输入框会**按当前用户加密保存**（Windows DPAPI，写入 `ai-settings.json`
+  的 `api_key_sealed`；其他平台用 `plain:` 前缀的 base64 仅作混淆），点 **Save** 后下次
+  启动自动加载；环境变量方式仍可用。模型下拉来自
   `recraft_ai::{DEEPSEEK_MODELS, OPENCODE_GO_MODELS}`。
 
   ![AI provider modes](images/ai-modes.png)

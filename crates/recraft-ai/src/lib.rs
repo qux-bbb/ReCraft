@@ -17,12 +17,15 @@
 //! Pluggable LLM providers (OpenAI-compatible / local Ollama) will produce the same
 //! `Proposal` shape; the UI diff → manual confirm → apply path stays identical.
 
-#![forbid(unsafe_code)]
+// DPAPI is the one OS FFI exception; it is isolated in `secret`.
+#![deny(unsafe_code)]
 
 mod cache;
 mod eval;
 mod provider;
 mod query;
+#[allow(unsafe_code)]
+mod secret;
 mod transport;
 
 pub use cache::{
