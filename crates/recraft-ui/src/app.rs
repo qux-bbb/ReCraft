@@ -1973,7 +1973,7 @@ impl ReCraftApp {
                     ui.colored_label(color, &self.status);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak(self.t("ui_synchronized_with_hex_view_1"));
+                    ui.weak(self.t("ui_synchronized_with_hex_view"));
                     ui.separator();
                     if let Some((start, _)) = self.current_function() {
                         let name = self
@@ -3724,7 +3724,7 @@ impl ReCraftApp {
             ui.separator();
             ui.weak(format!("{} blocks", cfg.blocks.len()));
             ui.separator();
-            ui.weak(self.t("ui_synchronized_with_hex_view_1"));
+            ui.weak(self.t("ui_synchronized_with_hex_view"));
         });
     }
 
@@ -3956,7 +3956,7 @@ impl ReCraftApp {
                     ui.weak(format!("fn {:#x}", start.get()));
                 }
                 ui.separator();
-                ui.weak(self.t("ui_synchronized_with_hex_view_1"));
+                ui.weak(self.t("ui_synchronized_with_hex_view"));
             });
         }
     }
