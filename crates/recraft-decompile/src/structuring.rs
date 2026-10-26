@@ -217,6 +217,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     structurer.emit_all(&mut lines);
+    hide_callee_saves(&mut lines);
     tidy_labels(&mut lines);
     lines.push(PseudoLine {
         addr: start,
@@ -1556,6 +1557,85 @@ fn nested_loop_leaves_parent(
     false
 }
 
+/// Hide compiler callee-saved spills (`var_XX = rbx` ... `rbx = var_XX`) when the slot
+/// is used for nothing else. They preserve the caller's register but add no meaning to
+/// pseudo-C. A slot with any other reference stays visible.
+fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
+    let mut saves: BTreeMap<String, (&str, usize)> = BTreeMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let text = line.text.trim();
+        let Some((lhs, rhs)) = text.strip_suffix(';').and_then(|t| t.split_once(" = ")) else {
+            continue;
+        };
+        if !lhs.starts_with("var_") || !is_register_name(rhs) {
+            continue;
+        }
+        saves.entry(lhs.to_owned()).or_insert((rhs, index));
+    }
+    if saves.is_empty() {
+        return;
+    }
+
+    let mut remove = BTreeSet::new();
+    for (slot, (reg, save_index)) in &saves {
+        let references = lines
+            .iter()
+            .filter(|line| mentions_slot(&line.text, slot))
+            .count();
+        if references != 2 {
+            continue;
+        }
+        let restore = lines.iter().position(|line| {
+            line.text
+                .trim()
+                .strip_suffix(';')
+                .is_some_and(|text| text == format!("{reg} = {slot}"))
+        });
+        if let Some(restore) = restore
+            && restore > *save_index
+        {
+            remove.insert(*save_index);
+            remove.insert(restore);
+        }
+    }
+    if remove.is_empty() {
+        return;
+    }
+    let mut index = 0;
+    lines.retain(|_| {
+        let keep = !remove.contains(&index);
+        index += 1;
+        keep
+    });
+}
+
+fn is_register_name(text: &str) -> bool {
+    matches!(
+        text,
+        "rax"
+            | "rbx"
+            | "rcx"
+            | "rdx"
+            | "rsi"
+            | "rdi"
+            | "rbp"
+            | "rsp"
+            | "r8"
+            | "r9"
+            | "r10"
+            | "r11"
+            | "r12"
+            | "r13"
+            | "r14"
+            | "r15"
+    )
+}
+
+fn mentions_slot(text: &str, slot: &str) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| token == slot)
+}
+
 fn indent(level: usize) -> String {
     "    ".repeat(level)
 }
@@ -1677,6 +1757,41 @@ mod tests {
         tidy_labels(&mut lines);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "    x = 1;");
+    }
+
+    #[test]
+    fn callee_saved_spills_are_hidden_only_for_unrelated_slots() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x10),
+                text: "    var_8 = rbx;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x14),
+                text: "    var_10 = rdi;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x18),
+                text: "    eax = var_10;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1c),
+                text: "    rbx = var_8;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    rdi = var_10;".to_owned(),
+            },
+        ];
+        hide_callee_saves(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("var_8"), "{text}");
+        assert!(text.contains("var_10 = rdi"), "{text}");
+        assert!(text.contains("rdi = var_10"), "{text}");
     }
 
     fn analyzed_corpus() -> Option<(Session, TempDir)> {
