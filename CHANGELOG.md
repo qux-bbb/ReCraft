@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Application icon: a geometric mint **R** inside a hexagon with circuit nodes, generated
+  from `assets/generate_icon.py` (PNG + multi-size ICO + raw RGBA). The icon is embedded
+  in `recraft-ui.exe` via the Windows SDK resource compiler, set as the eframe window icon,
+  and used by the NSIS installer.
 - Drag and drop a sample onto the window to open it: `.rcraft` projects load directly,
   PE files are imported to a sibling `.rcraft` project, and a centered drop overlay shows
   the accepted targets while dragging. A dropped file is processed before the next frame.

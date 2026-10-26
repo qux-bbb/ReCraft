@@ -18,6 +18,8 @@
 !endif
 
 Name "ReCraft ${VERSION}"
+Icon "${STAGE}\recraft.ico"
+UninstallIcon "${STAGE}\recraft.ico"
 OutFile "${OUT}"
 InstallDir "$LOCALAPPDATA\ReCraft"
 RequestExecutionLevel user

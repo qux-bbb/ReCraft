@@ -55,6 +55,10 @@ try {
             Copy-Item -LiteralPath $file -Destination (Join-Path $stage $file)
         }
     }
+    $icon = Join-Path $repo 'assets\recraft.ico'
+    if (Test-Path -LiteralPath $icon) {
+        Copy-Item -LiteralPath $icon -Destination (Join-Path $stage 'recraft.ico')
+    }
     $docs = Join-Path $stage 'docs'
     New-Item -ItemType Directory -Force -Path $docs | Out-Null
     Copy-Item -Path (Join-Path $repo 'docs\*.md') -Destination $docs -Force
