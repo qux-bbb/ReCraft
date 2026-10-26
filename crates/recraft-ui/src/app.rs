@@ -3206,6 +3206,27 @@ impl ReCraftApp {
     }
 
     fn ai_sidebar_ui(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        if !self.ai_sidebar {
+            // A visible collapsed rail is easier to discover than egui's hover-only
+            // drag handle; clicking it opens the sidebar again.
+            egui::Panel::right("ai_sidebar_rail")
+                .resizable(false)
+                .exact_size(48.0)
+                .show(ui, |ui| {
+                    ui.add_space(6.0);
+                    ui.vertical_centered(|ui| {
+                        if ui
+                            .button(RichText::new("AI").strong())
+                            .on_hover_text(self.t("ui_open_in_sidebar"))
+                            .clicked()
+                        {
+                            *action = Action::ToggleAiSidebar;
+                        }
+                        ui.label(RichText::new("‹").size(17.0));
+                    });
+                });
+            return;
+        }
         let mut expanded = self.ai_sidebar;
         let response = egui::Panel::right("ai_sidebar")
             .resizable(true)
