@@ -112,6 +112,11 @@ impl ArgNames {
         self.names.is_empty() && self.stack.is_empty()
     }
 
+    /// Number of recovered argument locations (register + stack).
+    pub fn count(&self) -> usize {
+        self.names.len() + self.stack.len()
+    }
+
     /// Build arguments from a parsed user prototype (x64 register arguments; at most
     /// four slots are representable without stack-argument layout).
     pub fn from_prototype(params: &[ProtoParam]) -> Self {

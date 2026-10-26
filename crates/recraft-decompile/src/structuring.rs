@@ -11,15 +11,16 @@
 //! Known approximation: statements executed by a loop header before its condition are
 //! emitted once before the `while` (compilers normally put only a compare there).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use recraft_analysis::{Cfg, EdgeKind, build_cfg};
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
+use recraft_decode::iced_x86;
 use recraft_ir::{Flow, Reg};
 
 use crate::l2::{X64_ARG_REGS, parse_prototype};
-use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
+use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block, recover_args};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
 pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode> {
@@ -89,6 +90,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
+    let no_counts: HashMap<u64, usize> = HashMap::new();
     for block in &cfg.blocks {
         bodies.push(lift_block(
             session,
@@ -97,13 +99,66 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             args,
             &arg_structs,
             None,
+            &no_counts,
         )?);
+    }
+    // Infer argument counts for direct call targets from the callee's prologue. This
+    // lets unknown calls render `sub(a, b)` with the right arity instead of dropping
+    // arguments or printing all four ABI registers.
+    let mut call_arg_counts: HashMap<u64, usize> = HashMap::new();
+    let ranges: HashMap<u64, (Address, Address)> = functions
+        .iter()
+        .map(|function| (function.start.get(), (function.start, function.end)))
+        .collect();
+    for target in bodies.iter().flat_map(|body| body.calls.iter().copied()) {
+        if target == start.get() {
+            if let Some(info) = info.as_ref()
+                && info.args.count() > 0
+            {
+                call_arg_counts.insert(target, info.args.count());
+            }
+            continue;
+        }
+        if let Some((target_start, target_end)) = ranges.get(&target) {
+            let mut target_start = *target_start;
+            let mut target_end = *target_end;
+            // Import thunks begin with a single `jmp`; their argument registers are
+            // consumed by the real body, so infer from the destination instead.
+            for _ in 0..4 {
+                let Some(insn) = session.insn_at(target_start).ok().flatten() else {
+                    break;
+                };
+                if insn.mnemonic() != iced_x86::Mnemonic::Jmp {
+                    break;
+                }
+                let Some(next) = insn.branch_target() else {
+                    break;
+                };
+                let Some((next_start, next_end)) = ranges.get(&next.get()).copied() else {
+                    break;
+                };
+                if next_start == target_start {
+                    break;
+                }
+                target_start = next_start;
+                target_end = next_end;
+            }
+            if let Ok(args) = recover_args(session, target_start, target_end)
+                && args.count() > 0
+            {
+                call_arg_counts.insert(target, args.count());
+            }
+        }
     }
     // SSA-lite: which registers are already overwritten on every path reaching a block.
     // Re-lifting with that seed keeps `argN` off clobbered values at join points.
-    if args.is_some() {
+    let seeds = if args.is_some() {
         let written: Vec<BTreeSet<Reg>> = bodies.iter().map(|body| body.written.clone()).collect();
-        let seeds = entry_written(&cfg, &written);
+        entry_written(&cfg, &written)
+    } else {
+        vec![BTreeSet::new(); cfg.blocks.len()]
+    };
+    if args.is_some() || !call_arg_counts.is_empty() {
         let mut seeded = Vec::with_capacity(cfg.blocks.len());
         for (index, block) in cfg.blocks.iter().enumerate() {
             seeded.push(lift_block(
@@ -113,6 +168,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
                 args,
                 &arg_structs,
                 Some(&seeds[index]),
+                &call_arg_counts,
             )?);
         }
         bodies = seeded;
@@ -161,6 +217,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     structurer.emit_all(&mut lines);
+    tidy_labels(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -1503,6 +1560,61 @@ fn indent(level: usize) -> String {
     "    ".repeat(level)
 }
 
+/// Remove labels/gotos that add no control flow: a `goto` whose target label is the
+/// very next line, and labels that are never referenced. Fallback output otherwise
+/// contains long runs of `goto loc_x; loc_x:` pairs that hide the actual structure.
+fn tidy_labels(lines: &mut Vec<PseudoLine>) {
+    if lines.len() < 2 {
+        return;
+    }
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let target = goto_target(&lines[index].text);
+        if let Some(target) = target
+            && lines[index + 1].text.trim() == format!("loc_{target:x}:")
+        {
+            lines.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+
+    let labels: Vec<String> = lines
+        .iter()
+        .filter_map(|line| {
+            line.text
+                .trim()
+                .strip_suffix(':')
+                .filter(|label| label.starts_with("loc_"))
+                .map(str::to_owned)
+        })
+        .collect();
+    let mut removable = Vec::new();
+    for label in labels {
+        let references = lines
+            .iter()
+            .filter(|line| line.text.matches(label.as_str()).count() > 0)
+            .count();
+        if references <= 1 {
+            removable.push(format!("{label}:"));
+        }
+    }
+    lines.retain(|line| !removable.contains(&line.text.trim().to_owned()));
+}
+
+fn goto_target(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let rest = if let Some(rest) = text.strip_prefix("goto loc_") {
+        rest
+    } else if let Some((_, rest)) = text.split_once(") goto loc_") {
+        rest
+    } else {
+        return None;
+    };
+    rest.strip_suffix(';')
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+}
+
 fn intersect(
     order: &BTreeMap<usize, usize>,
     dom: &[Option<usize>],
@@ -1541,6 +1653,31 @@ mod tests {
     use super::*;
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
+
+    #[test]
+    fn tidy_labels_removes_adjacent_gotos_and_orphans() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x10),
+                text: "    goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    x = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x30),
+                text: "    loc_30:".to_owned(),
+            },
+        ];
+        tidy_labels(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "    x = 1;");
+    }
 
     fn analyzed_corpus() -> Option<(Session, TempDir)> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1931,7 +2068,7 @@ mod tests {
         };
         let start = function_start(&session, "recursive").unwrap();
         let before = pseudocode_l2(&mut session, start).unwrap().text();
-        assert!(before.contains("recursive()"), "{before}");
+        assert!(before.contains("recursive(rcx)"), "{before}");
         session
             .execute(recraft_core::Command::SetPrototype {
                 addr: start,
@@ -1939,6 +2076,7 @@ mod tests {
             })
             .unwrap();
         let after = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(after.contains("int recursive(int n)"), "{after}");
         assert!(after.contains("recursive(rcx)"), "{after}");
         assert!(!after.contains("recursive()"), "{after}");
     }

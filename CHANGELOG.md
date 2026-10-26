@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Decompiled call sites now show inferred arguments instead of bare `sub_xxx()`:
+  callee prologues are scanned once per target (following import `jmp` thunks), argument
+  setup writes captured by the call are elided, and calls without a recoverable signature
+  fall back to the caller's computed slots. Consecutive duplicate writes, `int3`/`nop`
+  padding, adjacent `goto`/label pairs and unreferenced labels are removed from L1/L2
+  output. `call_sites_show_arguments_with_a_callee_prototype` and
+  `tidy_labels_removes_adjacent_gotos_and_orphans` cover the new behavior.
 - The toolbar's Text/Graph pair is now a single target-mode toggle: in Graph mode it
   offers 文本/Text, in Text mode it offers 图形/Graph. The Space shortcut and the existing
   view behavior are unchanged. This removes the duplicate segmented control while keeping

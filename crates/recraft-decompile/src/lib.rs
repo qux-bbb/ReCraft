@@ -42,6 +42,8 @@ pub(crate) struct BlockLift {
     pub flow: Flow,
     /// Registers written anywhere in the block (for cross-block argument tracking).
     pub written: BTreeSet<Reg>,
+    /// Direct call targets seen in the block (for one-pass signature inference).
+    pub calls: BTreeSet<u64>,
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
@@ -56,6 +58,7 @@ pub(crate) fn lift_block(
     args: Option<&ArgNames>,
     arg_structs: &BTreeMap<Reg, StructDef>,
     seed: Option<&BTreeSet<Reg>>,
+    call_arg_counts: &HashMap<u64, usize>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -63,6 +66,7 @@ pub(crate) fn lift_block(
             condition: None,
             flow: Flow::Fallthrough,
             written: BTreeSet::new(),
+            calls: BTreeSet::new(),
         });
     }
     let mut lifter = Lifter::new();
@@ -89,6 +93,7 @@ pub(crate) fn lift_block(
             condition: None,
             flow: Flow::Fallthrough,
             written: BTreeSet::new(),
+            calls: BTreeSet::new(),
         });
     }
 
@@ -120,6 +125,14 @@ pub(crate) fn lift_block(
             }
         }
     }
+    let mut calls = BTreeSet::new();
+    for item in &lifted {
+        for stmt in &item.stmts {
+            if let Stmt::Call { target, .. } = stmt {
+                calls.insert(target.get());
+            }
+        }
+    }
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
@@ -130,13 +143,14 @@ pub(crate) fn lift_block(
         args,
         arg_structs,
         call_protos: &call_protos,
+        call_arg_counts,
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
         frame_reg: None,
     };
 
-    let mut statements = Vec::new();
+    let mut statements: Vec<PseudoLine> = Vec::new();
     let mut written = BTreeSet::new();
     // Argument-register writes immediately consumed by a prototyped call are redundant:
     // the call already renders its captured argument expressions.
@@ -146,38 +160,78 @@ pub(crate) fn lift_block(
             flat.push((item_index, stmt_index));
         }
     }
-    let is_arg_write = |stmt: &Stmt| {
-        matches!(
-            stmt,
-            Stmt::WriteReg { reg, .. } if crate::l2::X64_ARG_REGS.contains(&reg.base)
-        )
-    };
     let mut skip: HashSet<(usize, usize)> = HashSet::new();
-    for (position, &(item_index, stmt_index)) in flat.iter().enumerate() {
-        let Stmt::WriteReg { reg, .. } = &lifted[item_index].stmts[stmt_index] else {
-            continue;
-        };
-        let Some(slot) = crate::l2::X64_ARG_REGS
-            .iter()
-            .position(|arg| *arg == reg.base)
-        else {
-            continue;
-        };
-        let mut next = position + 1;
-        while next < flat.len() && is_arg_write(&lifted[flat[next].0].stmts[flat[next].1]) {
-            next += 1;
-        }
-        let Some(&(call_item, call_stmt)) = flat.get(next) else {
-            continue;
-        };
-        if let Stmt::Call { target, args } = &lifted[call_item].stmts[call_stmt]
-            && let Some(proto) = call_protos.get(&target.get())
-            && slot < proto.params.len()
-            && args
-                .get(slot)
-                .is_some_and(|value| !matches!(exprs[*value as usize], Expr::Reg(_)))
-        {
-            skip.insert((item_index, stmt_index));
+    if session.image().is_64 {
+        // A call captures its argument expressions at the call site. Remove the
+        // preceding register setup for each captured argument, even when unrelated
+        // instructions sit between the setup and the call, as long as the register is
+        // not read in between.
+        for (position, &(call_item, call_stmt)) in flat.iter().enumerate() {
+            let Stmt::Call { target, args } = &lifted[call_item].stmts[call_stmt] else {
+                continue;
+            };
+            for (slot, arg) in args.iter().enumerate().take(crate::l2::X64_ARG_REGS.len()) {
+                let arg_reg = match exprs[*arg as usize] {
+                    Expr::Reg(view) => Some(view.base),
+                    _ => None,
+                };
+                if arg_reg == Some(crate::l2::X64_ARG_REGS[slot]) {
+                    // The call renders the register itself; its writer cannot be
+                    // removed without changing the value read by the call.
+                    continue;
+                }
+                let limit =
+                    call_arg_limit(target.get(), args, &exprs, &call_protos, call_arg_counts);
+                if slot >= limit {
+                    continue;
+                }
+                let reg = crate::l2::X64_ARG_REGS[slot];
+                for previous in (0..position).rev() {
+                    let (item_index, stmt_index) = flat[previous];
+                    let stmt = &lifted[item_index].stmts[stmt_index];
+                    if stmt_reads_reg(stmt, &exprs, reg) {
+                        break;
+                    }
+                    if let Stmt::WriteReg {
+                        reg: destination,
+                        value,
+                    } = stmt
+                        && destination.base == reg
+                    {
+                        if value == arg {
+                            let mut sources = BTreeSet::new();
+                            expr_regs(&exprs, *arg, &mut sources);
+                            // The expression is evaluated at the call site; it is only
+                            // safe to delete the setup when none of its inputs (and no
+                            // intervening call) can change before the call.
+                            let self_referential = sources.contains(&reg);
+                            let mut stable = !self_referential;
+                            for &(later_item, later_stmt) in &flat[previous + 1..position] {
+                                let later_stmt = &lifted[later_item].stmts[later_stmt];
+                                if matches!(
+                                    later_stmt,
+                                    Stmt::Call { .. }
+                                        | Stmt::CallIndirect { .. }
+                                        | Stmt::Intrinsic { .. }
+                                ) {
+                                    stable = false;
+                                    break;
+                                }
+                                if let Stmt::WriteReg { reg: later_reg, .. } = later_stmt
+                                    && sources.contains(&later_reg.base)
+                                {
+                                    stable = false;
+                                    break;
+                                }
+                            }
+                            if stable {
+                                skip.insert((item_index, stmt_index));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
     for (item_index, item) in lifted.iter().enumerate() {
@@ -188,10 +242,19 @@ pub(crate) fn lift_block(
             if let Stmt::WriteReg { reg, .. } = stmt {
                 written.insert(reg.base);
             }
-            if printer.is_noop_write(stmt) {
+            if printer.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                 continue;
             }
             let text = printer.stmt(stmt);
+            // Consecutive identical pure writes are idempotent and common after
+            // compiler-generated copy chains. Calls/intrinsics must never be folded.
+            let pure = !matches!(
+                stmt,
+                Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+            );
+            if pure && statements.last().is_some_and(|line| line.text == text) {
+                continue;
+            }
             statements.push(PseudoLine {
                 addr: item.addr,
                 text: format!("{text};"),
@@ -209,7 +272,98 @@ pub(crate) fn lift_block(
         condition,
         flow: last.flow,
         written,
+        calls,
     })
+}
+
+/// Number of leading call arguments to print for a call without a user prototype.
+///
+/// All x64 argument slots are captured by the lifter, even when they still hold the
+/// incoming register. Print through the last *computed* slot so calls stop looking
+/// argument-less whenever the caller actually prepared a value; trailing untouched
+/// registers stay implicit instead of producing `(rcx, rdx, r8, r9)` noise.
+fn rendered_arg_count(args: &[ExprId], exprs: &[Expr]) -> usize {
+    args.iter()
+        .rposition(|arg| !matches!(exprs[*arg as usize], Expr::Reg(_)))
+        .map_or(0, |index| index + 1)
+}
+
+fn call_arg_limit(
+    target: u64,
+    args: &[ExprId],
+    exprs: &[Expr],
+    protos: &HashMap<u64, crate::l2::ProtoSig>,
+    counts: &HashMap<u64, usize>,
+) -> usize {
+    if let Some(proto) = protos.get(&target) {
+        proto.params.len().min(args.len())
+    } else if let Some(count) = counts.get(&target) {
+        (*count).min(args.len())
+    } else {
+        rendered_arg_count(args, exprs)
+    }
+}
+
+fn expr_reads_reg(exprs: &[Expr], expr: ExprId, reg: Reg) -> bool {
+    match &exprs[expr as usize] {
+        Expr::Const(_) | Expr::Temp(_) => false,
+        Expr::Reg(view) => view.base == reg,
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => expr_reads_reg(exprs, *addr, reg),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_reg(exprs, *lhs, reg) || expr_reads_reg(exprs, *rhs, reg)
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_reads_reg(exprs, *arg, reg),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_reads_reg(exprs, *cond, reg)
+                || expr_reads_reg(exprs, *then, reg)
+                || expr_reads_reg(exprs, *otherwise, reg)
+        }
+    }
+}
+
+fn expr_regs(exprs: &[Expr], expr: ExprId, out: &mut BTreeSet<Reg>) {
+    match &exprs[expr as usize] {
+        Expr::Const(_) | Expr::Temp(_) => {}
+        Expr::Reg(view) => {
+            out.insert(view.base);
+        }
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => expr_regs(exprs, *addr, out),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_regs(exprs, *lhs, out);
+            expr_regs(exprs, *rhs, out);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_regs(exprs, *arg, out),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_regs(exprs, *cond, out);
+            expr_regs(exprs, *then, out);
+            expr_regs(exprs, *otherwise, out);
+        }
+    }
+}
+
+fn stmt_reads_reg(stmt: &Stmt, exprs: &[Expr], reg: Reg) -> bool {
+    match stmt {
+        Stmt::WriteReg { value, .. } => expr_reads_reg(exprs, *value, reg),
+        Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
+            expr_reads_reg(exprs, *addr, reg) || expr_reads_reg(exprs, *value, reg)
+        }
+        Stmt::Call { args, .. } => args.iter().any(|arg| expr_reads_reg(exprs, *arg, reg)),
+        Stmt::CallIndirect { target } => expr_reads_reg(exprs, *target, reg),
+        Stmt::Intrinsic { .. } => false,
+    }
+}
+
+/// Alignment padding (`int3`) and `nop` are compiler artifacts, not source code.
+fn is_padding_intrinsic(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Intrinsic { text } if matches!(text.trim(), "int3" | "nop"))
 }
 
 /// One line of pseudo-C, with its source address.
@@ -293,6 +447,7 @@ pub fn pseudocode_l0(
 
     let no_structs: BTreeMap<Reg, StructDef> = BTreeMap::new();
     let no_protos: HashMap<u64, crate::l2::ProtoSig> = HashMap::new();
+    let no_counts: HashMap<u64, usize> = HashMap::new();
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
@@ -303,6 +458,7 @@ pub fn pseudocode_l0(
         args: None,
         arg_structs: &no_structs,
         call_protos: &no_protos,
+        call_arg_counts: &no_counts,
         written: HashSet::new(),
         frame_reg: None,
     };
@@ -401,6 +557,8 @@ struct Printer<'a> {
     arg_structs: &'a BTreeMap<Reg, StructDef>,
     /// User prototypes of direct call targets (renders call arguments/types).
     call_protos: &'a HashMap<u64, crate::l2::ProtoSig>,
+    /// Inferred argument counts for direct call targets without a user prototype.
+    call_arg_counts: &'a HashMap<u64, usize>,
     /// Quoted C literals for address constants that name a stored string.
     literals: &'a HashMap<u64, String>,
     /// Registers written so far (for argument-register naming).
@@ -420,7 +578,7 @@ impl Printer<'_> {
                 });
             }
             for stmt in &insn.stmts {
-                if self.is_noop_write(stmt) {
+                if self.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                     continue;
                 }
                 let text = self.stmt(stmt);
@@ -760,7 +918,22 @@ impl Printer<'_> {
                             .collect();
                         format!("{name}({})", rendered.join(", "))
                     }
-                    None => format!("{name}()"),
+                    None => {
+                        let count = call_arg_limit(
+                            target.get(),
+                            args,
+                            self.exprs,
+                            self.call_protos,
+                            self.call_arg_counts,
+                        );
+                        if count == 0 {
+                            format!("{name}()")
+                        } else {
+                            let rendered: Vec<String> =
+                                args.iter().take(count).map(|arg| self.expr(*arg)).collect();
+                            format!("{name}({})", rendered.join(", "))
+                        }
+                    }
                 }
             }
             Stmt::CallIndirect { target } => format!("(*{})()", self.expr(*target)),
