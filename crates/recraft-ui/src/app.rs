@@ -2242,7 +2242,13 @@ impl ReCraftApp {
             return;
         };
         if let Some(path) = state.find_tab(&Pane::Ai) {
+            let ai_was_active = state
+                .find_active_focused()
+                .is_some_and(|(_, tab)| *tab == Pane::Ai);
             state.remove_tab(path);
+            if ai_was_active && let Some(view) = state.find_tab(&Pane::View) {
+                let _ = state.set_active_tab(view);
+            }
         }
     }
 
