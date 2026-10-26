@@ -1,67 +1,69 @@
 # ReCraft
 
-> **Status: M3 complete, M4 (public preview) in progress.** Import/analyze PE32/PE32+
-> (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
-> struct-type writes through a journaled command bus with undo, MCP read-only server, and
-> offline-first AI (explain / rename proposals / triage) with a propose-apply UI.
-> Quality gates: corpus semantic coverage **97.1%**, structured rate **93.1%**; 1 GiB
-> sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
-> [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
+**简体中文** | [English](README.en.md)
 
-ReCraft is an AI-native reverse-engineering platform: a native desktop disassembler and
-decompiler for Windows binaries, with an MCP server and LLM assistance built in from day one.
+> **状态：M3 已完成，M4（公开预览）进行中。** 支持导入/分析 PE32/PE32+
+> （x64 + Win32）；带签名、ABI 和类型的结构化伪 C；通过带撤销的日志命令总线执行
+> 重命名/注释/原型/结构体类型写入；只读 MCP 服务器；离线优先 AI（解释 / 重命名建议 /
+> 初筛）及 propose-apply UI。
+> 质量门禁：语料语义覆盖率 **97.1%**，结构化率 **93.1%**；1 GiB 样本：导入约 4 秒，
+> 分析约 0.3 秒，峰值 5.6 MiB（debug）。预览清单见 [`docs/M4.md`](docs/M4.md)，
+> 常见问题见 [`docs/FAQ.md`](docs/FAQ.md)。
 
-It is an independent, clean-room implementation. It is **not** affiliated with Hex-Rays or
-IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
+ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的原生桌面反汇编器与反编译器，
+从第一天就内置 MCP 服务器和 LLM 辅助。
 
-## Why ReCraft
+它是独立的净室实现，**与 Hex-Rays / IDA Pro 没有关联**，不使用 IDA 的 SDK、数据库格式或
+签名库。
 
-- **Native, not Electron**: Rust + egui desktop app; no webview, no Python runtime.
-- **Decompiler in the open**: LIR → SSA-lite → structured pseudo-C; every token maps back
-  to an instruction address; golden snapshots guard every change.
-- **AI that proposes, never silently writes**: proposals carry evidence addresses and a
-  confidence; writes go through the same journaled command bus as manual edits (undoable).
-- **Offline by default**: AI heuristics need no network; LLM providers are opt-in, prompts
-  are redacted + budgeted, results cached and audited locally.
-- **MCP-native**: Claude/Cursor and other agents can query functions, pseudocode, xrefs,
-  strings, imports and call graphs through a read-only MCP server.
-- **Built for triage**: API behaviour tagging, strings/xrefs, runtime symbol recovery
-  (Go/Rust/C++), one-command triage with suspicious-function ranking.
-- **Honest engineering**: documented limitations, measured quality gates, reproducible
-  corpus (MSVC, no CRT, linker map as ground truth).
+## 为什么选择 ReCraft
+
+- **原生，不是 Electron**：Rust + egui 桌面应用；没有 webview，也没有 Python 运行时。
+- **反编译器完全公开**：LIR → SSA-lite → 结构化伪 C；每个 token 都能映射回指令地址；
+  每一处改动都有黄金快照守护。
+- **AI 只提议，绝不静默写入**：提议携带证据地址和置信度；写入与手工修改走同一条
+  日志命令总线（可撤销）。
+- **默认离线**：AI 启发式无需网络；LLM provider 可选，prompt 会脱敏并限制预算，
+  结果本地缓存和审计。
+- **MCP 原生**：Claude/Cursor 及其他 agent 可以通过只读 MCP 服务器查询函数、伪代码、
+  交叉引用、字符串、导入和调用图。
+- **为初筛而生**：API 行为标记、字符串/交叉引用、运行时符号恢复（Go/Rust/C++）、
+  一条命令完成初筛并按可疑函数排序。
+- **诚实的工程**：记录已知限制，量化质量门禁，使用可复现语料（MSVC、无 CRT，
+  链接器 map 作为基准）。
 
 | | ReCraft | IDA Pro | Ghidra |
 |---|---|---|---|
-| Price / license | AGPL-3.0-only (+ commercial) | commercial | Apache-2.0 |
-| UI | native Rust/egui | native | Java/Swing |
-| Decompiler | self-built (readable, not compilable) | Hex-Rays (mature) | mature |
-| MCP / AI assist | built in (offline-first) | plugins/add-ons | plugins |
-| 1 GiB sample gate | ✅ automated | ✅ | ✅ |
-| IDA plugin ecosystem | ❌ | ✅ | ❌ |
+| 价格 / 许可 | AGPL-3.0-only（另有商业许可） | 商业 | Apache-2.0 |
+| 界面 | 原生 Rust/egui | 原生 | Java/Swing |
+| 反编译器 | 自研（可读，不保证可编译） | Hex-Rays（成熟） | 成熟 |
+| MCP / AI 辅助 | 内置（离线优先） | 插件/附加组件 | 插件 |
+| 1 GiB 样本门禁 | ✅ 自动化 | ✅ | ✅ |
+| IDA 插件生态 | ❌ | ✅ | ❌ |
 
-## Documents
+## 文档
 
-[`docs/README.md`](docs/README.md) indexes all design/milestone docs; start with
-[`docs/DESIGN.md`](docs/DESIGN.md), then [`docs/FAQ.md`](docs/FAQ.md) and
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+[`docs/README.md`](docs/README.md) 索引了全部设计与里程碑文档；建议从
+[`docs/DESIGN.md`](docs/DESIGN.md) 开始，然后阅读 [`docs/FAQ.md`](docs/FAQ.md) 和
+[`docs/ROADMAP.md`](docs/ROADMAP.md)。
 
-## Goals (v1)
+## 目标（v1）
 
-- **PE x64 + Win32 x86** static analysis. ELF / ARM64 / firmware later.
-- **Self-built decompiler** (LIR → SSA → structured C-like pseudocode). Readable output,
-  not guaranteed compilable — every token maps back to its instruction address.
-- **Scales to 1 GB samples**, stays interactive (paged storage, background analysis).
-- **Malware-triage first**: strings, imports, cross-references, API behaviour tagging,
-  "find `main`", "follow the network callback".
-- **MCP-native AI**: function explanation, naming proposals, sample summaries,
-  natural-language queries over the database. AI can only *propose* changes; a human applies them.
-- **Native egui UI**, dense IDA-like layout, modern look, English + 简体中文
-  (Fluent `.ftl` resources under `crates/recraft-ui/locales/`).
+- **PE x64 + Win32 x86** 静态分析。ELF / ARM64 / 固件稍后支持。
+- **自研反编译器**（LIR → SSA → 结构化类 C 伪代码）。输出可读，不保证可编译——
+  每个 token 都能映射回指令地址。
+- **可扩展到 1 GB 样本**并保持交互流畅（分页存储、后台分析）。
+- **恶意样本初筛优先**：字符串、导入、交叉引用、API 行为标记、“查找 `main`”、
+  “跟踪网络回调”。
+- **MCP 原生 AI**：函数解释、命名建议、样本摘要、数据库自然语言查询。AI 只能
+  *提议*修改，由人确认应用。
+- **原生 egui 界面**，紧凑的 IDA 风格布局，现代观感，支持英文 + 简体中文
+  （Fluent `.ftl` 资源位于 `crates/recraft-ui/locales/`）。
 
-## Architecture
+## 架构
 
-Headless core + command bus + MCP server + native UI client. See
-[`docs/DESIGN.md`](docs/DESIGN.md) for the full design.
+无界面核心 + 命令总线 + MCP 服务器 + 原生 UI 客户端。完整设计见
+[`docs/DESIGN.md`](docs/DESIGN.md)。
 
 ```mermaid
 flowchart TB
@@ -84,27 +86,26 @@ flowchart TB
     ai --> ui
 ```
 
-All writes (rename/comment/prototype/apply_type) go through `recraft-core`'s journaled
-command bus; analysis output lives in derived tables and can be rebuilt at any time.
+所有写入（重命名/注释/原型/apply_type）都经过 `recraft-core` 的日志命令总线；
+分析结果存放在派生表中，可以随时重建。
 
-## Building
+## 构建
 
-Requires Rust **1.85+** (stable). No other toolchain is needed on Windows.
+需要 Rust **1.85+**（stable）。Windows 上不需要其他工具链。
 
 ```powershell
 cargo build --workspace
 cargo test --workspace
 ```
 
-Run the desktop app against a project (or drag a PE file onto its window):
+针对项目运行桌面应用（也可以把 PE 文件拖到窗口上）：
 
 ```powershell
 cargo run -p recraft-ui -- path\to\sample.rcraft
 ```
 
-First import a binary from the command line (read-only commands such as `strings`,
-`funcs`, `decompile`, `search` or `callgraph` also accept a PE path directly and
-auto-analyze it into a temporary project):
+先在命令行导入二进制（`strings`、`funcs`、`decompile`、`search`、`callgraph` 等只读命令
+也接受 PE 路径，并自动分析到临时项目）：
 
 ```powershell
 cargo run -p recraft-cli -- analyze C:\Windows\System32\notepad.exe --out notepad.rcraft
@@ -126,17 +127,16 @@ cargo run -p recraft-cli -- metrics notepad.rcraft
 cargo run -p recraft-cli -- golden notepad.rcraft --dir golden-out --check
 ```
 
-The analysis corpus is built with MSVC (no CRT) and doubles as a regression benchmark
-where exports + `.pdata` are ground truth:
+分析语料使用 MSVC（无 CRT）构建，同时作为回归基准，其中导出表 + `.pdata` 是基准真值：
 
 ```powershell
 .\corpus\build.ps1
 cargo run -p recraft-cli -- eval .\corpus\build\x64\corpus.exe
-# Linker map: ground truth for every function, including non-exported helpers.
+# 链接器 map：每个函数的基准真值，包括未导出的辅助函数。
 cargo run -p recraft-cli -- eval .\corpus\build\x64\corpus.exe --map .\corpus\build\x64\corpus.map
 ```
 
-A Go sample validates runtime symbol recovery (kept `pclntab`):
+Go 样本用于验证运行时符号恢复（保留 `pclntab`）：
 
 ```powershell
 .\corpus\build-go.ps1
@@ -145,7 +145,7 @@ cargo run -p recraft-cli -- analyze go.rcraft
 cargo run -p recraft-cli -- funcs go.rcraft    # main.main, runtime.*, ...
 ```
 
-A C++ sample validates symbol demangling:
+C++ 样本用于验证符号 demangle：
 
 ```powershell
 .\corpus\build-cpp.ps1
@@ -155,7 +155,7 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
-### Packaging
+### 打包
 
 ```powershell
 pwsh -File scripts/package.ps1 -NoInstaller   # release build + green zip + SHA256SUMS
@@ -165,58 +165,56 @@ pwsh -File scripts/package.ps1                # also builds the NSIS installer i
 pwsh -File scripts/verify-installer.ps1       # install -> CLI/GUI -> uninstall, fully scripted
 ```
 
-See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip,
-the NSIS installer (installer job) and checksums as artifacts.
+发布清单见 [`docs/RELEASE.md`](docs/RELEASE.md)；CI 会上传 zip、NSIS 安装程序
+（installer job）和校验和作为构建产物。
 
-### Installing (unsigned preview builds)
+### 安装（未签名预览版）
 
-v0.1 preview binaries are **not code-signed** (a deliberate decision; see
-[`docs/RELEASE.md`](docs/RELEASE.md)). Windows SmartScreen will show "Unknown publisher"
-until the project adopts a trusted OSS signing service:
+v0.1 预览二进制**没有代码签名**（这是刻意决定；见
+[`docs/RELEASE.md`](docs/RELEASE.md)）。在项目采用可信的开源签名服务之前，Windows
+SmartScreen 会显示“未知发布者”：
 
-1. Download `recraft-v0.1.0-windows-x64.zip` or `recraft-0.1.0-setup.exe` together with
-   `SHA256SUMS.txt`.
-2. Verify the download before running:
+1. 下载 `recraft-v0.1.0-windows-x64.zip` 或 `recraft-0.1.0-setup.exe`，以及
+   `SHA256SUMS.txt`。
+2. 运行前先校验下载：
    ```powershell
    Get-FileHash .\recraft-0.1.0-setup.exe -Algorithm SHA256
-   # compare with the matching line in SHA256SUMS.txt
+   # 与 SHA256SUMS.txt 中对应行比较
    ```
-3. If SmartScreen appears: **More info → Run anyway**. The installer is per-user
-   (`%LOCALAPPDATA%\ReCraft`, no elevation) and the portable zip needs no installation.
+3. 如果出现 SmartScreen：**更多信息 → 仍要运行**。安装程序按用户安装
+   （`%LOCALAPPDATA%\ReCraft`，无需提权），便携 zip 无需安装。
 
-Signed builds (and the exact certificate identity) will be announced when available;
-until then checksums are the integrity reference.
+签名构建（以及确切的证书身份）将在可用时公布；在此之前，校验和就是完整性依据。
 
-### Demo
+### 演示
 
 ```powershell
 pwsh -File scripts/demo.ps1 -Keep     # 9-step CLI walkthrough, then open the GUI
 ```
 
-The full 10-minute script (CLI + GUI + MCP client + local LLM) is in
-[`docs/DEMO.md`](docs/DEMO.md).
+完整的 10 分钟脚本（CLI + GUI + MCP 客户端 + 本地 LLM）见
+[`docs/DEMO.md`](docs/DEMO.md)。
 
-The UI binary renders with OpenGL (Glow); wgpu/DX12 crashed on an Intel UHD driver
-during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md).
+UI 二进制使用 OpenGL（Glow）渲染；wgpu/DX12 在 spike 阶段于 Intel UHD 驱动上崩溃，
+见 [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-framework.md)。
 
-### MCP server
+### MCP 服务器
 
-Read-only Model Context Protocol tools over stdio: `list_functions`, `get_disassembly`,
-`get_pseudocode` (L0/L1/L2), `xrefs_to/from`, `list_strings`, `list_imports`,
-`callgraph`, `search_bytes`, `function_summary`, plus project resources.
+通过 stdio 提供只读 Model Context Protocol 工具：`list_functions`、`get_disassembly`、
+`get_pseudocode`（L0/L1/L2）、`xrefs_to/from`、`list_strings`、`list_imports`、
+`callgraph`、`search_bytes`、`function_summary`，以及项目资源。
 
 ```powershell
 cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 # newline-delimited JSON-RPC 2.0 on stdin/stdout; see docs/MCP.md
 ```
 
-### AI assist
+### AI 辅助
 
-Offline (no network) explanation, rename proposals and sample triage; proposals carry
-evidence addresses and are only applied through the journaled command bus. The GUI's **AI**
-tab can configure the optional LLM provider (endpoint/model/API-key env var, persisted to
-`%LOCALAPPDATA%\ReCraft\ai-settings.json`) and run **Explain**/**Polish** without any CLI
-configuration:
+离线（无网络）解释、重命名建议和样本初筛；提议携带证据地址，并且只能通过日志命令
+总线应用。GUI 的 **AI 侧栏**可以配置可选的 LLM provider（endpoint/model/API-key 环境
+变量，持久化到 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），并运行
+**解释**/**润色**，无需任何 CLI 配置：
 
 ```powershell
 cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry
@@ -225,33 +223,17 @@ cargo run -p recraft-cli -- ai triage notepad.rcraft
 cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # undoable
 ```
 
-## Contributing
+## 贡献
 
-Contributions are welcome, but **every contribution requires a signed CLA**
-(this is what makes the AGPL + commercial dual-license model work).
+欢迎贡献，但**每项贡献都需要签署 CLA**（这是 AGPL + 商业双许可模式能够成立的前提）。
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`CLA.md`](CLA.md).
+见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`CLA.md`](CLA.md)。
 
-Never commit malware samples or binaries — use local, uncommitted test data only.
+绝不要提交恶意样本或二进制文件——只使用本地、未提交的测试数据。
 
-## License
+## 许可
 
-- Open-source edition: **AGPL-3.0-only** (see [`LICENSE`](LICENSE)).
-- Commercial license for use without AGPL obligations: see [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md).
-- The "ReCraft" name and logo are governed by [`TRADEMARK.md`](TRADEMARK.md).
-
----
-
-## 简体中文
-
-ReCraft 是一个 AI 原生的逆向工程平台：原生桌面反汇编/反编译器，内置 MCP 与 LLM 辅助。
-独立实现，与 Hex-Rays / IDA Pro 无关，不使用其 SDK、数据库格式或签名库。
-
-v1 目标：PE x64/x86 静态分析、自研反编译器（输出可读、不保证可编译）、支持 1GB 样本、
-恶意样本初筛工作流、MCP 原生 AI、egui 原生界面（英文 + 简中）。
-
-当前状态：**M0–M3 完成，M4 公开预览准备中**（corpus 覆盖 97.1%、结构化 93.1%，
-1 GiB 门禁通过，AI 默认离线 + propose/apply 可撤销）。设计文档见
-[`docs/DESIGN.md`](docs/DESIGN.md)，里程碑见 [`docs/ROADMAP.md`](docs/ROADMAP.md)，
-常见问题见 [`docs/FAQ.md`](docs/FAQ.md)。
-贡献需要签署 CLA，开源版许可为 AGPL-3.0-only，另有商业许可。
+- 开源版：**AGPL-3.0-only**（见 [`LICENSE`](LICENSE)）。
+- 希望在不承担 AGPL 义务的情况下使用，可购买商业许可：见
+  [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)。
+- “ReCraft”名称和 logo 受 [`TRADEMARK.md`](TRADEMARK.md) 约束。
