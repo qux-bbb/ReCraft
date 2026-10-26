@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Drag and drop a sample onto the window to open it: `.rcraft` projects load directly,
+  PE files are imported to a sibling `.rcraft` project, and a centered drop overlay shows
+  the accepted targets while dragging. A dropped file is processed before the next frame.
 - AI is now a **sidebar-only** assistant: there is no AI dock tab. The right sidebar is
   shown by default, can be collapsed only via `×` or Options, and resized by dragging its
   inner edge (clamped to 300–620px) without ever turning into the button. When collapsed

@@ -870,6 +870,53 @@ impl ReCraftApp {
         }
     }
 
+    /// Open a project or PE file dropped onto the window, and show a drop target
+    /// overlay while a file is hovering over the app.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let (dropped, hovering) = ctx.input(|input| {
+            (
+                input
+                    .raw
+                    .dropped_files
+                    .first()
+                    .map(|file| file.path().to_path_buf()),
+                !input.raw.hovered_files.is_empty(),
+            )
+        });
+        if let Some(path) = dropped {
+            self.open_path(&path);
+        }
+        if hovering {
+            let pal = self.palette();
+            let title = self.t("ui_drop_to_open");
+            let hint = self.t("ui_drop_hint");
+            egui::Area::new(egui::Id::new("drop_overlay"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -36.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(pal.panel)
+                        .stroke(egui::Stroke::new(1.5, pal.mnemonic))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(20))
+                        .shadow(egui::epaint::Shadow {
+                            offset: [0, 4],
+                            blur: 18,
+                            spread: 0,
+                            color: Color32::from_black_alpha(70),
+                        })
+                        .show(ui, |ui| {
+                            ui.set_min_width(250.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(RichText::new("↓").size(30.0).color(pal.mnemonic));
+                                ui.label(RichText::new(title.as_str()).size(18.0).strong());
+                                ui.label(RichText::new(hint.as_str()).size(12.0).color(pal.text));
+                            });
+                        });
+                });
+        }
+    }
+
     // -------------------------------------------------------------- loading --
 
     fn open_path(&mut self, path: &Path) {
@@ -4847,6 +4894,7 @@ impl ReCraftApp {
     fn update_inner(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         self.install_style(&ctx);
+        self.handle_dropped_files(&ctx);
         self.tick();
         // Background AI requests must wake the UI when they complete; otherwise the
         // polished text only appears after an unrelated mouse/keyboard event.
@@ -6086,6 +6134,42 @@ mod tests {
                 .is_some(),
             "Views menu focus must re-dock a closed pane"
         );
+    }
+
+    #[test]
+    fn dropped_pe_opens_a_project() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("dropped.exe");
+        std::fs::write(&source, &bytes).unwrap();
+
+        #[derive(Debug)]
+        struct Dropped(std::path::PathBuf);
+        impl egui::DroppedFile for Dropped {
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                std::fs::read(&self.0).map_err(|error| error.to_string())
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            dropped_files: vec![Arc::new(Dropped(source.clone()))],
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(app.session.is_some(), "dropped PE must be imported");
+        assert_eq!(app.project, Some(source.with_extension("rcraft")));
     }
 
     #[test]
