@@ -3264,21 +3264,16 @@ impl ReCraftApp {
                 });
             return;
         }
-        let mut expanded = self.ai_sidebar;
         let response = egui::Panel::right("ai_sidebar")
             .resizable(true)
-            .drag_to_open(true)
             .default_size(self.ai_sidebar_width)
             .min_size(300.0)
             .max_size(620.0)
-            .show_collapsible(ui, &mut expanded, |ui| {
+            .show(ui, |ui| {
                 ui.add_space(3.0);
                 self.ai_panel(ui, action);
             });
-        self.ai_sidebar = expanded;
-        if let Some(response) = response {
-            self.ai_sidebar_width = response.response.rect.width().clamp(300.0, 620.0);
-        }
+        self.ai_sidebar_width = response.response.rect.width().clamp(300.0, 620.0);
     }
 
     fn ai_settings_window(&mut self, ctx: &egui::Context) {
@@ -4867,13 +4862,7 @@ impl ReCraftApp {
         let mut action = self.handle_keys(&ctx);
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
-        let sidebar_before = self.ai_sidebar;
         self.ai_sidebar_ui(root, &mut action);
-        if self.ai_sidebar != sidebar_before {
-            self.remove_ai_tab_from_dock();
-            self.layout_saved = None;
-            self.save_layout_now();
-        }
         self.dock_area(root, &mut action);
         self.ai_settings_window(&ctx);
         self.edit_window(&ctx, &mut action);

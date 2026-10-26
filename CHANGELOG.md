@@ -51,12 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - AI is now a **sidebar-only** assistant: there is no AI dock tab. The right sidebar is
-  shown by default, can be collapsed with `×`, Options, dragging below the minimum or
-  double-clicking its edge. When collapsed it leaves a **draggable floating AI pill**
-  (rounded, shadowed, foreground overlay; does not consume layout width); drag it around
-  and click to reopen. Its position is persisted in `layout.json`. Drag the inner edge to
-  resize (300–620px); visibility/width persist too. `F10` and the AI menu entries open the
-  sidebar. Provider settings live in the header ⚙ popup.
+  shown by default, can be collapsed only via `×` or Options, and resized by dragging its
+  inner edge (clamped to 300–620px) without ever turning into the button. When collapsed
+  it leaves a **draggable floating AI pill** (rounded, shadowed, foreground overlay; does
+  not consume layout width); drag it around and click to reopen. Its position is persisted
+  in `layout.json`. `F10` and the AI menu entries open the sidebar. Provider settings live
+  in the header ⚙ popup.
 - Provider settings moved out of the inline panel into a **gear popup** in the AI header
   (also reachable from Options), so the main pane stays focused on actions/results.
 - Redesigned the AI pane as a compact assistant dashboard: a title/status header, rounded
