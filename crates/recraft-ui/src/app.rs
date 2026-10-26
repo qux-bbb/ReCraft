@@ -6094,8 +6094,10 @@ mod tests {
     #[test]
     fn floating_ai_button_can_be_dragged() {
         let ctx = egui::Context::default();
-        let mut app = ReCraftApp::default();
-        app.ai_sidebar = false;
+        let mut app = ReCraftApp {
+            ai_sidebar: false,
+            ..ReCraftApp::default()
+        };
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
         let mut run = |events: Vec<egui::Event>| {
             let input = egui::RawInput {
