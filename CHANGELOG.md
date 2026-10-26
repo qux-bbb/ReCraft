@@ -47,11 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- AI is now a **right sidebar** by default: collapsible from its header or
-  Options, with the dock AI tab detached while the sidebar is open so the controls are
-  not shown twice. The header's **Tab** button restores the general dock view; switching
-  to the AI tab from the menu does the same. Sidebar visibility/width persist in
-  `layout.json`.
+- AI is now a **right sidebar** by default: drag its inner edge to resize (300–620px),
+  drag below the minimum or double-click the edge to collapse, and drag the collapsed
+  handle back open. The header `×` and Options toggle also collapse it; the header
+  **Tab** button restores the general dock view. Visibility/width persist in `layout.json`.
+  The dock AI tab is detached while the sidebar is open so controls are not shown twice.
 - Provider settings moved out of the inline panel into a **gear popup** in the AI header
   (also reachable from Options), so the main pane stays focused on actions/results.
 - Redesigned the AI pane as a compact assistant dashboard: a title/status header, rounded

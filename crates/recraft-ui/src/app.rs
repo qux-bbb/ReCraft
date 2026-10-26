@@ -3242,14 +3242,21 @@ impl ReCraftApp {
     }
 
     fn ai_sidebar_ui(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let mut expanded = self.ai_sidebar;
         let response = egui::Panel::right("ai_sidebar")
-            .resizable(false)
-            .exact_size(self.ai_sidebar_width)
-            .show(ui, |ui| {
+            .resizable(true)
+            .drag_to_open(true)
+            .default_size(self.ai_sidebar_width)
+            .min_size(300.0)
+            .max_size(620.0)
+            .show_collapsible(ui, &mut expanded, |ui| {
                 ui.add_space(3.0);
                 self.ai_panel(ui, action, AiPanelMode::Sidebar);
             });
-        self.ai_sidebar_width = response.response.rect.width().clamp(300.0, 620.0);
+        self.ai_sidebar = expanded;
+        if let Some(response) = response {
+            self.ai_sidebar_width = response.response.rect.width().clamp(300.0, 620.0);
+        }
     }
 
     fn ai_settings_window(&mut self, ctx: &egui::Context) {
@@ -4843,8 +4850,12 @@ impl ReCraftApp {
         let mut action = self.handle_keys(&ctx);
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
-        if self.ai_sidebar {
-            self.ai_sidebar_ui(root, &mut action);
+        let sidebar_before = self.ai_sidebar;
+        self.ai_sidebar_ui(root, &mut action);
+        if self.ai_sidebar != sidebar_before {
+            self.sync_ai_tab_visibility();
+            self.layout_saved = None;
+            self.save_layout_now();
         }
         self.dock_area(root, &mut action);
         self.ai_settings_window(&ctx);
@@ -6108,6 +6119,11 @@ mod tests {
         let loaded = load_layout_from(&file).expect("layout reload");
         assert_eq!(loaded.theme, ThemeMode::Light, "theme must persist");
         assert_eq!(loaded.lang, Lang::Zh, "language must persist");
+        assert!(loaded.ai_sidebar, "AI sidebar visibility must persist");
+        assert!(
+            (loaded.ai_sidebar_width - 360.0).abs() < f32::EPSILON,
+            "AI sidebar width must persist"
+        );
         assert!(
             (loaded.zoom - 1.2).abs() < f32::EPSILON,
             "zoom must persist"
