@@ -3219,33 +3219,41 @@ impl ReCraftApp {
                 .unwrap_or(egui::pos2(screen.right() - 64.0, screen.center().y - 20.0));
             pos.x = pos.x.clamp(screen.left() + 8.0, screen.right() - 60.0);
             pos.y = pos.y.clamp(screen.top() + 8.0, screen.bottom() - 48.0);
-            let shadow = egui::epaint::Shadow {
-                offset: [0, 3],
-                blur: 14,
-                spread: 0,
-                color: Color32::from_black_alpha(55),
-            };
             egui::Area::new(egui::Id::new("ai_sidebar_fab"))
                 .fixed_pos(pos)
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
-                    let response = egui::Frame::new()
-                        .shadow(shadow)
-                        .corner_radius(egui::CornerRadius::same(20))
-                        .show(ui, |ui| {
-                            let button = egui::Button::new(
-                                RichText::new("AI")
-                                    .strong()
-                                    .size(14.0)
-                                    .color(Color32::WHITE),
-                            )
-                            .min_size(egui::vec2(52.0, 40.0))
-                            .corner_radius(egui::CornerRadius::same(20))
-                            .fill(self.palette().mnemonic)
-                            .stroke(egui::Stroke::new(1.5, Color32::from_white_alpha(90)));
-                            ui.add(button)
-                        })
-                        .inner
+                    let (rect, response) = ui
+                        .allocate_exact_size(egui::vec2(52.0, 40.0), egui::Sense::click_and_drag());
+                    let painter = ui.painter();
+                    // Soft stacked glow instead of a flat drop shadow.
+                    for step in (1..=4).rev() {
+                        painter.rect_filled(
+                            rect.expand(step as f32 * 2.0),
+                            20.0,
+                            Color32::from_black_alpha(8),
+                        );
+                    }
+                    let fill = if response.hovered() {
+                        self.palette().mnemonic.gamma_multiply(1.15)
+                    } else {
+                        self.palette().mnemonic
+                    };
+                    painter.rect_filled(rect, 20.0, fill);
+                    painter.rect_stroke(
+                        rect,
+                        20.0,
+                        egui::Stroke::new(1.0, Color32::from_white_alpha(110)),
+                        egui::StrokeKind::Inside,
+                    );
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "AI",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    let response = response
                         .on_hover_text(self.t("ui_open_in_sidebar"))
                         .on_hover_cursor(egui::CursorIcon::Grab);
                     if response.dragged() {
@@ -6080,6 +6088,48 @@ mod tests {
                 .find_tab(&Pane::Functions)
                 .is_some(),
             "Views menu focus must re-dock a closed pane"
+        );
+    }
+
+    #[test]
+    fn floating_ai_button_can_be_dragged() {
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp::default();
+        app.ai_sidebar = false;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let mut run = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        };
+        run(Vec::new());
+        run(Vec::new());
+        let start = egui::pos2(1360.0, 450.0);
+        let end = egui::pos2(1100.0, 600.0);
+        run(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        run(vec![egui::Event::PointerMoved(end)]);
+        run(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        }]);
+        let pos = app.ai_fab_pos.expect("button should be draggable");
+        assert!(
+            (pos.x - 1360.0).abs() > 100.0,
+            "floating button did not move: {pos:?}"
         );
     }
 
