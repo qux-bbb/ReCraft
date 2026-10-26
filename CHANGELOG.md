@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- AI polish no longer silently forces a 65,536-token completion budget: the value from
+  Provider settings is honored, so reasoning models can be tuned down instead of spending
+  hidden tokens. Results are cached in memory per endpoint/model/budget, and repeat polishing
+  of the same function is instant. The AI header now shows elapsed seconds while a provider
+  call is running.
 - Decompiled call sites now show inferred arguments instead of bare `sub_xxx()`:
   callee prologues are scanned once per target (following import `jmp` thunks), argument
   setup writes captured by the call are elided, and calls without a recoverable signature

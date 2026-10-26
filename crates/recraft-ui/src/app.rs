@@ -395,6 +395,7 @@ struct AnalysisJob {
 struct AiJob {
     receiver: mpsc::Receiver<std::result::Result<String, String>>,
     started: Instant,
+    prompt: Option<recraft_ai::PromptRequest>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -710,6 +711,8 @@ pub struct ReCraftApp {
     ai_api_key: String,
     ai_show_key: bool,
     ai_settings: recraft_ai::ProviderSettings,
+    ai_cache: recraft_ai::PromptCache,
+    ai_cache_fingerprint: Option<String>,
     ai_explanation: Option<String>,
     ai_query: String,
     ai_answer: Option<recraft_ai::QueryAnswer>,
@@ -790,6 +793,8 @@ impl Default for ReCraftApp {
             ai_api_key: String::new(),
             ai_show_key: false,
             ai_settings: recraft_ai::ProviderSettings::default(),
+            ai_cache: recraft_ai::PromptCache::new(),
+            ai_cache_fingerprint: None,
             ai_explanation: None,
             ai_query: String::new(),
             ai_answer: None,
@@ -1397,25 +1402,27 @@ impl ReCraftApp {
 
     /// Poll a background polish request (spawned by [`Action::AiPolish`]).
     fn poll_ai_job(&mut self) {
-        let Some(job) = self.ai_job.as_ref() else {
+        let Some(job) = self.ai_job.take() else {
             return;
         };
         match job.receiver.try_recv() {
             Ok(Ok(text)) => {
                 let elapsed = job.started.elapsed().as_millis();
+                if let Some(prompt) = job.prompt.as_ref() {
+                    self.ai_cache.insert(prompt, &text);
+                }
                 self.ai_explanation = Some(text);
                 self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
                 self.set_status(self.ai_status.clone());
-                self.ai_job = None;
             }
             Ok(Err(error)) => {
-                self.ai_job = None;
                 self.ai_status = self.t_args("ui_polish_failed", &[("error", &error.to_string())]);
                 self.set_status(self.ai_status.clone());
             }
-            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                self.ai_job = Some(job);
+            }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.ai_job = None;
                 self.ai_status = self.t("ui_polish_worker_stopped");
             }
         }
@@ -3012,9 +3019,13 @@ impl ReCraftApp {
                     .size(12.0)
                     .color(pal.tab_inactive_text),
             );
-            if self.ai_job.is_some() {
+            if let Some(job) = self.ai_job.as_ref() {
                 ui.spinner();
-                ui.weak(self.t("ai_working"));
+                ui.weak(format!(
+                    "{} {:.1}s",
+                    self.t("ai_working"),
+                    job.started.elapsed().as_secs_f64()
+                ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -4736,12 +4747,15 @@ impl ReCraftApp {
                     self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
                     return;
                 };
-                let settings = {
-                    let mut settings = self.ai_settings.clone();
-                    // deepseek-v4-pro can spend ~64k tokens on hidden reasoning.
-                    settings.max_tokens = settings.max_tokens.max(65536);
-                    settings
-                };
+                let settings = self.ai_settings.clone();
+                let fingerprint = format!(
+                    "{}|{}|{}",
+                    settings.endpoint, settings.model, settings.max_tokens
+                );
+                if self.ai_cache_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                    self.ai_cache = recraft_ai::PromptCache::new();
+                    self.ai_cache_fingerprint = Some(fingerprint);
+                }
                 let Some(session) = self.session.as_mut() else {
                     return;
                 };
@@ -4752,6 +4766,14 @@ impl ReCraftApp {
                         return;
                     }
                 };
+                if let Some(cached) = self.ai_cache.get(&prompt) {
+                    let text = cached.to_owned();
+                    self.ai_explanation = Some(text);
+                    self.ai_status = self.t_args("ui_polish_done", &[("ms", "0")]);
+                    self.set_status(self.ai_status.clone());
+                    return;
+                }
+                let job_prompt = prompt.clone();
                 let (sender, receiver) = mpsc::channel();
                 std::thread::spawn(move || {
                     let mut provider = recraft_ai::provider_from_settings(&settings);
@@ -4763,6 +4785,7 @@ impl ReCraftApp {
                 self.ai_job = Some(AiJob {
                     receiver,
                     started: Instant::now(),
+                    prompt: Some(job_prompt),
                 });
                 self.ai_status = self.t("ui_calling_provider").to_owned();
                 self.set_status(self.ai_status.clone());
@@ -6331,6 +6354,7 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
+                prompt: None,
             }),
             ..ReCraftApp::default()
         };
