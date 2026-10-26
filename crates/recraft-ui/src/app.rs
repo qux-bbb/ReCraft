@@ -3207,23 +3207,29 @@ impl ReCraftApp {
 
     fn ai_sidebar_ui(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if !self.ai_sidebar {
-            // A visible collapsed rail is easier to discover than egui's hover-only
-            // drag handle; clicking it opens the sidebar again.
-            egui::Panel::right("ai_sidebar_rail")
-                .resizable(false)
-                .exact_size(48.0)
-                .show(ui, |ui| {
-                    ui.add_space(6.0);
-                    ui.vertical_centered(|ui| {
-                        if ui
-                            .button(RichText::new("AI").strong())
-                            .on_hover_text(self.t("ui_open_in_sidebar"))
-                            .clicked()
-                        {
-                            *action = Action::ToggleAiSidebar;
-                        }
-                        ui.label(RichText::new("‹").size(17.0));
-                    });
+            // Floating action button instead of a full-width rail: it does not consume
+            // layout space and is visible over the dock.
+            egui::Area::new(egui::Id::new("ai_sidebar_fab"))
+                .anchor(egui::Align2::RIGHT_CENTER, egui::vec2(-14.0, 0.0))
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    let button = egui::Button::new(
+                        RichText::new("AI")
+                            .strong()
+                            .size(14.0)
+                            .color(Color32::WHITE),
+                    )
+                    .min_size(egui::vec2(44.0, 44.0))
+                    .corner_radius(egui::CornerRadius::same(22))
+                    .fill(self.palette().mnemonic)
+                    .stroke(egui::Stroke::new(1.0, self.palette().grid_line));
+                    if ui
+                        .add(button)
+                        .on_hover_text(self.t("ui_open_in_sidebar"))
+                        .clicked()
+                    {
+                        *action = Action::ToggleAiSidebar;
+                    }
                 });
             return;
         }
