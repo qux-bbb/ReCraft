@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collapsing the AI sidebar no longer switches the dock to another tab: re-attaching the
+  general AI view preserves the previously active document (e.g. Decompile). Regression
+  test: `collapsing_ai_sidebar_keeps_the_active_document_tab`.
 - Hex view now follows IDA's dump layout: 16-digit addresses without `0x`, tight
   two-digit bytes (uppercase), no per-byte offset header, and the ASCII tail directly after
   the bytes. Word mode keeps the same compact grid.

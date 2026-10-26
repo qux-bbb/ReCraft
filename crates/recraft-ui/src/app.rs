@@ -2264,7 +2264,19 @@ impl ReCraftApp {
                 let _ = state.set_active_tab(view);
             }
         } else if state.find_tab(&Pane::Ai).is_none() {
+            // Re-attach the general view without stealing focus from the document the
+            // user was reading (closing the sidebar must not switch tabs).
+            let previous = state.find_active_focused().map(|(_, tab)| *tab);
             state.push_to_focused_leaf(Pane::Ai);
+            if let Some(previous) = previous
+                && previous != Pane::Ai
+                && let Some(path) = state.find_tab(&previous)
+            {
+                let node_path = path.node_path();
+                if state.set_active_tab(path).is_ok() {
+                    state.set_focused_node_and_surface(node_path);
+                }
+            }
         }
     }
 
@@ -5969,6 +5981,23 @@ mod tests {
         assert_eq!(field.kind, "i32");
         assert!(parse_struct_field_spec("nope").is_err());
         assert!(parse_struct_field_spec("0:a:b:c").is_err());
+    }
+
+    #[test]
+    fn collapsing_ai_sidebar_keeps_the_active_document_tab() {
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        app.focus_pane(Pane::Pseudo);
+        app.ai_sidebar = false;
+        app.sync_ai_tab_visibility();
+        let state = app.dock.as_mut().expect("dock");
+        let active = state.find_active_focused().map(|(_, tab)| *tab);
+        assert_eq!(
+            active,
+            Some(Pane::Pseudo),
+            "collapsing the sidebar must not switch the document tab"
+        );
+        assert!(state.find_tab(&Pane::Ai).is_some());
     }
 
     #[test]
