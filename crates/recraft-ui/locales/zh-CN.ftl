@@ -232,6 +232,6 @@ ai_evidence = 证据
 ui_ai_sidebar = AI 侧栏
 ui_open_in_tab = 在标签页打开
 ui_open_in_sidebar = 在侧栏打开
-ui_collapse = 收起
+ui_collapse = 收起 AI 侧栏
 ui_tab_short = 标签页
 ui_sidebar_short = 侧栏

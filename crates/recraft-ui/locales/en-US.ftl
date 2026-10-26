@@ -232,6 +232,6 @@ ai_evidence = evidence
 ui_ai_sidebar = AI sidebar
 ui_open_in_tab = Open in tab
 ui_open_in_sidebar = Open in sidebar
-ui_collapse = Collapse
+ui_collapse = Collapse AI sidebar
 ui_tab_short = Tab
 ui_sidebar_short = Sidebar

@@ -2976,7 +2976,7 @@ impl ReCraftApp {
                     *action = Action::OpenAiSettings;
                 }
                 if ui
-                    .button(RichText::new("×").size(15.0))
+                    .button(RichText::new("»").size(17.0).strong())
                     .on_hover_text(self.t("ui_collapse"))
                     .clicked()
                 {
