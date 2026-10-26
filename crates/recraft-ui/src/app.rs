@@ -612,7 +612,6 @@ enum Action {
     Redo,
     ToggleLang,
     ToggleViewMode,
-    SetViewMode(ViewMode),
     GotoDialog,
     EditName,
     EditComment,
@@ -1883,17 +1882,20 @@ impl ReCraftApp {
                 }
                 ui.separator();
                 let graph_active = self.view_mode == ViewMode::Graph;
+                // One target-mode button instead of two labels: it stays discoverable,
+                // shows what clicking will switch to, and removes the duplicate
+                // Text/Graph pair.
+                let switch_label = if graph_active {
+                    text_label.as_str()
+                } else {
+                    graph_label.as_str()
+                };
                 if ui
-                    .selectable_label(!graph_active, text_label.as_str())
+                    .button(switch_label)
+                    .on_hover_text(self.t("palette_toggle_view_mode"))
                     .clicked()
                 {
-                    *action = Action::SetViewMode(ViewMode::Text);
-                }
-                if ui
-                    .selectable_label(graph_active, graph_label.as_str())
-                    .clicked()
-                {
-                    *action = Action::SetViewMode(ViewMode::Graph);
+                    *action = Action::ToggleViewMode;
                 }
                 ui.separator();
                 if let Some(job) = self.analysis.as_ref() {
@@ -4771,11 +4773,6 @@ impl ReCraftApp {
                 self.tab = Tab::Disasm;
                 self.focus_pane(Pane::View);
             }
-            Action::SetViewMode(mode) => {
-                self.view_mode = mode;
-                self.tab = Tab::Disasm;
-                self.focus_pane(Pane::View);
-            }
             Action::GotoDialog => {
                 if self.session.is_some() {
                     self.goto = Some(String::new());
@@ -6289,9 +6286,9 @@ mod tests {
         assert_eq!(app.view_mode, ViewMode::Graph);
         app.apply_action(&ctx, Action::ToggleViewMode);
         assert_eq!(app.view_mode, ViewMode::Text);
-        app.apply_action(&ctx, Action::SetViewMode(ViewMode::Graph));
+        app.apply_action(&ctx, Action::ToggleViewMode);
         assert_eq!(app.view_mode, ViewMode::Graph);
-        app.apply_action(&ctx, Action::SetViewMode(ViewMode::Text));
+        app.apply_action(&ctx, Action::ToggleViewMode);
         assert_eq!(app.view_mode, ViewMode::Text);
     }
 

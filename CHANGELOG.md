@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The toolbar's Text/Graph pair is now a single target-mode toggle: in Graph mode it
+  offers 文本/Text, in Text mode it offers 图形/Graph. The Space shortcut and the existing
+  view behavior are unchanged. This removes the duplicate segmented control while keeping
+  the mode switch discoverable.
+
 ### Fixed
 
 - Collapsing the AI sidebar leaves the active document untouched. The assistant is
