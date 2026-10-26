@@ -7,6 +7,10 @@
 //! startup on an Intel UHD driver during the UI spike (see `docs/adr/ADR-002`), so the
 //! product pins Glow until a renderer fallback is implemented.
 
+// Windows GUI subsystem: launching the desktop app must not open a console window.
+// Keep the console for unit tests so test output remains visible.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 mod app;
 mod i18n;
 

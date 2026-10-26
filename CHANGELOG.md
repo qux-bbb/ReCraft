@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Windows desktop binary is now linked with the GUI subsystem, so launching
+  `recraft-ui.exe` no longer flashes/keeps a black console window. Unit tests keep the
+  console so their output remains visible.
 - Collapsing the AI sidebar leaves the active document untouched. The assistant is
   sidebar-only, so no dock tab is added or focused; regression test:
   `collapsing_ai_sidebar_keeps_the_active_document_tab`.
