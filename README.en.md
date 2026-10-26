@@ -45,7 +45,8 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 
 [`docs/README.md`](docs/README.md) indexes all design/milestone docs; start with
 [`docs/DESIGN.md`](docs/DESIGN.md), then [`docs/FAQ.md`](docs/FAQ.md) and
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+[`docs/ROADMAP.md`](docs/ROADMAP.md). The icon concept and usage rules are documented in
+[`docs/ICON.md`](docs/ICON.md).
 
 ## Goals (v1)
 

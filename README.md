@@ -45,7 +45,8 @@ ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的�
 
 [`docs/README.md`](docs/README.md) 索引了全部设计与里程碑文档；建议从
 [`docs/DESIGN.md`](docs/DESIGN.md) 开始，然后阅读 [`docs/FAQ.md`](docs/FAQ.md) 和
-[`docs/ROADMAP.md`](docs/ROADMAP.md)。
+[`docs/ROADMAP.md`](docs/ROADMAP.md)。图标概念与规范见
+[`docs/ICON.md`](docs/ICON.md)。
 
 ## 目标（v1）
 
