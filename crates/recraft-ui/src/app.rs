@@ -198,7 +198,7 @@ enum Pane {
 }
 
 impl Pane {
-    fn all() -> [Pane; 14] {
+    fn all() -> [Pane; 13] {
         [
             // Default document tabs, in tab order.
             Pane::View,
@@ -208,7 +208,6 @@ impl Pane {
             Pane::Structs,
             Pane::Imports,
             Pane::Exports,
-            Pane::Ai,
             // Hidden by default, reachable from the Views menu.
             Pane::Names,
             Pane::Xrefs,
@@ -295,7 +294,7 @@ impl egui_dock::TabViewer for DockViewer<'_> {
             Pane::Xrefs => self.app.xrefs_list(ui, self.action),
             Pane::Names => self.app.names_list(ui, self.action),
             Pane::Segments => self.app.segments_list(ui, self.action),
-            Pane::Ai => self.app.ai_panel(ui, self.action, AiPanelMode::Tab),
+            Pane::Ai => self.app.ai_panel(ui, self.action),
             Pane::Structs => self.app.structs_panel(ui, self.action),
             Pane::Exports => self.app.exports_list(ui, self.action),
             Pane::GraphOverview => self.app.graph_overview(ui, self.action),
@@ -537,11 +536,6 @@ fn follow_tokens(operands: &str) -> Vec<String> {
 type AiSelection = Option<usize>;
 
 /// Built-in AI endpoint choices exposed by the settings panel.
-enum AiPanelMode {
-    Tab,
-    Sidebar,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AiMode {
     Offline,
@@ -644,7 +638,6 @@ enum Action {
     FocusPane(Pane),
     ToggleAiSidebar,
     OpenAiSettings,
-    DockAi,
     ResetLayout,
     SetTheme(ThemeMode),
     ToggleTheme,
@@ -835,7 +828,7 @@ impl ReCraftApp {
             app.ai_settings.max_tokens = app.ai_settings.max_tokens.max(65536);
         }
         app.restore_layout();
-        app.sync_ai_tab_visibility();
+        app.remove_ai_tab_from_dock();
         if let Some(path) = initial {
             app.open_path(&path);
         } else {
@@ -2171,11 +2164,6 @@ impl ReCraftApp {
             Pane::Imports,
             Pane::Exports,
         ]);
-        if !self.ai_sidebar {
-            // The AI tab is the "general view"; while the sidebar is open the tab is
-            // detached so the same controls are not rendered twice.
-            state.push_to_focused_leaf(Pane::Ai);
-        }
         {
             let surface = state.main_surface_mut();
             // Output window across the bottom (about 18% like the IDA reference).
@@ -2246,37 +2234,15 @@ impl ReCraftApp {
         }
     }
 
-    /// Keep the dock's AI tab in sync with the sidebar: detached while the sidebar is
-    /// open, re-attached when the user switches to the general view.
-    fn sync_ai_tab_visibility(&mut self) {
+    /// The AI assistant is sidebar-only, so remove any stale AI tab loaded from an older
+    /// layout.
+    fn remove_ai_tab_from_dock(&mut self) {
         self.ensure_dock();
         let Some(state) = self.dock.as_mut() else {
             return;
         };
-        if self.ai_sidebar {
-            let ai_was_active = state
-                .find_active_focused()
-                .is_some_and(|(_, tab)| *tab == Pane::Ai);
-            if let Some(path) = state.find_tab(&Pane::Ai) {
-                state.remove_tab(path);
-            }
-            if ai_was_active && let Some(view) = state.find_tab(&Pane::View) {
-                let _ = state.set_active_tab(view);
-            }
-        } else if state.find_tab(&Pane::Ai).is_none() {
-            // Re-attach the general view without stealing focus from the document the
-            // user was reading (closing the sidebar must not switch tabs).
-            let previous = state.find_active_focused().map(|(_, tab)| *tab);
-            state.push_to_focused_leaf(Pane::Ai);
-            if let Some(previous) = previous
-                && previous != Pane::Ai
-                && let Some(path) = state.find_tab(&previous)
-            {
-                let node_path = path.node_path();
-                if state.set_active_tab(path).is_ok() {
-                    state.set_focused_node_and_surface(node_path);
-                }
-            }
+        if let Some(path) = state.find_tab(&Pane::Ai) {
+            state.remove_tab(path);
         }
     }
 
@@ -2958,15 +2924,15 @@ impl ReCraftApp {
         }
     }
 
-    fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action, mode: AiPanelMode) {
+    fn ai_panel(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         // The panel can be shorter than its content (provider settings + result), so keep
         // the whole body scrollable instead of clipping the status/result below the fold.
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| self.ai_panel_inner(ui, action, mode));
+            .show(ui, |ui| self.ai_panel_inner(ui, action));
     }
 
-    fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action, mode: AiPanelMode) {
+    fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         let suggest = self.t("ui_suggest_names");
         let apply_label = self.t("ui_apply_selected");
@@ -2997,32 +2963,12 @@ impl ReCraftApp {
                 {
                     *action = Action::OpenAiSettings;
                 }
-                match mode {
-                    AiPanelMode::Sidebar => {
-                        if ui
-                            .button(RichText::new("×").size(15.0))
-                            .on_hover_text(self.t("ui_collapse"))
-                            .clicked()
-                        {
-                            *action = Action::ToggleAiSidebar;
-                        }
-                        if ui
-                            .button(self.t("ui_tab_short"))
-                            .on_hover_text(self.t("ui_open_in_tab"))
-                            .clicked()
-                        {
-                            *action = Action::DockAi;
-                        }
-                    }
-                    AiPanelMode::Tab => {
-                        if ui
-                            .button(self.t("ui_sidebar_short"))
-                            .on_hover_text(self.t("ui_open_in_sidebar"))
-                            .clicked()
-                        {
-                            *action = Action::ToggleAiSidebar;
-                        }
-                    }
+                if ui
+                    .button(RichText::new("×").size(15.0))
+                    .on_hover_text(self.t("ui_collapse"))
+                    .clicked()
+                {
+                    *action = Action::ToggleAiSidebar;
                 }
             });
         });
@@ -3263,7 +3209,7 @@ impl ReCraftApp {
             .max_size(620.0)
             .show_collapsible(ui, &mut expanded, |ui| {
                 ui.add_space(3.0);
-                self.ai_panel(ui, action, AiPanelMode::Sidebar);
+                self.ai_panel(ui, action);
             });
         self.ai_sidebar = expanded;
         if let Some(response) = response {
@@ -4473,29 +4419,24 @@ impl ReCraftApp {
                 self.focus_pane(Pane::Structs);
             }
             Action::FocusPane(pane) => {
-                // Explicitly focusing the AI tab is the "general view" path; collapse the
-                // sidebar so the same controls are not shown twice.
+                // The AI assistant has no dock tab; focusing it opens the sidebar.
                 if pane == Pane::Ai {
-                    self.ai_sidebar = false;
-                    self.sync_ai_tab_visibility();
+                    self.ai_sidebar = true;
+                    self.remove_ai_tab_from_dock();
+                    self.layout_saved = None;
+                    self.save_layout_now();
+                    return;
                 }
                 self.focus_pane(pane);
             }
             Action::ToggleAiSidebar => {
                 self.ai_sidebar = !self.ai_sidebar;
-                self.sync_ai_tab_visibility();
+                self.remove_ai_tab_from_dock();
                 self.layout_saved = None;
                 self.save_layout_now();
             }
             Action::OpenAiSettings => {
                 self.ai_settings_open = true;
-            }
-            Action::DockAi => {
-                self.ai_sidebar = false;
-                self.sync_ai_tab_visibility();
-                self.focus_pane(Pane::Ai);
-                self.layout_saved = None;
-                self.save_layout_now();
             }
             Action::ResetLayout => {
                 self.dock = None;
@@ -4865,7 +4806,7 @@ impl ReCraftApp {
         let sidebar_before = self.ai_sidebar;
         self.ai_sidebar_ui(root, &mut action);
         if self.ai_sidebar != sidebar_before {
-            self.sync_ai_tab_visibility();
+            self.remove_ai_tab_from_dock();
             self.layout_saved = None;
             self.save_layout_now();
         }
@@ -5989,7 +5930,7 @@ mod tests {
         app.ensure_dock();
         app.focus_pane(Pane::Pseudo);
         app.ai_sidebar = false;
-        app.sync_ai_tab_visibility();
+        app.remove_ai_tab_from_dock();
         let state = app.dock.as_mut().expect("dock");
         let active = state.find_active_focused().map(|(_, tab)| *tab);
         assert_eq!(
@@ -5997,7 +5938,7 @@ mod tests {
             Some(Pane::Pseudo),
             "collapsing the sidebar must not switch the document tab"
         );
-        assert!(state.find_tab(&Pane::Ai).is_some());
+        assert!(state.find_tab(&Pane::Ai).is_none());
     }
 
     #[test]
@@ -6024,7 +5965,7 @@ mod tests {
         }
         assert!(
             state.find_tab(&Pane::Ai).is_none(),
-            "the AI tab is detached while the sidebar is open"
+            "the AI tab is never part of the dock"
         );
         for hidden in [Pane::Names, Pane::Xrefs, Pane::Segments] {
             assert!(
@@ -6032,12 +5973,6 @@ mod tests {
                 "{hidden:?} should be hidden by default"
             );
         }
-        app.ai_sidebar = false;
-        app.sync_ai_tab_visibility();
-        assert!(
-            app.dock.as_ref().unwrap().find_tab(&Pane::Ai).is_some(),
-            "the AI general view is re-attached when the sidebar is closed"
-        );
     }
 
     #[test]
@@ -6096,16 +6031,19 @@ mod tests {
     }
 
     #[test]
-    fn ai_sidebar_toggles_and_docks_as_a_tab() {
+    fn ai_sidebar_toggles_without_creating_a_dock_tab() {
         let ctx = egui::Context::default();
         let mut app = ReCraftApp::default();
         assert!(app.ai_sidebar);
+        app.ensure_dock();
         app.apply_action(&ctx, Action::ToggleAiSidebar);
         assert!(!app.ai_sidebar);
+        assert!(app.dock.as_ref().unwrap().find_tab(&Pane::Ai).is_none());
         app.apply_action(&ctx, Action::ToggleAiSidebar);
         assert!(app.ai_sidebar);
-        app.apply_action(&ctx, Action::DockAi);
-        assert!(!app.ai_sidebar);
+        app.apply_action(&ctx, Action::FocusPane(Pane::Ai));
+        assert!(app.ai_sidebar);
+        assert!(app.dock.as_ref().unwrap().find_tab(&Pane::Ai).is_none());
     }
 
     #[test]

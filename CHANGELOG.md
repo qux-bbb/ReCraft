@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Collapsing the AI sidebar no longer switches the dock to another tab: re-attaching the
-  general AI view preserves the previously active document (e.g. Decompile). Regression
-  test: `collapsing_ai_sidebar_keeps_the_active_document_tab`.
+- Collapsing the AI sidebar leaves the active document untouched. The assistant is
+  sidebar-only, so no dock tab is added or focused; regression test:
+  `collapsing_ai_sidebar_keeps_the_active_document_tab`.
 - Hex view now follows IDA's dump layout: 16-digit addresses without `0x`, tight
   two-digit bytes (uppercase), no per-byte offset header, and the ASCII tail directly after
   the bytes. Word mode keeps the same compact grid.
@@ -50,11 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- AI is now a **right sidebar** by default: drag its inner edge to resize (300–620px),
-  drag below the minimum or double-click the edge to collapse, and drag the collapsed
-  handle back open. The header `×` and Options toggle also collapse it; the header
-  **Tab** button restores the general dock view. Visibility/width persist in `layout.json`.
-  The dock AI tab is detached while the sidebar is open so controls are not shown twice.
+- AI is now a **sidebar-only** assistant: there is no AI dock tab. The right sidebar is
+  shown by default, can be collapsed with `×`, Options, dragging below the minimum or
+  double-clicking its edge, and dragged back open from the collapsed handle. Drag its
+  inner edge to resize (300–620px); visibility/width persist in `layout.json`. `F10` and
+  the AI menu entries open the sidebar. Provider settings live in the header ⚙ popup.
 - Provider settings moved out of the inline panel into a **gear popup** in the AI header
   (also reachable from Options), so the main pane stays focused on actions/results.
 - Redesigned the AI pane as a compact assistant dashboard: a title/status header, rounded
