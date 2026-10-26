@@ -455,6 +455,8 @@ struct SavedLayout {
     ai_sidebar: bool,
     #[serde(default = "default_ai_sidebar_width")]
     ai_sidebar_width: f32,
+    #[serde(default)]
+    ai_fab_pos: Option<[f32; 2]>,
 }
 
 fn layout_store_path() -> Option<PathBuf> {
@@ -715,6 +717,7 @@ pub struct ReCraftApp {
     ai_job: Option<AiJob>,
     ai_sidebar: bool,
     ai_sidebar_width: f32,
+    ai_fab_pos: Option<egui::Pos2>,
     ai_settings_open: bool,
     struct_name: String,
     struct_size: u64,
@@ -794,6 +797,7 @@ impl Default for ReCraftApp {
             ai_job: None,
             ai_sidebar: true,
             ai_sidebar_width: 360.0,
+            ai_fab_pos: None,
             ai_settings_open: false,
             struct_name: String::new(),
             struct_size: 16,
@@ -2283,6 +2287,7 @@ impl ReCraftApp {
             lang: self.lang,
             ai_sidebar: self.ai_sidebar,
             ai_sidebar_width: self.ai_sidebar_width,
+            ai_fab_pos: self.ai_fab_pos.map(|pos| [pos.x, pos.y]),
         };
         let Ok(text) = serde_json::to_string(&saved) else {
             return;
@@ -2308,6 +2313,7 @@ impl ReCraftApp {
             self.lang = saved.lang;
             self.ai_sidebar = saved.ai_sidebar;
             self.ai_sidebar_width = saved.ai_sidebar_width.clamp(300.0, 620.0);
+            self.ai_fab_pos = saved.ai_fab_pos.map(|[x, y]| egui::pos2(x, y));
             self.dock = Some(saved.dock);
         }
     }
@@ -3207,27 +3213,52 @@ impl ReCraftApp {
 
     fn ai_sidebar_ui(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if !self.ai_sidebar {
-            // Floating action button instead of a full-width rail: it does not consume
-            // layout space and is visible over the dock.
+            let screen = ui.ctx().content_rect();
+            let mut pos = self
+                .ai_fab_pos
+                .unwrap_or(egui::pos2(screen.right() - 64.0, screen.center().y - 20.0));
+            pos.x = pos.x.clamp(screen.left() + 8.0, screen.right() - 60.0);
+            pos.y = pos.y.clamp(screen.top() + 8.0, screen.bottom() - 48.0);
+            let shadow = egui::epaint::Shadow {
+                offset: [0, 3],
+                blur: 14,
+                spread: 0,
+                color: Color32::from_black_alpha(55),
+            };
             egui::Area::new(egui::Id::new("ai_sidebar_fab"))
-                .anchor(egui::Align2::RIGHT_CENTER, egui::vec2(-14.0, 0.0))
+                .fixed_pos(pos)
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
-                    let button = egui::Button::new(
-                        RichText::new("AI")
-                            .strong()
-                            .size(14.0)
-                            .color(Color32::WHITE),
-                    )
-                    .min_size(egui::vec2(44.0, 44.0))
-                    .corner_radius(egui::CornerRadius::same(22))
-                    .fill(self.palette().mnemonic)
-                    .stroke(egui::Stroke::new(1.0, self.palette().grid_line));
-                    if ui
-                        .add(button)
+                    let response = egui::Frame::new()
+                        .shadow(shadow)
+                        .corner_radius(egui::CornerRadius::same(20))
+                        .show(ui, |ui| {
+                            let button = egui::Button::new(
+                                RichText::new("AI")
+                                    .strong()
+                                    .size(14.0)
+                                    .color(Color32::WHITE),
+                            )
+                            .min_size(egui::vec2(52.0, 40.0))
+                            .corner_radius(egui::CornerRadius::same(20))
+                            .fill(self.palette().mnemonic)
+                            .stroke(egui::Stroke::new(1.5, Color32::from_white_alpha(90)));
+                            ui.add(button)
+                        })
+                        .inner
                         .on_hover_text(self.t("ui_open_in_sidebar"))
-                        .clicked()
-                    {
+                        .on_hover_cursor(egui::CursorIcon::Grab);
+                    if response.dragged() {
+                        pos += response.drag_delta();
+                        pos.x = pos.x.clamp(screen.left() + 8.0, screen.right() - 60.0);
+                        pos.y = pos.y.clamp(screen.top() + 8.0, screen.bottom() - 48.0);
+                        self.ai_fab_pos = Some(pos);
+                    }
+                    if response.drag_stopped() {
+                        self.layout_saved = None;
+                        self.save_layout_now();
+                    }
+                    if response.clicked() {
                         *action = Action::ToggleAiSidebar;
                     }
                 });
@@ -6113,6 +6144,7 @@ mod tests {
                 lang: Lang::Zh,
                 ai_sidebar: true,
                 ai_sidebar_width: 360.0,
+                ai_fab_pos: Some([100.0, 200.0]),
             },
         )
         .unwrap();
@@ -6123,6 +6155,11 @@ mod tests {
         assert!(
             (loaded.ai_sidebar_width - 360.0).abs() < f32::EPSILON,
             "AI sidebar width must persist"
+        );
+        assert_eq!(
+            loaded.ai_fab_pos,
+            Some([100.0, 200.0]),
+            "floating AI button position must persist"
         );
         assert!(
             (loaded.zoom - 1.2).abs() < f32::EPSILON,
