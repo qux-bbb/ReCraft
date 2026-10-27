@@ -220,6 +220,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     hide_callee_saves(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
+    fold_jumps_over_braces(&mut lines);
     fold_return_labels(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
@@ -882,6 +883,37 @@ impl Structurer {
                         // A join inside the enclosing region's stop set is fine: the arms
                         // stop at it and the region ends there (early-exit chains).
                         if join >= self.blocks.len() || self.emitted[join] {
+                            // The join was consumed by an earlier arm. If the taken arm is
+                            // a short acyclic tail, duplicate it here rather than leaving a
+                            // dangling labelled jump and abandoning the fallthrough path.
+                            let mut arm_lines = Vec::new();
+                            if self.duplicate_leaf(&mut arm_lines, taken, level + 1) {
+                                lines.push(PseudoLine {
+                                    addr: self.blocks[current].entry,
+                                    text: format!("{}if ({condition}) {{", indent(level)),
+                                });
+                                lines.extend(arm_lines);
+                                lines.push(PseudoLine {
+                                    addr: self.blocks[current].entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
+                                current = not_taken;
+                                continue;
+                            }
+                            let mut else_lines = Vec::new();
+                            if self.duplicate_leaf(&mut else_lines, not_taken, level + 1) {
+                                lines.push(PseudoLine {
+                                    addr: self.blocks[current].entry,
+                                    text: format!("{}if (!{condition}) {{", indent(level)),
+                                });
+                                lines.extend(else_lines);
+                                lines.push(PseudoLine {
+                                    addr: self.blocks[current].entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
+                                current = taken;
+                                continue;
+                            }
                             self.emit_raw_flow(lines, current, level);
                             return;
                         }
@@ -1700,6 +1732,27 @@ fn leading_spaces(text: &str) -> usize {
     text.len() - text.trim_start().len()
 }
 
+/// A jump at the end of a region whose target label follows only closing braces is a
+/// fallthrough: both the jump and the normal `}` path reach the same label. Drop it.
+fn fold_jumps_over_braces(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let Some(target) = goto_target(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        let mut next = index + 1;
+        while next < lines.len() && lines[next].text.trim() == "}" {
+            next += 1;
+        }
+        if next < lines.len() && lines[next].text.trim() == format!("loc_{target:x}:") {
+            lines.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
 /// Replace jumps to a label whose body is exactly `return;` with a direct `return;`.
 /// These labels are the common function epilogue after stack restores have already been
 /// hidden; keeping the jump obscures an otherwise structured early exit.
@@ -1717,8 +1770,9 @@ fn fold_return_labels(lines: &mut [PseudoLine]) {
             .iter()
             .map(|line| line.text.trim())
             .take_while(|text| !(text.starts_with("loc_") && text.ends_with(':')))
+            .filter(|text| !text.is_empty() && *text != "}")
             .collect();
-        if body == ["return;"] {
+        if body == ["return;"] || body.is_empty() {
             returns.insert(label.to_owned());
         }
     }

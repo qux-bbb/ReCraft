@@ -61,7 +61,7 @@ goto fallback functions: 0
 结构化率被拉低（旧值 108142 指令 / 84.9%）。CFG 构建现在裁剪不可达块（`int3` 从 8547 →
 33）并把重叠函数区间夹到下一个函数起点，`measure` 只统计 CFG 内实际可达的指令；其后
 又补了 `movups/movdqu/movdqa` 内存形式、`ror/rol`、间接 call / IAT 尾调用、共享尾部链
-复制与 `bt`/SF/`setcc` 标志语义。因此 99.4% / 87.8% 是可复现的真实口径。
+复制与 `bt`/SF/`setcc` 标志语义。因此 99.4% / 89.2% 是可复现的真实口径。
 
 ## 畸形输入回归（DESIGN §11 的离线 fuzz 替代）
 

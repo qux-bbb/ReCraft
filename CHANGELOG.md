@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tail calls instead of leaving a jump to an unemitted label, drops straight-line code
   after an unconditional `return`, and folds jumps to return-only labels. Shared blocks
   with multiple predecessors get a label at their first emission, so no generated `goto`
-  targets a missing label. On the notepad corpus this raises structured functions from
-  432/502 (86.1%) to 441/502 (87.8%) while keeping instruction coverage at 99.4%; add a
-  regression test for the dead-tail cleanup.
+  targets a missing label. When an earlier arm consumed the post-dominator join, short
+  acyclic arms are now duplicated instead of falling back to a raw jump. On the notepad
+  corpus this raises structured functions from 432/502 (86.1%) to 448/502 (89.2%) while
+  keeping instruction coverage at 99.4%; add a regression test for the dead-tail cleanup.
 
 ### Changed
 
