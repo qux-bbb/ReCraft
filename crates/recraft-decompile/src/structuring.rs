@@ -1844,23 +1844,13 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                 addr: line.addr,
                 text: format!("{indent}if ({condition}) {{"),
             });
-            for body in tail {
-                output.push(PseudoLine {
-                    addr: line.addr,
-                    text: format!("{indent}    {body}"),
-                });
-            }
+            append_indented_tail(&mut output, line.addr, &format!("{indent}    "), tail.as_slice());
             output.push(PseudoLine {
                 addr: line.addr,
                 text: format!("{indent}}}"),
             });
         } else {
-            for body in tail {
-                output.push(PseudoLine {
-                    addr: line.addr,
-                    text: format!("{indent}{body}"),
-                });
-            }
+            append_indented_tail(&mut output, line.addr, &indent, tail.as_slice());
         }
     }
     *lines = output;
@@ -1964,12 +1954,7 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
                 addr: line.addr,
                 text: format!("{indent}if ({condition}) {{"),
             });
-            for body in &tail {
-                output.push(PseudoLine {
-                    addr: line.addr,
-                    text: format!("{indent}    {body}"),
-                });
-            }
+            append_indented_tail(&mut output, line.addr, &format!("{indent}    "), tail.as_slice());
             if needs_return {
                 output.push(PseudoLine {
                     addr: line.addr,
@@ -1981,12 +1966,7 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
                 text: format!("{indent}}}"),
             });
         } else {
-            for body in &tail {
-                output.push(PseudoLine {
-                    addr: line.addr,
-                    text: format!("{indent}{body}"),
-                });
-            }
+            append_indented_tail(&mut output, line.addr, &indent, tail.as_slice());
             if needs_return {
                 output.push(PseudoLine {
                     addr: line.addr,
@@ -1996,6 +1976,25 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
         }
     }
     *lines = output;
+}
+
+/// Copy a balanced tail while restoring one indentation level per brace. The source lines
+/// are trimmed, so nested `if`/`else` bodies would otherwise collapse to one column.
+fn append_indented_tail(output: &mut Vec<PseudoLine>, addr: Address, base: &str, tail: &[String]) {
+    let mut depth = 0usize;
+    for body in tail {
+        let text = body.trim();
+        if text.starts_with('}') {
+            depth = depth.saturating_sub(1);
+        }
+        output.push(PseudoLine {
+            addr,
+            text: format!("{base}{}{text}", "    ".repeat(depth)),
+        });
+        if text.ends_with('{') {
+            depth += 1;
+        }
+    }
 }
 
 /// Replace jumps to a label whose body is exactly `return;` with a direct `return;`.
