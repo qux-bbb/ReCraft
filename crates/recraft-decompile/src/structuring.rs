@@ -1774,7 +1774,10 @@ fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
     let mut index = 0;
     while index < lines.len() {
         let text = lines[index].text.trim();
-        if !text.starts_with("goto loc_") {
+        let conditional = text
+            .split_once(") goto loc_")
+            .map(|(condition, _)| condition.strip_prefix("if (").unwrap_or(condition));
+        if !text.starts_with("goto loc_") && conditional.is_none() {
             index += 1;
             continue;
         }
@@ -1837,13 +1840,30 @@ fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
             continue;
         }
         let indent = " ".repeat(goto_indent);
-        let replacement: Vec<PseudoLine> = tail
-            .into_iter()
-            .map(|body| PseudoLine {
+        let mut replacement = Vec::new();
+        if let Some(condition) = conditional {
+            replacement.push(PseudoLine {
                 addr: lines[index].addr,
-                text: format!("{indent}{body}"),
-            })
-            .collect();
+                text: format!("{indent}if ({condition}) {{"),
+            });
+            for body in &tail {
+                replacement.push(PseudoLine {
+                    addr: lines[index].addr,
+                    text: format!("{indent}    {body}"),
+                });
+            }
+            replacement.push(PseudoLine {
+                addr: lines[index].addr,
+                text: format!("{indent}}}"),
+            });
+        } else {
+            for body in &tail {
+                replacement.push(PseudoLine {
+                    addr: lines[index].addr,
+                    text: format!("{indent}{body}"),
+                });
+            }
+        }
         let count = replacement.len();
         lines.splice(index..=index, replacement);
         index += count;
@@ -2232,6 +2252,41 @@ mod tests {
     use super::*;
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
+
+    #[test]
+    fn conditional_sibling_tail_goto_is_folded() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    if (flag) goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "        loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "        value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x22),
+                text: "    }".to_owned(),
+            },
+        ];
+        fold_sibling_tail_gotos(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("if (flag) {"), "{text}");
+        assert!(text.contains("value = 1;"), "{text}");
+    }
 
     #[test]
     fn sibling_tail_goto_is_folded() {
