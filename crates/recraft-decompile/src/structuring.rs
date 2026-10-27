@@ -223,6 +223,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         drop_unreachable_tails(&mut lines);
     }
     fold_jumps_over_braces(&mut lines);
+    fold_sibling_tail_gotos(&mut lines);
     fold_return_labels(&mut lines);
     fold_return_tail_labels(&mut lines);
     fold_last_label_tails(&mut lines);
@@ -1766,6 +1767,89 @@ fn fold_jumps_over_braces(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// Fold an unconditional jump at the end of one sibling arm to the short straight-line
+/// tail of the other arm. Both the jump and the normal `}` fallthrough leave the parent
+/// at the same point, so the tail can be copied and the jump removed.
+fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let text = lines[index].text.trim();
+        if !text.starts_with("goto loc_") {
+            index += 1;
+            continue;
+        }
+        let Some(target) = goto_target(text) else {
+            index += 1;
+            continue;
+        };
+        let goto_indent = leading_spaces(&lines[index].text);
+        let mut after = index + 1;
+        while after < lines.len() && lines[after].text.trim().is_empty() {
+            after += 1;
+        }
+        if after >= lines.len()
+            || leading_spaces(&lines[after].text) >= goto_indent
+            || !lines[after].text.trim().starts_with('}')
+        {
+            index += 1;
+            continue;
+        }
+        let close_indent = leading_spaces(&lines[after].text);
+        let label = format!("loc_{target:x}:");
+        let Some(label_index) = lines.iter().position(|line| line.text.trim() == label) else {
+            index += 1;
+            continue;
+        };
+        let label_indent = leading_spaces(&lines[label_index].text);
+        if label_indent <= goto_indent {
+            index += 1;
+            continue;
+        }
+        let mut tail = Vec::new();
+        let mut cursor = label_index + 1;
+        let mut valid = false;
+        while cursor < lines.len() {
+            let text = lines[cursor].text.trim();
+            if text.is_empty() {
+                cursor += 1;
+                continue;
+            }
+            if leading_spaces(&lines[cursor].text) < label_indent {
+                valid = lines[cursor].text.trim().starts_with('}')
+                    && leading_spaces(&lines[cursor].text) >= close_indent;
+                break;
+            }
+            if text.starts_with('}')
+                || text.starts_with("if (")
+                || text.starts_with("while")
+                || text.starts_with("for ")
+                || text.starts_with("switch")
+                || text.starts_with("goto loc_")
+                || text.starts_with("loc_")
+            {
+                break;
+            }
+            tail.push(text.to_owned());
+            cursor += 1;
+        }
+        if !valid || tail.is_empty() || tail.len() > 8 {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(goto_indent);
+        let replacement: Vec<PseudoLine> = tail
+            .into_iter()
+            .map(|body| PseudoLine {
+                addr: lines[index].addr,
+                text: format!("{indent}{body}"),
+            })
+            .collect();
+        let count = replacement.len();
+        lines.splice(index..=index, replacement);
+        index += count;
+    }
+}
+
 /// Replace jumps to a label whose straight-line tail ends in `return;` with a copy of
 /// that tail. Unlike the last-label pass this works for any label and needs no epilogue:
 /// the return is part of the copied block.
@@ -1844,7 +1928,12 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                 addr: line.addr,
                 text: format!("{indent}if ({condition}) {{"),
             });
-            append_indented_tail(&mut output, line.addr, &format!("{indent}    "), tail.as_slice());
+            append_indented_tail(
+                &mut output,
+                line.addr,
+                &format!("{indent}    "),
+                tail.as_slice(),
+            );
             output.push(PseudoLine {
                 addr: line.addr,
                 text: format!("{indent}}}"),
@@ -1954,7 +2043,12 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
                 addr: line.addr,
                 text: format!("{indent}if ({condition}) {{"),
             });
-            append_indented_tail(&mut output, line.addr, &format!("{indent}    "), tail.as_slice());
+            append_indented_tail(
+                &mut output,
+                line.addr,
+                &format!("{indent}    "),
+                tail.as_slice(),
+            );
             if needs_return {
                 output.push(PseudoLine {
                     addr: line.addr,
@@ -2138,6 +2232,40 @@ mod tests {
     use super::*;
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
+
+    #[test]
+    fn sibling_tail_goto_is_folded() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "        loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "        value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x22),
+                text: "    }".to_owned(),
+            },
+        ];
+        fold_sibling_tail_gotos(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("value = 1;"), "{text}");
+    }
 
     #[test]
     fn return_tail_label_copies_a_balanced_if() {

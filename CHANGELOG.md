@@ -20,11 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ends in `return`/a tail call copy that tail too. The last-label cleanup tail may now be
   a large balanced `if`/assignment region, not only straight-line statements. Dead code
   after `return` also drops orphan labels, ignoring references that only occur inside the
-  dead tail, and exposes the rest of the unreachable tail. Copied tails now restore one
-  indentation level per brace instead of collapsing nested bodies to a single column. On
-  the notepad corpus this raises structured functions from 432/502 (86.1%) to 482/502
-  (96.0%) while keeping instruction coverage at 99.4%; add regression tests for dead-tail,
-  orphan-label, balanced-if and last-tail cleanup.
+  dead tail, and exposes the rest of the unreachable tail. A jump at the end of one
+  sibling arm to the short straight-line tail of its sibling is copied and removed.
+  Copied tails now restore one indentation level per brace instead of collapsing nested
+  bodies to a single column. On the notepad corpus this raises structured functions from
+  432/502 (86.1%) to 484/502 (96.4%) while keeping instruction coverage at 99.4%; add
+  regression tests for dead-tail, orphan-label, sibling-tail, balanced-if and last-tail
+  cleanup.
 
 ### Changed
 
