@@ -16,10 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   targets a missing label. When an earlier arm consumed the post-dominator join, short
   acyclic arms are now duplicated instead of falling back to a raw jump, and jumps to the
   last labelled short tail copy that tail plus the function epilogue. Tail scanning now
-  recognizes `} else {` as a closing brace, so cleanup tails inside an else arm fold too.
-  On the notepad corpus this raises structured functions from 432/502 (86.1%) to 459/502
-  (91.4%) while keeping instruction coverage at 99.4%; add regression tests for the
-  dead-tail and last-tail cleanup.
+  recognizes `} else {` as a closing brace, and jumps to any label whose balanced tail
+  ends in `return`/a tail call copy that tail too. On the notepad corpus this raises
+  structured functions from 432/502 (86.1%) to 460/502 (91.6%) while keeping instruction
+  coverage at 99.4%; add regression tests for dead-tail, balanced-if and last-tail
+  cleanup.
 
 ### Changed
 

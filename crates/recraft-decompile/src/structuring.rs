@@ -222,6 +222,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_unreachable_tails(&mut lines);
     fold_jumps_over_braces(&mut lines);
     fold_return_labels(&mut lines);
+    fold_return_tail_labels(&mut lines);
     fold_last_label_tails(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
@@ -1754,6 +1755,105 @@ fn fold_jumps_over_braces(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// Replace jumps to a label whose straight-line tail ends in `return;` with a copy of
+/// that tail. Unlike the last-label pass this works for any label and needs no epilogue:
+/// the return is part of the copied block.
+fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
+    let mut tails = BTreeMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let text = line.text.trim();
+        let Some(label) = text.strip_suffix(':') else {
+            continue;
+        };
+        if !label.starts_with("loc_") {
+            continue;
+        }
+        let mut tail = Vec::new();
+        let mut depth = 0usize;
+        for line in &lines[index + 1..] {
+            let text = line.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if depth == 0 && text.starts_with('}') {
+                break;
+            }
+            if text.starts_with("while")
+                || text.starts_with("for ")
+                || text.starts_with("switch")
+                || text.starts_with("goto loc_")
+                || text.starts_with("loc_")
+            {
+                return;
+            }
+            if text.starts_with('}') {
+                depth = depth.saturating_sub(1);
+            }
+            depth += text.matches('{').count();
+            depth = depth.saturating_sub(
+                text.matches('}')
+                    .count()
+                    .saturating_sub(usize::from(text.starts_with('}'))),
+            );
+            tail.push(text.to_owned());
+            if depth == 0 && tail.len() > 8 {
+                break;
+            }
+        }
+        if tail.len() <= 16
+            && depth == 0
+            && tail
+                .last()
+                .is_some_and(|line| line.starts_with("return ") || line == "return;")
+        {
+            tails.insert(label.to_owned(), tail);
+        }
+    }
+    if tails.is_empty() {
+        return;
+    }
+    let mut output = Vec::with_capacity(lines.len());
+    for line in lines.drain(..) {
+        let text = line.text.trim();
+        let Some(target) = goto_target(&line.text) else {
+            output.push(line);
+            continue;
+        };
+        let Some(tail) = tails.get(&format!("loc_{target:x}")) else {
+            output.push(line);
+            continue;
+        };
+        let indent = " ".repeat(leading_spaces(&line.text));
+        let conditional = text
+            .split_once(") goto loc_")
+            .map(|(condition, _)| condition.strip_prefix("if (").unwrap_or(condition));
+        if let Some(condition) = conditional {
+            output.push(PseudoLine {
+                addr: line.addr,
+                text: format!("{indent}if ({condition}) {{"),
+            });
+            for body in tail {
+                output.push(PseudoLine {
+                    addr: line.addr,
+                    text: format!("{indent}    {body}"),
+                });
+            }
+            output.push(PseudoLine {
+                addr: line.addr,
+                text: format!("{indent}}}"),
+            });
+        } else {
+            for body in tail {
+                output.push(PseudoLine {
+                    addr: line.addr,
+                    text: format!("{indent}{body}"),
+                });
+            }
+        }
+    }
+    *lines = output;
+}
+
 /// A jump to the last labelled tail can be turned into a copy of that short tail followed
 /// by `return`; there is no later block in the function to continue into.
 fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
@@ -2012,6 +2112,45 @@ mod tests {
     use super::*;
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
+
+    #[test]
+    fn return_tail_label_copies_a_balanced_if() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "    if (flag) {".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x22),
+                text: "        value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x23),
+                text: "    }".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x24),
+                text: "    return;".to_owned(),
+            },
+        ];
+        fold_return_tail_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("if (flag) {"), "{text}");
+        assert!(text.contains("return;"), "{text}");
+    }
 
     #[test]
     fn last_label_tail_replaces_goto() {
