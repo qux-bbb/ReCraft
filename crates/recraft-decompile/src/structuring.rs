@@ -1715,10 +1715,18 @@ fn drop_unreachable_tails(lines: &mut Vec<PseudoLine>) {
         let mut end = index + 1;
         while end < lines.len() {
             let text = lines[end].text.trim();
-            if text.starts_with('}')
-                || leading_spaces(&lines[end].text) < indent
-                || (text.starts_with("loc_") && text.ends_with(':'))
+            let is_label = text.starts_with("loc_") && text.ends_with(':');
+            if is_label
+                && !lines
+                    .iter()
+                    .any(|line| line.text.contains(&format!("goto {text}")))
             {
+                // An orphan label after `return` cannot be reached; drop it and keep
+                // scanning the dead tail behind it.
+                lines.remove(end);
+                continue;
+            }
+            if text.starts_with('}') || leading_spaces(&lines[end].text) < indent || is_label {
                 break;
             }
             end += 1;
@@ -1784,7 +1792,8 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                 || text.starts_with("goto loc_")
                 || text.starts_with("loc_")
             {
-                return;
+                tail.clear();
+                break;
             }
             if text.starts_with('}') {
                 depth = depth.saturating_sub(1);
@@ -1796,11 +1805,11 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                     .saturating_sub(usize::from(text.starts_with('}'))),
             );
             tail.push(text.to_owned());
-            if depth == 0 && tail.len() > 8 {
+            if depth == 0 && tail.len() > 16 {
                 break;
             }
         }
-        if tail.len() <= 16
+        if tail.len() <= 32
             && depth == 0
             && tail
                 .last()
@@ -2150,6 +2159,34 @@ mod tests {
         assert!(!text.contains("goto loc_"), "{text}");
         assert!(text.contains("if (flag) {"), "{text}");
         assert!(text.contains("return;"), "{text}");
+    }
+
+    #[test]
+    fn orphan_label_after_return_is_removed() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    return;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1001),
+                text: "    loc_1001:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1002),
+                text: "    value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1003),
+                text: "    goto loc_1001;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+        ];
+        drop_unreachable_tails(&mut lines);
+        assert_eq!(lines.len(), 2, "{lines:?}");
     }
 
     #[test]

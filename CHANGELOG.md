@@ -17,10 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acyclic arms are now duplicated instead of falling back to a raw jump, and jumps to the
   last labelled short tail copy that tail plus the function epilogue. Tail scanning now
   recognizes `} else {` as a closing brace, and jumps to any label whose balanced tail
-  ends in `return`/a tail call copy that tail too. On the notepad corpus this raises
-  structured functions from 432/502 (86.1%) to 460/502 (91.6%) while keeping instruction
-  coverage at 99.4%; add regression tests for dead-tail, balanced-if and last-tail
-  cleanup.
+  ends in `return`/a tail call copy that tail too. Dead code after `return` now also drops
+  orphan labels, exposing the rest of the unreachable tail. On the notepad corpus this
+  raises structured functions from 432/502 (86.1%) to 465/502 (92.6%) while keeping
+  instruction coverage at 99.4%; add regression tests for dead-tail, orphan-label,
+  balanced-if and last-tail cleanup.
 
 ### Changed
 
