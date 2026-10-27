@@ -2289,6 +2289,40 @@ mod tests {
     }
 
     #[test]
+    fn sibling_tail_accepts_else_boundary() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    if (flag) goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "} else {".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "        loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "        value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x22),
+                text: "    }".to_owned(),
+            },
+        ];
+        fold_sibling_tail_gotos(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("if (flag) {"), "{text}");
+    }
+
+    #[test]
     fn sibling_tail_goto_is_folded() {
         let mut lines = vec![
             PseudoLine {
