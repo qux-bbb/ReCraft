@@ -3397,6 +3397,35 @@ impl ReCraftApp {
         }
     }
 
+    /// Switch the AI provider as one unit: endpoint/model preset, API-key field and
+    /// session key. Keeping the previous provider's key here silently sent that secret to
+    /// the newly selected endpoint.
+    fn switch_ai_mode(&mut self, mode: AiMode) {
+        let previous = self.ai_mode;
+        if previous == mode {
+            return;
+        }
+        self.ai_mode = mode;
+        match mode.preset() {
+            Some(preset) => preset.apply(&mut self.ai_settings),
+            None => {
+                self.ai_settings.kind = recraft_ai::ProviderKind::OpenAiCompatible;
+                if previous.preset().is_some() || self.ai_settings.endpoint.is_empty() {
+                    let defaults = recraft_ai::ProviderSettings::default();
+                    self.ai_settings.endpoint = "https://api.openai.com".to_owned();
+                    self.ai_settings.model = defaults.model;
+                }
+            }
+        }
+        self.ai_api_key.clear();
+        self.ai_settings.api_key = None;
+        self.ai_settings.api_key_env = recraft_ai::ProviderSettings::default().api_key_env;
+        self.ai_settings.enabled = false;
+        self.ai_cache = recraft_ai::PromptCache::new();
+        self.ai_cache_fingerprint = None;
+        self.ai_status = self.t("ui_provider_switched_enter_key").to_owned();
+    }
+
     /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a
     /// session-only API key (persisted settings never contain the key).
     fn ai_settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -3414,18 +3443,7 @@ impl ReCraftApp {
                                     .selectable_label(self.ai_mode == mode, mode.label())
                                     .clicked()
                                 {
-                                    self.ai_mode = mode;
-                                    match mode.preset() {
-                                        Some(preset) => preset.apply(&mut self.ai_settings),
-                                        None => {
-                                            self.ai_settings.kind =
-                                                recraft_ai::ProviderKind::OpenAiCompatible;
-                                            if self.ai_settings.endpoint.is_empty() {
-                                                self.ai_settings.endpoint =
-                                                    "https://api.openai.com".to_owned();
-                                            }
-                                        }
-                                    }
+                                    self.switch_ai_mode(mode);
                                 }
                             }
                         });
@@ -6457,6 +6475,39 @@ mod tests {
         );
         assert_eq!(polish_token_limit("https://api.deepseek.com", 65536), 65536);
         assert_eq!(polish_token_limit("https://opencode.ai", 2048), 2048);
+    }
+
+    #[test]
+    fn switching_provider_clears_the_session_key_and_endpoint() {
+        let mut app = ReCraftApp::default();
+        recraft_ai::ProviderPreset::DeepSeek.apply(&mut app.ai_settings);
+        app.ai_mode = AiMode::DeepSeek;
+        app.ai_settings.api_key = Some("deepseek-secret".to_owned());
+        app.ai_settings.api_key_env = "DEEPSEEK_KEY".to_owned();
+        app.ai_api_key = "deepseek-secret".to_owned();
+        app.ai_settings.enabled = true;
+
+        // Selecting the already-active provider must not wipe a valid key.
+        app.switch_ai_mode(AiMode::DeepSeek);
+        assert_eq!(app.ai_api_key, "deepseek-secret");
+
+        app.switch_ai_mode(AiMode::OpenCodeGo);
+        assert_eq!(app.ai_settings.endpoint, recraft_ai::OPENCODE_GO_ENDPOINT);
+        assert!(app.ai_settings.api_key.is_none());
+        assert!(app.ai_api_key.is_empty());
+        assert_eq!(
+            app.ai_settings.api_key_env,
+            recraft_ai::ProviderSettings::default().api_key_env
+        );
+        assert!(!app.ai_settings.enabled);
+        assert!(app.ai_status.contains("API key"), "{}", app.ai_status);
+
+        app.switch_ai_mode(AiMode::Custom);
+        assert_eq!(app.ai_settings.endpoint, "https://api.openai.com");
+        assert_eq!(
+            app.ai_settings.model,
+            recraft_ai::ProviderSettings::default().model
+        );
     }
 
     #[test]
