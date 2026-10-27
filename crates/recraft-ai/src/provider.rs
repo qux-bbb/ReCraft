@@ -845,6 +845,7 @@ struct OpenAiSseDecoder {
     pending: String,
     raw: String,
     content: String,
+    reasoning_chars: usize,
     error: Option<String>,
     saw_data: bool,
 }
@@ -866,6 +867,14 @@ impl OpenAiSseDecoder {
         }
         if let Some(error) = self.error.take() {
             return Err(Error::internal(format!("openai stream error: {error}")));
+        }
+        if self.content.is_empty() && self.reasoning_chars > 0 {
+            return Err(Error::internal(format!(
+                "openai stream returned only reasoning content ({} chars), no assistant text; \
+                 the model used the completion budget before answering. Try a non-reasoning \
+                 model (e.g. GLM-5.3-Flash) or a larger max_tokens",
+                self.reasoning_chars
+            )));
         }
         if self.saw_data {
             return Ok(self.content);
@@ -899,6 +908,9 @@ impl OpenAiSseDecoder {
         {
             self.content.push_str(content);
             on_chunk(content);
+        }
+        if let Some(reasoning) = value["choices"][0]["delta"]["reasoning_content"].as_str() {
+            self.reasoning_chars += reasoning.chars().count();
         }
     }
 }
@@ -990,6 +1002,20 @@ mod tests {
             .expect("SSE");
         assert_eq!(text, "int main(void)");
         assert_eq!(streamed, text);
+    }
+
+    #[test]
+    fn openai_sse_decoder_reports_reasoning_only_streams() {
+        let mut decoder = OpenAiSseDecoder::default();
+        decoder.push(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\ndata: [DONE]\n",
+            &mut |_| {},
+        );
+        let error = decoder.finish(&mut |_| {}).expect_err("reasoning-only");
+        assert!(
+            error.to_string().contains("only reasoning content"),
+            "{error}"
+        );
     }
 
     #[test]
