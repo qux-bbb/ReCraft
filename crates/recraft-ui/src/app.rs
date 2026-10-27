@@ -653,6 +653,16 @@ enum Action {
     ZoomReset,
 }
 
+/// OpenCode Go's gateway turns a 64k completion allowance into a very long first-token
+/// wait. Polish outputs are normally a few thousand tokens, so cap this gateway only.
+fn polish_token_limit(endpoint: &str, configured: usize) -> usize {
+    if endpoint.contains("opencode.ai") {
+        configured.min(8192)
+    } else {
+        configured
+    }
+}
+
 pub struct ReCraftApp {
     session: Option<Session>,
     project: Option<PathBuf>,
@@ -3502,6 +3512,9 @@ impl ReCraftApp {
                     );
                     ui.weak(self.t("ui_reasoning_models_usually_need_32768_65536"));
                 });
+                if self.ai_mode == AiMode::OpenCodeGo {
+                    ui.weak(self.t("ui_opencode_polish_budget_cap"));
+                }
                 if ui.button(self.t("ui_save_settings")).clicked() {
                     self.ai_settings.api_key = (!self.ai_api_key.trim().is_empty())
                         .then(|| self.ai_api_key.trim().to_owned());
@@ -4771,7 +4784,12 @@ impl ReCraftApp {
                     self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
                     return;
                 };
-                let settings = self.ai_settings.clone();
+                let mut settings = self.ai_settings.clone();
+                // OpenCode Go allocates very long reasoning budgets when asked for 64k
+                // completion tokens; a polish answer is typically < 4k, and the high cap
+                // delays the first token by tens of seconds. Keep an 8k ceiling for this
+                // gateway while leaving direct providers (DeepSeek etc.) untouched.
+                settings.max_tokens = polish_token_limit(&settings.endpoint, settings.max_tokens);
                 let fingerprint = format!(
                     "{}|{}|{}",
                     settings.endpoint, settings.model, settings.max_tokens
@@ -6418,6 +6436,16 @@ mod tests {
         app.poll_ai_job();
         assert_eq!(app.ai_explanation.as_deref(), Some("int main(void)"));
         assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn opencode_polish_budget_is_capped() {
+        assert_eq!(
+            polish_token_limit("https://opencode.ai/inference/go/openai", 65536),
+            8192
+        );
+        assert_eq!(polish_token_limit("https://api.deepseek.com", 65536), 65536);
+        assert_eq!(polish_token_limit("https://opencode.ai", 2048), 2048);
     }
 
     #[test]

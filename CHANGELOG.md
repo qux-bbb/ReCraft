@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stream: true`, the parser handles `delta.content` (including chunks split across TCP
   reads and UTF-8 characters split across reads), and the AI result pane appends text live
   with auto-scroll. Local plain-HTTP transports and providers without SSE fall back to one
-  final chunk. The completion budget honors Provider settings instead of being forced to
-  65,536; repeated polish requests are cached per endpoint/model/budget; and the AI header
-  shows elapsed seconds while a call is running.
+  final chunk. Other providers honor the configured completion budget; OpenCode Go polish
+  caps it at 8k tokens because a 64k allowance there delays the first token by tens of
+  seconds. Repeated polish requests are cached per endpoint/model/budget; the AI header
+  shows elapsed seconds and a first-token waiting status while a call is running.
 - Decompiled call sites now show inferred arguments instead of bare `sub_xxx()`:
   callee prologues are scanned once per target (following import `jmp` thunks), argument
   setup writes captured by the call are elided, and calls without a recoverable signature
