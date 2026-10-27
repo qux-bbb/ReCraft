@@ -392,8 +392,13 @@ struct AnalysisJob {
 }
 
 /// Background LLM request; HTTP calls never run on the UI thread.
+enum AiMessage {
+    Chunk(String),
+    Done(std::result::Result<String, String>),
+}
+
 struct AiJob {
-    receiver: mpsc::Receiver<std::result::Result<String, String>>,
+    receiver: mpsc::Receiver<AiMessage>,
     started: Instant,
     prompt: Option<recraft_ai::PromptRequest>,
 }
@@ -1405,25 +1410,43 @@ impl ReCraftApp {
         let Some(job) = self.ai_job.take() else {
             return;
         };
-        match job.receiver.try_recv() {
-            Ok(Ok(text)) => {
-                let elapsed = job.started.elapsed().as_millis();
-                if let Some(prompt) = job.prompt.as_ref() {
-                    self.ai_cache.insert(prompt, &text);
+        loop {
+            match job.receiver.try_recv() {
+                Ok(AiMessage::Chunk(chunk)) => {
+                    self.ai_explanation
+                        .get_or_insert_with(String::new)
+                        .push_str(&chunk);
+                    self.ai_status = self.t("ui_streaming").to_owned();
                 }
-                self.ai_explanation = Some(text);
-                self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
-                self.set_status(self.ai_status.clone());
-            }
-            Ok(Err(error)) => {
-                self.ai_status = self.t_args("ui_polish_failed", &[("error", &error.to_string())]);
-                self.set_status(self.ai_status.clone());
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.ai_job = Some(job);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.ai_status = self.t("ui_polish_worker_stopped");
+                Ok(AiMessage::Done(Ok(text))) => {
+                    let elapsed = job.started.elapsed().as_millis();
+                    if let Some(prompt) = job.prompt.as_ref() {
+                        self.ai_cache.insert(prompt, &text);
+                    }
+                    self.ai_explanation = Some(text);
+                    self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
+                    self.set_status(self.ai_status.clone());
+                    return;
+                }
+                Ok(AiMessage::Done(Err(error))) => {
+                    self.ai_status = self.t_args("ui_polish_failed", &[("error", &error)]);
+                    self.set_status(self.ai_status.clone());
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    if self.ai_explanation.is_none() && job.started.elapsed().as_secs() >= 3 {
+                        self.ai_status = self.t_args(
+                            "ui_waiting_for_first_token",
+                            &[("seconds", &job.started.elapsed().as_secs().to_string())],
+                        );
+                    }
+                    self.ai_job = Some(job);
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.ai_status = self.t("ui_polish_worker_stopped");
+                    return;
+                }
             }
         }
     }
@@ -3132,6 +3155,7 @@ impl ReCraftApp {
                         .id_salt("ai_explanation")
                         .max_height(240.0)
                         .auto_shrink([false, false])
+                        .stick_to_bottom(self.ai_job.is_some())
                         .show(ui, |ui| {
                             ui.label(RichText::new(text).monospace().size(11.0).color(pal.text));
                         });
@@ -4777,10 +4801,10 @@ impl ReCraftApp {
                 let (sender, receiver) = mpsc::channel();
                 std::thread::spawn(move || {
                     let mut provider = recraft_ai::provider_from_settings(&settings);
-                    let result = provider
-                        .complete(&prompt)
-                        .map_err(|error| error.to_string());
-                    let _ = sender.send(result);
+                    let result = provider.complete_stream(&prompt, &mut |chunk| {
+                        let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
+                    });
+                    let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
                 });
                 self.ai_job = Some(AiJob {
                     receiver,
@@ -6349,7 +6373,9 @@ mod tests {
     #[test]
     fn ai_job_result_updates_status_and_explanation() {
         let (sender, receiver) = mpsc::channel();
-        sender.send(Ok("int main(void) {}".to_owned())).unwrap();
+        sender
+            .send(AiMessage::Done(Ok("int main(void) {}".to_owned())))
+            .unwrap();
         let mut app = ReCraftApp {
             ai_job: Some(AiJob {
                 receiver,
@@ -6365,6 +6391,32 @@ mod tests {
             "{}",
             app.ai_status
         );
+        assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_stream_chunks_update_explanation() {
+        let (sender, receiver) = mpsc::channel();
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+                prompt: None,
+            }),
+            ..ReCraftApp::default()
+        };
+        sender.send(AiMessage::Chunk("int ".to_owned())).unwrap();
+        app.poll_ai_job();
+        assert_eq!(app.ai_explanation.as_deref(), Some("int "));
+        assert!(app.ai_job.is_some());
+        sender
+            .send(AiMessage::Chunk("main(void)".to_owned()))
+            .unwrap();
+        sender
+            .send(AiMessage::Done(Ok("int main(void)".to_owned())))
+            .unwrap();
+        app.poll_ai_job();
+        assert_eq!(app.ai_explanation.as_deref(), Some("int main(void)"));
         assert!(app.ai_job.is_none());
     }
 

@@ -38,6 +38,23 @@ pub struct HttpResponse {
 /// Blocking HTTP transport (injectable for tests).
 pub trait Transport {
     fn send(&mut self, request: &HttpRequest) -> Result<HttpResponse>;
+
+    /// Send a request and forward the response body as it arrives. The default keeps
+    /// non-streaming transports working by delivering the whole body once.
+    fn send_stream(
+        &mut self,
+        request: &HttpRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<HttpResponse> {
+        let response = self.send(request)?;
+        if response.status == 200 {
+            on_chunk(&response.body);
+        }
+        Ok(HttpResponse {
+            status: response.status,
+            body: String::new(),
+        })
+    }
 }
 
 /// Which transport serves an endpoint.
@@ -102,6 +119,77 @@ impl Transport for UreqTransport {
             .read_to_string()
             .map_err(|error| Error::internal(format!("https response body: {error}")))?;
         Ok(HttpResponse { status, body })
+    }
+
+    fn send_stream(
+        &mut self,
+        request: &HttpRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<HttpResponse> {
+        if !matches!(transport_kind(&request.url), TransportKind::Tls) {
+            return Err(Error::unsupported(
+                "UreqTransport only handles https:// endpoints",
+            ));
+        }
+        if request.method != "POST" {
+            return Err(Error::unsupported(
+                "provider transport only supports POST requests",
+            ));
+        }
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut builder = agent.post(request.url.as_str());
+        for (name, value) in &request.headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        let mut response = builder
+            .send(request.body.as_str())
+            .map_err(|error| Error::internal(format!("https request failed: {error}")))?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            let body = response
+                .body_mut()
+                .read_to_string()
+                .map_err(|error| Error::internal(format!("https response body: {error}")))?;
+            return Ok(HttpResponse { status, body });
+        }
+        let mut reader = response.body_mut().as_reader();
+        let mut buffer = [0u8; 4096];
+        let mut pending = Vec::new();
+        loop {
+            let read = reader
+                .read(&mut buffer)
+                .map_err(|error| Error::internal(format!("https response stream: {error}")))?;
+            if read == 0 {
+                break;
+            }
+            pending.extend_from_slice(&buffer[..read]);
+            // A chunk may end in the middle of a multi-byte character; only forward
+            // the valid UTF-8 prefix and keep the incomplete suffix for the next read.
+            match std::str::from_utf8(&pending) {
+                Ok(text) => {
+                    on_chunk(text);
+                    pending.clear();
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    if valid > 0 {
+                        let text = String::from_utf8_lossy(&pending[..valid]).into_owned();
+                        on_chunk(&text);
+                        pending.drain(..valid);
+                    }
+                }
+            }
+        }
+        if !pending.is_empty() {
+            on_chunk(&String::from_utf8_lossy(&pending));
+        }
+        Ok(HttpResponse {
+            status,
+            body: String::new(),
+        })
     }
 }
 

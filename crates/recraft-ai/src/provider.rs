@@ -632,6 +632,18 @@ impl AuditLog {
 pub trait Provider {
     fn name(&self) -> &'static str;
     fn complete(&mut self, request: &PromptRequest) -> Result<String>;
+
+    /// Streaming variant used by the desktop UI. The default preserves providers that
+    /// do not implement SSE by delivering the completed answer as one chunk.
+    fn complete_stream(
+        &mut self,
+        request: &PromptRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<String> {
+        let text = self.complete(request)?;
+        on_chunk(&text);
+        Ok(text)
+    }
 }
 
 /// Local Ollama (`POST /api/chat`, `stream: false`).
@@ -705,6 +717,44 @@ impl OpenAiCompatibleProvider {
             api_key,
         }
     }
+
+    fn stream_request(&self, request: &PromptRequest) -> crate::transport::HttpRequest {
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.settings.endpoint.trim_end_matches('/')
+        );
+        let body = serde_json::json!({
+            "model": self.settings.model,
+            "max_tokens": self.settings.max_tokens,
+            "stream": true,
+            "messages": [
+                {"role": "system", "content": request.system},
+                {"role": "user", "content": request.user},
+            ],
+        })
+        .to_string();
+        let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
+        headers.push((
+            "User-Agent".to_owned(),
+            format!("recraft/{}", env!("CARGO_PKG_VERSION")),
+        ));
+        // Some OpenAI-compatible gateways buffer until the request advertises SSE.
+        headers.push(("Accept".to_owned(), "text/event-stream".to_owned()));
+        headers.push(("Cache-Control".to_owned(), "no-cache".to_owned()));
+        headers.push(("Accept-Encoding".to_owned(), "identity".to_owned()));
+        if self.settings.endpoint.contains("opencode.ai") {
+            headers.push(("x-opencode-session".to_owned(), opencode_session_id()));
+        }
+        if let Some(key) = &self.api_key {
+            headers.push(("Authorization".to_owned(), format!("Bearer {key}")));
+        }
+        crate::transport::HttpRequest {
+            method: "POST",
+            url,
+            headers,
+            body,
+        }
+    }
 }
 
 impl Provider for OpenAiCompatibleProvider {
@@ -760,6 +810,96 @@ impl Provider for OpenAiCompatibleProvider {
             )));
         }
         Ok(strip_code_fences(&text))
+    }
+
+    fn complete_stream(
+        &mut self,
+        request: &PromptRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<String> {
+        let http = self.stream_request(request);
+        let mut decoder = OpenAiSseDecoder::default();
+        let response = self
+            .transport
+            .send_stream(&http, &mut |raw| decoder.push(raw, on_chunk))?;
+        if response.status != 200 {
+            return Err(Error::internal(format!(
+                "openai HTTP {}: {}",
+                response.status,
+                response.body.chars().take(800).collect::<String>()
+            )));
+        }
+        let text = decoder.finish(on_chunk)?;
+        if text.trim().is_empty() {
+            return Err(Error::internal(
+                "openai stream returned no assistant content (reasoning-only or empty stream)",
+            ));
+        }
+        Ok(strip_code_fences(&text))
+    }
+}
+
+/// Incremental parser for the OpenAI `text/event-stream` wire format.
+#[derive(Debug, Default)]
+struct OpenAiSseDecoder {
+    pending: String,
+    raw: String,
+    content: String,
+    error: Option<String>,
+    saw_data: bool,
+}
+
+impl OpenAiSseDecoder {
+    fn push(&mut self, raw: &str, on_chunk: &mut dyn FnMut(&str)) {
+        self.raw.push_str(raw);
+        self.pending.push_str(raw);
+        while let Some(position) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=position).collect();
+            self.line(line.trim_end_matches(['\r', '\n']), on_chunk);
+        }
+    }
+
+    fn finish(mut self, on_chunk: &mut dyn FnMut(&str)) -> Result<String> {
+        if !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            self.line(line.trim_end_matches(['\r', '\n']), on_chunk);
+        }
+        if let Some(error) = self.error.take() {
+            return Err(Error::internal(format!("openai stream error: {error}")));
+        }
+        if self.saw_data {
+            return Ok(self.content);
+        }
+        // Some compatible gateways ignore `stream: true` and return one JSON body.
+        let text = crate::transport::parse_openai_response(&self.raw)?;
+        if !text.is_empty() {
+            on_chunk(&text);
+        }
+        Ok(text)
+    }
+
+    fn line(&mut self, line: &str, on_chunk: &mut dyn FnMut(&str)) {
+        let Some(data) = line.strip_prefix("data:") else {
+            return;
+        };
+        self.saw_data = true;
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            return;
+        };
+        if let Some(error) = value.get("error") {
+            self.error = Some(error.to_string());
+            return;
+        }
+        if let Some(content) = value["choices"][0]["delta"]["content"].as_str()
+            && !content.is_empty()
+        {
+            self.content.push_str(content);
+            on_chunk(content);
+        }
     }
 }
 
@@ -832,6 +972,87 @@ impl Provider for HeuristicProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_sse_decoder_handles_split_chunks() {
+        let mut decoder = OpenAiSseDecoder::default();
+        let mut streamed = String::new();
+        decoder.push(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"int \"}}]}\n\ndata: {\"cho",
+            &mut |chunk| streamed.push_str(chunk),
+        );
+        decoder.push(
+            "ices\":[{\"delta\":{\"content\":\"main(void)\"}}]}\n\ndata: [DONE]\n",
+            &mut |chunk| streamed.push_str(chunk),
+        );
+        let text = decoder
+            .finish(&mut |chunk| streamed.push_str(chunk))
+            .expect("SSE");
+        assert_eq!(text, "int main(void)");
+        assert_eq!(streamed, text);
+    }
+
+    #[test]
+    fn openai_sse_decoder_accepts_non_stream_json_fallback() {
+        let mut decoder = OpenAiSseDecoder::default();
+        let mut streamed = String::new();
+        decoder.push(
+            "{\"choices\":[{\"message\":{\"content\":\"fallback\"}}]}",
+            &mut |chunk| streamed.push_str(chunk),
+        );
+        let text = decoder
+            .finish(&mut |chunk| streamed.push_str(chunk))
+            .expect("fallback");
+        assert_eq!(text, "fallback");
+        assert_eq!(streamed, text);
+    }
+
+    #[test]
+    fn openai_provider_streams_sse_chunks() {
+        struct SseTransport;
+        impl crate::transport::Transport for SseTransport {
+            fn send(
+                &mut self,
+                _request: &crate::transport::HttpRequest,
+            ) -> Result<crate::transport::HttpResponse> {
+                panic!("streaming path must use send_stream")
+            }
+            fn send_stream(
+                &mut self,
+                request: &crate::transport::HttpRequest,
+                on_chunk: &mut dyn FnMut(&str),
+            ) -> Result<crate::transport::HttpResponse> {
+                assert!(request.body.contains("\"stream\":true"), "{}", request.body);
+                on_chunk("data: {\"choices\":[{\"delta\":{\"content\":\"int \"}}]}\n\n");
+                on_chunk("data: {\"choices\":[{\"delta\":{\"content\":\"main\"}}]}\n\n");
+                on_chunk("data: [DONE]\n\n");
+                Ok(crate::transport::HttpResponse {
+                    status: 200,
+                    body: String::new(),
+                })
+            }
+        }
+
+        let settings = ProviderSettings {
+            kind: ProviderKind::OpenAiCompatible,
+            endpoint: "https://example.invalid".to_owned(),
+            model: "test".to_owned(),
+            max_tokens: 128,
+            ..ProviderSettings::default()
+        };
+        let mut provider = OpenAiCompatibleProvider::new(settings, Box::new(SseTransport), None);
+        let request = PromptRequest {
+            system: "system".to_owned(),
+            user: "user".to_owned(),
+            estimated_tokens: 2,
+        };
+        let mut streamed = String::new();
+        let text = provider
+            .complete_stream(&request, &mut |chunk| streamed.push_str(chunk))
+            .expect("stream");
+        assert_eq!(text, "int main");
+        assert_eq!(streamed, text);
+    }
 
     #[test]
     fn default_settings_are_offline() {
