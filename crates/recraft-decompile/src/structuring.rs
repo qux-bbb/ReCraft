@@ -219,7 +219,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     structurer.emit_all(&mut lines);
     hide_callee_saves(&mut lines);
     tidy_labels(&mut lines);
-    drop_unreachable_tails(&mut lines);
+    for _ in 0..4 {
+        drop_unreachable_tails(&mut lines);
+    }
     fold_jumps_over_braces(&mut lines);
     fold_return_labels(&mut lines);
     fold_return_tail_labels(&mut lines);
@@ -1717,12 +1719,13 @@ fn drop_unreachable_tails(lines: &mut Vec<PseudoLine>) {
             let text = lines[end].text.trim();
             let is_label = text.starts_with("loc_") && text.ends_with(':');
             if is_label
-                && !lines
+                && !lines[..index]
                     .iter()
                     .any(|line| line.text.contains(&format!("goto {text}")))
             {
                 // An orphan label after `return` cannot be reached; drop it and keep
-                // scanning the dead tail behind it.
+                // scanning the dead tail behind it. References from inside the dead tail
+                // do not make the label reachable.
                 lines.remove(end);
                 continue;
             }
@@ -1875,13 +1878,16 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
         return;
     };
     let mut tail = Vec::new();
+    let mut depth = 0usize;
     for line in &lines[label_index + 1..] {
         let text = line.text.trim();
-        if text.starts_with('}') || text.is_empty() {
+        if text.is_empty() {
+            continue;
+        }
+        if depth == 0 && text.starts_with('}') {
             break;
         }
-        if text.starts_with("if (")
-            || text.starts_with("while")
+        if text.starts_with("while")
             || text.starts_with("for ")
             || text.starts_with("switch")
             || text.starts_with("goto loc_")
@@ -1889,9 +1895,21 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
         {
             return;
         }
+        if text.starts_with('}') {
+            depth = depth.saturating_sub(1);
+        }
+        depth += text.matches('{').count();
+        depth = depth.saturating_sub(
+            text.matches('}')
+                .count()
+                .saturating_sub(usize::from(text.starts_with('}'))),
+        );
         tail.push(text.to_owned());
+        if depth == 0 && tail.len() > 16 {
+            break;
+        }
     }
-    if tail.len() > 8 {
+    if depth != 0 || tail.len() > 16 {
         return;
     }
     // The target exits every enclosing branch and runs the function epilogue. Copy that
@@ -1920,7 +1938,7 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
             .iter()
             .map(|line| line.text.trim().to_owned())
             .collect();
-        if epilogue.len() > 16 {
+        if epilogue.len() > 32 {
             return;
         }
         tail.extend(epilogue);
