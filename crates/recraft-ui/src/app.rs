@@ -546,7 +546,6 @@ type AiSelection = Option<usize>;
 /// Built-in AI endpoint choices exposed by the settings panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AiMode {
-    Offline,
     DeepSeek,
     OpenCodeGo,
     Custom,
@@ -554,9 +553,6 @@ enum AiMode {
 
 impl AiMode {
     fn from_settings(settings: &recraft_ai::ProviderSettings) -> Self {
-        if settings.kind == recraft_ai::ProviderKind::Heuristic {
-            return Self::Offline;
-        }
         if settings.endpoint.contains("api.deepseek.com") {
             Self::DeepSeek
         } else if settings.endpoint.contains("opencode.ai") {
@@ -570,13 +566,12 @@ impl AiMode {
         match self {
             Self::DeepSeek => Some(recraft_ai::ProviderPreset::DeepSeek),
             Self::OpenCodeGo => Some(recraft_ai::ProviderPreset::OpenCodeGo),
-            Self::Offline | Self::Custom => None,
+            Self::Custom => None,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            Self::Offline => "Offline / heuristic",
             Self::DeepSeek => "DeepSeek",
             Self::OpenCodeGo => "OpenCode Go",
             Self::Custom => "Custom OpenAI-compatible",
@@ -804,7 +799,7 @@ impl Default for ReCraftApp {
             ai_proposals: Vec::new(),
             ai_selected: None,
             ai_status: String::new(),
-            ai_mode: AiMode::Offline,
+            ai_mode: AiMode::Custom,
             ai_api_key: String::new(),
             ai_show_key: false,
             ai_settings: recraft_ai::ProviderSettings::default(),
@@ -3391,24 +3386,30 @@ impl ReCraftApp {
         self.ai_settings_open = open;
     }
 
+    /// Return whether an LLM provider is configured, updating the AI status if not.
+    fn require_ai_provider(&mut self) -> bool {
+        self.ai_settings.refresh_enabled();
+        if self.ai_settings.enabled {
+            true
+        } else {
+            self.ai_status = self.t("ui_configure_provider_first").to_owned();
+            false
+        }
+    }
+
     /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a
     /// session-only API key (persisted settings never contain the key).
     fn ai_settings_ui(&mut self, ui: &mut egui::Ui) {
         let title = self.t("ui_provider_settings");
         egui::CollapsingHeader::new(title)
-            .default_open(self.ai_mode != AiMode::Offline)
+            .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(self.t("ui_mode"));
                     egui::ComboBox::from_id_salt("ai_mode")
                         .selected_text(self.ai_mode.label())
                         .show_ui(ui, |ui| {
-                            for mode in [
-                                AiMode::Offline,
-                                AiMode::DeepSeek,
-                                AiMode::OpenCodeGo,
-                                AiMode::Custom,
-                            ] {
+                            for mode in [AiMode::DeepSeek, AiMode::OpenCodeGo, AiMode::Custom] {
                                 if ui
                                     .selectable_label(self.ai_mode == mode, mode.label())
                                     .clicked()
@@ -3416,10 +3417,6 @@ impl ReCraftApp {
                                     self.ai_mode = mode;
                                     match mode.preset() {
                                         Some(preset) => preset.apply(&mut self.ai_settings),
-                                        None if mode == AiMode::Offline => {
-                                            self.ai_settings.kind =
-                                                recraft_ai::ProviderKind::Heuristic;
-                                        }
                                         None => {
                                             self.ai_settings.kind =
                                                 recraft_ai::ProviderKind::OpenAiCompatible;
@@ -3474,35 +3471,36 @@ impl ReCraftApp {
                         );
                     });
                 } else {
-                    ui.weak(
-                        self.t("ui_offline_explain_suggest_use_local_heuristics_polish_needs_a_m"),
-                    );
-                }
-                if self.ai_mode != AiMode::Offline {
                     ui.horizontal(|ui| {
-                        ui.label(self.t("ui_api_key"));
+                        ui.label(self.t("ui_endpoint"));
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.ai_api_key)
-                                .password(!self.ai_show_key)
+                            egui::TextEdit::singleline(&mut self.ai_settings.endpoint)
                                 .desired_width(320.0)
-                                .hint_text("sk-…"),
+                                .hint_text("https://api.example.com/v1"),
                         );
-                        let reveal = if self.ai_show_key {
-                            self.t("ui_hide")
-                        } else {
-                            self.t("ui_show")
-                        };
-                        if ui.button(reveal).clicked() {
-                            self.ai_show_key = !self.ai_show_key;
-                        }
-                        if ui.button(self.t("ui_copy")).clicked() {
-                            ui.ctx().copy_text(self.ai_api_key.clone());
-                        }
                     });
-                    ui.weak(
-                        self.t("ui_the_key_is_encrypted_for_this_user_dpapi_and_reused_on_startu"),
-                    );
                 }
+                ui.horizontal(|ui| {
+                    ui.label(self.t("ui_api_key"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ai_api_key)
+                            .password(!self.ai_show_key)
+                            .desired_width(320.0)
+                            .hint_text("sk-…"),
+                    );
+                    let reveal = if self.ai_show_key {
+                        self.t("ui_hide")
+                    } else {
+                        self.t("ui_show")
+                    };
+                    if ui.button(reveal).clicked() {
+                        self.ai_show_key = !self.ai_show_key;
+                    }
+                    if ui.button(self.t("ui_copy")).clicked() {
+                        ui.ctx().copy_text(self.ai_api_key.clone());
+                    }
+                });
+                ui.weak(self.t("ui_the_key_is_encrypted_for_this_user_dpapi_and_reused_on_startu"));
                 ui.horizontal(|ui| {
                     ui.label(self.t("ui_max_tokens"));
                     ui.add(
@@ -3544,7 +3542,7 @@ impl ReCraftApp {
                     if self.ai_settings.enabled {
                         self.t("ui_enabled")
                     } else {
-                        self.t("ui_offline")
+                        self.t("ui_not_configured")
                     }
                 ));
             });
@@ -4697,6 +4695,9 @@ impl ReCraftApp {
                 }
             }
             Action::AiSuggest => {
+                if !self.require_ai_provider() {
+                    return;
+                }
                 let result = self
                     .session
                     .as_mut()
@@ -4729,6 +4730,9 @@ impl ReCraftApp {
                 self.ai_answer = None;
             }
             Action::AiQuery => {
+                if !self.require_ai_provider() {
+                    return;
+                }
                 let text = self.ai_query.trim().to_owned();
                 if text.is_empty() {
                     self.ai_status = self.t("ui_type_a_question_first").to_owned();
@@ -4755,6 +4759,9 @@ impl ReCraftApp {
                 }
             }
             Action::AiExplain => {
+                if !self.require_ai_provider() {
+                    return;
+                }
                 let Some((start, _)) = self.current_function() else {
                     self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
                     return;
@@ -5787,7 +5794,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_explain_works_offline_and_polish_asks_for_provider() {
+    fn ai_actions_require_a_provider() {
         let Some(bytes) = sample_pe() else {
             return;
         };
@@ -5810,17 +5817,18 @@ mod tests {
         let ctx = egui::Context::default();
         app.apply_action(&ctx, Action::AiExplain);
         assert!(
-            app.ai_explanation
-                .as_ref()
-                .is_some_and(|text| text.contains("insn")),
-            "offline explanation: {:?} / status: {}",
+            app.ai_explanation.is_none()
+                && (app.ai_status.to_lowercase().contains("provider")
+                    || app.ai_status.to_lowercase().contains("configure")),
+            "explain should ask for a provider: {:?} / {}",
             app.ai_explanation,
             app.ai_status
         );
         app.apply_action(&ctx, Action::AiPolish);
         assert!(
             app.ai_status.to_lowercase().contains("provider")
-                || app.ai_status.to_lowercase().contains("enable"),
+                || app.ai_status.to_lowercase().contains("enable")
+                || app.ai_status.to_lowercase().contains("configure"),
             "polish should ask for a provider: {}",
             app.ai_status
         );
@@ -5868,7 +5876,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_query_ui_answers_and_links_addresses() {
+    fn query_ui_answers_and_links_addresses() {
         assert_eq!(
             parse_query_addr("0x140001000").map(|addr| addr.get()),
             Some(0x140001000)
@@ -5892,6 +5900,9 @@ mod tests {
             ..ReCraftApp::default()
         };
         app.after_open();
+        app.ai_settings.endpoint = "https://example.test".to_owned();
+        app.ai_settings.api_key = Some("test-key".to_owned());
+        app.ai_settings.refresh_enabled();
         app.ai_query = "urls".to_owned();
         let ctx = egui::Context::default();
         app.apply_action(&ctx, Action::AiQuery);
@@ -6459,10 +6470,6 @@ mod tests {
         assert_eq!(settings.endpoint, recraft_ai::OPENCODE_GO_ENDPOINT);
         assert!(settings.model.starts_with("deepseek-v4"));
 
-        settings.kind = recraft_ai::ProviderKind::Heuristic;
-        assert_eq!(AiMode::from_settings(&settings), AiMode::Offline);
-
-        settings.kind = recraft_ai::ProviderKind::OpenAiCompatible;
         settings.endpoint = "https://example.test".to_owned();
         assert_eq!(AiMode::from_settings(&settings), AiMode::Custom);
     }

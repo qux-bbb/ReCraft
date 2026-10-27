@@ -6,7 +6,7 @@
 //! Nothing here performs network I/O: this milestone makes the *contract* explicit and
 //! testable so an HTTP transport can be added without touching the call sites.
 //!
-//! - [`ProviderSettings`] is disabled by default (heuristic/offline). Enabling an HTTP
+//! - [`ProviderSettings`] is disabled until an endpoint, model and API key are configured.
 //!   provider requires `RECRAFT_AI_PROVIDER` **and** an API key in the configured env
 //!   var; otherwise the settings report `enabled = false`.
 //! - [`build_explain_prompt`] / [`build_rename_prompt`] assemble minimal context
@@ -24,18 +24,15 @@ use recraft_core::Session;
 /// Which provider backend a session is configured to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
-    /// Deterministic heuristics only; never sends data anywhere.
-    Heuristic,
-    /// OpenAI-compatible HTTP endpoint (transport not implemented yet).
+    /// OpenAI-compatible HTTP endpoint.
     OpenAiCompatible,
-    /// Local Ollama HTTP endpoint (transport not implemented yet).
+    /// Local Ollama HTTP endpoint.
     Ollama,
 }
 
 impl ProviderKind {
     pub const fn as_str(self) -> &'static str {
         match self {
-            ProviderKind::Heuristic => "heuristic",
             ProviderKind::OpenAiCompatible => "openai",
             ProviderKind::Ollama => "ollama",
         }
@@ -43,7 +40,6 @@ impl ProviderKind {
 
     pub fn parse(text: &str) -> Option<Self> {
         match text.to_ascii_lowercase().as_str() {
-            "heuristic" | "off" | "none" => Some(ProviderKind::Heuristic),
             "openai" | "openai-compatible" => Some(ProviderKind::OpenAiCompatible),
             "ollama" => Some(ProviderKind::Ollama),
             _ => None,
@@ -114,7 +110,7 @@ impl ProviderPreset {
     }
 }
 
-/// Provider configuration. Defaults are offline: heuristic, disabled, empty endpoint.
+/// Provider configuration. A provider must be configured before AI features can run.
 #[derive(Clone)]
 pub struct ProviderSettings {
     pub kind: ProviderKind,
@@ -125,7 +121,7 @@ pub struct ProviderSettings {
     /// API key entered in the UI. Persisted sealed as `api_key_sealed` (DPAPI on Windows).
     pub api_key: Option<String>,
     pub max_tokens: usize,
-    /// True only when a non-heuristic provider has an endpoint and a key is available.
+    /// True only when a provider has an endpoint and a key is available.
     pub enabled: bool,
 }
 
@@ -146,7 +142,7 @@ impl std::fmt::Debug for ProviderSettings {
 impl Default for ProviderSettings {
     fn default() -> Self {
         ProviderSettings {
-            kind: ProviderKind::Heuristic,
+            kind: ProviderKind::OpenAiCompatible,
             endpoint: String::new(),
             model: "gpt-4o-mini".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
@@ -180,13 +176,12 @@ impl ProviderSettings {
         {
             settings.max_tokens = max_tokens;
         }
-        settings.enabled = settings.kind != ProviderKind::Heuristic
-            && !settings.endpoint.is_empty()
+        settings.enabled = !settings.endpoint.is_empty()
             && lookup(&settings.api_key_env).is_some_and(|key| !key.is_empty());
         settings
     }
 
-    /// Read the real process environment (defaults stay offline unless explicitly set).
+    /// Read the real process environment (disabled until a provider is configured).
     pub fn from_env() -> Self {
         ProviderSettings::from_lookup(|name| std::env::var(name).ok())
     }
@@ -276,9 +271,7 @@ impl ProviderSettings {
 
     /// Recompute `enabled` from the current environment after the user edits settings.
     pub fn refresh_enabled(&mut self) {
-        self.enabled = self.kind != ProviderKind::Heuristic
-            && !self.endpoint.is_empty()
-            && self.api_key_present();
+        self.enabled = !self.endpoint.is_empty() && self.api_key_present();
     }
 
     /// Whether a session key or the configured API-key environment variable is present.
@@ -949,10 +942,10 @@ fn opencode_session_id() -> String {
         .clone()
 }
 
-/// Build the provider selected by `settings`; disabled settings stay offline.
+/// Build the provider selected by `settings`; unconfigured AI returns a clear error.
 pub fn provider_from_settings(settings: &ProviderSettings) -> Box<dyn Provider> {
-    if !settings.enabled || settings.kind == ProviderKind::Heuristic {
-        return Box::new(HeuristicProvider);
+    if !settings.enabled {
+        return Box::new(UnavailableProvider);
     }
     match settings.kind {
         ProviderKind::Ollama => Box::new(OllamaProvider::new(
@@ -967,22 +960,21 @@ pub fn provider_from_settings(settings: &ProviderSettings) -> Box<dyn Provider> 
                 api_key,
             ))
         }
-        ProviderKind::Heuristic => Box::new(HeuristicProvider),
     }
 }
 
-/// Default provider: no network. It refuses to pretend to be a model.
+/// Placeholder provider when AI is not configured; it never pretends to be a model.
 #[derive(Debug, Default)]
-pub struct HeuristicProvider;
+pub struct UnavailableProvider;
 
-impl Provider for HeuristicProvider {
+impl Provider for UnavailableProvider {
     fn name(&self) -> &'static str {
-        "heuristic"
+        "unconfigured"
     }
 
     fn complete(&mut self, _request: &PromptRequest) -> Result<String> {
         Err(Error::unsupported(
-            "no LLM provider configured; set RECRAFT_AI_PROVIDER/RECRAFT_AI_ENDPOINT and the API key env var",
+            "no LLM provider configured; open Provider settings and set an endpoint/model/API key",
         ))
     }
 }
@@ -1115,9 +1107,9 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_are_offline() {
+    fn default_settings_are_unconfigured() {
         let settings = ProviderSettings::default();
-        assert_eq!(settings.kind, ProviderKind::Heuristic);
+        assert_eq!(settings.kind, ProviderKind::OpenAiCompatible);
         assert!(!settings.enabled);
         assert!(settings.describe().contains("state=disabled"));
     }
@@ -1202,7 +1194,7 @@ mod tests {
 
         let mut audit = AuditLog::default();
         audit.record(AuditEntry {
-            provider: "heuristic",
+            provider: "test",
             function: Some(Address::new(0x1000)),
             prompt_tokens: request.estimated_tokens,
             response_tokens: 2,
@@ -1213,9 +1205,9 @@ mod tests {
     }
 
     #[test]
-    fn heuristic_provider_never_pretends_to_be_a_model() {
+    fn unavailable_provider_reports_missing_configuration() {
         let request = PromptRequest::new(TokenBudget::new(64), "system", "user");
-        let error = HeuristicProvider.complete(&request).unwrap_err();
+        let error = UnavailableProvider.complete(&request).unwrap_err();
         assert!(error.to_string().contains("no LLM provider configured"));
     }
 
@@ -1379,8 +1371,8 @@ mod tests {
     }
 
     #[test]
-    fn disabled_settings_select_the_heuristic_provider() {
+    fn disabled_settings_select_the_unavailable_provider() {
         let provider = provider_from_settings(&ProviderSettings::default());
-        assert_eq!(provider.name(), "heuristic");
+        assert_eq!(provider.name(), "unconfigured");
     }
 }

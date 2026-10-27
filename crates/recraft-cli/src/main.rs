@@ -1270,7 +1270,19 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
     }
 }
 
+fn require_ai_provider(operation: &str) -> Result<recraft_ai::ProviderSettings> {
+    let settings = recraft_ai::ProviderSettings::from_env();
+    if !settings.enabled {
+        return Err(recraft_common::Error::unsupported(format!(
+            "{operation} needs an LLM provider; set RECRAFT_AI_PROVIDER, \
+             RECRAFT_AI_ENDPOINT and the API key env var (see `recraft ai provider`)"
+        )));
+    }
+    Ok(settings)
+}
+
 fn cmd_ai_query(project: &Path, text: &str, as_json: bool) -> Result<()> {
+    require_ai_provider("ai query")?;
     let mut session = Session::open(project)?;
     let answer = recraft_ai::answer_query(&mut session, text)?;
     if as_json {
@@ -1328,7 +1340,7 @@ fn cmd_ai_polish(project: &Path, addr: Option<&str>, as_json: bool, no_cache: bo
     let mut settings = recraft_ai::ProviderSettings::from_env();
     // Reasoning models spend most of this budget on hidden reasoning before the answer.
     settings.max_tokens = settings.max_tokens.max(65536);
-    if !settings.enabled || settings.kind == recraft_ai::ProviderKind::Heuristic {
+    if !settings.enabled {
         return Err(recraft_common::Error::unsupported(
             "pseudo-code polish needs an LLM provider; set RECRAFT_AI_PROVIDER, \
              RECRAFT_AI_ENDPOINT and the API key env var (see `recraft ai provider`)",
@@ -1475,6 +1487,7 @@ fn cmd_ai_explain(
     llm: bool,
     no_cache: bool,
 ) -> Result<()> {
+    require_ai_provider("ai explain")?;
     let mut session = Session::open(project)?;
     let addr = match addr {
         Some(raw) => resolve_address(&session, raw)?,
@@ -1597,6 +1610,7 @@ fn cmd_ai_explain(
 }
 
 fn cmd_ai_suggest(project: &Path, as_json: bool, limit: usize, out: Option<&Path>) -> Result<()> {
+    require_ai_provider("ai suggest")?;
     let mut session = Session::open(project)?;
     let proposals = recraft_ai::suggest_names(&mut session, limit)?;
     let values: Vec<Value> = proposals
@@ -1635,6 +1649,7 @@ fn cmd_ai_suggest(project: &Path, as_json: bool, limit: usize, out: Option<&Path
 }
 
 fn cmd_ai_triage(project: &Path, as_json: bool) -> Result<()> {
+    require_ai_provider("ai triage")?;
     let mut session = Session::open(project)?;
     let triage = recraft_ai::triage(&mut session)?;
     if as_json {

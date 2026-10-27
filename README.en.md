@@ -5,7 +5,7 @@
 > **Status: M3 complete, M4 (public preview) in progress.** Import/analyze PE32/PE32+
 > (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type writes through a journaled command bus with undo, MCP read-only server, and
-> offline-first AI (explain / rename proposals / triage) with a propose-apply UI.
+> provider-backed AI (explain / rename proposals / triage) with a propose-apply UI.
 > Quality gates: corpus semantic coverage **97.1%**, structured rate **93.1%**; 1 GiB
 > sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
 > [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
@@ -23,7 +23,7 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
   to an instruction address; golden snapshots guard every change.
 - **AI that proposes, never silently writes**: proposals carry evidence addresses and a
   confidence; writes go through the same journaled command bus as manual edits (undoable).
-- **Offline by default**: AI heuristics need no network; LLM providers are opt-in, prompts
+- **Provider required**: AI features use a configured LLM provider; prompts
   are redacted + budgeted, results cached and audited locally.
 - **MCP-native**: Claude/Cursor and other agents can query functions, pseudocode, xrefs,
   strings, imports and call graphs through a read-only MCP server.
@@ -37,7 +37,7 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 | Price / license | AGPL-3.0-only (+ commercial) | commercial | Apache-2.0 |
 | UI | native Rust/egui | native | Java/Swing |
 | Decompiler | self-built (readable, not compilable) | Hex-Rays (mature) | mature |
-| MCP / AI assist | built in (offline-first) | plugins/add-ons | plugins |
+| MCP / AI assist | built in (provider-backed) | plugins/add-ons | plugins |
 | 1 GiB sample gate | ✅ automated | ✅ | ✅ |
 | IDA plugin ecosystem | ❌ | ✅ | ❌ |
 
@@ -215,7 +215,7 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 
 ### AI assist
 
-Offline (no network) explanation, rename proposals and sample triage; proposals carry
+Provider-backed explanation, rename proposals and sample triage; proposals carry
 evidence addresses and are only applied through the journaled command bus. The GUI's **AI**
 sidebar can configure the optional LLM provider (endpoint/model/API-key env var, persisted to
 `%LOCALAPPDATA%\ReCraft\ai-settings.json`) and run **Explain**/**Polish** without any CLI

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
+  `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
+  corresponding CLI commands now refuse to run until an LLM provider is configured. The
+  provider settings panel only offers DeepSeek, OpenCode Go and a custom OpenAI-compatible
+  endpoint, and unconfigured streaming returns a clear "no LLM provider configured" error.
 - AI polish now streams OpenAI-compatible SSE responses: HTTPS providers emit
   `stream: true`, the parser handles `delta.content` (including chunks split across TCP
   reads and UTF-8 characters split across reads), and the AI result pane appends text live
