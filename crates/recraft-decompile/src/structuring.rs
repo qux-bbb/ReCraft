@@ -318,6 +318,7 @@ struct Structurer {
     /// recursing back into `emit_loop` for the same header).
     fallback_headers: BTreeSet<usize>,
     emitted: Vec<bool>,
+    labeled: Vec<bool>,
     bodies: Vec<BlockLift>,
     args: Option<ArgNames>,
 }
@@ -407,6 +408,7 @@ impl Structurer {
             loop_stack: Vec::new(),
             fallback_headers: BTreeSet::new(),
             emitted: vec![false; bodies.len()],
+            labeled: vec![false; bodies.len()],
             bodies,
             args,
         }
@@ -613,6 +615,7 @@ impl Structurer {
                 continue;
             }
             self.emitted[index] = true;
+            self.labeled[index] = true;
             lines.push(PseudoLine {
                 addr: self.blocks[index].entry,
                 text: format!("{}loc_{:x}:", indent(1), self.blocks[index].entry.get()),
@@ -636,6 +639,7 @@ impl Structurer {
                     addr: self.blocks[index].entry,
                     text: format!("{}loc_{:x}:", indent(1), self.blocks[index].entry.get()),
                 });
+                self.labeled[index] = true;
             }
             self.emitted[index] = true;
             self.emit_simple(lines, index, 1);
@@ -735,6 +739,20 @@ impl Structurer {
                         return;
                     }
                 }
+            }
+            if self.predecessors[current].len() > 1
+                && !self.labeled[current]
+                && current != self.entry
+            {
+                lines.push(PseudoLine {
+                    addr: self.blocks[current].entry,
+                    text: format!(
+                        "{}loc_{:x}:",
+                        indent(level),
+                        self.blocks[current].entry.get()
+                    ),
+                });
+                self.labeled[current] = true;
             }
             self.emitted[current] = true;
             self.emit_simple(lines, current, level);
