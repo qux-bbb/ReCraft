@@ -1909,7 +1909,7 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
             break;
         }
     }
-    if depth != 0 || tail.len() > 16 {
+    if depth != 0 || tail.len() > 128 {
         return;
     }
     // The target exits every enclosing branch and runs the function epilogue. Copy that
@@ -2205,6 +2205,49 @@ mod tests {
         ];
         drop_unreachable_tails(&mut lines);
         assert_eq!(lines.len(), 2, "{lines:?}");
+    }
+
+    #[test]
+    fn last_label_tail_copies_balanced_if_and_epilogue() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "    if (flag) {".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x22),
+                text: "        value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x23),
+                text: "    }".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x24),
+                text: "    rbx = saved;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x25),
+                text: "    return;".to_owned(),
+            },
+        ];
+        fold_last_label_tails(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("if (flag) {"), "{text}");
+        assert!(text.contains("rbx = saved;"), "{text}");
     }
 
     #[test]

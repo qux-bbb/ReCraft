@@ -18,10 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last labelled short tail copy that tail plus the function epilogue. Tail scanning now
   recognizes `} else {` as a closing brace, and jumps to any label whose balanced tail
   ends in `return`/a tail call copy that tail too. The last-label cleanup tail may now be
-  a short balanced `if`/assignment region, not only straight-line statements. Dead code
+  a large balanced `if`/assignment region, not only straight-line statements. Dead code
   after `return` also drops orphan labels, exposing the rest of the unreachable tail. On
-  the notepad corpus this raises structured functions from 432/502 (86.1%) to 475/502
-  (94.6%) while keeping instruction coverage at 99.4%; add regression tests for dead-tail,
+  the notepad corpus this raises structured functions from 432/502 (86.1%) to 482/502
+  (96.0%) while keeping instruction coverage at 99.4%; add regression tests for dead-tail,
   orphan-label, balanced-if and last-tail cleanup.
 
 ### Changed
