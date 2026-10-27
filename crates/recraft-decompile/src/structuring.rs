@@ -222,6 +222,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_unreachable_tails(&mut lines);
     fold_jumps_over_braces(&mut lines);
     fold_return_labels(&mut lines);
+    fold_last_label_tails(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     lines.push(PseudoLine {
@@ -1753,6 +1754,123 @@ fn fold_jumps_over_braces(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// A jump to the last labelled tail can be turned into a copy of that short tail followed
+/// by `return`; there is no later block in the function to continue into.
+fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
+    let Some((label_index, target)) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let text = line.text.trim();
+        let label = text.strip_suffix(':')?;
+        let addr = label.strip_prefix("loc_")?;
+        Some((index, u64::from_str_radix(addr, 16).ok()?))
+    }) else {
+        return;
+    };
+    let mut tail = Vec::new();
+    for line in &lines[label_index + 1..] {
+        let text = line.text.trim();
+        if text == "}" || text.is_empty() {
+            break;
+        }
+        if text.starts_with("if (")
+            || text.starts_with("while")
+            || text.starts_with("for ")
+            || text.starts_with("switch")
+            || text.starts_with("goto loc_")
+            || text.starts_with("loc_")
+        {
+            return;
+        }
+        tail.push(text.to_owned());
+    }
+    if tail.len() > 8 {
+        return;
+    }
+    // The target exits every enclosing branch and runs the function epilogue. Copy that
+    // epilogue too; otherwise a bare `return` would skip stack/cookie restoration.
+    if tail.last().is_none_or(|line| line != "return;") {
+        let Some(return_index) = lines.iter().rposition(|line| line.text.trim() == "return;")
+        else {
+            return;
+        };
+        let mut epilogue_start = return_index;
+        while epilogue_start > 0 {
+            let text = lines[epilogue_start - 1].text.trim();
+            if text == "}"
+                || text.starts_with("if (")
+                || text.starts_with("while")
+                || text.starts_with("for ")
+                || text.starts_with("switch")
+                || text.starts_with("goto loc_")
+                || text.starts_with("loc_")
+            {
+                break;
+            }
+            epilogue_start -= 1;
+        }
+        let epilogue: Vec<String> = lines[epilogue_start..=return_index]
+            .iter()
+            .map(|line| line.text.trim().to_owned())
+            .collect();
+        if epilogue.len() > 16 {
+            return;
+        }
+        tail.extend(epilogue);
+    }
+    let needs_return = false;
+    let mut output = Vec::with_capacity(lines.len());
+    for line in lines.drain(..) {
+        let text = line.text.trim();
+        let Some(jump) = goto_target(&line.text) else {
+            output.push(line);
+            continue;
+        };
+        if jump != target {
+            output.push(line);
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&line.text));
+        let conditional = text
+            .split_once(") goto loc_")
+            .map(|(condition, _)| condition.strip_prefix("if (").unwrap_or(condition));
+        if let Some(condition) = conditional {
+            output.push(PseudoLine {
+                addr: line.addr,
+                text: format!("{indent}if ({condition}) {{"),
+            });
+            for body in &tail {
+                output.push(PseudoLine {
+                    addr: line.addr,
+                    text: format!("{indent}    {body}"),
+                });
+            }
+            if needs_return {
+                output.push(PseudoLine {
+                    addr: line.addr,
+                    text: format!("{indent}    return;"),
+                });
+            }
+            output.push(PseudoLine {
+                addr: line.addr,
+                text: format!("{indent}}}"),
+            });
+        } else {
+            for body in &tail {
+                output.push(PseudoLine {
+                    addr: line.addr,
+                    text: format!("{indent}{body}"),
+                });
+            }
+            if needs_return {
+                output.push(PseudoLine {
+                    addr: line.addr,
+                    text: format!("{indent}return;"),
+                });
+            }
+        }
+    }
+    *lines = output;
+}
+
 /// Replace jumps to a label whose body is exactly `return;` with a direct `return;`.
 /// These labels are the common function epilogue after stack restores have already been
 /// hidden; keeping the jump obscures an otherwise structured early exit.
@@ -1894,6 +2012,41 @@ mod tests {
     use super::*;
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
+
+    #[test]
+    fn last_label_tail_replaces_goto() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    loc_20:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "    return;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+        ];
+        fold_last_label_tails(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(text.contains("value = 1;"), "{text}");
+        assert!(text.contains("return;"), "{text}");
+    }
 
     #[test]
     fn unreachable_tail_after_return_is_removed() {
