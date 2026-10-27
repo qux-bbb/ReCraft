@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Decompiler structuring now duplicates terminal blocks that end in padding/external
+  tail calls instead of leaving a jump to an unemitted label, drops straight-line code
+  after an unconditional `return`, and folds jumps to return-only labels. On the notepad
+  corpus this raises structured functions from 432/502 (86.1%) to 441/502 (87.8%) while
+  keeping instruction coverage at 99.4%; add a regression test for the dead-tail cleanup.
+
 ### Changed
 
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and

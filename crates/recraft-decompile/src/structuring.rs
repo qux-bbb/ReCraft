@@ -219,6 +219,10 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     structurer.emit_all(&mut lines);
     hide_callee_saves(&mut lines);
     tidy_labels(&mut lines);
+    drop_unreachable_tails(&mut lines);
+    fold_return_labels(&mut lines);
+    tidy_labels(&mut lines);
+    drop_unreachable_tails(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -1391,7 +1395,8 @@ impl Structurer {
                 }
                 Flow::Fallthrough => {
                     let Some(next) = self.blocks[current].not_taken else {
-                        return false;
+                        // No successor: the block ends in padding/an external tail call.
+                        break;
                     };
                     if next == current {
                         return false;
@@ -1409,7 +1414,10 @@ impl Structurer {
         };
         let ends_leaf = matches!(self.blocks[last].flow, Flow::Return)
             || (self.blocks[last].goto_target.is_none()
-                && matches!(self.blocks[last].flow, Flow::Goto(_)));
+                && matches!(self.blocks[last].flow, Flow::Goto(_)))
+            // A block ending in `int3`/an external tail call can have no successor without
+            // being a `Flow::Return`; it still terminates this duplicated leaf.
+            || self.successors[last].is_empty();
         if !ends_leaf {
             return false;
         }
@@ -1423,7 +1431,7 @@ impl Structurer {
         for &index in &chain {
             self.emit_simple(lines, index, level);
         }
-        if matches!(self.blocks[last].flow, Flow::Return) {
+        if matches!(self.blocks[last].flow, Flow::Return) || self.successors[last].is_empty() {
             lines.push(PseudoLine {
                 addr: self.blocks[last].entry,
                 text: format!("{}return;", indent(level)),
@@ -1640,6 +1648,87 @@ fn indent(level: usize) -> String {
     "    ".repeat(level)
 }
 
+/// Drop straight-line code emitted after an unconditional `return;` inside the same
+/// block. Structuring can leave an alternate-entry tail after the common return block
+/// (`return; al = 1; goto epilogue;`); without this pass those dead lines also count as a
+/// goto fallback and hide the recovered structure.
+fn drop_unreachable_tails(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].text.trim() != "return;" {
+            index += 1;
+            continue;
+        }
+        let indent = leading_spaces(&lines[index].text);
+        let mut end = index + 1;
+        while end < lines.len() {
+            let text = lines[end].text.trim();
+            if text.starts_with('}')
+                || leading_spaces(&lines[end].text) < indent
+                || (text.starts_with("loc_") && text.ends_with(':'))
+            {
+                break;
+            }
+            end += 1;
+        }
+        if end > index + 1 {
+            lines.drain(index + 1..end);
+        }
+        index += 1;
+    }
+}
+
+fn leading_spaces(text: &str) -> usize {
+    text.len() - text.trim_start().len()
+}
+
+/// Replace jumps to a label whose body is exactly `return;` with a direct `return;`.
+/// These labels are the common function epilogue after stack restores have already been
+/// hidden; keeping the jump obscures an otherwise structured early exit.
+fn fold_return_labels(lines: &mut [PseudoLine]) {
+    let mut returns = BTreeSet::new();
+    for (index, line) in lines.iter().enumerate() {
+        let text = line.text.trim();
+        let Some(label) = text.strip_suffix(':') else {
+            continue;
+        };
+        if !label.starts_with("loc_") {
+            continue;
+        }
+        let body: Vec<&str> = lines[index + 1..]
+            .iter()
+            .map(|line| line.text.trim())
+            .take_while(|text| !(text.starts_with("loc_") && text.ends_with(':')))
+            .collect();
+        if body == ["return;"] {
+            returns.insert(label.to_owned());
+        }
+    }
+    if returns.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        let text = line.text.trim();
+        let Some((prefix, target)) = text
+            .strip_prefix("goto loc_")
+            .map(|target| ("", target))
+            .or_else(|| text.split_once(") goto loc_"))
+        else {
+            continue;
+        };
+        let target = target.trim_end_matches(';');
+        if !returns.contains(&format!("loc_{target}")) {
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&line.text));
+        line.text = if prefix.is_empty() {
+            format!("{indent}return;")
+        } else {
+            format!("{indent}if ({prefix}) return;")
+        };
+    }
+}
+
 /// Remove labels/gotos that add no control flow: a `goto` whose target label is the
 /// very next line, and labels that are never referenced. Fallback output otherwise
 /// contains long runs of `goto loc_x; loc_x:` pairs that hide the actual structure.
@@ -1733,6 +1822,31 @@ mod tests {
     use super::*;
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
+
+    #[test]
+    fn unreachable_tail_after_return_is_removed() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    return;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1001),
+                text: "    value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1002),
+                text: "    goto loc_1000;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+        ];
+        drop_unreachable_tails(&mut lines);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].text.trim(), "return;");
+    }
 
     #[test]
     fn tidy_labels_removes_adjacent_gotos_and_orphans() {
