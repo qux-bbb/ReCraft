@@ -1768,7 +1768,7 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
     let mut tail = Vec::new();
     for line in &lines[label_index + 1..] {
         let text = line.text.trim();
-        if text == "}" || text.is_empty() {
+        if text.starts_with('}') || text.is_empty() {
             break;
         }
         if text.starts_with("if (")
@@ -1795,7 +1795,7 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
         let mut epilogue_start = return_index;
         while epilogue_start > 0 {
             let text = lines[epilogue_start - 1].text.trim();
-            if text == "}"
+            if text.starts_with('}')
                 || text.starts_with("if (")
                 || text.starts_with("while")
                 || text.starts_with("for ")
