@@ -723,7 +723,7 @@ impl OpenAiCompatibleProvider {
             "{}/v1/chat/completions",
             self.settings.endpoint.trim_end_matches('/')
         );
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.settings.model,
             "max_tokens": self.settings.max_tokens,
             "stream": true,
@@ -731,8 +731,14 @@ impl OpenAiCompatibleProvider {
                 {"role": "system", "content": request.system},
                 {"role": "user", "content": request.user},
             ],
-        })
-        .to_string();
+        });
+        if self.settings.endpoint.contains("opencode.ai") {
+            // DeepSeek/GLM reasoning can consume the whole completion budget before
+            // emitting content. Polish is a transformation task, so prefer the direct
+            // answer path for this gateway.
+            body["thinking"] = serde_json::json!({"type": "disabled"});
+        }
+        let body = body.to_string();
         let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
         headers.push((
             "User-Agent".to_owned(),
@@ -984,6 +990,34 @@ impl Provider for HeuristicProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_stream_disables_thinking() {
+        let settings = ProviderSettings {
+            kind: ProviderKind::OpenAiCompatible,
+            endpoint: OPENCODE_GO_ENDPOINT.to_owned(),
+            model: "glm-5.3-flash".to_owned(),
+            max_tokens: 8192,
+            ..ProviderSettings::default()
+        };
+        let provider = OpenAiCompatibleProvider::new(
+            settings,
+            Box::new(crate::transport::MockTransport::new()),
+            None,
+        );
+        let request = PromptRequest {
+            system: "system".to_owned(),
+            user: "user".to_owned(),
+            estimated_tokens: 2,
+        };
+        let http = provider.stream_request(&request);
+        assert!(
+            http.body.contains("\"thinking\":{\"type\":\"disabled\"}"),
+            "{}",
+            http.body
+        );
+        assert!(http.body.contains("\"stream\":true"), "{}", http.body);
+    }
 
     #[test]
     fn openai_sse_decoder_handles_split_chunks() {

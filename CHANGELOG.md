@@ -14,11 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads and UTF-8 characters split across reads), and the AI result pane appends text live
   with auto-scroll. Local plain-HTTP transports and providers without SSE fall back to one
   final chunk. Other providers honor the configured completion budget; OpenCode Go polish
-  caps it at 8k tokens because a 64k allowance there delays the first token by tens of
-  seconds. Reasoning-only OpenCode streams now produce an actionable error (reasoning
-  character count + non-reasoning model suggestion) instead of a generic empty-stream
-  failure. Repeated polish requests are cached per endpoint/model/budget; the AI header
-  shows elapsed seconds and a first-token waiting status while a call is running.
+  disables thinking (`{"thinking":{"type":"disabled"}}`) and caps completion at 8k tokens,
+  because the reasoning path delayed the first answer by 57–111 seconds. Reasoning-only
+  OpenCode streams now produce an actionable error (reasoning character count +
+  non-reasoning model suggestion) instead of a generic empty-stream failure. Repeated
+  polish requests are cached per endpoint/model/budget; the AI header shows elapsed seconds
+  and a first-token waiting status while a call is running.
 - Decompiled call sites now show inferred arguments instead of bare `sub_xxx()`:
   callee prologues are scanned once per target (following import `jmp` thunks), argument
   setup writes captured by the call are elided, and calls without a recoverable signature
