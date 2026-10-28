@@ -4118,6 +4118,32 @@ mod tests {
     }
 
     #[test]
+    fn generated_output_has_balanced_braces() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let starts: Vec<Address> = session
+            .functions()
+            .unwrap()
+            .iter()
+            .map(|function| function.start)
+            .collect();
+        for start in starts {
+            for text in [
+                pseudocode_l1(&mut session, start).unwrap().text(),
+                pseudocode_l2(&mut session, start).unwrap().text(),
+            ] {
+                assert_eq!(
+                    text.matches('{').count(),
+                    text.matches('}').count(),
+                    "unbalanced braces at {start:?}:\n{text}"
+                );
+                assert!(!text.contains("if ()"), "empty condition:\n{text}");
+            }
+        }
+    }
+
+    #[test]
     fn generated_gotos_always_have_a_label() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;
