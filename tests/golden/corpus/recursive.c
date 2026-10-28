@@ -3,9 +3,9 @@ void recursive_l1(void) {
     var_n8 = rbx;
     ebx = ecx;
     if ((ecx > 1 /* signed */)) {
-        ecx = (ecx - 1);
+        ecx -= 1;
         recursive();
-        eax = (eax * ebx);
+        eax *= ebx;
         rbx = *(u64*)(rsp);
         return;
     }

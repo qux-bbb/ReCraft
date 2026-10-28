@@ -5,7 +5,7 @@ void uses_helper_l1(void) {
     var_8 = eax;
     ecx = var_8;
     eax = var_10;
-    eax = (eax * ecx);
-    eax = (eax + 7);
+    eax *= ecx;
+    eax += 7;
     return;
 }

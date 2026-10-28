@@ -4,17 +4,17 @@ void switcher_l1(void) {
         eax = 0xADDR;
         return;
     }
-    ecx = (ecx - 1);
+    ecx -= 1;
     if ((ecx == 1)) {
         eax = 0xADDR;
         return;
     }
-    ecx = (ecx - 1);
+    ecx -= 1;
     if ((ecx == 1)) {
         eax = 0xADDR;
         return;
     }
-    ecx = (ecx - 1);
+    ecx -= 1;
     if ((ecx == 1)) {
         eax = 0xADDR;
         return;

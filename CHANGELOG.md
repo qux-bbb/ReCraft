@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Decompiled pseudocode now reads closer to source: `x = (x + n);` becomes `x += n;`,
+  `r = *(T*)(a); r -= k; *(T*)(a) = r;` collapses to `*(T*)(a) -= k;`, and
+  `if (!(x == 0))` becomes `if (x != 0)`. The negation helper used chained string
+  replacements that cancelled each other (`==` → `!=` → `==`), so equality branches kept a
+  redundant `!`; it now flips exactly one comparison and leaves `&&`/`||` conditions
+  wrapped in an explicit `!`.
+- L1 structuring recovers more shape and never emits a `goto` to a missing label. Shared
+  tails may now be up to 48 lines and may contain inner labels (the label is not copied),
+  consecutive identical terminating arms merge into `if (a || b) { … }` (the compiler's
+  short-circuit `||` lowering), and loop headers get a label when another path jumps to
+  them. Labels that a live forward `goto` still names are kept when dead tails are pruned,
+  so no jump dangles. On notepad this measures **487/502 structured (97.0%)** with
+  coverage unchanged at 99.4%; corpus x64 stays at 31/31 and 97.4% coverage, and the
+  golden snapshots were regenerated for the new statement forms.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The

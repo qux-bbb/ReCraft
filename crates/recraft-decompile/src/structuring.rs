@@ -227,6 +227,10 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_return_labels(&mut lines);
     fold_return_tail_labels(&mut lines);
     fold_last_label_tails(&mut lines);
+    merge_identical_if_arms(&mut lines);
+    fold_compound_assignments(&mut lines);
+    fold_load_modify_store(&mut lines);
+    simplify_negated_conditions(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     lines.push(PseudoLine {
@@ -1063,6 +1067,20 @@ impl Structurer {
         header: usize,
         level: usize,
     ) -> Option<usize> {
+        // Loop constructs are emitted without a label, but another path may still jump to
+        // the header (an external `goto`, or a duplicate arm). Keep a label in front of the
+        // construct so those jumps have a target; the final tidy pass drops it when unused.
+        if header != self.entry && !self.labeled[header] {
+            lines.push(PseudoLine {
+                addr: self.blocks[header].entry,
+                text: format!(
+                    "{}loc_{:x}:",
+                    indent(level),
+                    self.blocks[header].entry.get()
+                ),
+            });
+            self.labeled[header] = true;
+        }
         let body = self.loop_blocks.get(&header)?.clone();
         if self.blocks[header].condition.is_none() {
             // No condition at the header: try a do-while whose latch tests the condition
@@ -1719,16 +1737,19 @@ fn drop_unreachable_tails(lines: &mut Vec<PseudoLine>) {
         while end < lines.len() {
             let text = lines[end].text.trim();
             let is_label = text.starts_with("loc_") && text.ends_with(':');
-            if is_label
-                && !lines[..index]
+            if is_label {
+                // A forward `goto` may appear after the label; removing the label would
+                // leave that jump dangling. Only drop labels that no live jump names.
+                let label = text.trim_end_matches(':');
+                let referenced = lines
                     .iter()
-                    .any(|line| line.text.contains(&format!("goto {text}")))
-            {
-                // An orphan label after `return` cannot be reached; drop it and keep
-                // scanning the dead tail behind it. References from inside the dead tail
-                // do not make the label reachable.
-                lines.remove(end);
-                continue;
+                    .any(|line| line.text.contains(&format!("goto {label}")));
+                if !referenced {
+                    // An orphan label after `return` cannot be reached; drop it and keep
+                    // scanning the dead tail behind it.
+                    lines.remove(end);
+                    continue;
+                }
             }
             if text.starts_with('}') || leading_spaces(&lines[end].text) < indent || is_label {
                 break;
@@ -1897,10 +1918,14 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                 || text.starts_with("for ")
                 || text.starts_with("switch")
                 || text.starts_with("goto loc_")
-                || text.starts_with("loc_")
             {
                 tail.clear();
                 break;
+            }
+            // An inner label only names a block inside the shared tail; the copied body
+            // does not need it and the original label still serves jumps into its block.
+            if text.starts_with("loc_") && text.ends_with(':') {
+                continue;
             }
             if text.starts_with('}') {
                 depth = depth.saturating_sub(1);
@@ -1912,11 +1937,11 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                     .saturating_sub(usize::from(text.starts_with('}'))),
             );
             tail.push(text.to_owned());
-            if depth == 0 && tail.len() > 16 {
+            if depth == 0 && tail.len() > 48 {
                 break;
             }
         }
-        if tail.len() <= 32
+        if tail.len() <= 48
             && depth == 0
             && tail
                 .last()
@@ -1963,6 +1988,296 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
         }
     }
     *lines = output;
+}
+
+/// Fold `x = (x + y);` into `x += y;`. Compiler-generated pseudo-code spells every
+/// arithmetic update as a load and a separate write of the destination register; the
+/// compound form matches the original source and removes one temporary write per update.
+fn fold_compound_assignments(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        let Some(statement) = line.text.trim().strip_suffix(';') else {
+            continue;
+        };
+        let Some((lhs, rhs)) = statement.split_once(" = ") else {
+            continue;
+        };
+        let lhs = lhs.trim();
+        if !is_identifier(lhs) {
+            continue;
+        }
+        let rhs = rhs.trim();
+        let Some(inner) = rhs
+            .strip_prefix('(')
+            .and_then(|text| text.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let Some(rest) = inner.strip_prefix(lhs) else {
+            continue;
+        };
+        if !rest.starts_with(' ') {
+            continue;
+        }
+        let rest = rest.trim_start();
+        let Some(operator) =
+            ["<<", ">>", "+", "-", "*", "&", "|", "^"]
+                .into_iter()
+                .find(|operator| {
+                    rest.strip_prefix(operator)
+                        .is_some_and(|value| value.starts_with(' '))
+                })
+        else {
+            continue;
+        };
+        let value = rest[operator.len()..].trim();
+        if value.is_empty() {
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&line.text));
+        line.text = format!("{indent}{lhs} {operator}= {value};");
+    }
+}
+
+/// Rewrite `if (!(x == 0)) {` as `if ((x != 0)) {`. A negated comparison is harder to
+/// read than its flipped form, and the structurer produces many of them when it inverts a
+/// branch to follow the fallthrough path. Conditions joined by `&&`/`||` are left alone
+/// because flipping their operators would not be equivalent.
+fn simplify_negated_conditions(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        let text = line.text.trim();
+        let (keyword, indent) = if text.starts_with("if (") {
+            ("if", leading_spaces(&line.text))
+        } else if text.starts_with("while (") {
+            ("while", leading_spaces(&line.text))
+        } else {
+            continue;
+        };
+        let rest = &text[text.find('(').unwrap_or(0) + 1..];
+        let Some(condition) = rest.strip_suffix(") {") else {
+            continue;
+        };
+        let Some(inner) = condition
+            .strip_prefix("!(")
+            .and_then(|inner| inner.strip_suffix(')'))
+        else {
+            continue;
+        };
+        if inner.contains("&&")
+            || inner.contains("||")
+            || inner.contains('?')
+            || inner.contains("!(")
+        {
+            continue;
+        }
+        let negated = negate(inner);
+        if negated == format!("!({inner})") {
+            continue;
+        }
+        line.text = format!("{}{keyword} (({negated})) {{", " ".repeat(indent));
+    }
+}
+
+fn is_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// Collapse `r = *(T*)(a); r -= k; *(T*)(a) = r;` into `*(T*)(a) -= k;`. The temporary
+/// register only carries the loaded value back to the same slot, so the update can be
+/// written against the lvalue directly, as the original source did.
+fn fold_load_modify_store(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 2 < lines.len() {
+        let first = lines[index].text.trim();
+        let second = lines[index + 1].text.trim();
+        let third = lines[index + 2].text.trim();
+        let Some((register, ty, address)) = parse_load(first) else {
+            index += 1;
+            continue;
+        };
+        let Some((compound_register, operator, value)) = parse_compound(second) else {
+            index += 1;
+            continue;
+        };
+        let Some((store_ty, store_address, stored)) = parse_store(third) else {
+            index += 1;
+            continue;
+        };
+        if compound_register != register
+            || stored != register
+            || store_ty != ty
+            || store_address != address
+        {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&lines[index].text));
+        let addr = lines[index].addr;
+        lines.splice(
+            index..index + 3,
+            [PseudoLine {
+                addr,
+                text: format!("{indent}*({ty})({address}) {operator}= {value};"),
+            }],
+        );
+        index += 1;
+    }
+}
+
+/// Parse `r = *(T)(a);` into `(r, T, a)`.
+fn parse_load(text: &str) -> Option<(&str, &str, &str)> {
+    let statement = text.strip_suffix(';')?;
+    let (lhs, rhs) = statement.split_once(" = ")?;
+    let lhs = lhs.trim();
+    if !is_identifier(lhs) {
+        return None;
+    }
+    let (ty, address) = parse_dereference(rhs.trim())?;
+    Some((lhs, ty, address))
+}
+
+/// Parse `*(T)(a) = r;` into `(T, a, r)`.
+fn parse_store(text: &str) -> Option<(&str, &str, &str)> {
+    let statement = text.strip_suffix(';')?;
+    let (lhs, rhs) = statement.split_once(" = ")?;
+    let (ty, address) = parse_dereference(lhs.trim())?;
+    let register = rhs.trim();
+    if !is_identifier(register) {
+        return None;
+    }
+    Some((ty, address, register))
+}
+
+/// Parse `r op= value;` into `(r, op, value)`.
+fn parse_compound(text: &str) -> Option<(&str, &str, &str)> {
+    let statement = text.strip_suffix(';')?;
+    for operator in ["<<=", ">>=", "+=", "-=", "*=", "&=", "|=", "^="] {
+        let Some(position) = statement.find(operator) else {
+            continue;
+        };
+        if position == 0 || !statement[..position].ends_with(' ') {
+            continue;
+        }
+        let register = statement[..position].trim();
+        let value = statement[position + operator.len()..].trim();
+        if is_identifier(register) && !value.is_empty() {
+            return Some((register, &operator[..operator.len() - 1], value));
+        }
+    }
+    None
+}
+
+fn parse_dereference(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("*(")?;
+    let (ty, rest) = rest.split_once(')')?;
+    let rest = rest.trim();
+    let address = rest.strip_prefix('(')?.strip_suffix(')')?;
+    Some((ty, address))
+}
+/// one `if (c1 || c2) { body }`. Compilers lower a short-circuit `||` chain into a series
+/// of conditional jumps to the same block; without this pass the structurer duplicates the
+/// body once per condition, which hides the original `||` expression.
+fn merge_identical_if_arms(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let Some((first_condition, first_close)) = standalone_if_block(lines, index) else {
+            index += 1;
+            continue;
+        };
+        let key = body_key(&lines[index + 1..first_close]);
+        let Some(key) = key.filter(|key| !key.is_empty()) else {
+            index += 1;
+            continue;
+        };
+        if !body_terminates(&lines[index + 1..first_close]) {
+            index += 1;
+            continue;
+        }
+        let mut conditions = vec![first_condition];
+        let mut last_close = first_close;
+        loop {
+            let mut next = last_close + 1;
+            while next < lines.len() && lines[next].text.trim().is_empty() {
+                next += 1;
+            }
+            let Some((condition, close)) = standalone_if_block(lines, next) else {
+                break;
+            };
+            if leading_spaces(&lines[next].text) != leading_spaces(&lines[index].text) {
+                break;
+            }
+            let body = &lines[next + 1..close];
+            if body_key(body) != Some(key.clone()) || !body_terminates(body) {
+                break;
+            }
+            conditions.push(condition);
+            last_close = close;
+        }
+        if conditions.len() < 2 {
+            index = first_close + 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&lines[index].text));
+        lines[index].text = format!("{indent}if ({}) {{", conditions.join(" || "));
+        lines.drain(first_close + 1..=last_close);
+        index = first_close + 1;
+    }
+}
+
+/// Recognise a standalone `if (cond) {` block at `index` and return its condition plus the
+/// line index of its closing brace. An `else` arm disqualifies the block.
+fn standalone_if_block(lines: &[PseudoLine], index: usize) -> Option<(String, usize)> {
+    let line = lines.get(index)?;
+    let text = line.text.trim();
+    let condition = text.strip_prefix("if (")?.strip_suffix(") {")?.to_owned();
+    let mut depth = 0isize;
+    for (offset, candidate) in lines[index..].iter().enumerate() {
+        let text = candidate.text.trim();
+        depth += text.matches('{').count() as isize;
+        depth -= text.matches('}').count() as isize;
+        if depth == 0 {
+            if text.starts_with("} else") || text.starts_with("else") {
+                return None;
+            }
+            return Some((condition, index + offset));
+        }
+    }
+    None
+}
+
+/// Structural fingerprint of an arm body. Label definitions are ignored so a body that
+/// was emitted with a shared-block label can still match its unlabelled copies; a `goto`
+/// inside the body is not merged because copying it would relocate the jump's labels.
+fn body_key(body: &[PseudoLine]) -> Option<String> {
+    let mut lines = Vec::with_capacity(body.len());
+    for line in body {
+        let text = line.text.trim();
+        if text.is_empty() || (text.starts_with("loc_") && text.ends_with(':')) {
+            continue;
+        }
+        if text.starts_with("goto loc_") {
+            return None;
+        }
+        lines.push(text);
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+/// The copy runs at most once per path only if every path through it leaves the current
+/// block; a `return` (or loop `break`/`continue`) on the last line guarantees that.
+fn body_terminates(body: &[PseudoLine]) -> bool {
+    let Some(last) = body.iter().rev().find(|line| !line.text.trim().is_empty()) else {
+        return false;
+    };
+    let text = last.text.trim();
+    (text.starts_with("return") && text.ends_with(';')) || text == "break;" || text == "continue;"
 }
 
 /// A jump to the last labelled tail can be turned into a copy of that short tail followed
@@ -2111,7 +2426,7 @@ fn append_indented_tail(output: &mut Vec<PseudoLine>, addr: Address, base: &str,
     }
 }
 
-/// Replace jumps to a label whose body is exactly `return;` with a direct `return;`.
+/// Replace jumps to a label whose own block is exactly `return;` with a direct `return;`.
 /// These labels are the common function epilogue after stack restores have already been
 /// hidden; keeping the jump obscures an otherwise structured early exit.
 fn fold_return_labels(lines: &mut [PseudoLine]) {
@@ -2124,12 +2439,33 @@ fn fold_return_labels(lines: &mut [PseudoLine]) {
         if !label.starts_with("loc_") {
             continue;
         }
-        let body: Vec<&str> = lines[index + 1..]
-            .iter()
-            .map(|line| line.text.trim())
-            .take_while(|text| !(text.starts_with("loc_") && text.ends_with(':')))
-            .filter(|text| !text.is_empty() && *text != "}")
-            .collect();
+        // Only the statements belonging to this label's block count. A label nested inside
+        // an `if` is followed by the enclosing `}` long before the next label, so scanning
+        // to the next label would swallow unrelated sibling code.
+        let mut depth = 0usize;
+        let mut body = Vec::new();
+        for candidate in &lines[index + 1..] {
+            let text = candidate.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if depth == 0
+                && (text.starts_with('}') || (text.starts_with("loc_") && text.ends_with(':')))
+            {
+                break;
+            }
+            if text.starts_with('}') {
+                depth = depth.saturating_sub(1);
+            }
+            depth += text.matches('{').count();
+            depth = depth.saturating_sub(
+                text.matches('}')
+                    .count()
+                    .saturating_sub(usize::from(text.starts_with('}'))),
+            );
+            body.push(text);
+        }
+        body.retain(|text| !text.starts_with('}'));
         if body == ["return;"] || body.is_empty() {
             returns.insert(label.to_owned());
         }
@@ -2154,7 +2490,8 @@ fn fold_return_labels(lines: &mut [PseudoLine]) {
         line.text = if prefix.is_empty() {
             format!("{indent}return;")
         } else {
-            format!("{indent}if ({prefix}) return;")
+            let condition = prefix.strip_prefix("if (").unwrap_or(prefix);
+            format!("{indent}if ({condition}) return;")
         };
     }
 }
@@ -2233,18 +2570,25 @@ fn intersect(
 
 fn negate(condition: &str) -> String {
     let trimmed = condition.trim();
-    let flipped = trimmed
-        .replace(" == ", " != ")
-        .replace(" != ", " == ")
-        .replace(" <= ", " > ")
-        .replace(" >= ", " < ")
-        .replace(" < ", " >= ")
-        .replace(" > ", " <= ");
-    if flipped != trimmed {
-        flipped
-    } else {
-        format!("!({trimmed})")
+    // Flip exactly one comparison operator. Replacing them in a chain would undo the
+    // earlier substitution (`==` -> `!=` -> `==`), and a conjunction needs De Morgan,
+    // which the explicit `!` wrapper expresses correctly.
+    if trimmed.contains("&&") || trimmed.contains("||") {
+        return format!("!({trimmed})");
     }
+    for (from, to) in [
+        (" == ", " != "),
+        (" != ", " == "),
+        (" <= ", " > "),
+        (" >= ", " < "),
+        (" < ", " >= "),
+        (" > ", " <= "),
+    ] {
+        if trimmed.contains(from) {
+            return trimmed.replacen(from, to, 1);
+        }
+    }
+    format!("!({trimmed})")
 }
 
 #[cfg(test)]
@@ -2411,8 +2755,32 @@ mod tests {
                 text: "    value = 1;".to_owned(),
             },
             PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+        ];
+        drop_unreachable_tails(&mut lines);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+    }
+
+    #[test]
+    fn forward_goto_keeps_its_label_after_return() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    return;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1001),
+                text: "    loc_1001:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1002),
+                text: "    value = 1;".to_owned(),
+            },
+            PseudoLine {
                 addr: Address::new(0x1003),
-                text: "    goto loc_1001;".to_owned(),
+                text: "    if (flag) goto loc_1001;".to_owned(),
             },
             PseudoLine {
                 addr: Address::new(0x1000),
@@ -2420,7 +2788,50 @@ mod tests {
             },
         ];
         drop_unreachable_tails(&mut lines);
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines.iter().any(|line| line.text.trim() == "loc_1001:"),
+            "{lines:?}"
+        );
+        assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn forward_goto_skips_a_dead_tail() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "    return;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1001),
+                text: "    dead = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1002),
+                text: "    loc_1002:".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1003),
+                text: "    live = 2;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1004),
+                text: "    if (flag) goto loc_1002;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "}".to_owned(),
+            },
+        ];
+        drop_unreachable_tails(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("dead = 1;"), "{text}");
+        assert!(text.contains("loc_1002:"), "{text}");
+        assert!(text.contains("live = 2;"), "{text}");
     }
 
     #[test]
@@ -2908,7 +3319,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("eax = a;"), "{text}");
-        assert!(text.contains("(eax + b)"), "{text}");
+        assert!(text.contains("eax += b;"), "{text}");
     }
 
     #[test]
@@ -3032,5 +3443,97 @@ mod tests {
         let first = pseudocode_l1(&mut session, start).unwrap().text();
         let second = pseudocode_l1(&mut session, start).unwrap().text();
         assert_eq!(first, second);
+    }
+
+    fn test_line(text: &str) -> PseudoLine {
+        PseudoLine {
+            addr: Address::new(0x1000),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn negate_flips_exactly_one_comparison() {
+        assert_eq!(negate("x == 0"), "x != 0");
+        assert_eq!(negate("x != 0"), "x == 0");
+        assert_eq!(negate("a < b"), "a >= b");
+        assert_eq!(negate("a >= b"), "a < b");
+        assert_eq!(negate("a <= b"), "a > b");
+        assert_eq!(negate("flag"), "!(flag)");
+        assert_eq!(negate("a && b"), "!(a && b)");
+    }
+
+    #[test]
+    fn compound_updates_lvalue_stores_and_negations_are_folded() {
+        let mut lines = vec![
+            test_line("    eax = *(u32*)(rdi);"),
+            test_line("    eax = (eax - 1);"),
+            test_line("    *(u32*)(rdi) = eax;"),
+            test_line("    rax = (rax ^ rsp);"),
+            test_line("    if (!(eax == 0)) {"),
+        ];
+        fold_compound_assignments(&mut lines);
+        fold_load_modify_store(&mut lines);
+        simplify_negated_conditions(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("*(u32*)(rdi) -= 1;"), "{text}");
+        assert!(text.contains("rax ^= rsp;"), "{text}");
+        assert!(text.contains("if ((eax != 0)) {"), "{text}");
+        assert!(!text.contains("eax = (eax - 1);"), "{text}");
+        assert!(!text.contains("*(u32*)(rdi) = eax;"), "{text}");
+    }
+
+    #[test]
+    fn identical_terminating_arms_merge_into_or() {
+        let mut lines = vec![
+            test_line("    if ((eax != 0)) {"),
+            test_line("        sub_1();"),
+            test_line("        return;"),
+            test_line("    }"),
+            test_line("    if ((edx != 0)) {"),
+            test_line("        sub_1();"),
+            test_line("        return;"),
+            test_line("    }"),
+        ];
+        merge_identical_if_arms(&mut lines);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert_eq!(lines[0].text, "    if ((eax != 0) || (edx != 0)) {");
+    }
+
+    #[test]
+    fn generated_gotos_always_have_a_label() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let starts: Vec<Address> = session
+            .functions()
+            .unwrap()
+            .iter()
+            .map(|function| function.start)
+            .collect();
+        for start in starts {
+            let text = pseudocode_l1(&mut session, start).unwrap().text();
+            let labels: BTreeSet<String> = text
+                .lines()
+                .filter_map(|line| {
+                    line.trim()
+                        .strip_suffix(':')
+                        .filter(|label| label.starts_with("loc_"))
+                        .map(str::to_owned)
+                })
+                .collect();
+            for line in text.lines() {
+                if let Some(target) = goto_target(line) {
+                    assert!(
+                        labels.contains(&format!("loc_{target:x}")),
+                        "goto without label {target:x} in {start:?}:\n{text}"
+                    );
+                }
+            }
+        }
     }
 }

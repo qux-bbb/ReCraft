@@ -4,17 +4,17 @@ void loopy_l1(void) {
     edx = r10d;
     r8d = r10d;
     eax = r10d;
-    if (!(ecx < 2 /* signed */)) {
+    if ((ecx >= 2 /* signed */)) {
         r9d = (rcx - 1);
         do {
-            r8d = (r8d + 1);
-            edx = (edx + eax);
-            r8d = (r8d + eax);
-            eax = (eax + 2);
+            r8d += 1;
+            edx += eax;
+            r8d += eax;
+            eax += 2;
         } while ((eax < r9d /* signed */));
     }
     eax = ((eax >= ecx /* signed */) ? r10d : eax);
-    eax = (eax + r8d);
-    eax = (eax + edx);
+    eax += r8d;
+    eax += edx;
     return;
 }
