@@ -60,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `rcx`/`rdx`/`r8`/`r9` before the call are rendered in ABI order (`&var_XX` for a
   stack-slot address). A `jmp [IAT]` tail call renders as `return Api();`. On notepad 1657
   of 1667 indirect calls are named and most carry their captured arguments.
+- Call arguments that pass the address of a local now print as `&var_XX` instead of a raw
+  `(rbp - 0x30)` pointer expression, for direct and indirect calls alike, and a full-width
+  copy of an argument register (`rsi = arg1`) keeps the parameter name for later reads.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The

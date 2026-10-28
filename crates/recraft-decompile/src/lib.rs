@@ -153,6 +153,7 @@ pub(crate) fn lift_block(
             .unwrap_or_default(),
         frame_reg: None,
         arg_values: [None, None, None, None],
+        arg_aliases: BTreeMap::new(),
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
@@ -265,6 +266,7 @@ pub(crate) fn lift_block(
                 text: format!("{text};"),
             });
             printer.note_write(stmt);
+            printer.note_arg_alias(stmt);
             if let Stmt::WriteReg { reg, value } = stmt
                 && let Some(slot) = arg_slot(reg.base)
             {
@@ -485,6 +487,7 @@ pub fn pseudocode_l0(
         written: HashSet::new(),
         frame_reg: None,
         arg_values: [None, None, None, None],
+        arg_aliases: BTreeMap::new(),
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -626,6 +629,9 @@ struct Printer<'a> {
     /// Rendered values last written to the x64 argument registers, for naming the
     /// arguments of an indirect IAT call (`CreateFileW(path, access, ...)`).
     arg_values: [Option<String>; 4],
+    /// Registers that still hold an incoming argument copied from its ABI register
+    /// (`rsi = arg1`), so later reads print the parameter name instead of the register.
+    arg_aliases: BTreeMap<Reg, String>,
 }
 
 impl Printer<'_> {
@@ -659,6 +665,7 @@ impl Printer<'_> {
                     });
                 }
                 self.note_write(stmt);
+                self.note_arg_alias(stmt);
                 if let Stmt::WriteReg { reg, value } = stmt
                     && let Some(slot) = arg_slot(reg.base)
                 {
@@ -766,6 +773,11 @@ impl Printer<'_> {
         if self.frame_reg == Some(view.base) {
             return "frame".to_owned();
         }
+        if view.width == 8
+            && let Some(name) = self.arg_aliases.get(&view.base)
+        {
+            return name.clone();
+        }
         if let Some(args) = self.args
             && let Some(name) = args.name_for(view.base)
             && !self.written.contains(&view.base)
@@ -773,6 +785,45 @@ impl Printer<'_> {
             return name.to_owned();
         }
         view.name().to_owned()
+    }
+
+    /// Record or drop the argument alias carried by a register write. A full-width copy of
+    /// an argument register (`rsi = arg1`) keeps naming the parameter until the register is
+    /// overwritten; every other write clears the alias.
+    fn note_arg_alias(&mut self, stmt: &Stmt) {
+        if matches!(
+            stmt,
+            Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+        ) {
+            for reg in [
+                Reg::Rcx,
+                Reg::Rdx,
+                Reg::R8,
+                Reg::R9,
+                Reg::Rax,
+                Reg::R10,
+                Reg::R11,
+            ] {
+                self.arg_aliases.remove(&reg);
+            }
+        }
+        if let Stmt::WriteReg { reg, value } = stmt {
+            let alias = match &self.exprs[*value as usize] {
+                Expr::Reg(view) if view.width == 8 => {
+                    self.arg_aliases.get(&view.base).cloned().or_else(|| {
+                        self.args
+                            .and_then(|args| args.name_for(view.base))
+                            .filter(|_| !self.written.contains(&view.base))
+                            .map(str::to_owned)
+                    })
+                }
+                _ => None,
+            };
+            self.arg_aliases.remove(&reg.base);
+            if let Some(alias) = alias {
+                self.arg_aliases.insert(reg.base, alias);
+            }
+        }
     }
 
     /// `[rsp + const]`, `[rbp - const]`, `[ebp + const]` -> (base register, offset).
@@ -994,7 +1045,7 @@ impl Printer<'_> {
                             .take(count)
                             .enumerate()
                             .map(|(index, arg)| {
-                                let value = self.expr(*arg);
+                                let value = self.arg_expr(*arg);
                                 match proto.params.get(index) {
                                     // Pointer parameters make the argument's intended
                                     // type visible; scalars stay uncast for readability.
@@ -1018,8 +1069,11 @@ impl Printer<'_> {
                         if count == 0 {
                             format!("{name}()")
                         } else {
-                            let rendered: Vec<String> =
-                                args.iter().take(count).map(|arg| self.expr(*arg)).collect();
+                            let rendered: Vec<String> = args
+                                .iter()
+                                .take(count)
+                                .map(|arg| self.arg_expr(*arg))
+                                .collect();
                             format!("{name}({})", rendered.join(", "))
                         }
                     }
