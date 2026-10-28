@@ -67,6 +67,7 @@ impl AiCache {
         model.hash(&mut hasher);
         request.system.hash(&mut hasher);
         request.user.hash(&mut hasher);
+        request.thinking.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
     }
 

@@ -147,7 +147,14 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 - **已验证的兼容端点**（都是 OpenAI-compatible，`RECRAFT_AI_PROVIDER=openai`；endpoint
   填 base，不要带 `/v1`）：
   - **DeepSeek 官方**：`RECRAFT_AI_ENDPOINT=https://api.deepseek.com`，
-    `RECRAFT_AI_MODEL=deepseek-chat`（或 `deepseek-reasoner`），key 为 DeepSeek API key。
+    `RECRAFT_AI_MODEL=deepseek-flash`（或 `deepseek-v4-pro`），key 为 DeepSeek API key。
+    旧的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 下线，不再可用；两个现役
+    模型都支持 1M 上下文与 Thinking / Non-Thinking 双模式。V4 默认开启 thinking，而
+    thinking 会让首个正文 token 等上约一分钟，所以默认请求显式发送
+    `{"thinking":{"type":"disabled"}}` 直出；AI 面板的 **思考模式**
+    （`ai_thinking`）开关会改为请求 thinking，并把 `reasoning_content` 流式显示在
+    可折叠的“思考过程”区，答案完成后自动折叠。代码层等价开关是
+    `PromptRequest::with_thinking()`。
   - **OpenCode Go**：`RECRAFT_AI_ENDPOINT=https://opencode.ai/inference/go/openai`，
     model 例如 `deepseek-v4.1-flash` / `deepseek-v4-pro` / `kimi-k3`；key 是 Console 里
     复制的 Go API key。DeepSeek 模型需要在 Privacy 里把 Regions 设为 `Global`。

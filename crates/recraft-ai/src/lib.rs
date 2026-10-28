@@ -740,6 +740,10 @@ mod tests {
             "{}",
             prompt.user
         );
+        assert!(
+            !prompt.thinking,
+            "polish asks for a direct answer so the first content token is not delayed"
+        );
     }
 
     #[test]

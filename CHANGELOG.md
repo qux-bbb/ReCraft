@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The AI panel has a **Thinking mode** toggle. With it on, polish keeps the provider's
+  reasoning pass and the streamed `reasoning_content` is shown in a collapsible
+  “Thinking” section that expands while the model reasons and folds automatically when the
+  answer completes. `Provider::complete_stream_with_reasoning` forwards reasoning deltas
+  (the plain streaming entry point ignores them), and the UI receives them as
+  `AiMessage::Reasoning`.
+
 ### Fixed
 
+- The built-in DeepSeek provider preset now offers the live model ids `deepseek-flash` and
+  `deepseek-v4-pro`. The previous `deepseek-chat` / `deepseek-reasoner` ids were retired on
+  2026-07-24 and no longer resolve, so the preset defaulted to a model the API rejects.
+  Saved settings still pointing at a retired id are migrated to `deepseek-flash` on load, and
+  the docs list the new ids.
+- AI polish (and other AI actions) no longer wait about a minute for the first content token
+  on the DeepSeek official endpoint: requests now ask for a direct answer
+  (`{"thinking":{"type":"disabled"}}`). DeepSeek V4 enables thinking by default with high
+  effort, and its reasoning pass delayed the output. `PromptRequest` carries the choice
+  (default: direct answer, `with_thinking()` opts back in); both the streaming and
+  non-streaming request builders honour it, and prompt/cache keys include it so fast and
+  reasoning answers do not collide.
 - Switching the AI provider now updates the endpoint, model and API-key field together:
   the outgoing key is remembered per provider, the matching key is restored, and an
   unknown provider starts disabled with an empty key field. Key environment names reset

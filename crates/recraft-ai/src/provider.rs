@@ -418,6 +418,10 @@ pub struct PromptRequest {
     pub system: String,
     pub user: String,
     pub estimated_tokens: usize,
+    /// Whether the model may spend tokens on chain-of-thought before answering.
+    /// DeepSeek V4 enables thinking by default, which delays the first content token by
+    /// about a minute; ReCraft asks for a direct answer unless a request opts in.
+    pub thinking: bool,
 }
 
 impl PromptRequest {
@@ -429,7 +433,14 @@ impl PromptRequest {
             system,
             user,
             estimated_tokens,
+            thinking: false,
         }
+    }
+
+    /// Opt into the provider's reasoning pass (slower, occasionally better answers).
+    pub fn with_thinking(mut self) -> Self {
+        self.thinking = true;
+        self
     }
 }
 
@@ -612,6 +623,8 @@ pub fn build_polish_prompt(
         user.push('\n');
     }
     let user = redact(&user);
+    // DeepSeek V4 answers directly by default here: a reasoning pass would delay the first
+    // content token of this transformation task by about a minute.
     Ok(PromptRequest::new(budget, POLISH_SYSTEM, &user))
 }
 
@@ -633,6 +646,8 @@ impl PromptCache {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         request.system.hash(&mut hasher);
         request.user.hash(&mut hasher);
+        // Thinking changes the answer, so it must not share a cache entry with the fast path.
+        request.thinking.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -713,6 +728,18 @@ pub trait Provider {
         on_chunk(&text);
         Ok(text)
     }
+
+    /// Streaming variant that also forwards the model's chain-of-thought deltas
+    /// (`reasoning_content`) when the provider emits them. Providers without a reasoning
+    /// channel simply never call `on_reasoning`.
+    fn complete_stream_with_reasoning(
+        &mut self,
+        request: &PromptRequest,
+        on_chunk: &mut dyn FnMut(&str),
+        _on_reasoning: &mut dyn FnMut(&str),
+    ) -> Result<String> {
+        self.complete_stream(request, on_chunk)
+    }
 }
 
 /// Local Ollama (`POST /api/chat`, `stream: false`).
@@ -787,6 +814,16 @@ impl OpenAiCompatibleProvider {
         }
     }
 
+    /// Whether the request must explicitly turn the provider's thinking mode off.
+    fn thinking_toggle(&self, request: &PromptRequest) -> Option<bool> {
+        let endpoint = &self.settings.endpoint;
+        // DeepSeek V4 turns thinking on by default (high effort), and the reasoning pass
+        // delays the first content token by about a minute. Both built-in presets always
+        // send an explicit toggle: direct answer by default, reasoning when the UI opts in.
+        (endpoint.contains("api.deepseek.com") || endpoint.contains("opencode.ai"))
+            .then_some(request.thinking)
+    }
+
     fn stream_request(&self, request: &PromptRequest) -> crate::transport::HttpRequest {
         let url = format!(
             "{}/v1/chat/completions",
@@ -801,11 +838,13 @@ impl OpenAiCompatibleProvider {
                 {"role": "user", "content": request.user},
             ],
         });
-        if self.settings.endpoint.contains("opencode.ai") {
-            // DeepSeek/GLM reasoning can consume the whole completion budget before
-            // emitting content. Polish is a transformation task, so prefer the direct
-            // answer path for this gateway.
-            body["thinking"] = serde_json::json!({"type": "disabled"});
+        // DeepSeek V4 enables thinking by default, and the reasoning pass delays the first
+        // content token by up to a minute. The built-in presets always send an explicit
+        // toggle so the UI's "show thinking" switch fully controls the mode.
+        if let Some(enabled) = self.thinking_toggle(request) {
+            body["thinking"] = serde_json::json!({
+                "type": if enabled { "enabled" } else { "disabled" },
+            });
         }
         let body = body.to_string();
         let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
@@ -842,15 +881,20 @@ impl Provider for OpenAiCompatibleProvider {
             "{}/v1/chat/completions",
             self.settings.endpoint.trim_end_matches('/')
         );
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.settings.model,
             "max_tokens": self.settings.max_tokens,
             "messages": [
                 {"role": "system", "content": request.system},
                 {"role": "user", "content": request.user},
             ],
-        })
-        .to_string();
+        });
+        if let Some(enabled) = self.thinking_toggle(request) {
+            body["thinking"] = serde_json::json!({
+                "type": if enabled { "enabled" } else { "disabled" },
+            });
+        }
+        let body = body.to_string();
         let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
         headers.push((
             "User-Agent".to_owned(),
@@ -892,11 +936,20 @@ impl Provider for OpenAiCompatibleProvider {
         request: &PromptRequest,
         on_chunk: &mut dyn FnMut(&str),
     ) -> Result<String> {
+        self.complete_stream_with_reasoning(request, on_chunk, &mut |_| {})
+    }
+
+    fn complete_stream_with_reasoning(
+        &mut self,
+        request: &PromptRequest,
+        on_chunk: &mut dyn FnMut(&str),
+        on_reasoning: &mut dyn FnMut(&str),
+    ) -> Result<String> {
         let http = self.stream_request(request);
         let mut decoder = OpenAiSseDecoder::default();
         let response = self
             .transport
-            .send_stream(&http, &mut |raw| decoder.push(raw, on_chunk))?;
+            .send_stream(&http, &mut |raw| decoder.push(raw, on_chunk, on_reasoning))?;
         if response.status != 200 {
             return Err(Error::internal(format!(
                 "openai HTTP {}: {}",
@@ -904,7 +957,7 @@ impl Provider for OpenAiCompatibleProvider {
                 response.body.chars().take(800).collect::<String>()
             )));
         }
-        let text = decoder.finish(on_chunk)?;
+        let text = decoder.finish(on_chunk, on_reasoning)?;
         if text.trim().is_empty() {
             return Err(Error::internal(
                 "openai stream returned no assistant content (reasoning-only or empty stream)",
@@ -926,19 +979,28 @@ struct OpenAiSseDecoder {
 }
 
 impl OpenAiSseDecoder {
-    fn push(&mut self, raw: &str, on_chunk: &mut dyn FnMut(&str)) {
+    fn push(
+        &mut self,
+        raw: &str,
+        on_chunk: &mut dyn FnMut(&str),
+        on_reasoning: &mut dyn FnMut(&str),
+    ) {
         self.raw.push_str(raw);
         self.pending.push_str(raw);
         while let Some(position) = self.pending.find('\n') {
             let line: String = self.pending.drain(..=position).collect();
-            self.line(line.trim_end_matches(['\r', '\n']), on_chunk);
+            self.line(line.trim_end_matches(['\r', '\n']), on_chunk, on_reasoning);
         }
     }
 
-    fn finish(mut self, on_chunk: &mut dyn FnMut(&str)) -> Result<String> {
+    fn finish(
+        mut self,
+        on_chunk: &mut dyn FnMut(&str),
+        on_reasoning: &mut dyn FnMut(&str),
+    ) -> Result<String> {
         if !self.pending.is_empty() {
             let line = std::mem::take(&mut self.pending);
-            self.line(line.trim_end_matches(['\r', '\n']), on_chunk);
+            self.line(line.trim_end_matches(['\r', '\n']), on_chunk, on_reasoning);
         }
         if let Some(error) = self.error.take() {
             return Err(Error::internal(format!("openai stream error: {error}")));
@@ -962,7 +1024,12 @@ impl OpenAiSseDecoder {
         Ok(text)
     }
 
-    fn line(&mut self, line: &str, on_chunk: &mut dyn FnMut(&str)) {
+    fn line(
+        &mut self,
+        line: &str,
+        on_chunk: &mut dyn FnMut(&str),
+        on_reasoning: &mut dyn FnMut(&str),
+    ) {
         let Some(data) = line.strip_prefix("data:") else {
             return;
         };
@@ -984,8 +1051,11 @@ impl OpenAiSseDecoder {
             self.content.push_str(content);
             on_chunk(content);
         }
-        if let Some(reasoning) = value["choices"][0]["delta"]["reasoning_content"].as_str() {
+        if let Some(reasoning) = value["choices"][0]["delta"]["reasoning_content"].as_str()
+            && !reasoning.is_empty()
+        {
             self.reasoning_chars += reasoning.chars().count();
+            on_reasoning(reasoning);
         }
     }
 }
@@ -1077,6 +1147,7 @@ mod tests {
             system: "system".to_owned(),
             user: "user".to_owned(),
             estimated_tokens: 2,
+            thinking: false,
         };
         let http = provider.stream_request(&request);
         assert!(
@@ -1088,21 +1159,94 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_fast_path_disables_thinking() {
+        let settings = ProviderSettings {
+            endpoint: DEEPSEEK_ENDPOINT.to_owned(),
+            model: "deepseek-flash".to_owned(),
+            max_tokens: 8192,
+            ..ProviderSettings::default()
+        };
+        let provider = OpenAiCompatibleProvider::new(
+            settings.clone(),
+            Box::new(crate::transport::MockTransport::new()),
+            None,
+        );
+        let fast = PromptRequest::new(TokenBudget::new(256), "sys", "user");
+        let http = provider.stream_request(&fast);
+        assert!(
+            http.body.contains("\"thinking\":{\"type\":\"disabled\"}"),
+            "{}",
+            http.body
+        );
+
+        // The UI's thinking toggle sends an explicit `enabled` for the reasoning pass.
+        let deep = PromptRequest::new(TokenBudget::new(256), "sys", "user").with_thinking();
+        let http = provider.stream_request(&deep);
+        assert!(
+            http.body.contains("\"thinking\":{\"type\":\"enabled\"}"),
+            "{}",
+            http.body
+        );
+
+        // The non-streaming path (CLI polish) honours the same toggle.
+        let mut transport = crate::transport::MockTransport::new();
+        let requests = transport.requests_handle();
+        transport.push(
+            200,
+            r#"{"choices":[{"message":{"content":"int main(void) {}"}}]}"#,
+        );
+        let mut provider = OpenAiCompatibleProvider::new(settings, Box::new(transport), None);
+        assert_eq!(provider.complete(&fast).unwrap(), "int main(void) {}");
+        let requests = requests.lock().unwrap();
+        assert!(
+            requests[0]
+                .body
+                .contains("\"thinking\":{\"type\":\"disabled\"}"),
+            "{}",
+            requests[0].body
+        );
+    }
+
+    #[test]
     fn openai_sse_decoder_handles_split_chunks() {
         let mut decoder = OpenAiSseDecoder::default();
         let mut streamed = String::new();
         decoder.push(
             "data: {\"choices\":[{\"delta\":{\"content\":\"int \"}}]}\n\ndata: {\"cho",
             &mut |chunk| streamed.push_str(chunk),
+            &mut |_| {},
         );
         decoder.push(
             "ices\":[{\"delta\":{\"content\":\"main(void)\"}}]}\n\ndata: [DONE]\n",
             &mut |chunk| streamed.push_str(chunk),
+            &mut |_| {},
         );
         let text = decoder
-            .finish(&mut |chunk| streamed.push_str(chunk))
+            .finish(&mut |chunk| streamed.push_str(chunk), &mut |_| {})
             .expect("SSE");
         assert_eq!(text, "int main(void)");
+        assert_eq!(streamed, text);
+    }
+
+    #[test]
+    fn openai_sse_decoder_forwards_reasoning_chunks() {
+        let mut decoder = OpenAiSseDecoder::default();
+        let mut streamed = String::new();
+        let mut reasoning = String::new();
+        decoder.push(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan \"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"carefully\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"int main\"}}]}\n\ndata: [DONE]\n",
+            &mut |chunk| streamed.push_str(chunk),
+            &mut |chunk| reasoning.push_str(chunk),
+        );
+        let text = decoder
+            .finish(&mut |chunk| streamed.push_str(chunk), &mut |chunk| {
+                reasoning.push_str(chunk)
+            })
+            .expect("SSE");
+        assert_eq!(reasoning, "plan carefully");
+        assert_eq!(text, "int main");
         assert_eq!(streamed, text);
     }
 
@@ -1112,8 +1256,11 @@ mod tests {
         decoder.push(
             "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\ndata: [DONE]\n",
             &mut |_| {},
+            &mut |_| {},
         );
-        let error = decoder.finish(&mut |_| {}).expect_err("reasoning-only");
+        let error = decoder
+            .finish(&mut |_| {}, &mut |_| {})
+            .expect_err("reasoning-only");
         assert!(
             error.to_string().contains("only reasoning content"),
             "{error}"
@@ -1127,9 +1274,10 @@ mod tests {
         decoder.push(
             "{\"choices\":[{\"message\":{\"content\":\"fallback\"}}]}",
             &mut |chunk| streamed.push_str(chunk),
+            &mut |_| {},
         );
         let text = decoder
-            .finish(&mut |chunk| streamed.push_str(chunk))
+            .finish(&mut |chunk| streamed.push_str(chunk), &mut |_| {})
             .expect("fallback");
         assert_eq!(text, "fallback");
         assert_eq!(streamed, text);
@@ -1173,11 +1321,62 @@ mod tests {
             system: "system".to_owned(),
             user: "user".to_owned(),
             estimated_tokens: 2,
+            thinking: false,
         };
         let mut streamed = String::new();
         let text = provider
             .complete_stream(&request, &mut |chunk| streamed.push_str(chunk))
             .expect("stream");
+        assert_eq!(text, "int main");
+        assert_eq!(streamed, text);
+    }
+
+    #[test]
+    fn openai_provider_streams_reasoning_to_the_ui() {
+        struct ReasoningTransport;
+        impl crate::transport::Transport for ReasoningTransport {
+            fn send(
+                &mut self,
+                _request: &crate::transport::HttpRequest,
+            ) -> Result<crate::transport::HttpResponse> {
+                panic!("streaming path must use send_stream")
+            }
+            fn send_stream(
+                &mut self,
+                _request: &crate::transport::HttpRequest,
+                on_chunk: &mut dyn FnMut(&str),
+            ) -> Result<crate::transport::HttpResponse> {
+                on_chunk("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan \"}}]}\n\n");
+                on_chunk("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first\"}}]}\n\n");
+                on_chunk("data: {\"choices\":[{\"delta\":{\"content\":\"int main\"}}]}\n\n");
+                on_chunk("data: [DONE]\n\n");
+                Ok(crate::transport::HttpResponse {
+                    status: 200,
+                    body: String::new(),
+                })
+            }
+        }
+
+        let settings = ProviderSettings {
+            kind: ProviderKind::OpenAiCompatible,
+            endpoint: "https://example.invalid".to_owned(),
+            model: "test".to_owned(),
+            max_tokens: 128,
+            ..ProviderSettings::default()
+        };
+        let mut provider =
+            OpenAiCompatibleProvider::new(settings, Box::new(ReasoningTransport), None);
+        let request = PromptRequest::new(TokenBudget::new(128), "system", "user").with_thinking();
+        let mut streamed = String::new();
+        let mut reasoning = String::new();
+        let text = provider
+            .complete_stream_with_reasoning(
+                &request,
+                &mut |chunk| streamed.push_str(chunk),
+                &mut |chunk| reasoning.push_str(chunk),
+            )
+            .expect("stream");
+        assert_eq!(reasoning, "plan first");
         assert_eq!(text, "int main");
         assert_eq!(streamed, text);
     }

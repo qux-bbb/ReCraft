@@ -393,7 +393,10 @@ struct AnalysisJob {
 
 /// Background LLM request; HTTP calls never run on the UI thread.
 enum AiMessage {
+    /// Assistant text (the answer shown in the result pane).
     Chunk(String),
+    /// Chain-of-thought delta (`reasoning_content`), shown in a collapsible section.
+    Reasoning(String),
     Done(std::result::Result<String, String>),
 }
 
@@ -725,6 +728,12 @@ pub struct ReCraftApp {
     ai_cache: recraft_ai::PromptCache,
     ai_cache_fingerprint: Option<String>,
     ai_explanation: Option<String>,
+    /// Streamed chain-of-thought (`reasoning_content`) for the running or last AI call.
+    ai_reasoning: String,
+    /// Whether the thinking section is expanded; collapsed automatically when a call ends.
+    ai_reasoning_open: bool,
+    /// UI toggle: request the provider's thinking mode and stream its reasoning.
+    ai_thinking: bool,
     ai_query: String,
     ai_answer: Option<recraft_ai::QueryAnswer>,
     ai_job: Option<AiJob>,
@@ -808,6 +817,9 @@ impl Default for ReCraftApp {
             ai_cache: recraft_ai::PromptCache::new(),
             ai_cache_fingerprint: None,
             ai_explanation: None,
+            ai_reasoning: String::new(),
+            ai_reasoning_open: false,
+            ai_thinking: false,
             ai_query: String::new(),
             ai_answer: None,
             ai_job: None,
@@ -1426,23 +1438,34 @@ impl ReCraftApp {
                         .push_str(&chunk);
                     self.ai_status = self.t("ui_streaming").to_owned();
                 }
+                Ok(AiMessage::Reasoning(chunk)) => {
+                    self.ai_reasoning.push_str(&chunk);
+                    self.ai_reasoning_open = true;
+                    self.ai_status = self.t("ui_thinking").to_owned();
+                }
                 Ok(AiMessage::Done(Ok(text))) => {
                     let elapsed = job.started.elapsed().as_millis();
                     if let Some(prompt) = job.prompt.as_ref() {
                         self.ai_cache.insert(prompt, &text);
                     }
                     self.ai_explanation = Some(text);
+                    // Fold the chain-of-thought once the answer is complete.
+                    self.ai_reasoning_open = false;
                     self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Ok(AiMessage::Done(Err(error))) => {
+                    self.ai_reasoning_open = false;
                     self.ai_status = self.t_args("ui_polish_failed", &[("error", &error)]);
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    if self.ai_explanation.is_none() && job.started.elapsed().as_secs() >= 3 {
+                    if self.ai_explanation.is_none()
+                        && self.ai_reasoning.is_empty()
+                        && job.started.elapsed().as_secs() >= 3
+                    {
                         self.ai_status = self.t_args(
                             "ui_waiting_for_first_token",
                             &[("seconds", &job.started.elapsed().as_secs().to_string())],
@@ -3038,6 +3061,8 @@ impl ReCraftApp {
         let explain_label = self.t("ui_explain");
         let polish_label = self.t("ui_polish");
         let clear = self.t("ui_clear");
+        let thinking_mode = self.t("ui_thinking_mode");
+        let thinking_hint = self.t("ui_thinking_hint");
         let has_selection = self
             .ai_selected
             .and_then(|index| self.ai_proposals.get(index))
@@ -3134,7 +3159,55 @@ impl ReCraftApp {
                     }
                 });
             });
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.ai_thinking, thinking_mode.as_str())
+                    .on_hover_text(thinking_hint.as_str());
+            });
         });
+
+        // Chain-of-thought stream (only when the toggle asked for thinking). Expanded while
+        // the model reasons, folded as soon as the answer completes.
+        if !self.ai_reasoning.is_empty() {
+            // Long reasoning passes can reach tens of thousands of characters; render only
+            // the tail so live text layout stays cheap while the count shows the full size.
+            const THINKING_DISPLAY_CHARS: usize = 12_000;
+            let total = self.ai_reasoning.chars().count();
+            let reasoning = if total > THINKING_DISPLAY_CHARS {
+                self.ai_reasoning
+                    .chars()
+                    .skip(total - THINKING_DISPLAY_CHARS)
+                    .collect::<String>()
+            } else {
+                self.ai_reasoning.clone()
+            };
+            let title = self.t_args("ui_thinking_process", &[("chars", &total.to_string())]);
+            let open = self.ai_reasoning_open;
+            let streaming = self.ai_job.is_some();
+            let response =
+                egui::CollapsingHeader::new(RichText::new(title).size(12.0).color(pal.comment))
+                    .id_salt("ai_reasoning")
+                    .open(Some(open))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("ai_reasoning_scroll")
+                            .max_height(160.0)
+                            .auto_shrink([false, false])
+                            .stick_to_bottom(streaming)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(&reasoning)
+                                        .monospace()
+                                        .size(10.0)
+                                        .color(pal.comment),
+                                );
+                            });
+                    });
+            if response.header_response.clicked() {
+                self.ai_reasoning_open = !open;
+            }
+            ui.add_space(8.0);
+        }
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -4792,6 +4865,8 @@ impl ReCraftApp {
                 self.ai_selected = None;
                 self.ai_status.clear();
                 self.ai_explanation = None;
+                self.ai_reasoning.clear();
+                self.ai_reasoning_open = false;
                 self.ai_answer = None;
             }
             Action::AiQuery => {
@@ -4859,9 +4934,12 @@ impl ReCraftApp {
                 let mut settings = self.ai_settings.clone();
                 // OpenCode Go allocates very long reasoning budgets when asked for 64k
                 // completion tokens; a polish answer is typically < 4k, and the high cap
-                // delays the first token by tens of seconds. Keep an 8k ceiling for this
-                // gateway while leaving direct providers (DeepSeek etc.) untouched.
-                settings.max_tokens = polish_token_limit(&settings.endpoint, settings.max_tokens);
+                // delays the first token by tens of seconds. Keep an 8k ceiling on the
+                // direct-answer path; an explicit thinking request needs the full budget.
+                if !self.ai_thinking {
+                    settings.max_tokens =
+                        polish_token_limit(&settings.endpoint, settings.max_tokens);
+                }
                 let fingerprint = format!(
                     "{}|{}|{}",
                     settings.endpoint, settings.model, settings.max_tokens
@@ -4880,6 +4958,16 @@ impl ReCraftApp {
                         return;
                     }
                 };
+                // The toggle opts into the model's reasoning pass and streams it into the
+                // collapsible thinking section; off keeps the fast direct-answer path.
+                let prompt = if self.ai_thinking {
+                    prompt.with_thinking()
+                } else {
+                    prompt
+                };
+                self.ai_explanation = None;
+                self.ai_reasoning.clear();
+                self.ai_reasoning_open = self.ai_thinking;
                 if let Some(cached) = self.ai_cache.get(&prompt) {
                     let text = cached.to_owned();
                     self.ai_explanation = Some(text);
@@ -4891,9 +4979,15 @@ impl ReCraftApp {
                 let (sender, receiver) = mpsc::channel();
                 std::thread::spawn(move || {
                     let mut provider = recraft_ai::provider_from_settings(&settings);
-                    let result = provider.complete_stream(&prompt, &mut |chunk| {
-                        let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
-                    });
+                    let result = provider.complete_stream_with_reasoning(
+                        &prompt,
+                        &mut |chunk| {
+                            let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
+                        },
+                        &mut |reasoning| {
+                            let _ = sender.send(AiMessage::Reasoning(reasoning.to_owned()));
+                        },
+                    );
                     let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
                 });
                 self.ai_job = Some(AiJob {
@@ -5456,6 +5550,10 @@ mod tests {
             ..ReCraftApp::default()
         };
         app.after_open();
+        // Exercise the collapsible thinking section in the AI pane.
+        app.ai_thinking = true;
+        app.ai_reasoning_open = true;
+        app.ai_reasoning = "check the loop bound and the buffer size".to_owned();
 
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
@@ -6511,6 +6609,48 @@ mod tests {
             .unwrap();
         app.poll_ai_job();
         assert_eq!(app.ai_explanation.as_deref(), Some("int main(void)"));
+        assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_reasoning_streams_expands_and_folds_when_done() {
+        let (sender, receiver) = mpsc::channel();
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+                prompt: None,
+            }),
+            ai_thinking: true,
+            ..ReCraftApp::default()
+        };
+        sender
+            .send(AiMessage::Reasoning("plan ".to_owned()))
+            .unwrap();
+        app.poll_ai_job();
+        assert_eq!(app.ai_reasoning, "plan ");
+        assert!(
+            app.ai_reasoning_open,
+            "thinking stays expanded while the model reasons"
+        );
+        assert!(app.ai_explanation.is_none(), "no answer yet");
+
+        sender
+            .send(AiMessage::Reasoning("first".to_owned()))
+            .unwrap();
+        sender
+            .send(AiMessage::Chunk("int main".to_owned()))
+            .unwrap();
+        sender
+            .send(AiMessage::Done(Ok("int main".to_owned())))
+            .unwrap();
+        app.poll_ai_job();
+        assert_eq!(app.ai_reasoning, "plan first");
+        assert!(
+            !app.ai_reasoning_open,
+            "thinking folds once the answer completes"
+        );
+        assert_eq!(app.ai_explanation.as_deref(), Some("int main"));
         assert!(app.ai_job.is_none());
     }
 
