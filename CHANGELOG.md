@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A function that rebuilds its own frame pointer (`rbp = rsp - 0x27`) now names positive
   `[rbp+off]` accesses as locals too, and a stack store that is overwritten later in the
   same straight-line run without a read is removed.
+- The `frame = rsp` alias is treated like `rsp` for stack-slot naming, so spills made
+  through it become `var_XX` and are hidden like any other callee-save pair.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The

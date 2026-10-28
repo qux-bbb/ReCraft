@@ -846,7 +846,12 @@ impl Printer<'_> {
             _ => return None,
         };
         let base_of = |id: ExprId, exprs: &[Expr]| match &exprs[id as usize] {
-            Expr::Reg(view) if matches!(view.base, Reg::Rsp | Reg::Rbp) => Some(view.base),
+            Expr::Reg(view)
+                if matches!(view.base, Reg::Rsp | Reg::Rbp)
+                    || self.frame_reg == Some(view.base) =>
+            {
+                Some(view.base)
+            }
             _ => None,
         };
         let const_of = |id: ExprId, exprs: &[Expr]| match exprs[id as usize] {
@@ -902,7 +907,7 @@ impl Printer<'_> {
             return Some(name.to_owned());
         }
         let rebuilt_frame = base == Reg::Rbp && self.written.contains(&Reg::Rbp);
-        if base == Reg::Rsp || offset < 0 || rebuilt_frame {
+        if base == Reg::Rsp || offset < 0 || rebuilt_frame || self.frame_reg == Some(base) {
             return Some(Self::stack_name(offset));
         }
         None
