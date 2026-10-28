@@ -167,6 +167,7 @@ ui_put_cursor_inside_function = 把光标放到函数内
 ui_enable_provider_for_polish = 先在上方启用提供商（接口地址 + API key 环境变量）再润色
 ui_configure_provider_first = 请先在提供商设置中配置 LLM 模型。
 ui_provider_switched_enter_key = 已切换供应商，请重新输入对应的 API key。
+ui_provider_switched_key_restored = 已切换供应商，已恢复该供应商保存的 API key。
 pane_disassembly = 反汇编
 pane_decompile = 反编译
 pane_hex = 十六进制

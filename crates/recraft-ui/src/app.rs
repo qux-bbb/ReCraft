@@ -721,6 +721,7 @@ pub struct ReCraftApp {
     ai_api_key: String,
     ai_show_key: bool,
     ai_settings: recraft_ai::ProviderSettings,
+    ai_key_id: String,
     ai_cache: recraft_ai::PromptCache,
     ai_cache_fingerprint: Option<String>,
     ai_explanation: Option<String>,
@@ -801,6 +802,7 @@ impl Default for ReCraftApp {
             ai_status: String::new(),
             ai_mode: AiMode::Custom,
             ai_api_key: String::new(),
+            ai_key_id: String::new(),
             ai_show_key: false,
             ai_settings: recraft_ai::ProviderSettings::default(),
             ai_cache: recraft_ai::PromptCache::new(),
@@ -842,6 +844,7 @@ impl ReCraftApp {
         };
         app.ai_mode = AiMode::from_settings(&app.ai_settings);
         app.ai_api_key = app.ai_settings.api_key.clone().unwrap_or_default();
+        app.ai_key_id = app.ai_settings.provider_key_id();
         if app.ai_mode.preset().is_some() {
             app.ai_settings.max_tokens = app.ai_settings.max_tokens.max(65536);
         }
@@ -3398,13 +3401,17 @@ impl ReCraftApp {
     }
 
     /// Switch the AI provider as one unit: endpoint/model preset, API-key field and
-    /// session key. Keeping the previous provider's key here silently sent that secret to
-    /// the newly selected endpoint.
+    /// session key. Keys are remembered per provider so switching back restores the right
+    /// secret; the previous key is never sent to the newly selected endpoint.
     fn switch_ai_mode(&mut self, mode: AiMode) {
         let previous = self.ai_mode;
         if previous == mode {
             return;
         }
+        if !self.ai_api_key.trim().is_empty() {
+            self.ai_settings.api_key = Some(self.ai_api_key.trim().to_owned());
+        }
+        self.ai_settings.remember_current_key();
         self.ai_mode = mode;
         match mode.preset() {
             Some(preset) => preset.apply(&mut self.ai_settings),
@@ -3417,13 +3424,51 @@ impl ReCraftApp {
                 }
             }
         }
-        self.ai_api_key.clear();
-        self.ai_settings.api_key = None;
+        let key = self
+            .ai_settings
+            .saved_api_keys
+            .get(&self.ai_settings.provider_key_id())
+            .cloned();
+        self.ai_api_key = key.clone().unwrap_or_default();
+        self.ai_settings.api_key = key;
         self.ai_settings.api_key_env = recraft_ai::ProviderSettings::default().api_key_env;
-        self.ai_settings.enabled = false;
+        self.ai_settings.refresh_enabled();
         self.ai_cache = recraft_ai::PromptCache::new();
         self.ai_cache_fingerprint = None;
-        self.ai_status = self.t("ui_provider_switched_enter_key").to_owned();
+        self.ai_key_id = self.ai_settings.provider_key_id();
+        self.ai_status = if self.ai_settings.api_key_present() {
+            self.t("ui_provider_switched_key_restored").to_owned()
+        } else {
+            self.t("ui_provider_switched_enter_key").to_owned()
+        };
+    }
+
+    /// Detect a raw endpoint edit in Custom mode. Preserve the key under the old
+    /// endpoint and restore the key remembered for the new endpoint, if any.
+    fn sync_provider_key_identity(&mut self) {
+        let id = self.ai_settings.provider_key_id();
+        if id == self.ai_key_id {
+            return;
+        }
+        if let Some(key) =
+            (!self.ai_api_key.trim().is_empty()).then(|| self.ai_api_key.trim().to_owned())
+        {
+            self.ai_settings
+                .saved_api_keys
+                .insert(self.ai_key_id.clone(), key);
+        }
+        let key = self.ai_settings.saved_api_keys.get(&id).cloned();
+        self.ai_api_key = key.clone().unwrap_or_default();
+        self.ai_settings.api_key = key;
+        self.ai_settings.refresh_enabled();
+        self.ai_key_id = id;
+        self.ai_cache = recraft_ai::PromptCache::new();
+        self.ai_cache_fingerprint = None;
+        self.ai_status = if self.ai_settings.api_key_present() {
+            self.t("ui_provider_switched_key_restored").to_owned()
+        } else {
+            self.t("ui_provider_switched_enter_key").to_owned()
+        };
     }
 
     /// Provider settings editor: built-in DeepSeek / OpenCode Go modes, model picker and a
@@ -3531,9 +3576,11 @@ impl ReCraftApp {
                 if self.ai_mode == AiMode::OpenCodeGo {
                     ui.weak(self.t("ui_opencode_polish_budget_cap"));
                 }
+                self.sync_provider_key_identity();
                 if ui.button(self.t("ui_save_settings")).clicked() {
                     self.ai_settings.api_key = (!self.ai_api_key.trim().is_empty())
                         .then(|| self.ai_api_key.trim().to_owned());
+                    self.ai_settings.remember_current_key();
                     self.ai_settings.refresh_enabled();
                     match self.ai_settings.save() {
                         Ok(()) => {
@@ -6508,6 +6555,24 @@ mod tests {
             app.ai_settings.model,
             recraft_ai::ProviderSettings::default().model
         );
+
+        app.switch_ai_mode(AiMode::DeepSeek);
+        assert_eq!(app.ai_api_key, "deepseek-secret");
+        assert_eq!(app.ai_settings.api_key.as_deref(), Some("deepseek-secret"));
+        assert!(app.ai_settings.enabled);
+        assert!(
+            app.ai_status.contains("API key"),
+            "restored status: {}",
+            app.ai_status
+        );
+
+        // Raw endpoint edits in Custom mode use the same per-provider key memory.
+        app.ai_settings.endpoint = "https://custom.example/v1".to_owned();
+        app.sync_provider_key_identity();
+        assert!(app.ai_api_key.is_empty());
+        app.ai_settings.endpoint = recraft_ai::DEEPSEEK_ENDPOINT.to_owned();
+        app.sync_provider_key_identity();
+        assert_eq!(app.ai_api_key, "deepseek-secret");
     }
 
     #[test]

@@ -120,6 +120,9 @@ pub struct ProviderSettings {
     pub api_key_env: String,
     /// API key entered in the UI. Persisted sealed as `api_key_sealed` (DPAPI on Windows).
     pub api_key: Option<String>,
+    /// Remembered keys per provider identity so switching back does not discard a key.
+    /// Values are sealed independently in `ai-settings.json`.
+    pub saved_api_keys: BTreeMap<String, String>,
     pub max_tokens: usize,
     /// True only when a provider has an endpoint and a key is available.
     pub enabled: bool,
@@ -133,6 +136,7 @@ impl std::fmt::Debug for ProviderSettings {
             .field("model", &self.model)
             .field("api_key_env", &self.api_key_env)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("saved_api_keys", &self.saved_api_keys.len())
             .field("max_tokens", &self.max_tokens)
             .field("enabled", &self.enabled)
             .finish()
@@ -147,6 +151,7 @@ impl Default for ProviderSettings {
             model: "gpt-4o-mini".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
             api_key: None,
+            saved_api_keys: BTreeMap::new(),
             max_tokens: 65536,
             enabled: false,
         }
@@ -184,6 +189,28 @@ impl ProviderSettings {
     /// Read the real process environment (disabled until a provider is configured).
     pub fn from_env() -> Self {
         ProviderSettings::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Stable identity for remembering a key across provider switches.
+    pub fn provider_key_id(&self) -> String {
+        let endpoint = self.endpoint.trim_end_matches('/');
+        if endpoint.contains("api.deepseek.com") {
+            "deepseek".to_owned()
+        } else if endpoint.contains("opencode.ai") {
+            "opencode-go".to_owned()
+        } else if endpoint.is_empty() {
+            "unconfigured".to_owned()
+        } else {
+            format!("custom:{endpoint}")
+        }
+    }
+
+    /// Remember the currently entered key under the current provider identity.
+    pub fn remember_current_key(&mut self) {
+        if let Some(key) = self.api_key.as_deref().filter(|key| !key.is_empty()) {
+            self.saved_api_keys
+                .insert(self.provider_key_id(), key.to_owned());
+        }
     }
 
     /// Persisted provider settings location (`%LOCALAPPDATA%\ReCraft\ai-settings.json`).
@@ -231,6 +258,17 @@ impl ProviderSettings {
         if let Some(sealed) = value.get("api_key_sealed").and_then(|value| value.as_str()) {
             settings.api_key = crate::secret::open(sealed);
         }
+        if let Some(keys) = value.get("api_keys").and_then(|value| value.as_object()) {
+            for (id, sealed) in keys {
+                if let Some(key) = sealed.as_str().and_then(crate::secret::open) {
+                    settings.saved_api_keys.insert(id.clone(), key);
+                }
+            }
+        }
+        if let Some(key) = settings.api_key.clone() {
+            let id = settings.provider_key_id();
+            settings.saved_api_keys.entry(id).or_insert(key);
+        }
         Some(settings)
     }
 
@@ -261,6 +299,15 @@ impl ProviderSettings {
         if let Some(key) = self.api_key.as_deref().filter(|key| !key.is_empty()) {
             value["api_key_sealed"] = serde_json::Value::String(crate::secret::seal(key)?);
         }
+        let mut saved = self.saved_api_keys.clone();
+        if let Some(key) = self.api_key.as_deref().filter(|key| !key.is_empty()) {
+            saved.insert(self.provider_key_id(), key.to_owned());
+        }
+        let mut sealed_keys = serde_json::Map::new();
+        for (id, key) in saved {
+            sealed_keys.insert(id, serde_json::Value::String(crate::secret::seal(&key)?));
+        }
+        value["api_keys"] = serde_json::Value::Object(sealed_keys);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|error| Error::internal(format!("cannot encode settings: {error}")))?;
         std::fs::write(path, text).map_err(|error| {
@@ -1218,6 +1265,7 @@ mod tests {
             model: "test-model".to_owned(),
             api_key_env: "RECRAFT_AI_API_KEY".to_owned(),
             api_key: None,
+            saved_api_keys: BTreeMap::new(),
             max_tokens: 256,
             enabled: true,
         }
@@ -1240,6 +1288,34 @@ mod tests {
         assert!(
             settings.max_tokens >= 65536,
             "reasoning models need a large polish budget"
+        );
+    }
+
+    #[test]
+    fn saved_api_keys_roundtrip_per_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-settings.json");
+        let mut settings = ProviderSettings {
+            endpoint: DEEPSEEK_ENDPOINT.to_owned(),
+            model: "deepseek-chat".to_owned(),
+            api_key: Some("deepseek-secret".to_owned()),
+            ..ProviderSettings::default()
+        };
+        settings.remember_current_key();
+        settings.endpoint = OPENCODE_GO_ENDPOINT.to_owned();
+        settings.model = "glm-5.3-flash".to_owned();
+        settings.api_key = Some("opencode-secret".to_owned());
+        settings.remember_current_key();
+        settings.save_to(&path).unwrap();
+
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(
+            loaded.saved_api_keys.get("deepseek").map(String::as_str),
+            Some("deepseek-secret")
+        );
+        assert_eq!(
+            loaded.saved_api_keys.get("opencode-go").map(String::as_str),
+            Some("opencode-secret")
         );
     }
 

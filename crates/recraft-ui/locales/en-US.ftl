@@ -167,6 +167,7 @@ ui_put_cursor_inside_function = put the cursor inside a function
 ui_enable_provider_for_polish = enable a provider above (endpoint + API key env) to use polish
 ui_configure_provider_first = Configure an LLM provider in Provider settings first.
 ui_provider_switched_enter_key = provider switched; enter the API key for the new provider.
+ui_provider_switched_key_restored = provider switched; restored the saved API key for this provider.
 pane_disassembly = Disassembly
 pane_decompile = Decompile
 pane_hex = Hex

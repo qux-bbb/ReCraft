@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Switching the AI provider now updates the endpoint, model and API-key field together:
-  the previous session key is cleared, the key environment name resets to the default,
-  and the provider is marked disabled until a key for the new provider is entered.
-  Selecting the already-active provider leaves the current key untouched.
+  the outgoing key is remembered per provider, the matching key is restored, and an
+  unknown provider starts disabled with an empty key field. Key environment names reset
+  to the default, prompt caches are invalidated, and raw Custom-endpoint edits use the
+  same key memory. Selecting the already-active provider leaves the current key untouched.
 - Decompiler structuring now duplicates terminal blocks that end in padding/external
   tail calls instead of leaving a jump to an unemitted label, drops straight-line code
   after an unconditional `return`, and folds jumps to return-only labels. Shared blocks
