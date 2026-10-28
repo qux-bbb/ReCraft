@@ -64,6 +64,28 @@ goto fallback functions: 0
 又补了 `movups/movdqu/movdqa` 内存形式、`ror/rol`、间接 call / IAT 尾调用、共享尾部链
 复制与 `bt`/SF/`setcc` 标志语义。因此 99.4% / 97.0% 是可复现的真实口径。
 
+## 伪代码后处理（L1/L2 共用）
+
+结构化发射之后，`structuring.rs` 依次执行一组保守的文本级折叠；每一步都必须保持
+**每个 `goto` 都有同名标签**、**花括号平衡**、**条件非空**这三条不变量（corpus 上由
+`generated_gotos_always_have_a_label` 与 `generated_output_has_balanced_braces` 断言）：
+
+| 处理 | 作用 |
+|---|---|
+| 标签/尾部复制 | 共享尾部、末尾标签、兄弟分支尾部复制为 `if`/直写；最多 48 行、允许内部标签 |
+| 死代码裁剪 | `return` 之后按花括号深度整段删除；被外部跳转引用的标签保留 |
+| 短路合臂 | 相邻且体相同的终止 `if` 合并为 `if (a \|\| b)` |
+| 表达式收拢 | `x = (x + n)` → `x += n`；`r = *(T*)(a); r -= k; *(T*)(a) = r;` → `*(T*)(a) -= k;` |
+| 条件清理 | `if (!(x == 0))` → `if (x != 0)`；整条件外层多余括号去掉 |
+| 参数传播 | 序言里 `rsi = arg1` 且此后不再赋值时，所有读取改用 `arg1` 并删掉复制 |
+| 栈槽/保留寄存器 | 只用于保存/恢复的 callee-saved 槽隐藏；`frame = rsp` 别名按 `rsp` 命名；死栈写删除 |
+| 调用美化 | IAT 槽解析成 API 名，`rcx/rdx/r8/r9` 渲染为实参，栈地址写成 `&var_XX` |
+| 尾跳 | 目标越过函数末尾的跳转渲染为 `return sub_xxx();` |
+
+这些处理是**纯文本**的，因此只做能由文本证明安全的变换（例如参数传播要求复制位于
+任何分支之前的直线序言、寄存器为 callee-saved 且全函数只写一次）。不满足条件的
+情况保留原始 `goto`——这是设计允许的降级路径，而不是质量缺陷。
+
 ## 畸形输入回归（DESIGN §11 的离线 fuzz 替代）
 
 `crates/recraft-format/tests/malformed.rs` 用确定性 xorshift PRNG 覆盖三类输入，要求
