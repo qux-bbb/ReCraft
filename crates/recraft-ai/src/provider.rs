@@ -58,8 +58,9 @@ pub enum ProviderPreset {
 pub const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com";
 /// OpenCode Go OpenAI-compatible endpoint.
 pub const OPENCODE_GO_ENDPOINT: &str = "https://opencode.ai/inference/go/openai";
-/// Common DeepSeek model ids.
-pub const DEEPSEEK_MODELS: &[&str] = &["deepseek-chat", "deepseek-reasoner"];
+/// Current DeepSeek model ids. `deepseek-chat` / `deepseek-reasoner` were retired on
+/// 2026-07-24 and no longer resolve, so the picker only offers the live V4 lineup.
+pub const DEEPSEEK_MODELS: &[&str] = &["deepseek-flash", "deepseek-v4-pro"];
 /// A subset of OpenCode Go model ids that are useful for code reasoning.
 pub const OPENCODE_GO_MODELS: &[&str] = &[
     "deepseek-v4.1-flash",
@@ -93,7 +94,7 @@ impl ProviderPreset {
     }
 
     pub fn default_model(self) -> &'static str {
-        self.models().first().copied().unwrap_or("deepseek-chat")
+        self.models().first().copied().unwrap_or("deepseek-flash")
     }
 
     /// Apply the preset to settings, keeping the current model when it is valid.
@@ -249,6 +250,7 @@ impl ProviderSettings {
         if let Some(model) = value.get("model").and_then(|value| value.as_str()) {
             settings.model = model.to_owned();
         }
+        settings.migrate_retired_model();
         if let Some(api_key_env) = value.get("api_key_env").and_then(|value| value.as_str()) {
             settings.api_key_env = api_key_env.to_owned();
         }
@@ -270,6 +272,17 @@ impl ProviderSettings {
             settings.saved_api_keys.entry(id).or_insert(key);
         }
         Some(settings)
+    }
+
+    /// Replace a model id the DeepSeek API has retired with the current preset default, so
+    /// settings persisted by older builds do not keep requesting a model that no longer
+    /// resolves.
+    fn migrate_retired_model(&mut self) {
+        if self.endpoint.contains("api.deepseek.com")
+            && matches!(self.model.as_str(), "deepseek-chat" | "deepseek-reasoner")
+        {
+            self.model = ProviderPreset::DeepSeek.default_model().to_owned();
+        }
     }
 
     /// Persist to the default per-user location.
@@ -1218,6 +1231,29 @@ mod tests {
     }
 
     #[test]
+    fn retired_deepseek_models_migrate_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-settings.json");
+        std::fs::write(
+            &path,
+            r#"{"kind":"openai","endpoint":"https://api.deepseek.com","model":"deepseek-chat","api_key_env":"RECRAFT_AI_API_KEY","max_tokens":65536}"#,
+        )
+        .unwrap();
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(loaded.endpoint, DEEPSEEK_ENDPOINT);
+        assert_eq!(loaded.model, "deepseek-flash");
+
+        // A custom endpoint may legitimately keep a model id we do not know about.
+        std::fs::write(
+            &path,
+            r#"{"kind":"openai","endpoint":"https://gateway.example/v1","model":"deepseek-chat"}"#,
+        )
+        .unwrap();
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(loaded.model, "deepseek-chat");
+    }
+
+    #[test]
     fn http_provider_requires_endpoint_and_key() {
         let settings = ProviderSettings::from_lookup(|name| match name {
             "RECRAFT_AI_PROVIDER" => Some("openai".to_owned()),
@@ -1309,7 +1345,19 @@ mod tests {
         ProviderPreset::DeepSeek.apply(&mut settings);
         assert_eq!(settings.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(settings.endpoint, DEEPSEEK_ENDPOINT);
-        assert_eq!(settings.model, "deepseek-chat");
+        assert_eq!(settings.model, "deepseek-flash");
+        assert_eq!(
+            ProviderPreset::DeepSeek.models(),
+            ["deepseek-flash", "deepseek-v4-pro"].as_slice(),
+            "only the live DeepSeek lineup is offered"
+        );
+        assert!(
+            !ProviderPreset::DeepSeek
+                .models()
+                .iter()
+                .any(|model| model.contains("chat") || model.contains("reasoner")),
+            "retired DeepSeek ids must not be offered"
+        );
 
         ProviderPreset::OpenCodeGo.apply(&mut settings);
         assert_eq!(settings.endpoint, OPENCODE_GO_ENDPOINT);
@@ -1326,7 +1374,7 @@ mod tests {
         let path = dir.path().join("ai-settings.json");
         let mut settings = ProviderSettings {
             endpoint: DEEPSEEK_ENDPOINT.to_owned(),
-            model: "deepseek-chat".to_owned(),
+            model: "deepseek-flash".to_owned(),
             api_key: Some("deepseek-secret".to_owned()),
             ..ProviderSettings::default()
         };
@@ -1353,7 +1401,7 @@ mod tests {
         let mut settings = ProviderSettings {
             kind: ProviderKind::OpenAiCompatible,
             endpoint: DEEPSEEK_ENDPOINT.to_owned(),
-            model: "deepseek-chat".to_owned(),
+            model: "deepseek-flash".to_owned(),
             api_key: Some("sk-session-secret".to_owned()),
             ..ProviderSettings::default()
         };
