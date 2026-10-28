@@ -2,7 +2,7 @@
 void caller_l1(void) {
     if (ecx <= 0xADDR /* signed */) {
         eax = 0;
-        ecx = ((ecx < 0xADDR /* signed */) ? eax : ecx);
+        ecx = ((ecx < -0xADDR /* signed */) ? eax : ecx);
         eax = ecx;
         return;
     }

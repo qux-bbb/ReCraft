@@ -21,7 +21,7 @@ void nested_loops_l1(void) {
         if (ebx >= 8) {
             if (ebp >= 2 /* signed */) {
                 ecx = ebx;
-                ecx &= 0xADDR;
+                ecx &= -0xADDR;
                 do {
                     xmm0 = edx;
                     eax = (rdx + 4);

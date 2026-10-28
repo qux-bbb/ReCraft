@@ -9,7 +9,7 @@ void bytes_op_l1(void) {
         if (r11d >= 8) {
             r9 = r11;
             xmm3 = 0;
-            r9 &= 0xADDR;
+            r9 &= -0xADDR;
             xmm2 = 0;
             rdx = r10;
             do {

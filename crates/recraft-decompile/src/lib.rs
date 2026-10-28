@@ -1171,6 +1171,16 @@ impl Printer<'_> {
                 if let Some(literal) = self.literals.get(value) {
                     return literal.clone();
                 }
+                let signed = *value as i64;
+                if (-0x1_0000..0).contains(&signed) {
+                    // Sign-extended small negatives (`add eax, -0x30`, `or rax, -1`)
+                    // read better as negative literals than as 16 hex digits.
+                    return if signed == -1 {
+                        "-1".to_owned()
+                    } else {
+                        format!("-{:#x}", -signed)
+                    };
+                }
                 if *value < 10 {
                     value.to_string()
                 } else {

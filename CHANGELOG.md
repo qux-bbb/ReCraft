@@ -72,6 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same straight-line run without a read is removed.
 - The `frame = rsp` alias is treated like `rsp` for stack-slot naming, so spills made
   through it become `var_XX` and are hidden like any other callee-save pair.
+- Small sign-extended constants print as negative literals (`or rax, -1` instead of
+  `or rax, 0xffffffffffffffff`, `and r9, -8` for a `0xfffffffffffffff8` mask), and
+  `x |= -1` folds to `x = -1`.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The

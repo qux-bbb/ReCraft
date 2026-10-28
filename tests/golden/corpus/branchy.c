@@ -4,7 +4,7 @@ void branchy_l1(void) {
     if (ecx <= 0xADDR /* signed */) {
         ecx = -(ecx);
         eax = 0;
-        eax = ((edx < 0xADDR /* signed */) ? ecx : eax);
+        eax = ((edx < -0xADDR /* signed */) ? ecx : eax);
         return;
     }
     eax = (rcx + (rcx * 1));

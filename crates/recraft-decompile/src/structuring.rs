@@ -2049,11 +2049,30 @@ fn fold_compound_assignments(lines: &mut [PseudoLine]) {
         else {
             continue;
         };
-        let value = rest[operator.len()..].trim();
+        let mut value = rest[operator.len()..].trim();
         if value.is_empty() {
             continue;
         }
+        // `x = (x + -0x30)` -> `x -= 0x30`; `x |= -1` sets every bit, i.e. assigns -1.
+        let mut operator = operator;
+        if let Some(stripped) = value.strip_prefix('-') {
+            match operator {
+                "+" => {
+                    operator = "-";
+                    value = stripped;
+                }
+                "-" => {
+                    operator = "+";
+                    value = stripped;
+                }
+                _ => {}
+            }
+        }
         let indent = " ".repeat(leading_spaces(&line.text));
+        if operator == "|" && value == "-1" {
+            line.text = format!("{indent}{lhs} = -1;");
+            continue;
+        }
         line.text = format!("{indent}{lhs} {operator}= {value};");
     }
 }
@@ -2479,6 +2498,8 @@ fn parse_dereference(text: &str) -> Option<(&str, &str)> {
     let address = rest.strip_prefix('(')?.strip_suffix(')')?;
     Some((ty, address))
 }
+
+/// Merge consecutive `if (c) { body }` arms that share an identical terminating body into
 /// one `if (c1 || c2) { body }`. Compilers lower a short-circuit `||` chain into a series
 /// of conditional jumps to the same block; without this pass the structurer duplicates the
 /// body once per condition, which hides the original `||` expression.
@@ -3823,6 +3844,14 @@ mod tests {
         assert!(text.contains("if ((eax != 0)) {"), "{text}");
         assert!(!text.contains("eax = (eax - 1);"), "{text}");
         assert!(!text.contains("*(u32*)(rdi) = eax;"), "{text}");
+
+        let mut lines = vec![
+            test_line("    eax = (eax + -0x30);"),
+            test_line("    ecx = (ecx | -1);"),
+        ];
+        fold_compound_assignments(&mut lines);
+        assert_eq!(lines[0].text, "    eax -= 0x30;");
+        assert_eq!(lines[1].text, "    ecx = -1;");
     }
 
     #[test]
