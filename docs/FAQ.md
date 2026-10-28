@@ -8,15 +8,16 @@
 ## 2. 反编译质量到什么程度？
 
 伪代码是**可读但不保证可编译**的 C-like 输出，每个 token 可回溯到指令地址（DESIGN §7）。
-corpus 基准：语义覆盖 97.1%、结构化成功率 93.1%；真实样本（notepad）结构化 62.4%。
+corpus 基准：语义覆盖 97.4%、结构化成功率 100%；真实样本（notepad）覆盖 99.4%、
+结构化 97.0%（487/502）。
 复杂异常处理/不可归约控制流会回退到 `goto` 标签，这是设计允许的降级路径。
 
 ## 3. AI 会把我的样本/伪代码发到云端吗？
 
-默认**不联网**：AI 功能默认是确定性启发式（解释/命名/摘要），provider 为 `heuristic` 且
-`enabled=false`。只有显式配置 `RECRAFT_AI_PROVIDER` + endpoint + API key 后才会发送，
-发送前经过脱敏（URL/IP/邮箱）与 token 预算裁剪，并且可以用 `recraft ai prompt` 先审阅。
-详见 [docs/AI.md](AI.md)。
+默认**不联网**：AI 功能需要先显式配置 provider（DeepSeek / OpenCode Go / 自定义
+OpenAI 兼容端点）、endpoint 和 API key，否则解释/建议/查询/润色都会提示先配置；
+配置后发送前仍会经过脱敏（URL/IP/邮箱）与 token 预算裁剪，并且可以用
+`recraft ai prompt` 先审阅。详见 [docs/AI.md](AI.md)。
 
 ## 4. AI 能直接改我的数据库吗？
 

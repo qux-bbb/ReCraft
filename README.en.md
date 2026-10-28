@@ -6,7 +6,8 @@
 > (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type writes through a journaled command bus with undo, MCP read-only server, and
 > provider-backed AI (explain / rename proposals / triage) with a propose-apply UI.
-> Quality gates: corpus semantic coverage **97.1%**, structured rate **93.1%**; 1 GiB
+> Quality gates: corpus semantic coverage **97.4%**, structured rate **100%**; notepad
+> **99.4%** coverage and **97.0%** structured (487/502); 1 GiB
 > sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
 > [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
 
