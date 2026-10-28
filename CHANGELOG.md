@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Call arguments that pass the address of a local now print as `&var_XX` instead of a raw
   `(rbp - 0x30)` pointer expression, for direct and indirect calls alike, and a full-width
   copy of an argument register (`rsi = arg1`) keeps the parameter name for later reads.
+- Callee-save bookkeeping is removed whenever a spill slot is only saved and restored:
+  one save may pair with several restores, and a save that is never restored counts as
+  dead. On notepad the pseudocode shrinks by ~800 lines and most functions now start with
+  their first real statement instead of `var_8 = rbx; ...`.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The

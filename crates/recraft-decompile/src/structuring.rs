@@ -236,6 +236,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
+    // Duplicate spills to one slot were just collapsed, so more save/restore pairs are
+    // recognizable now.
+    hide_callee_saves(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -1643,7 +1646,8 @@ fn nested_loop_leaves_parent(
 
 /// Hide compiler callee-saved spills (`var_XX = rbx` ... `rbx = var_XX`) when the slot
 /// is used for nothing else. They preserve the caller's register but add no meaning to
-/// pseudo-C. A slot with any other reference stays visible.
+/// pseudo-C. One save may be paired with several restores (every return path restores the
+/// register); a slot with any other reference stays visible.
 fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
     let mut saves: BTreeMap<String, (&str, usize)> = BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
@@ -1662,25 +1666,37 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
 
     let mut remove = BTreeSet::new();
     for (slot, (reg, save_index)) in &saves {
-        let references = lines
+        let references: Vec<usize> = lines
             .iter()
-            .filter(|line| mentions_slot(&line.text, slot))
-            .count();
-        if references != 2 {
+            .enumerate()
+            .filter(|(_, line)| mentions_slot(&line.text, slot))
+            .map(|(index, _)| index)
+            .collect();
+        if references.len() > 8 {
             continue;
         }
-        let restore = lines.iter().position(|line| {
-            line.text
-                .trim()
-                .strip_suffix(';')
-                .is_some_and(|text| text == format!("{reg} = {slot}"))
-        });
-        if let Some(restore) = restore
-            && restore > *save_index
-        {
+        if references.len() == 1 {
+            // The saved value is never restored or read; the store is dead.
             remove.insert(*save_index);
-            remove.insert(restore);
+            continue;
         }
+        let expected_restore = format!("{reg} = {slot};");
+        let mut restores = Vec::new();
+        for &index in &references {
+            if index == *save_index {
+                continue;
+            }
+            if index < *save_index || lines[index].text.trim() != expected_restore {
+                restores.clear();
+                break;
+            }
+            restores.push(index);
+        }
+        if restores.is_empty() {
+            continue;
+        }
+        remove.insert(*save_index);
+        remove.extend(restores);
     }
     if remove.is_empty() {
         return;
@@ -3220,6 +3236,40 @@ mod tests {
         assert!(text.contains("rdi = var_10"), "{text}");
     }
 
+    #[test]
+    fn callee_save_with_several_restores_is_hidden() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x10),
+                text: "    var_8 = rbx;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x14),
+                text: "    eax = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x18),
+                text: "    rbx = var_8;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1c),
+                text: "    return;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    rbx = var_8;".to_owned(),
+            },
+        ];
+        hide_callee_saves(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("var_8"), "{text}");
+        assert!(text.contains("eax = 1;"), "{text}");
+    }
+
     fn analyzed_corpus() -> Option<(Session, TempDir)> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../corpus/build/x64/corpus.exe");
@@ -3346,7 +3396,9 @@ mod tests {
             "argument reads were not renamed:\n{text}"
         );
 
-        let nested = function_start(&session, "nested_loops").unwrap();
+        // `start` keeps real stack locals (the argument/loop-only test cases have their
+        // spills hidden as callee-save bookkeeping).
+        let nested = function_start(&session, "start").unwrap();
         let text = pseudocode_l2(&mut session, nested).unwrap().text();
         assert!(text.contains("var_"), "stack slots were not named:\n{text}");
     }
