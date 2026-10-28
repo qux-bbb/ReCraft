@@ -235,6 +235,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     strip_condition_parentheses(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
+    drop_overwritten_assignments(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -2129,6 +2130,80 @@ fn matching_close(text: &str) -> Option<usize> {
     None
 }
 
+/// Remove an assignment that the very next statement overwrites without reading it:
+/// `var_n8 = rdi; var_n8 = r14;` keeps only the second store. Compilers spill several
+/// incoming registers to the same slot before the frame settles; those earlier stores are
+/// dead and only add noise. The value being dropped must be side-effect free (no call), so
+/// a discarded call is never removed.
+fn drop_overwritten_assignments(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let Some((first_lhs, first_rhs)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        let Some((second_lhs, second_rhs)) = plain_assignment(&lines[index + 1].text) else {
+            index += 1;
+            continue;
+        };
+        if first_lhs != second_lhs || !is_identifier(first_lhs) {
+            index += 1;
+            continue;
+        }
+        if contains_call(first_rhs) || mentions_slot(second_rhs, first_lhs) {
+            index += 1;
+            continue;
+        }
+        lines.remove(index);
+    }
+}
+
+/// Split `x = rhs;` into `(x, rhs)` for a plain assignment to an identifier.
+fn plain_assignment(text: &str) -> Option<(&str, &str)> {
+    let statement = text.trim().strip_suffix(';')?;
+    if statement.contains(" += ")
+        || statement.contains(" -= ")
+        || statement.contains(" *= ")
+        || statement.contains(" &= ")
+        || statement.contains(" |= ")
+        || statement.contains(" ^= ")
+        || statement.contains(" <<= ")
+        || statement.contains(" >>= ")
+    {
+        return None;
+    }
+    let (lhs, rhs) = statement.split_once(" = ")?;
+    Some((lhs.trim(), rhs.trim()))
+}
+
+/// True when the expression calls a function (`sub_...(...)`, an API, `__asm(...)`).
+fn contains_call(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte.is_ascii_alphabetic() || byte == b'_' {
+            let start = index;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            let mut next = index;
+            while next < bytes.len() && bytes[next] == b' ' {
+                next += 1;
+            }
+            if next < bytes.len() && bytes[next] == b'(' && next > start {
+                return true;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// True when the text is exactly one identifier (no operators or spaces inside).
 fn is_identifier(text: &str) -> bool {
     let mut chars = text.chars();
     chars
@@ -3678,6 +3753,30 @@ mod tests {
         assert_eq!(lines[0].text, "    if (eax == 0) {");
         assert_eq!(lines[1].text, "    while (rdx != 1) {");
         assert_eq!(lines[2].text, "    if ((a) && (b)) {");
+    }
+
+    #[test]
+    fn overwritten_assignments_are_dropped_unless_the_value_is_read() {
+        let mut lines = vec![
+            test_line("    var_n8 = rdi;"),
+            test_line("    var_n8 = r14;"),
+            test_line("    var_n8 = r15;"),
+            test_line("    rax = 1;"),
+            test_line("    rax = (rax + 1);"),
+            test_line("    eax = sub_1();"),
+            test_line("    eax = 0;"),
+        ];
+        drop_overwritten_assignments(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(lines.len(), 5, "{text}");
+        assert!(text.contains("var_n8 = r15;"), "{text}");
+        assert!(!text.contains("var_n8 = rdi;"), "{text}");
+        assert!(text.contains("(rax + 1)"), "{text}");
+        assert!(text.contains("sub_1();"), "{text}");
     }
 
     #[test]
