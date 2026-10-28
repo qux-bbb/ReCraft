@@ -1962,30 +1962,64 @@ fn drop_unreachable_tails(lines: &mut Vec<PseudoLine>) {
         }
         let indent = leading_spaces(&lines[index].text);
         let mut end = index + 1;
+        let mut depth = 0usize;
         while end < lines.len() {
             let text = lines[end].text.trim();
             let is_label = text.starts_with("loc_") && text.ends_with(':');
-            if is_label {
-                // A forward `goto` may appear after the label; removing the label would
-                // leave that jump dangling. Only drop labels that no live jump names.
-                let label = text.trim_end_matches(':');
-                let referenced = lines
-                    .iter()
-                    .any(|line| line.text.contains(&format!("goto {label}")));
-                if !referenced {
-                    // An orphan label after `return` cannot be reached; drop it and keep
-                    // scanning the dead tail behind it.
-                    lines.remove(end);
-                    continue;
+            if depth == 0 {
+                if is_label {
+                    // A forward `goto` may appear after the label; removing the label
+                    // would leave that jump dangling. Only drop labels that no live jump
+                    // names.
+                    let label = text.trim_end_matches(':');
+                    let referenced = lines
+                        .iter()
+                        .any(|line| line.text.contains(&format!("goto {label}")));
+                    if !referenced {
+                        // An orphan label after `return` cannot be reached; drop it and
+                        // keep scanning the dead tail behind it.
+                        lines.remove(end);
+                        continue;
+                    }
+                }
+                if text.starts_with('}') || leading_spaces(&lines[end].text) < indent || is_label {
+                    break;
                 }
             }
-            if text.starts_with('}') || leading_spaces(&lines[end].text) < indent || is_label {
-                break;
+            // A nested `if { ... }` in the dead tail is removed as a whole; stopping at
+            // its closing brace would leave a stray `}` behind.
+            if text.starts_with('}') {
+                depth = depth.saturating_sub(1);
             }
+            depth += text.matches('{').count();
+            depth = depth.saturating_sub(
+                text.matches('}')
+                    .count()
+                    .saturating_sub(usize::from(text.starts_with('}'))),
+            );
             end += 1;
         }
         if end > index + 1 {
-            lines.drain(index + 1..end);
+            // A nested label inside the region may be the target of a live jump from
+            // outside it; then the region is reachable through that jump and must stay.
+            let labels: BTreeSet<&str> = lines[index + 1..end]
+                .iter()
+                .filter_map(|line| {
+                    let text = line.text.trim();
+                    text.strip_suffix(':')
+                        .filter(|label| label.starts_with("loc_"))
+                })
+                .collect();
+            let referenced_outside = lines.iter().enumerate().any(|(line_index, line)| {
+                if (index + 1..end).contains(&line_index) {
+                    return false;
+                }
+                goto_target(&line.text)
+                    .is_some_and(|target| labels.contains(format!("loc_{target:x}").as_str()))
+            });
+            if !referenced_outside {
+                lines.drain(index + 1..end);
+            }
         }
         index += 1;
     }

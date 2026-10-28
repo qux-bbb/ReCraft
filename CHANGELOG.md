@@ -90,6 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - L2 signatures fill gaps between recovered x64 argument registers: a function that reads
   `rcx` and `r8` is declared with `arg1, arg2, arg3` instead of silently omitting the unused
   `rdx` parameter, so the parameter list matches the calling convention.
+- Dead-tail pruning now removes a nested `if { … }` region as a whole instead of stopping at
+  its closing brace, which used to leave a stray `}` behind (3 kernel32 and 11 Go functions).
+  A region holding a label that an outside jump still names is kept, so the fix does not
+  reintroduce dangling jumps. kernel32 now has 0 of 2567 functions with unbalanced braces or
+  missing labels.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The
