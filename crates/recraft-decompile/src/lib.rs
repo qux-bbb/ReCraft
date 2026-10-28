@@ -1331,6 +1331,26 @@ mod tests {
     }
 
     #[test]
+    fn import_slots_map_to_sanitised_c_names() {
+        let dir = TempDir::new().unwrap();
+        let Some(session) = session(&dir) else {
+            return;
+        };
+        let names = import_names(&session);
+        assert!(!names.is_empty(), "the sample PE has no named imports");
+        assert!(
+            names.values().all(|name| {
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            }),
+            "import names must be valid C identifiers: {:?}",
+            names.values().take(8).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn renders_notepad_entry() {
         let dir = TempDir::new().unwrap();
         let Some(mut session) = session(&dir) else {
