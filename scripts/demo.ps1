@@ -46,8 +46,17 @@ function Step([string]$title) {
 
 function Run-Recraft([string[]]$Arguments) {
     Write-Host ('$ recraft ' + ($Arguments -join ' ')) -ForegroundColor DarkGray
-    $output = & $Recraft @Arguments
-    if ($LASTEXITCODE -ne 0) { throw ("recraft {0} failed" -f ($Arguments -join ' ')) }
+    # Progress lines from import/analyze go to stderr; capture them without letting the
+    # script's $ErrorActionPreference='Stop' turn a stderr line into a terminating error.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $Recraft @Arguments 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($code -ne 0) { throw ("recraft {0} failed" -f ($Arguments -join ' ')) }
     return $output
 }
 
@@ -94,22 +103,27 @@ try {
         Write-Host '[skip] sample has no field_probe; struct demo needs the corpus fixture'
     }
 
-    Step '7. AI assist (offline heuristics + propose/apply)'
-    # The corpus fixture has no imports/strings, so run the AI demo on a real sample.
-    $realProject = $project
-    $notepad = Join-Path $env:SystemRoot 'System32\notepad.exe'
-    if (Test-Path -LiteralPath $notepad) {
-        $realProject = Join-Path $work 'real.rcraft'
-        Run-Recraft @('import', $notepad, '-o', $realProject) | Out-Null
-        Run-Recraft @('analyze', $realProject) | Out-Null
-        Write-Host "AI demo project: $notepad"
+    Step '7. AI assist (requires a configured provider)'
+    $providerStatus = (Run-Recraft @('ai', 'provider') -join "`n")
+    if ($providerStatus -match 'state=disabled') {
+        Write-Host '[skip] AI provider is disabled; configure it in the AI panel and re-run.'
+    } else {
+        # The corpus fixture has no imports/strings, so run the AI demo on a real sample.
+        $realProject = $project
+        $notepad = Join-Path $env:SystemRoot 'System32\notepad.exe'
+        if (Test-Path -LiteralPath $notepad) {
+            $realProject = Join-Path $work 'real.rcraft'
+            Run-Recraft @('import', $notepad, '-o', $realProject) | Out-Null
+            Run-Recraft @('analyze', $realProject) | Out-Null
+            Write-Host "AI demo project: $notepad"
+        }
+        (Run-Recraft @('ai', 'triage', $realProject) | Select-Object -First 14) | ForEach-Object { Write-Host $_ }
+        Run-Recraft @('ai', 'suggest', $realProject, '--limit', '3', '--out', $proposals) | ForEach-Object { Write-Host $_ }
+        $lines = (Get-Content -Raw -LiteralPath $proposals) -split "`r?`n"
+        ($lines | Select-Object -First 22) | ForEach-Object { Write-Host $_ }
+        (Run-Recraft @('ai', 'apply', $realProject, $proposals, '--yes') | Select-Object -First 5) | ForEach-Object { Write-Host $_ }
+        (Run-Recraft @('undo', $realProject)) | ForEach-Object { Write-Host ("undo: " + $_) }
     }
-    (Run-Recraft @('ai', 'triage', $realProject) | Select-Object -First 14) | ForEach-Object { Write-Host $_ }
-    Run-Recraft @('ai', 'suggest', $realProject, '--limit', '3', '--out', $proposals) | ForEach-Object { Write-Host $_ }
-    $lines = (Get-Content -Raw -LiteralPath $proposals) -split "`r?`n"
-    ($lines | Select-Object -First 22) | ForEach-Object { Write-Host $_ }
-    (Run-Recraft @('ai', 'apply', $realProject, $proposals, '--yes') | Select-Object -First 5) | ForEach-Object { Write-Host $_ }
-    (Run-Recraft @('undo', $realProject)) | ForEach-Object { Write-Host ("undo: " + $_) }
 
     Step '8. MCP server (newline-delimited JSON-RPC over stdio)'
     $mcpLines = @(
