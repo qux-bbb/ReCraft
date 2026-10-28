@@ -39,10 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Decompiled pseudocode now reads closer to source: `x = (x + n);` becomes `x += n;`,
-  `r = *(T*)(a); r -= k; *(T*)(a) = r;` collapses to `*(T*)(a) -= k;`, and
-  `if (!(x == 0))` becomes `if (x != 0)`. The negation helper used chained string
-  replacements that cancelled each other (`==` → `!=` → `==`), so equality branches kept a
-  redundant `!`; it now flips exactly one comparison and leaves `&&`/`||` conditions
+  `r = *(T*)(a); r -= k; *(T*)(a) = r;` collapses to `*(T*)(a) -= k;`,
+  `if (!(x == 0))` becomes `if (x != 0)`, the redundant wrapper around a whole condition
+  is dropped (`if ((x == 0))` becomes `if (x == 0)`), and a temporary written once and read
+  once is inlined into its reader. The negation helper used chained
+  string replacements that cancelled each other (`==` → `!=` → `==`), so equality branches
+  kept a redundant `!`; it now flips exactly one comparison and leaves `&&`/`||` conditions
   wrapped in an explicit `!`.
 - L1 structuring recovers more shape and never emits a `goto` to a missing label. Shared
   tails may now be up to 48 lines and may contain inner labels (the label is not copied),

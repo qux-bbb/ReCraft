@@ -5,8 +5,8 @@ void bytes_op_l1(void) {
     r10 = rcx;
     r9d = r8d;
     ecx = r8d;
-    if ((edx > 0 /* signed */)) {
-        if ((r11d >= 8)) {
+    if (edx > 0 /* signed */) {
+        if (r11d >= 8) {
             r9 = r11;
             xmm3 = 0;
             r9 &= 0xADDR;
@@ -39,13 +39,13 @@ void bytes_op_l1(void) {
     }
     rax = (int64)(ecx);
     edx = r8d;
-    if ((rax >= r11 /* signed */)) {
+    if (rax >= r11 /* signed */) {
         eax = r9d;
         return;
     }
     rcx = r11;
     rcx -= rax;
-    if ((rcx < 2 /* signed */)) {
+    if (rcx < 2 /* signed */) {
         ecx = (uint32)(*(u8*)((rax + (r10 * 1))));
         r9d += ecx;
     } else {
@@ -59,7 +59,7 @@ void bytes_op_l1(void) {
             rax += 2;
         } while ((rax < rbx /* signed */));
         rbx = *(u64*)(rsp);
-        if ((rax < r11 /* signed */)) {
+        if (rax < r11 /* signed */) {
             ecx = (uint32)(*(u8*)((rax + (r10 * 1))));
             r9d += ecx;
             eax = (rdx + (r8 * 1));

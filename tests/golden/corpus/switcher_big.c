@@ -1,6 +1,6 @@
 // L1 structure recovery (23 blocks)
 void switcher_big_l1(void) {
-    if ((ecx > 0xADDR)) {
+    if (ecx > 0xADDR) {
         eax = 0xADDR;
         return;
     }

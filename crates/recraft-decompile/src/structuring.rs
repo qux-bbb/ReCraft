@@ -231,6 +231,8 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_compound_assignments(&mut lines);
     fold_load_modify_store(&mut lines);
     simplify_negated_conditions(&mut lines);
+    fold_single_use_temporaries(&mut lines);
+    strip_condition_parentheses(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     lines.push(PseudoLine {
@@ -2077,12 +2079,158 @@ fn simplify_negated_conditions(lines: &mut [PseudoLine]) {
     }
 }
 
+/// Drop the extra parentheses the generator wraps around a whole condition:
+/// `if ((x == 0))` becomes `if (x == 0)`. Only a wrapper that spans the entire condition
+/// is removed, so operator precedence inside the condition is untouched.
+fn strip_condition_parentheses(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        let text = line.text.trim();
+        let keyword = if text.starts_with("if (") {
+            "if"
+        } else if text.starts_with("while (") {
+            "while"
+        } else {
+            continue;
+        };
+        let Some(condition) = text
+            .strip_prefix(keyword)
+            .and_then(|rest| rest.trim_start().strip_prefix('('))
+            .and_then(|rest| rest.strip_suffix(") {"))
+        else {
+            continue;
+        };
+        if !condition.starts_with('(') || matching_close(condition) != Some(condition.len() - 1) {
+            continue;
+        }
+        let inner = &condition[1..condition.len() - 1];
+        if inner.is_empty() {
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&line.text));
+        line.text = format!("{indent}{keyword} ({inner}) {{");
+    }
+}
+
+/// Byte index of the `)` matching the `(` at index 0.
+fn matching_close(text: &str) -> Option<usize> {
+    let mut depth = 0isize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn is_identifier(text: &str) -> bool {
     let mut chars = text.chars();
     chars
         .next()
         .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// Inline a temporary that is written once and read exactly once by the next statement:
+/// `eax = *(u32*)(rdi); if ((eax == 0))` becomes `if ((*(u32*)(rdi) == 0))`. The write
+/// only names the value, so folding it into the single reader removes a register round-trip
+/// and makes the condition read like source. Conditions with `&&`/`||` are skipped because
+/// inlining could change when the right-hand side is evaluated.
+fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let statement = lines[index].text.trim();
+        let Some(statement) = statement.strip_suffix(';') else {
+            index += 1;
+            continue;
+        };
+        let Some((lhs, rhs)) = statement.split_once(" = ") else {
+            index += 1;
+            continue;
+        };
+        let lhs = lhs.trim();
+        let rhs = rhs.trim();
+        if !is_identifier(lhs) || rhs.is_empty() {
+            index += 1;
+            continue;
+        }
+        let occurrences: usize = lines
+            .iter()
+            .map(|line| {
+                line.text
+                    .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .filter(|token| *token == lhs)
+                    .count()
+            })
+            .sum();
+        if occurrences != 2 {
+            index += 1;
+            continue;
+        }
+        let next = lines[index + 1].text.clone();
+        let trimmed = next.trim();
+        let indent = " ".repeat(leading_spaces(&next));
+        if let Some(rest) = trimmed.strip_prefix("if (") {
+            let Some(condition) = rest.strip_suffix(") {") else {
+                index += 1;
+                continue;
+            };
+            if condition.contains("&&") || condition.contains("||") {
+                index += 1;
+                continue;
+            }
+            if condition
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .filter(|token| *token == lhs)
+                .count()
+                != 1
+            {
+                index += 1;
+                continue;
+            }
+            let condition = replace_token(condition, lhs, rhs);
+            lines[index + 1].text = format!("{indent}if ({condition}) {{");
+            lines.remove(index);
+            continue;
+        }
+        if trimmed == format!("return {lhs};") {
+            lines[index + 1].text = format!("{indent}return {rhs};");
+            lines.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// Replace whole identifier tokens, never substrings (`rax` inside `rax2`).
+fn replace_token(text: &str, token: &str, replacement: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut word = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            word.push(ch);
+        } else {
+            if word == token {
+                output.push_str(replacement);
+            } else {
+                output.push_str(&word);
+            }
+            word.clear();
+            output.push(ch);
+        }
+    }
+    if word == token {
+        output.push_str(replacement);
+    } else {
+        output.push_str(&word);
+    }
+    output
 }
 
 /// Collapse `r = *(T*)(a); r -= k; *(T*)(a) = r;` into `*(T*)(a) -= k;`. The temporary
@@ -3502,6 +3650,34 @@ mod tests {
         merge_identical_if_arms(&mut lines);
         assert_eq!(lines.len(), 4, "{lines:?}");
         assert_eq!(lines[0].text, "    if ((eax != 0) || (edx != 0)) {");
+    }
+
+    #[test]
+    fn single_use_temporary_is_inlined_into_the_reader() {
+        let mut lines = vec![
+            test_line("    eax = r8d;"),
+            test_line("    if ((eax == 0)) {"),
+            test_line("    }"),
+        ];
+        fold_single_use_temporaries(&mut lines);
+        assert_eq!(lines[0].text, "    if ((r8d == 0)) {");
+        let mut lines = vec![test_line("    eax = 7;"), test_line("    return eax;")];
+        fold_single_use_temporaries(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "    return 7;");
+    }
+
+    #[test]
+    fn condition_wrappers_are_stripped_once() {
+        let mut lines = vec![
+            test_line("    if ((eax == 0)) {"),
+            test_line("    while ((rdx != 1)) {"),
+            test_line("    if ((a) && (b)) {"),
+        ];
+        strip_condition_parentheses(&mut lines);
+        assert_eq!(lines[0].text, "    if (eax == 0) {");
+        assert_eq!(lines[1].text, "    while (rdx != 1) {");
+        assert_eq!(lines[2].text, "    if ((a) && (b)) {");
     }
 
     #[test]

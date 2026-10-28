@@ -1,6 +1,6 @@
 // L1 structure recovery (3 blocks)
 void field_probe_l1(void) {
-    if ((rcx == 0)) {
+    if (rcx == 0) {
         eax = 0xADDR;
         return;
     }

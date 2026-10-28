@@ -4,7 +4,7 @@ void loopy_l1(void) {
     edx = r10d;
     r8d = r10d;
     eax = r10d;
-    if ((ecx >= 2 /* signed */)) {
+    if (ecx >= 2 /* signed */) {
         r9d = (rcx - 1);
         do {
             r8d += 1;

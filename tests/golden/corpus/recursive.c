@@ -2,7 +2,7 @@
 void recursive_l1(void) {
     var_n8 = rbx;
     ebx = ecx;
-    if ((ecx > 1 /* signed */)) {
+    if (ecx > 1 /* signed */) {
         ecx -= 1;
         recursive();
         eax *= ebx;
