@@ -83,6 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `goto` whose target block was emitted without a label now gets that label materialized
   at the statement address, so generated pseudo-C no longer references a missing label on
   samples where the structurer emits a single-predecessor block inline (Go and kernel32).
+- A control transfer past the end of the analysed function is a tail jump into the next
+  function, so it renders as `return sub_xxx();` instead of a `goto` to a foreign block.
+  This removes the remaining dangling jumps on kernel32 (0 of 2567 functions now reference
+  a missing label) and on Go.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The

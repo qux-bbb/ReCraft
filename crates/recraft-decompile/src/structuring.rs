@@ -173,7 +173,12 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
         bodies = seeded;
     }
-    let mut structurer = Structurer::new(&cfg, bodies, info.as_ref().map(|info| info.args.clone()));
+    let mut structurer = Structurer::new(
+        &cfg,
+        bodies,
+        info.as_ref().map(|info| info.args.clone()),
+        function.end,
+    );
     structurer.compute_rpo();
     structurer.compute_dominators();
     structurer.compute_post_dominators();
@@ -343,10 +348,14 @@ struct Structurer {
     labeled: Vec<bool>,
     bodies: Vec<BlockLift>,
     args: Option<ArgNames>,
+    /// Exclusive end of the analysed function. CFG construction can follow a tail `jmp`
+    /// into the next function; such blocks are foreign code and only the jump back to the
+    /// caller (`return sub_x();`) should be rendered.
+    end: Address,
 }
 
 impl Structurer {
-    fn new(cfg: &Cfg, bodies: Vec<BlockLift>, args: Option<ArgNames>) -> Self {
+    fn new(cfg: &Cfg, bodies: Vec<BlockLift>, args: Option<ArgNames>, end: Address) -> Self {
         let index_of =
             |address: Address| cfg.blocks.iter().position(|block| block.start == address);
         let mut blocks = Vec::with_capacity(cfg.blocks.len());
@@ -416,6 +425,12 @@ impl Structurer {
             }
         }
         let entry = cfg.entry;
+        let mut emitted = vec![false; bodies.len()];
+        for (index, block) in blocks.iter().enumerate() {
+            if block.entry.get() >= end.get() {
+                emitted[index] = true;
+            }
+        }
         Structurer {
             blocks,
             entry,
@@ -429,10 +444,11 @@ impl Structurer {
             loop_blocks: BTreeMap::new(),
             loop_stack: Vec::new(),
             fallback_headers: BTreeSet::new(),
-            emitted: vec![false; bodies.len()],
+            emitted,
             labeled: vec![false; bodies.len()],
             bodies,
             args,
+            end,
         }
     }
 
@@ -656,6 +672,9 @@ impl Structurer {
 
     fn emit_flat(&mut self, lines: &mut Vec<PseudoLine>) {
         for index in 0..self.blocks.len() {
+            if self.blocks[index].entry.get() >= self.end.get() {
+                continue;
+            }
             if index != self.entry {
                 lines.push(PseudoLine {
                     addr: self.blocks[index].entry,
@@ -672,7 +691,12 @@ impl Structurer {
                     text: format!("{}return;", indent(1)),
                 }),
                 Flow::Goto(target) => {
-                    if self.blocks[index].goto_target.is_some() {
+                    if target.get() >= self.end.get() {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}return sub_{:x}();", indent(1), target.get()),
+                        });
+                    } else if self.blocks[index].goto_target.is_some() {
                         lines.push(PseudoLine {
                             addr: entry,
                             text: format!("{}goto loc_{:x};", indent(1), target.get()),
@@ -689,12 +713,28 @@ impl Structurer {
                         .condition
                         .clone()
                         .unwrap_or_else(|| "/* cond */".to_owned());
-                    lines.push(PseudoLine {
-                        addr: entry,
-                        text: format!("{}if ({condition}) goto loc_{:x};", indent(1), target.get()),
-                    });
+                    if target.get() >= self.end.get() {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!(
+                                "{}if ({condition}) return sub_{:x}();",
+                                indent(1),
+                                target.get()
+                            ),
+                        });
+                    } else {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!(
+                                "{}if ({condition}) goto loc_{:x};",
+                                indent(1),
+                                target.get()
+                            ),
+                        });
+                    }
                     if let Some(not_taken) = self.blocks[index].not_taken
                         && not_taken != index + 1
+                        && self.blocks[not_taken].entry.get() < self.end.get()
                     {
                         lines.push(PseudoLine {
                             addr: entry,
@@ -709,6 +749,7 @@ impl Structurer {
                 Flow::Fallthrough => {
                     if let Some(next) = self.blocks[index].not_taken
                         && next != index + 1
+                        && self.blocks[next].entry.get() < self.end.get()
                     {
                         lines.push(PseudoLine {
                             addr: entry,
@@ -791,7 +832,14 @@ impl Structurer {
                     });
                     return;
                 }
-                Flow::Goto(_) => {
+                Flow::Goto(address) => {
+                    if address.get() >= self.end.get() {
+                        lines.push(PseudoLine {
+                            addr: self.blocks[current].entry,
+                            text: format!("{}return sub_{:x}();", indent(level), address.get()),
+                        });
+                        return;
+                    }
                     let Some(target) = self.blocks[current].goto_target else {
                         self.emit_raw_flow(lines, current, level);
                         return;
@@ -852,6 +900,33 @@ impl Structurer {
                         return;
                     };
                     if taken == not_taken {
+                        current = taken;
+                        continue;
+                    }
+                    // A branch that leaves the analysed function is a tail call into the
+                    // next function; the CFG may have followed that jump.
+                    if self.blocks[taken].entry.get() >= self.end.get() {
+                        lines.push(PseudoLine {
+                            addr: self.blocks[current].entry,
+                            text: format!(
+                                "{}if ({condition}) return sub_{:x}();",
+                                indent(level),
+                                self.blocks[taken].entry.get()
+                            ),
+                        });
+                        current = not_taken;
+                        continue;
+                    }
+                    if self.blocks[not_taken].entry.get() >= self.end.get() {
+                        lines.push(PseudoLine {
+                            addr: self.blocks[current].entry,
+                            text: format!(
+                                "{}if ({}) return sub_{:x}();",
+                                indent(level),
+                                negate(&condition),
+                                self.blocks[not_taken].entry.get()
+                            ),
+                        });
                         current = taken;
                         continue;
                     }
@@ -1544,7 +1619,12 @@ impl Structurer {
                 text: format!("{}return;", indent(level)),
             }),
             Flow::Goto(target) => {
-                if self.blocks[block].goto_target.is_some() {
+                if target.get() >= self.end.get() {
+                    lines.push(PseudoLine {
+                        addr: entry,
+                        text: format!("{}return sub_{:x}();", indent(level), target.get()),
+                    });
+                } else if self.blocks[block].goto_target.is_some() {
                     // Labelled leftovers are emitted while a loop is still active; keep
                     // its back edge as `continue` and its exit as `break`.
                     if let Some(&(header, exit)) = self.loop_stack.last() {
@@ -1579,6 +1659,17 @@ impl Structurer {
                     .condition
                     .clone()
                     .unwrap_or_else(|| "/* cond */".to_owned());
+                if target.get() >= self.end.get() {
+                    lines.push(PseudoLine {
+                        addr: entry,
+                        text: format!(
+                            "{}if ({condition}) return sub_{:x}();",
+                            indent(level),
+                            target.get()
+                        ),
+                    });
+                    return;
+                }
                 if let Some(&(header, exit)) = self.loop_stack.last() {
                     if Some(header) == self.blocks[block].taken {
                         lines.push(PseudoLine {
