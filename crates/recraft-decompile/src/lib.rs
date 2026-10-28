@@ -881,13 +881,15 @@ impl Printer<'_> {
     }
 
     /// Render a stack reference: a recovered x86 argument name, otherwise `var_XX` for
-    /// rsp slots and frame-pointer locals. Positive `[rbp+...]` without a stack-argument
-    /// match stays a raw pointer (it may be the return address / caller frame).
+    /// rsp slots and frame-pointer locals. Positive `[rbp+...]` stays a raw pointer while
+    /// rbp is the incoming frame (it may be the return address / caller frame); once the
+    /// function assigns rbp itself, positive offsets are locals of the rebuilt frame.
     fn stack_reference(&self, base: Reg, offset: i64) -> Option<String> {
         if let Some(name) = self.args.and_then(|args| args.name_for_stack(base, offset)) {
             return Some(name.to_owned());
         }
-        if base == Reg::Rsp || offset < 0 {
+        let rebuilt_frame = base == Reg::Rbp && self.written.contains(&Reg::Rbp);
+        if base == Reg::Rsp || offset < 0 || rebuilt_frame {
             return Some(Self::stack_name(offset));
         }
         None
@@ -1001,9 +1003,9 @@ impl Printer<'_> {
                 // Writes never use incoming argument names: storing to a caller's
                 // argument slot is rare and would read as reassigning a variable.
                 if let Some((base, offset)) = self.stack_slot(*addr)
-                    && (base == Reg::Rsp || offset < 0)
+                    && let Some(name) = self.stack_reference(base, offset)
                 {
-                    format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                    format!("{name} = {}", self.expr(*value))
                 } else if let Some(index) = self.array_access(*addr) {
                     format!("{index} = {}", self.expr(*value))
                 } else if let Some(field) = self.field_access(*addr) {
@@ -1019,9 +1021,9 @@ impl Printer<'_> {
             }
             Stmt::StoreFloat { addr, value, size } => {
                 if let Some((base, offset)) = self.stack_slot(*addr)
-                    && (base == Reg::Rsp || offset < 0)
+                    && let Some(name) = self.stack_reference(base, offset)
                 {
-                    format!("{} = {}", Self::stack_name(offset), self.expr(*value))
+                    format!("{name} = {}", self.expr(*value))
                 } else if let Some(index) = self.array_access(*addr) {
                     format!("{index} = {}", self.expr(*value))
                 } else if let Some(field) = self.field_access(*addr) {
@@ -1173,7 +1175,11 @@ impl Printer<'_> {
                 }
             }
             Expr::LoadFloat { addr, size } => {
-                if let Some(index) = self.array_access(*addr) {
+                if let Some((base, offset)) = self.stack_slot(*addr)
+                    && let Some(name) = self.stack_reference(base, offset)
+                {
+                    name
+                } else if let Some(index) = self.array_access(*addr) {
                     index
                 } else if let Some(field) = self.field_access(*addr) {
                     field

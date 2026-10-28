@@ -236,6 +236,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
+    drop_dead_slot_stores(&mut lines);
     // Duplicate spills to one slot were just collapsed, so more save/restore pairs are
     // recognizable now.
     hide_callee_saves(&mut lines);
@@ -2324,6 +2325,68 @@ fn replace_token(text: &str, token: &str, replacement: &str) -> String {
     output
 }
 
+/// Drop a store to a stack slot when the slot is overwritten later in the same
+/// straight-line run without being read. Compilers materialize intermediate values into
+/// locals that are immediately replaced (`var_30 = 0; ... var_30 = rax;`); only the last
+/// store matters. Scanning stops at the first control-flow line, so a value that may be
+/// read on another path is never removed.
+fn drop_dead_slot_stores(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let Some((slot, rhs)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        if !slot.starts_with("var_") || !is_identifier(slot) || mentions_slot(rhs, slot) {
+            index += 1;
+            continue;
+        }
+        if contains_call(rhs) {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + 1;
+        let mut dead = false;
+        while cursor < lines.len() {
+            let text = lines[cursor].text.trim();
+            if text.is_empty() {
+                cursor += 1;
+                continue;
+            }
+            if is_control_line(text) {
+                break;
+            }
+            if mentions_slot(text, slot) {
+                dead = plain_assignment(text).is_some_and(|(lhs, _)| lhs == slot);
+                break;
+            }
+            cursor += 1;
+        }
+        if dead {
+            lines.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// Lines that end a straight-line run: branches, loops, labels, calls through a raw
+/// expression and closing braces.
+fn is_control_line(text: &str) -> bool {
+    text.starts_with("if (")
+        || text.starts_with("while")
+        || text.starts_with("for ")
+        || text.starts_with("do {")
+        || text.starts_with("switch")
+        || text.starts_with("goto ")
+        || text.starts_with("return")
+        || text.starts_with("break;")
+        || text.starts_with("continue;")
+        || text.starts_with("loc_")
+        || text.starts_with('}')
+        || text.starts_with("(*")
+}
+
 /// Collapse `r = *(T*)(a); r -= k; *(T*)(a) = r;` into `*(T*)(a) -= k;`. The temporary
 /// register only carries the loaded value back to the same slot, so the update can be
 /// written against the lvalue directly, as the original source did.
@@ -3829,6 +3892,25 @@ mod tests {
         assert!(!text.contains("var_n8 = rdi;"), "{text}");
         assert!(text.contains("(rax + 1)"), "{text}");
         assert!(text.contains("sub_1();"), "{text}");
+    }
+
+    #[test]
+    fn overwritten_slot_store_is_dropped_only_without_a_read() {
+        let mut lines = vec![
+            test_line("    var_30 = 0;"),
+            test_line("    eax = 1;"),
+            test_line("    var_30 = rax;"),
+        ];
+        drop_dead_slot_stores(&mut lines);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].text, "    eax = 1;");
+        let mut lines = vec![
+            test_line("    var_30 = 0;"),
+            test_line("    eax = var_30;"),
+            test_line("    var_30 = rax;"),
+        ];
+        drop_dead_slot_stores(&mut lines);
+        assert_eq!(lines.len(), 3, "{lines:?}");
     }
 
     #[test]

@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one save may pair with several restores, and a save that is never restored counts as
   dead. On notepad the pseudocode shrinks by ~800 lines and most functions now start with
   their first real statement instead of `var_8 = rbx; ...`.
+- A function that rebuilds its own frame pointer (`rbp = rsp - 0x27`) now names positive
+  `[rbp+off]` accesses as locals too, and a stack store that is overwritten later in the
+  same straight-line run without a read is removed.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The
