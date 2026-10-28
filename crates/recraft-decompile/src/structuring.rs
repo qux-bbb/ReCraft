@@ -1663,10 +1663,13 @@ fn is_epilogue_restore(text: &str) -> bool {
     let Some((lhs, rhs)) = plain_assignment(text) else {
         return false;
     };
-    if !is_callee_saved(lhs) {
+    if !is_callee_saved(lhs) || contains_call(rhs) {
         return false;
     }
-    rhs.starts_with("var_") || rhs.starts_with("*(u64*)(rsp") || rhs.starts_with("*(u64*)((rsp")
+    // A callee-saved assignment immediately before `return` cannot affect the returned
+    // value (which is in rax) or any later statement; it only restores the caller's
+    // register, so any side-effect-free expression qualifies.
+    true
 }
 
 fn hide_epilogue_restores(lines: &mut Vec<PseudoLine>) {
