@@ -17,7 +17,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::{Session, StructDef};
-use recraft_ir::{BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, Stmt, UnOp, cond_name};
+use recraft_ir::{
+    BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, RegView, Stmt, UnOp, cond_name,
+};
 
 mod l2;
 mod quality;
@@ -150,6 +152,7 @@ pub(crate) fn lift_block(
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
         frame_reg: None,
+        arg_values: [None, None, None, None],
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
@@ -262,6 +265,22 @@ pub(crate) fn lift_block(
                 text: format!("{text};"),
             });
             printer.note_write(stmt);
+            if let Stmt::WriteReg { reg, value } = stmt
+                && let Some(slot) = arg_slot(reg.base)
+            {
+                let rendered = if reg.width >= 4 {
+                    printer.arg_expr(*value)
+                } else {
+                    reg.name().to_owned()
+                };
+                printer.arg_values[slot] = Some(rendered);
+            }
+            if matches!(
+                stmt,
+                Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+            ) {
+                printer.arg_values = [None, None, None, None];
+            }
         }
     }
     let last = lifted.last().unwrap();
@@ -465,6 +484,7 @@ pub fn pseudocode_l0(
         imports: &imports,
         written: HashSet::new(),
         frame_reg: None,
+        arg_values: [None, None, None, None],
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -478,6 +498,13 @@ fn resolve_name(session: &Session, addr: Address) -> Result<String> {
         return Ok(name);
     }
     Ok(format!("sub_{:x}", addr.get()))
+}
+
+/// Position of a register in the x64 integer-argument order (`rcx`, `rdx`, `r8`, `r9`).
+fn arg_slot(reg: Reg) -> Option<usize> {
+    crate::l2::X64_ARG_REGS
+        .iter()
+        .position(|candidate| *candidate == reg)
 }
 
 /// Imported function names keyed by their IAT slot address. Indirect calls through the
@@ -596,6 +623,9 @@ struct Printer<'a> {
     written: HashSet<Reg>,
     /// Register that aliases `rsp` for frame-relative locals (e.g. `mov r11, rsp`).
     frame_reg: Option<Reg>,
+    /// Rendered values last written to the x64 argument registers, for naming the
+    /// arguments of an indirect IAT call (`CreateFileW(path, access, ...)`).
+    arg_values: [Option<String>; 4],
 }
 
 impl Printer<'_> {
@@ -610,8 +640,8 @@ impl Printer<'_> {
             }
             // `jmp [IAT]` lifts to a call statement plus `Flow::Return`; keep the tail call
             // as `return Api();` instead of a call followed by a bare `return;`.
-            let tail_call =
-                matches!(insn.flow, Flow::Return) && matches!(insn.stmts.last(), Some(Stmt::CallIndirect { .. }));
+            let tail_call = matches!(insn.flow, Flow::Return)
+                && matches!(insn.stmts.last(), Some(Stmt::CallIndirect { .. }));
             for (index, stmt) in insn.stmts.iter().enumerate() {
                 if self.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                     continue;
@@ -629,6 +659,22 @@ impl Printer<'_> {
                     });
                 }
                 self.note_write(stmt);
+                if let Stmt::WriteReg { reg, value } = stmt
+                    && let Some(slot) = arg_slot(reg.base)
+                {
+                    let rendered = if reg.width >= 4 {
+                        self.arg_expr(*value)
+                    } else {
+                        reg.name().to_owned()
+                    };
+                    self.arg_values[slot] = Some(rendered);
+                }
+                if matches!(
+                    stmt,
+                    Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+                ) {
+                    self.arg_values = [None, None, None, None];
+                }
             }
             match insn.flow {
                 Flow::Fallthrough => {}
@@ -980,7 +1026,14 @@ impl Printer<'_> {
                 }
             }
             Stmt::CallIndirect { target } => match self.import_target(*target) {
-                Some(name) => format!("{name}()"),
+                Some(name) => {
+                    let args = self.indirect_args();
+                    if args.is_empty() {
+                        format!("{name}()")
+                    } else {
+                        format!("{name}({args})")
+                    }
+                }
                 None => format!("(*{})()", self.expr(*target)),
             },
             Stmt::Intrinsic { text } => {
@@ -1004,7 +1057,42 @@ impl Printer<'_> {
         self.imports.get(&value).map(String::as_str)
     }
 
-    fn expr(&self, id: ExprId) -> String {        match &self.exprs[id as usize] {
+    /// Render a value passed to a call. A stack-slot address becomes `&var_XX`, which is
+    /// how the source would pass a local by pointer.
+    fn arg_expr(&self, id: ExprId) -> String {
+        if let Some((base, offset)) = self.stack_slot(id)
+            && let Some(name) = self.stack_reference(base, offset)
+        {
+            return format!("&{name}");
+        }
+        self.expr(id)
+    }
+
+    /// Render the argument list of an IAT call from the values last written to the ABI
+    /// argument registers. Slots that were not written keep their register name so the
+    /// position stays truthful; trailing untouched slots are dropped.
+    fn indirect_args(&self) -> String {
+        // Without the first argument the list would start with a register placeholder;
+        // keep the bare `Api()` form in that case.
+        if self.arg_values[0].is_none() {
+            return String::new();
+        }
+        let Some(last) = self.arg_values.iter().rposition(Option::is_some) else {
+            return String::new();
+        };
+        (0..=last)
+            .map(|slot| match &self.arg_values[slot] {
+                Some(value) => value.clone(),
+                None => RegView::full(crate::l2::X64_ARG_REGS[slot])
+                    .name()
+                    .to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn expr(&self, id: ExprId) -> String {
+        match &self.exprs[id as usize] {
             Expr::Const(value) => {
                 if let Some(literal) = self.literals.get(value) {
                     return literal.clone();

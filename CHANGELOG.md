@@ -55,9 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coverage unchanged at 99.4%; corpus x64 stays at 31/31 and 97.4% coverage, and the
   golden snapshots were regenerated for the new statement forms.
 - Indirect calls through the import table are rendered as the imported API instead of a
-  pointer expression: `(**(u64*)(0x...))()` becomes `CreateFileW()`. IAT slots of named
-  imports are mapped to their function name (sanitised to a C identifier), and a `jmp [IAT]`
-  tail call renders as `return Api();`. On notepad 1657 of 1667 indirect calls are named.
+  pointer expression: `(**(u64*)(0x...))()` becomes `CreateFileW(...)`. IAT slots of named
+  imports map to the function name (sanitised to a C identifier), and the arguments written
+  to `rcx`/`rdx`/`r8`/`r9` before the call are rendered in ABI order (`&var_XX` for a
+  stack-slot address). A `jmp [IAT]` tail call renders as `return Api();`. On notepad 1657
+  of 1667 indirect calls are named and most carry their captured arguments.
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The
