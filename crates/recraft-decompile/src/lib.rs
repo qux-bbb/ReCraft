@@ -99,6 +99,7 @@ pub(crate) fn lift_block(
 
     let exprs = lifter.into_exprs();
     let literals = collect_literals(session, &exprs)?;
+    let imports = import_names(session);
     let mut names: HashMap<u64, String> = HashMap::new();
     for item in &lifted {
         for stmt in &item.stmts {
@@ -144,6 +145,7 @@ pub(crate) fn lift_block(
         arg_structs,
         call_protos: &call_protos,
         call_arg_counts,
+        imports: &imports,
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
@@ -439,6 +441,7 @@ pub fn pseudocode_l0(
 
     let exprs = lifter.into_exprs();
     let literals = collect_literals(session, &exprs)?;
+    let imports = import_names(session);
     let mut names: HashMap<u64, String> = HashMap::new();
     for target in targets.iter().chain(calls.iter()) {
         let target = Address::new(*target);
@@ -459,6 +462,7 @@ pub fn pseudocode_l0(
         arg_structs: &no_structs,
         call_protos: &no_protos,
         call_arg_counts: &no_counts,
+        imports: &imports,
         written: HashSet::new(),
         frame_reg: None,
     };
@@ -474,6 +478,31 @@ fn resolve_name(session: &Session, addr: Address) -> Result<String> {
         return Ok(name);
     }
     Ok(format!("sub_{:x}", addr.get()))
+}
+
+/// Imported function names keyed by their IAT slot address. Indirect calls through the
+/// IAT are otherwise rendered as `(**(u64*)(0x...))()`, which hides which API is called.
+fn import_names(session: &Session) -> HashMap<u64, String> {
+    let mut names = HashMap::new();
+    for module in &session.image().imports {
+        for function in &module.functions {
+            if let Some(name) = &function.name {
+                // Keep the rendered call valid C even for decorated/ordinal names.
+                let sanitized: String = name
+                    .chars()
+                    .map(|ch| {
+                        if ch.is_ascii_alphanumeric() || ch == '_' {
+                            ch
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                names.insert(function.iat_va.get(), sanitized);
+            }
+        }
+    }
+    names
 }
 
 /// Quote a decoded string as a C literal, escaping quotes, backslashes and control bytes.
@@ -561,6 +590,8 @@ struct Printer<'a> {
     call_arg_counts: &'a HashMap<u64, usize>,
     /// Quoted C literals for address constants that name a stored string.
     literals: &'a HashMap<u64, String>,
+    /// Imported function names keyed by the address of their IAT slot.
+    imports: &'a HashMap<u64, String>,
     /// Registers written so far (for argument-register naming).
     written: HashSet<Reg>,
     /// Register that aliases `rsp` for frame-relative locals (e.g. `mov r11, rsp`).
@@ -577,19 +608,31 @@ impl Printer<'_> {
                     text: format!("loc_{:x}:", insn.addr.get()),
                 });
             }
-            for stmt in &insn.stmts {
+            // `jmp [IAT]` lifts to a call statement plus `Flow::Return`; keep the tail call
+            // as `return Api();` instead of a call followed by a bare `return;`.
+            let tail_call =
+                matches!(insn.flow, Flow::Return) && matches!(insn.stmts.last(), Some(Stmt::CallIndirect { .. }));
+            for (index, stmt) in insn.stmts.iter().enumerate() {
                 if self.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                     continue;
                 }
                 let text = self.stmt(stmt);
-                lines.push(PseudoLine {
-                    addr: insn.addr,
-                    text: format!("    {text};"),
-                });
+                if tail_call && index + 1 == insn.stmts.len() {
+                    lines.push(PseudoLine {
+                        addr: insn.addr,
+                        text: format!("    return {text};"),
+                    });
+                } else {
+                    lines.push(PseudoLine {
+                        addr: insn.addr,
+                        text: format!("    {text};"),
+                    });
+                }
                 self.note_write(stmt);
             }
             match insn.flow {
                 Flow::Fallthrough => {}
+                Flow::Return if tail_call => {}
                 Flow::Return => lines.push(PseudoLine {
                     addr: insn.addr,
                     text: "    return;".to_owned(),
@@ -936,7 +979,10 @@ impl Printer<'_> {
                     }
                 }
             }
-            Stmt::CallIndirect { target } => format!("(*{})()", self.expr(*target)),
+            Stmt::CallIndirect { target } => match self.import_target(*target) {
+                Some(name) => format!("{name}()"),
+                None => format!("(*{})()", self.expr(*target)),
+            },
             Stmt::Intrinsic { text } => {
                 // Unsupported instructions keep their assembly, but must stay inside
                 // a string literal so the pseudo-C does not break.
@@ -946,8 +992,19 @@ impl Printer<'_> {
         }
     }
 
-    fn expr(&self, id: ExprId) -> String {
-        match &self.exprs[id as usize] {
+    /// Resolve `call [IAT]` to the imported API name. Only a direct load of a constant
+    /// address is resolved; register- and index-based calls stay as pointer expressions.
+    fn import_target(&self, target: ExprId) -> Option<&str> {
+        let Expr::Load { addr, .. } = self.exprs[target as usize] else {
+            return None;
+        };
+        let Expr::Const(value) = self.exprs[addr as usize] else {
+            return None;
+        };
+        self.imports.get(&value).map(String::as_str)
+    }
+
+    fn expr(&self, id: ExprId) -> String {        match &self.exprs[id as usize] {
             Expr::Const(value) => {
                 if let Some(literal) = self.literals.get(value) {
                     return literal.clone();
