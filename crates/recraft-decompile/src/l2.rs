@@ -173,14 +173,23 @@ impl ArgNames {
 
     /// C parameter list (`int64 arg1, char* arg2`) or `void`.
     pub fn signature(&self) -> String {
-        let mut params: Vec<String> = self
-            .ordered_regs()
-            .into_iter()
-            .map(|(reg, name)| {
-                let ty = self.types.get(&reg).copied().unwrap_or(ArgType::Int64);
-                format!("{} {name}", ty.c_name())
-            })
-            .collect();
+        let mut params: Vec<String> = Vec::new();
+        // Fill gaps between recovered x64 argument registers: a function that reads rcx
+        // and r8 still has the rdx parameter in its ABI, even if the body never uses it.
+        if let Some(highest) = X64_ARG_REGS
+            .iter()
+            .rposition(|reg| self.names.contains_key(reg))
+        {
+            for (index, reg) in X64_ARG_REGS.iter().enumerate().take(highest + 1) {
+                let name = self
+                    .names
+                    .get(reg)
+                    .cloned()
+                    .unwrap_or_else(|| format!("arg{}", index + 1));
+                let ty = self.types.get(reg).copied().unwrap_or(ArgType::Int64);
+                params.push(format!("{} {name}", ty.c_name()));
+            }
+        }
         for ((base, offset), name) in &self.stack {
             let ty = self
                 .stack_types
@@ -900,6 +909,18 @@ mod tests {
         let (start, end) = bounds(&session, "branchy");
         let args = recover_args(&mut session, start, end).unwrap();
         assert_eq!(args.ordered().len(), 1, "{:?}", args.ordered());
+    }
+
+    #[test]
+    fn signature_fills_gaps_between_argument_registers() {
+        let mut args = ArgNames::default();
+        args.names.insert(Reg::Rcx, "arg1".to_owned());
+        args.names.insert(Reg::R8, "arg3".to_owned());
+        args.names.insert(Reg::R9, "arg4".to_owned());
+        assert_eq!(
+            args.signature(),
+            "int64 arg1, int64 arg2, int64 arg3, int64 arg4"
+        );
     }
 
     #[test]

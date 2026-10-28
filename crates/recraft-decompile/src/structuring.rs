@@ -2756,10 +2756,11 @@ fn propagate_argument_copies(lines: &mut Vec<PseudoLine>) {
         let Some((lhs, rhs)) = plain_assignment(text) else {
             continue;
         };
-        if rhs.starts_with("arg") && rhs[3..].chars().all(|ch| ch.is_ascii_digit()) {
-            if matches!(lhs, "rbx" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15") {
-                copies.push((index, lhs.to_owned(), rhs.to_owned()));
-            }
+        if rhs.starts_with("arg")
+            && rhs[3..].chars().all(|ch| ch.is_ascii_digit())
+            && matches!(lhs, "rbx" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15")
+        {
+            copies.push((index, lhs.to_owned(), rhs.to_owned()));
         }
     }
     copies.retain(|(_, register, _)| {
