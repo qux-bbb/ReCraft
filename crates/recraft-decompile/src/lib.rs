@@ -248,6 +248,7 @@ pub(crate) fn lift_block(
             if let Stmt::WriteReg { reg, .. } = stmt {
                 written.insert(reg.base);
             }
+            printer.retire_frame_alias(stmt);
             if printer.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                 continue;
             }
@@ -649,6 +650,7 @@ impl Printer<'_> {
             let tail_call = matches!(insn.flow, Flow::Return)
                 && matches!(insn.stmts.last(), Some(Stmt::CallIndirect { .. }));
             for (index, stmt) in insn.stmts.iter().enumerate() {
+                self.retire_frame_alias(stmt);
                 if self.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                     continue;
                 }
@@ -716,6 +718,17 @@ impl Printer<'_> {
             }
         }
         lines
+    }
+
+    /// Retire the `frame` name when the aliased register is overwritten with anything
+    /// other than `rsp`; afterwards it is an ordinary scratch register again.
+    fn retire_frame_alias(&mut self, stmt: &Stmt) {
+        if let Stmt::WriteReg { reg, value } = stmt
+            && self.frame_reg == Some(reg.base)
+            && !matches!(self.exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
+        {
+            self.frame_reg = None;
+        }
     }
 
     /// Records a register write so later reads no longer render as `argN`.
