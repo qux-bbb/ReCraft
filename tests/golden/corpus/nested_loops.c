@@ -5,8 +5,6 @@ void nested_loops_l1(void) {
     ebx = ecx;
     if (ecx <= 0 /* signed */) {
         eax = esi;
-        rsi = *(u64*)(rsp);
-        rbx = *(u64*)(rsp);
         return;
     }
     xmm3 = *(__m128*)(0xADDR);
@@ -80,7 +78,5 @@ void nested_loops_l1(void) {
     xmm2 += xmm0;
     eax = xmm2;
     eax += esi;
-    rsi = *(u64*)(rsp);
-    rbx = *(u64*)(rsp);
     return;
 }

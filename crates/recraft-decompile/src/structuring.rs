@@ -237,9 +237,13 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
     drop_dead_slot_stores(&mut lines);
+    // Epilogue restores no longer pair with anything once spills are gone, so identifying
+    // them as bookkeeping also makes the argument-copy propagation safe.
+    hide_epilogue_restores(&mut lines);
     // Duplicate spills to one slot were just collapsed, so more save/restore pairs are
     // recognizable now.
     hide_callee_saves(&mut lines);
+    propagate_argument_copies(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -1645,6 +1649,58 @@ fn nested_loop_leaves_parent(
     false
 }
 
+fn is_callee_saved(reg: &str) -> bool {
+    matches!(
+        reg,
+        "rbx" | "rbp" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15"
+    )
+}
+
+/// Drop callee-saved restores that lead directly to a `return`. `rsi = var_50; return;`
+/// only restores the caller's register; it does not contribute to the pseudo-code result
+/// (the return value is in `rax`) and hides the fact that `rsi` still held an argument.
+fn is_epilogue_restore(text: &str) -> bool {
+    let Some((lhs, rhs)) = plain_assignment(text) else {
+        return false;
+    };
+    if !is_callee_saved(lhs) {
+        return false;
+    }
+    rhs.starts_with("var_") || rhs.starts_with("*(u64*)(rsp") || rhs.starts_with("*(u64*)((rsp")
+}
+
+fn hide_epilogue_restores(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        if !is_epilogue_restore(lines[index].text.trim()) {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + 1;
+        let mut terminates = false;
+        while cursor < lines.len() {
+            let next = lines[cursor].text.trim();
+            if next.is_empty() {
+                cursor += 1;
+                continue;
+            }
+            if next == "return;" {
+                terminates = true;
+                break;
+            }
+            if !is_epilogue_restore(next) {
+                break;
+            }
+            cursor += 1;
+        }
+        if terminates {
+            lines.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
 /// Hide compiler callee-saved spills (`var_XX = rbx` ... `rbx = var_XX`) when the slot
 /// is used for nothing else. They preserve the caller's register but add no meaning to
 /// pseudo-C. One save may be paired with several restores (every return path restores the
@@ -2319,11 +2375,36 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
     }
 }
 
-/// Replace whole identifier tokens, never substrings (`rax` inside `rax2`).
+/// Replace whole identifier tokens, never substrings (`rax` inside `rax2`), and never
+/// inside a quoted string literal.
 fn replace_token(text: &str, token: &str, replacement: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut word = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
     for ch in text.chars() {
+        if quoted {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            if word == token {
+                output.push_str(replacement);
+            } else {
+                output.push_str(&word);
+            }
+            word.clear();
+            quoted = true;
+            output.push(ch);
+            continue;
+        }
         if ch.is_ascii_alphanumeric() || ch == '_' {
             word.push(ch);
         } else {
@@ -2497,6 +2578,76 @@ fn parse_dereference(text: &str) -> Option<(&str, &str)> {
     let rest = rest.trim();
     let address = rest.strip_prefix('(')?.strip_suffix(')')?;
     Some((ty, address))
+}
+
+/// Propagate an argument copied to a callee-saved register in the straight-line prologue:
+/// `rsi = arg1;` followed by many `rsi` reads becomes direct `arg1` reads and the copy is
+/// dropped. Sound only when the copy runs unconditionally (no branch/label before it) and
+/// the register is never assigned again anywhere in the function; the register must be
+/// callee-saved, because a call could otherwise clobber it between copy and read.
+fn propagate_argument_copies(lines: &mut Vec<PseudoLine>) {
+    let mut copies: Vec<(usize, String, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let text = line.text.trim();
+        if text.starts_with('}')
+            || text.starts_with("if (")
+            || text.starts_with("while")
+            || text.starts_with("for ")
+            || text.starts_with("do {")
+            || text.starts_with("switch")
+            || text.starts_with("goto ")
+            || text.starts_with("return")
+            || text.starts_with("loc_")
+        {
+            break;
+        }
+        let Some((lhs, rhs)) = plain_assignment(text) else {
+            continue;
+        };
+        if rhs.starts_with("arg") && rhs[3..].chars().all(|ch| ch.is_ascii_digit()) {
+            if matches!(lhs, "rbx" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15") {
+                copies.push((index, lhs.to_owned(), rhs.to_owned()));
+            }
+        }
+    }
+    copies.retain(|(_, register, _)| {
+        lines
+            .iter()
+            .filter(|line| assigns_register(&line.text, register))
+            .count()
+            == 1
+    });
+    if copies.is_empty() {
+        return;
+    }
+    for (index, register, argument) in &copies {
+        for (line_index, line) in lines.iter_mut().enumerate() {
+            if line_index <= *index {
+                continue;
+            }
+            line.text = replace_token(&line.text, register, argument);
+        }
+    }
+    for (index, _, _) in copies.into_iter().rev() {
+        lines.remove(index);
+    }
+}
+
+/// True when the statement writes the given register (`rsi = ...`, `rsi += ...`).
+fn assigns_register(text: &str, register: &str) -> bool {
+    let text = text.trim();
+    let Some(rest) = text.strip_prefix(register) else {
+        return false;
+    };
+    rest.starts_with(" = ")
+        || rest.starts_with(" += ")
+        || rest.starts_with(" -= ")
+        || rest.starts_with(" *= ")
+        || rest.starts_with(" &= ")
+        || rest.starts_with(" |= ")
+        || rest.starts_with(" ^= ")
+        || rest.starts_with(" <<= ")
+        || rest.starts_with(" >>= ")
 }
 
 /// Merge consecutive `if (c) { body }` arms that share an identical terminating body into
@@ -3940,6 +4091,27 @@ mod tests {
         ];
         drop_dead_slot_stores(&mut lines);
         assert_eq!(lines.len(), 3, "{lines:?}");
+    }
+
+    #[test]
+    fn epilogue_restores_and_argument_copies_collapse() {
+        let mut lines = vec![
+            test_line("    rsi = arg1;"),
+            test_line("    al = *(u8*)(rsi);"),
+            test_line("    rsi = var_50;"),
+            test_line("    r15 = *(u64*)(rsp);"),
+            test_line("    return;"),
+        ];
+        hide_epilogue_restores(&mut lines);
+        propagate_argument_copies(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("rsi = var_50;"), "{text}");
+        assert!(!text.contains("rsi = arg1;"), "{text}");
+        assert!(text.contains("*(u8*)(arg1)"), "{text}");
     }
 
     #[test]
