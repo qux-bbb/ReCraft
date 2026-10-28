@@ -244,6 +244,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // recognizable now.
     hide_callee_saves(&mut lines);
     propagate_argument_copies(&mut lines);
+    materialize_missing_labels(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -1700,6 +1701,63 @@ fn hide_epilogue_restores(lines: &mut Vec<PseudoLine>) {
             lines.remove(index);
         } else {
             index += 1;
+        }
+    }
+}
+
+/// Last-resort repair for a `goto` whose target block was emitted without a label: insert
+/// the label in front of the first statement carrying that address. Emitted lines keep the
+/// instruction address, so the jump lands at the right place even when the structurer
+/// forgot to label a single-predecessor block (seen on Go and kernel32 samples).
+fn materialize_missing_labels(lines: &mut Vec<PseudoLine>) {
+    for _ in 0..64 {
+        let labels: BTreeSet<u64> = lines
+            .iter()
+            .filter_map(|line| {
+                let text = line.text.trim();
+                text.strip_suffix(':')
+                    .and_then(|label| label.strip_prefix("loc_"))
+                    .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+            })
+            .collect();
+        let missing: BTreeSet<u64> = lines
+            .iter()
+            .filter_map(|line| goto_target(&line.text))
+            .filter(|target| !labels.contains(target))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let mut inserted = false;
+        for target in missing {
+            let statement_at = |line: &PseudoLine| {
+                let text = line.text.trim();
+                line.addr.get() == target
+                    && !text.is_empty()
+                    && text != "}"
+                    && !(text.starts_with("loc_") && text.ends_with(':'))
+            };
+            let index = lines.iter().position(statement_at).or_else(|| {
+                lines.iter().position(|line| {
+                    line.addr.get() > target
+                        && !line.text.trim().is_empty()
+                        && line.text.trim() != "}"
+                })
+            });
+            if let Some(index) = index {
+                let indent = " ".repeat(leading_spaces(&lines[index].text));
+                lines.insert(
+                    index,
+                    PseudoLine {
+                        addr: Address::new(target),
+                        text: format!("{indent}loc_{target:x}:"),
+                    },
+                );
+                inserted = true;
+            }
+        }
+        if !inserted {
+            return;
         }
     }
 }
@@ -4141,6 +4199,31 @@ mod tests {
                 assert!(!text.contains("if ()"), "empty condition:\n{text}");
             }
         }
+    }
+
+    #[test]
+    fn missing_labels_are_materialized_at_the_statement_address() {
+        let mut lines = vec![
+            PseudoLine {
+                addr: Address::new(0x10),
+                text: "    if (flag) goto loc_20;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x20),
+                text: "    value = 1;".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x21),
+                text: "    return;".to_owned(),
+            },
+        ];
+        materialize_missing_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("    loc_20:\n    value = 1;"), "{text}");
     }
 
     #[test]

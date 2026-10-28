@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`rsi = arg1;`) is replaced by the parameter name at every later read when the register
   is never assigned again. On notepad this removes ~2,250 lines of epilogue noise and
   turns `*(u16*)(rsi)` into `*(u16*)(arg1)` throughout L2 output.
+- A `goto` whose target block was emitted without a label now gets that label materialized
+  at the statement address, so generated pseudo-C no longer references a missing label on
+  samples where the structurer emits a single-predecessor block inline (Go and kernel32).
 - Removed the offline/Heuristic AI mode. `ProviderKind::Heuristic` and
   `HeuristicProvider` are gone; GUI AI actions (explain/suggest/query/polish) and the
   corresponding CLI commands now refuse to run until an LLM provider is configured. The
