@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown provider starts disabled with an empty key field. Key environment names reset
   to the default, prompt caches are invalidated, and raw Custom-endpoint edits use the
   same key memory. Selecting the already-active provider leaves the current key untouched.
+- Provider status now names the selected preset (`deepseek`, `opencode-go`,
+  `openai-compatible`, `ollama`) instead of printing the shared transport name `openai`.
 - Decompiler structuring now duplicates terminal blocks that end in padding/external
   tail calls instead of leaving a jump to an unemitted label, drops straight-line code
   after an unconditional `return`, and folds jumps to return-only labels. Shared blocks

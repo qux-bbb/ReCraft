@@ -335,12 +335,28 @@ impl ProviderSettings {
             .or_else(|| std::env::var(&self.api_key_env).ok())
     }
 
+    /// Human-readable backend name. `kind` only says OpenAI-compatible; presets such as
+    /// DeepSeek and OpenCode Go share that transport but must not both display as `openai`.
+    pub fn provider_name(&self) -> &'static str {
+        let endpoint = self.endpoint.as_str();
+        if endpoint.contains("api.deepseek.com") {
+            "deepseek"
+        } else if endpoint.contains("opencode.ai") {
+            "opencode-go"
+        } else {
+            match self.kind {
+                ProviderKind::Ollama => "ollama",
+                ProviderKind::OpenAiCompatible => "openai-compatible",
+            }
+        }
+    }
+
     /// One-line description safe to show in UI/CLI (never prints a key).
     pub fn describe(&self) -> String {
         let state = if self.enabled { "enabled" } else { "disabled" };
         format!(
             "provider={} state={state} model={} endpoint={} key_env={} max_tokens={}",
-            self.kind.as_str(),
+            self.provider_name(),
             self.model,
             if self.endpoint.is_empty() {
                 "<none>"
@@ -1151,6 +1167,19 @@ mod tests {
             .expect("stream");
         assert_eq!(text, "int main");
         assert_eq!(streamed, text);
+    }
+
+    #[test]
+    fn describe_names_the_selected_preset() {
+        let mut settings = ProviderSettings {
+            endpoint: DEEPSEEK_ENDPOINT.to_owned(),
+            ..ProviderSettings::default()
+        };
+        assert!(settings.describe().contains("provider=deepseek"));
+        settings.endpoint = OPENCODE_GO_ENDPOINT.to_owned();
+        assert!(settings.describe().contains("provider=opencode-go"));
+        settings.endpoint = "https://example.test".to_owned();
+        assert!(settings.describe().contains("provider=openai-compatible"));
     }
 
     #[test]
