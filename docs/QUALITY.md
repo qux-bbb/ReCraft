@@ -31,6 +31,11 @@ recraft golden <project> --dir tests/golden/corpus --check           # 对比快
 
 `metrics` 与 `golden` 都要求先 `import` + `analyze`。
 
+除了指标与快照，每次改动还会把真实样本的**每个函数**在三种模式下各反编译一遍
+（`decompile --addr <f>`、`--structured`、`--l2`），确认没有 panic/内部错误，并检查
+花括号是否配平、每个 `goto loc_...` 是否有对应标签。notepad 的 502 个函数当前三条路径
+均为 0 报错（2026-10-30 记录）。
+
 ## 当前基线（2026-10-24，MSVC VS2022，corpus x64）
 
 ```
