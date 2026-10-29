@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A register used only to carry a value into a store is folded into it:
+  `rcx = &var_58; var_30 = rcx;` becomes `var_30 = &var_58;`. The copy is only removed when
+  the register is redefined later in the same straight-line run, so a value a call or branch
+  could still read keeps its round-trip. Notepad's listing loses 220 such lines.
 - Stack-slot names are now one space per function: every block's `rsp` displacement is
   propagated over the control-flow graph and slots are named relative to the bottom of the
   frame, so the prologue, the body and every epilogue agree on what `var_XX` means. A

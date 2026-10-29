@@ -250,6 +250,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_load_modify_store(&mut lines);
     simplify_negated_conditions(&mut lines);
     fold_single_use_temporaries(&mut lines);
+    fold_store_copies(&mut lines);
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
     merge_else_if(&mut lines);
@@ -2776,6 +2777,57 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// Fold a register round-trip that only feeds one store: `rax = &var_20; var_30 = rax;`
+/// followed by another write to `rax` becomes `var_30 = &var_20;`. The value is consumed by
+/// the store and the register is redefined right after, so nothing else can read it.
+fn fold_store_copies(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let indent = leading_spaces(&lines[index].text);
+        let (Some((temporary, value)), Some((slot, source))) = (
+            plain_assignment(&lines[index].text),
+            plain_assignment(&lines[index + 1].text),
+        ) else {
+            index += 1;
+            continue;
+        };
+        if leading_spaces(&lines[index + 1].text) != indent
+            || !is_identifier(temporary)
+            || source != temporary
+            || slot == temporary
+            || mentions_slot(value, temporary)
+        {
+            index += 1;
+            continue;
+        }
+        // The register must be dead after the store. Within the straight-line run that
+        // starts right after it, the next mention has to be a full write; calls and
+        // branches stop the scan because the value may be used implicitly.
+        let mut cursor = index + 2;
+        let mut dead = false;
+        while cursor < lines.len() {
+            let text = lines[cursor].text.trim();
+            if leading_spaces(&lines[cursor].text) != indent
+                || is_control_line(text)
+                || is_call_line(text)
+            {
+                break;
+            }
+            if mentions_slot(text, temporary) {
+                dead = plain_assignment(text).is_some_and(|(lhs, _)| lhs == temporary);
+                break;
+            }
+            cursor += 1;
+        }
+        if !dead {
+            index += 1;
+            continue;
+        }
+        lines[index + 1].text = format!("{}{slot} = {value};", " ".repeat(indent));
+        lines.remove(index);
+    }
+}
+
 /// Inline a temporary that is written once and read exactly once by the next statement:
 /// `eax = *(u32*)(rdi); if ((eax == 0))` becomes `if ((*(u32*)(rdi) == 0))`. The write
 /// only names the value, so folding it into the single reader removes a register round-trip
@@ -4308,6 +4360,29 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn store_copies_fold_into_the_store() {
+        let mut lines = vec![
+            test_line("    rcx = &var_58;"),
+            test_line("    var_30 = rcx;"),
+            test_line("    rcx = &var_60;"),
+        ];
+        fold_store_copies(&mut lines);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].text, "    var_30 = &var_58;");
+        assert_eq!(lines[1].text, "    rcx = &var_60;");
+
+        // A call may read the register implicitly, so the copy stays visible.
+        let mut lines = vec![
+            test_line("    rcx = &var_58;"),
+            test_line("    var_30 = rcx;"),
+            test_line("    Api();"),
+            test_line("    rcx = 0;"),
+        ];
+        fold_store_copies(&mut lines);
+        assert_eq!(lines.len(), 4, "{lines:?}");
     }
 
     #[test]
