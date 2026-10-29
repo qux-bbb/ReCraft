@@ -101,6 +101,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             None,
             &no_counts,
             None,
+            None,
         )?);
     }
     // Infer argument counts for direct call targets from the callee's prologue. This
@@ -172,6 +173,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // relative to the bottom of the frame: the prologue, body and epilogue then agree on
     // what `var_XX` means.
     let (entry_stack, frame_base) = entry_stack_deltas(&cfg, &bodies);
+    let flag_sources = block_flag_sources(session, &cfg)?;
     let mut seeded = Vec::with_capacity(cfg.blocks.len());
     for (index, block) in cfg.blocks.iter().enumerate() {
         seeded.push(lift_block(
@@ -183,6 +185,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             Some(&seeds[index]),
             &call_arg_counts,
             entry_stack[index].map(|entry| (entry, frame_base)),
+            flag_sources[index],
         )?);
     }
     bodies = seeded;
@@ -1793,6 +1796,82 @@ fn nested_loop_leaves_parent(
         }
     }
     false
+}
+
+/// For a block that starts with a conditional branch, the pure flag-setting instruction of
+/// its unique predecessor that ends with a conditional branch. A branch does not modify the
+/// flags, so the second test compares the same operands; re-lifting `cmp`/`test`/`bt` there
+/// expresses the condition in the new block's own arena.
+fn block_flag_sources(session: &mut Session, cfg: &Cfg) -> Result<Vec<Option<Address>>> {
+    use iced_x86::Mnemonic as M;
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); cfg.blocks.len()];
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        for &(target, _) in &block.edges {
+            if target < cfg.blocks.len() {
+                predecessors[target].push(index);
+            }
+        }
+    }
+    let mut sources = vec![None; cfg.blocks.len()];
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        let Some(first) = session.insn_at(block.start)? else {
+            continue;
+        };
+        if first.flow() != recraft_decode::FlowKind::ConditionalBranch {
+            continue;
+        }
+        let Some(&predecessor) = predecessors[index].first() else {
+            continue;
+        };
+        if predecessors[index].len() != 1 {
+            continue;
+        }
+        // Walk the predecessor: the last flag definition must be a pure comparison, with
+        // nothing else touching the flags after it.
+        let mut addr = cfg.blocks[predecessor].start;
+        let mut last: Option<Address> = None;
+        let mut clobbered = false;
+        while addr < cfg.blocks[predecessor].end {
+            let Some(insn) = session.insn_at(addr)? else {
+                break;
+            };
+            let next = insn.next_addr();
+            if next <= addr {
+                break;
+            }
+            match insn.mnemonic() {
+                M::Cmp | M::Test | M::Bt => {
+                    last = Some(addr);
+                    clobbered = false;
+                }
+                M::Add
+                | M::Sub
+                | M::And
+                | M::Or
+                | M::Xor
+                | M::Neg
+                | M::Inc
+                | M::Dec
+                | M::Shl
+                | M::Shr
+                | M::Sar
+                | M::Rol
+                | M::Ror
+                | M::Imul
+                | M::Mul
+                | M::Div
+                | M::Idiv => {
+                    clobbered = true;
+                }
+                _ => {}
+            }
+            addr = next;
+        }
+        if !clobbered {
+            sources[index] = last;
+        }
+    }
+    Ok(sources)
 }
 
 /// `rsp` displacement at each block entry, plus the depth of the frame bottom.

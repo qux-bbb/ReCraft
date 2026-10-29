@@ -73,6 +73,9 @@ pub(crate) fn lift_block(
     // `(entry displacement, frame base)` for stack-slot naming; `None` keeps names
     // relative to the block's own `rsp`.
     stack: Option<(i64, i64)>,
+    // A pure flag-setting instruction (`cmp`/`test`/`bt`) just before the preceding
+    // block's branch: its flags are still live when this block starts with another branch.
+    flag_source: Option<Address>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -88,6 +91,16 @@ pub(crate) fn lift_block(
         });
     }
     let mut lifter = Lifter::new();
+    // Re-establish the comparison the preceding block left in the flags: a conditional
+    // branch does not modify them, so a second branch at the start of this block tests the
+    // same values. Lifting the pure `cmp`/`test`/`bt` again builds the condition in this
+    // block's own expression arena (operands are still the same registers).
+    if let Some(source) = flag_source
+        && let Some(insn) = session.insn_at(source)?
+        && !insn.is_invalid()
+    {
+        lifter.lift(&insn);
+    }
     let mut lifted: Vec<LiftedInsn> = Vec::new();
     let mut addr = start;
     while addr < end {

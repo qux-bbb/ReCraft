@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A conditional branch does not modify the flags, so a block that starts with another test
+  after its predecessor's branch re-lifts that predecessor's pure `cmp`/`test`/`bt` in its
+  own expression arena and prints a real condition instead of
+  `__asm("if (je ... /* unmodelled flags */) goto ...")`. `lock cmpxchg` also records the
+  comparison it performs, so the retry test after a compare-and-swap reads
+  `if (arg1->field_2c != eax) continue;`. Notepad's unmodelled branches drop 44 → 21 and the
+  intrinsic count 172 → 170; one large function now needs a `goto` for a shared tail
+  (structured 487 → 486).
 - `sbb x, x` is lifted as the carry mask it is (`x = cond ? -1 : 0`) instead of assembly, and
   its usual consumers fold into one statement: `x = -(x)` becomes the boolean
   `x = (cond ? 1 : 0)` and `x &= y` the conditional mask `x = (cond ? y : 0)`. The carry

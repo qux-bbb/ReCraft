@@ -146,6 +146,12 @@ impl Lifter {
             }
             M::Bts | M::Btr | M::Btc => self.lift_bit_modify(insn, &mut stmts),
             M::Sbb => self.lift_sbb(insn, &mut stmts),
+            // `lock cmpxchg` stays assembly (it updates memory conditionally), but the
+            // comparison flags it leaves behind are exact.
+            M::Cmpxchg => {
+                self.lift_cmpxchg_flags(insn);
+                self.intrinsic(insn, &mut stmts)
+            }
             M::Imul => self.lift_imul(insn, &mut stmts),
             M::Push => self.lift_push(insn, &mut stmts),
             M::Pop => self.lift_pop(insn, &mut stmts),
@@ -910,6 +916,25 @@ impl Lifter {
         stmts.push(Stmt::WriteReg { reg, value });
         self.reg_env.insert(Reg::Rax, value);
         Flow::Fallthrough
+    }
+
+    /// `cmpxchg dst, src` compares `dst` with the accumulator (al/ax/eax/rax) and leaves a
+    /// full comparison in the flags: `je` right after it means "the exchange happened".
+    fn lift_cmpxchg_flags(&mut self, insn: &Insn) {
+        let Some(destination) = self.read_operand(insn, 0) else {
+            self.last_cmp = None;
+            return;
+        };
+        let size = match insn.op_kind(0) {
+            iced_x86::OpKind::Register => insn.op_register(0).size(),
+            _ => memory_size_bytes(insn).map_or(8, usize::from),
+        };
+        let accumulator = self.reg(RegView::new(Reg::Rax, size as u8, 0));
+        self.last_cmp = Some(CmpState {
+            lhs: destination,
+            rhs: accumulator,
+            source: CmpSource::Arithmetic,
+        });
     }
 
     /// `sbb x, x` materialises the carry flag as `0`/`-1`: `x = CF ? -1 : 0`. The two-operand
