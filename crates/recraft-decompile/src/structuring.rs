@@ -4119,6 +4119,55 @@ mod tests {
         assert!(text.contains("eax = 1;"), "{text}");
     }
 
+    #[test]
+    fn single_reference_saves_are_kept_for_outgoing_stack_arguments() {
+        let mut lines = vec![test_line("    var_n8 = rdi;"), test_line("    var_8 = 0;")];
+        hide_callee_saves(&mut lines);
+        assert_eq!(lines.len(), 2, "a lone store may be a stack argument");
+
+        let mut lines = vec![
+            test_line("    var_20 = rbx;"),
+            test_line("    RtlVirtualUnwind(0, var_50, rdi, rax);"),
+        ];
+        drop_dead_slot_stores(&mut lines);
+        assert_eq!(lines.len(), 2, "a call may read the outgoing stack area");
+    }
+
+    #[test]
+    fn terminating_else_arms_are_flattened() {
+        let mut lines = vec![
+            test_line("    if (a) {"),
+            test_line("        return 1;"),
+            test_line("    } else {"),
+            test_line("        x = 2;"),
+            test_line("    }"),
+            test_line("    return x;"),
+        ];
+        flatten_terminating_else(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "    if (a) {",
+                "        return 1;",
+                "    }",
+                "    x = 2;",
+                "    return x;",
+            ]
+        );
+
+        // A then-arm that falls through keeps its else.
+        let mut lines = vec![
+            test_line("    if (a) {"),
+            test_line("        x = 1;"),
+            test_line("    } else {"),
+            test_line("        x = 2;"),
+            test_line("    }"),
+        ];
+        flatten_terminating_else(&mut lines);
+        assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
     fn analyzed_corpus() -> Option<(Session, TempDir)> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../corpus/build/x64/corpus.exe");
