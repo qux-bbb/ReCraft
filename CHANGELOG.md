@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A register write whose next mention in the same straight-line run is a full 32/64-bit
+  redefinition is dropped: `rax = var_b8; r9d = 0; r8d = 0; rax = var_b0;` loses the first
+  load. Calls, branches, labels and assembly stop the scan, a redefinition that reads the
+  register does not count, and an 8/16-bit write (`al = 0`) leaves the wider value alive.
+  The corpus `start` snapshot loses a dead spill and a dead argument copy; notepad's listing
+  drops 76 such lines.
 - A conditional branch does not modify the flags, so a block that starts with another test
   after its predecessor's branch re-lifts that predecessor's pure `cmp`/`test`/`bt` in its
   own expression arena and prints a real condition instead of

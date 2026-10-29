@@ -255,6 +255,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_single_use_temporaries(&mut lines);
     fold_store_copies(&mut lines);
     fold_carry_masks(&mut lines);
+    drop_dead_register_writes(&mut lines);
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
     merge_else_if(&mut lines);
@@ -2860,6 +2861,117 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// Drop a register write whose next mention in the same straight-line run is a full write to
+/// the same 32/64-bit register: the value is never read. Copies like
+/// `rax = var_b8; r9d = 0; r8d = 0; rax = var_b0;` are compiler register shuffling and only
+/// add noise. Calls, branches, labels and assembly statements stop the scan, and an 8/16-bit
+/// write (`al = 0`) does not kill the wider value.
+fn drop_dead_register_writes(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let Some((target, value)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        let Some(base) = wide_register_base(target) else {
+            index += 1;
+            continue;
+        };
+        if contains_call(value) {
+            index += 1;
+            continue;
+        }
+        let indent = leading_spaces(&lines[index].text);
+        let mut cursor = index + 1;
+        let mut dead = false;
+        while cursor < lines.len() {
+            let text = lines[cursor].text.trim();
+            if leading_spaces(&lines[cursor].text) != indent
+                || is_control_line(text)
+                || is_call_line(text)
+                || text.starts_with("__asm(")
+            {
+                break;
+            }
+            if mentions_slot(text, target) {
+                dead = plain_assignment(text).is_some_and(|(lhs, rhs)| {
+                    wide_register_base(lhs) == Some(base) && !reads_register(rhs, target)
+                });
+                break;
+            }
+            cursor += 1;
+        }
+        if dead {
+            lines.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// Base register of any spelling (`rax`/`eax`/`ax`/`al` -> 0, `r10d` -> 10).
+fn register_base_any(name: &str) -> Option<u8> {
+    const WIDE64: [&str; 16] = [
+        "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12",
+        "r13", "r14", "r15",
+    ];
+    const WIDE32: [&str; 16] = [
+        "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "r8d", "r9d", "r10d", "r11d",
+        "r12d", "r13d", "r14d", "r15d",
+    ];
+    const LOW16: [&str; 8] = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"];
+    const LOW8: [&str; 8] = ["al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil"];
+    const HIGH8: [&str; 4] = ["ah", "ch", "dh", "bh"];
+    for table in [&WIDE64[..], &WIDE32[..]] {
+        if let Some(index) = table.iter().position(|entry| *entry == name) {
+            return Some(index as u8);
+        }
+    }
+    for table in [&LOW16[..], &LOW8[..]] {
+        if let Some(index) = table.iter().position(|entry| *entry == name) {
+            return Some(index as u8);
+        }
+    }
+    if let Some(index) = HIGH8.iter().position(|entry| *entry == name) {
+        return Some(index as u8);
+    }
+    let rest = name.strip_prefix('r')?;
+    let digits = rest.trim_end_matches(['d', 'w', 'b']);
+    if digits == rest {
+        return None;
+    }
+    digits
+        .parse::<u8>()
+        .ok()
+        .filter(|value| (8..=15).contains(value))
+}
+
+/// True when the text reads any spelling of the register (`rax`, `eax`, `al`, ...).
+fn reads_register(text: &str, name: &str) -> bool {
+    let Some(base) = register_base_any(name) else {
+        return false;
+    };
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| register_base_any(token) == Some(base))
+}
+
+/// Base register of a 32/64-bit spelling (`rax`/`eax` -> 0, `r10`/`r10d` -> 10).
+fn wide_register_base(name: &str) -> Option<u8> {
+    const BASES: [&str; 16] = [
+        "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12",
+        "r13", "r14", "r15",
+    ];
+    const BASES32: [&str; 16] = [
+        "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "r8d", "r9d", "r10d", "r11d",
+        "r12d", "r13d", "r14d", "r15d",
+    ];
+    BASES
+        .iter()
+        .position(|base| *base == name)
+        .or_else(|| BASES32.iter().position(|base| *base == name))
+        .map(|index| index as u8)
+}
+
 /// Fold the consumers of a `sbb x, x` carry mask (`x = cond ? -1 : 0`):
 /// `x = -(x)` turns the branches into `1`/`0` (a boolean), and `x &= y` selects `y`
 /// (a conditional mask). Both stay one statement instead of spreading the idiom over two.
@@ -4499,6 +4611,22 @@ mod tests {
     }
 
     #[test]
+    fn dead_register_writes_drop_before_a_full_redefinition() {
+        let mut lines = vec![
+            test_line("    var_8 = 1;"),
+            test_line("    ecx = 0;"),
+            test_line("    eax = var_8;"),
+            test_line("    var_8 = ecx;"),
+            test_line("    eax = var_8;"),
+            test_line("    return;"),
+        ];
+        drop_dead_register_writes(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(text.len(), 5, "{text:?}");
+        assert_eq!(text[2], "    var_8 = ecx;");
+    }
+
+    #[test]
     fn carry_masks_fold_into_boolean_or_masked_value() {
         let mut lines = vec![
             test_line("    edx = ((ecx != 0) ? -1 : 0);"),
@@ -4751,9 +4879,10 @@ mod tests {
             "argument reads were not renamed:\n{text}"
         );
 
-        // `start` keeps real stack locals (the argument/loop-only test cases have their
-        // spills hidden as callee-save bookkeeping).
-        let nested = function_start(&session, "start").unwrap();
+        // `noinline_helper` keeps real stack locals (`volatile int x = a; volatile int
+        // y = b;`); the argument/loop-only test cases have their spills hidden as
+        // callee-save bookkeeping.
+        let nested = function_start(&session, "noinline_helper").unwrap();
         let text = pseudocode_l2(&mut session, nested).unwrap().text();
         assert!(text.contains("var_"), "stack slots were not named:\n{text}");
     }
