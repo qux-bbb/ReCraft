@@ -248,6 +248,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
     merge_else_if(&mut lines);
+    flatten_terminating_else(&mut lines);
     // The rewritten loop and `else if` conditions may now carry a negated comparison or the
     // generator's extra parentheses.
     simplify_negated_conditions(&mut lines);
@@ -1238,14 +1239,11 @@ impl Structurer {
         });
         self.emitted[header] = true;
         self.emit_simple(lines, header, level + 1);
-        let break_condition = if exit == taken {
-            condition.clone()
-        } else {
-            negate(&condition)
-        };
+        // `condition` above is the condition that stays in the loop (the fallthrough path
+        // after the rewrite), so leaving takes its negation.
         lines.push(PseudoLine {
             addr: self.blocks[header].entry,
-            text: format!("{}if ({break_condition}) break;", indent(level + 1)),
+            text: format!("{}if ({}) break;", indent(level + 1), negate(&condition)),
         });
 
         let mut stop = BTreeSet::new();
@@ -3433,6 +3431,63 @@ fn strip_inline_condition_parentheses(lines: &mut [PseudoLine]) {
         let indent = " ".repeat(leading_spaces(&line.text));
         line.text = format!("{indent}if ({inner}){tail}");
     }
+}
+
+/// Drop an `else` whose `if` arm always leaves the construct (`return`, `break`, `continue`
+/// or `goto`): the arm after it is just the following code. Unwrapping it removes a level of
+/// nesting and matches the early-exit style of the original source.
+fn flatten_terminating_else(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].text.trim() != "} else {" {
+            index += 1;
+            continue;
+        }
+        let else_indent = leading_spaces(&lines[index].text);
+        let Some(previous) = index.checked_sub(1) else {
+            index += 1;
+            continue;
+        };
+        if leading_spaces(&lines[previous].text) != else_indent + 4
+            || !terminates_arm(lines[previous].text.trim())
+        {
+            index += 1;
+            continue;
+        }
+        let Some(close) = closing_brace(lines, index + 1, 1) else {
+            index += 1;
+            continue;
+        };
+        lines[index].text = format!("{}}}", " ".repeat(else_indent));
+        for line in &mut lines[index + 1..close] {
+            let strip = leading_spaces(&line.text).min(4);
+            line.text = line.text[strip..].to_owned();
+        }
+        lines.remove(close);
+        index += 1;
+    }
+}
+
+/// Last statement of a block, as far as control flow is concerned: it never falls through.
+fn terminates_arm(text: &str) -> bool {
+    text == "break;"
+        || text == "continue;"
+        || (text.starts_with("return") && text.ends_with(';'))
+        || (text.starts_with("goto ") && text.ends_with(';'))
+}
+
+/// Index of the line whose `}` brings the brace depth back to zero, starting at `start`
+/// already inside `depth` open braces.
+fn closing_brace(lines: &[PseudoLine], start: usize, depth: usize) -> Option<usize> {
+    let mut depth = depth;
+    for (offset, line) in lines[start..].iter().enumerate() {
+        depth += line.text.matches('{').count();
+        depth = depth.saturating_sub(line.text.matches('}').count());
+        if depth == 0 {
+            return Some(start + offset);
+        }
+    }
+    None
 }
 
 /// Merge `} else { if (cond) { ... } }` into `} else if (cond) { ... }` when the nested

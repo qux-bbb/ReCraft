@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `while (1)` loop emitted for a loop header that carries statements (the structurer's
+  fallback when the test cannot sit on a `do-while` latch) broke on the condition that
+  *stays* in the loop instead of its negation, so the printed loop left when the machine
+  continued and continued when it left. The fallback now negates the fallthrough condition:
+  notepad's `cmp rdx, r9; je exit` reads `if (rdx == r9) break;` instead of
+  `if (rdx != r9) break;`.
 - `do { ... } while (...)` conditions no longer keep the generator's extra parentheses:
   `while ((ecx != 0));` renders as `while (ecx != 0);`, the same cleanup `if`/`while`
   already had.
