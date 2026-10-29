@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A loop-invariant setup at the top of a `while (1)` body hoists above the loop, so the
+  sentinel test becomes a real condition: `while (1) { rax = &var_30; if (rcx <= rax) break;
+  ... }` now reads `rax = &var_30; while (rcx > rax) { ... }`. The setup is only moved when
+  no call, assembly or write to that register appears in the body.
 - A register write whose register is never mentioned again in the whole function is dropped
   (`rbp = &var_b1;` in a stub, setup registers from an inlined call). All spellings count,
   `rax`/`eax` is kept because L1's bare `return;` still returns it, and a function containing

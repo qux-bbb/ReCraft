@@ -259,6 +259,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_unused_register_writes(&mut lines);
     fold_store_value_temporaries(&mut lines);
     strip_condition_parentheses(&mut lines);
+    hoist_invariant_loop_setups(&mut lines);
     fold_constant_loops(&mut lines);
     merge_else_if(&mut lines);
     flatten_terminating_else(&mut lines);
@@ -2921,6 +2922,87 @@ fn drop_unused_register_writes(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// A `while (1)` body often starts by preparing a value the first test needs — typically the
+/// address of a local used as a sentinel (`rax = &var_30; if (rcx <= rax) break;`). When that
+/// value is loop-invariant the setup hoists above the loop, which lets the loop-condition
+/// pass turn the `break` into a real `while` condition.
+fn hoist_invariant_loop_setups(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 2 < lines.len() {
+        if lines[index].text.trim() != "while (1) {" {
+            index += 1;
+            continue;
+        }
+        let indent = leading_spaces(&lines[index].text);
+        let Some((target, value)) = plain_assignment(&lines[index + 1].text) else {
+            index += 1;
+            continue;
+        };
+        let target = target.to_owned();
+        let value = value.to_owned();
+        if leading_spaces(&lines[index + 1].text) != indent + 4
+            || wide_register_base(&target).is_none()
+            || !(value.starts_with("&var_")
+                || value.starts_with("&frame_")
+                || value.parse::<i64>().is_ok())
+        {
+            index += 1;
+            continue;
+        }
+        let test = lines[index + 2].text.trim();
+        if !(test.starts_with("if (") && test.ends_with(") break;") && mentions_slot(test, &target))
+        {
+            index += 1;
+            continue;
+        }
+        // The register must survive the body unchanged until the loop tests it again: a call
+        // clobbers caller-saved registers, and any write would make the hoisted value stale.
+        let Some(end) = block_end(lines, index) else {
+            index += 1;
+            continue;
+        };
+        let clobbered = lines[index + 2..end].iter().any(|line| {
+            let text = line.text.trim();
+            text.starts_with("__asm(")
+                || is_call_line(text)
+                || plain_assignment(text)
+                    .is_some_and(|(lhs, _)| wide_register_base(lhs) == wide_register_base(&target))
+                || (text.starts_with(&format!("{target} ")) && text.contains("= "))
+        });
+        if clobbered {
+            index += 1;
+            continue;
+        }
+        let setup = lines.remove(index + 1);
+        lines.insert(
+            index,
+            PseudoLine {
+                addr: setup.addr,
+                text: format!("{}{} = {value};", " ".repeat(indent), target),
+            },
+        );
+        index += 2;
+    }
+}
+
+/// Index of the `}` that closes the block opened on `start`'s line (which must end in `{`).
+fn block_end(lines: &[PseudoLine], start: usize) -> Option<usize> {
+    let opened = lines[start].text.trim().ends_with('{');
+    if !opened {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (offset, line) in lines[start..].iter().enumerate() {
+        let text = line.text.trim();
+        depth += text.matches('{').count();
+        depth = depth.saturating_sub(text.matches('}').count());
+        if depth == 0 {
+            return Some(start + offset);
+        }
+    }
+    None
+}
+
 /// A temporary that exists only to be stored folds into the store:
 /// `ecx = (uint32)(*(u16*)(rax)); *(u32*)((r8 + 8)) = ecx;` becomes
 /// `*(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));`. The register must be dead after the store,
@@ -4792,6 +4874,29 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn invariant_loop_setups_hoist_above_the_loop() {
+        let mut lines = vec![
+            test_line("    while (1) {"),
+            test_line("        rax = &var_30;"),
+            test_line("        if (rcx <= rax) break;"),
+            test_line("        rcx -= 1;"),
+            test_line("    }"),
+        ];
+        hoist_invariant_loop_setups(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "    rax = &var_30;",
+                "    while (1) {",
+                "        if (rcx <= rax) break;",
+                "        rcx -= 1;",
+                "    }"
+            ]
+        );
     }
 
     #[test]
