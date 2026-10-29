@@ -2906,8 +2906,10 @@ fn drop_unused_register_writes(lines: &mut Vec<PseudoLine>) {
             continue;
         };
         // `rax`/`eax` is the return value: L1 prints a bare `return;` and the caller still
-        // reads it, so a write that only looks unused at this level must stay.
-        if base == 0 {
+        // reads it, so a write that only looks unused at this level must stay. Argument
+        // registers stay too — a call prints only the arguments it could recover, and the
+        // setup line is the only record of the rest.
+        if matches!(base, 0 | 1 | 2 | 8 | 9) {
             index += 1;
             continue;
         }
