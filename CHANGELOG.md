@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Scalar parameters are typed from the width the body reads them with: an argument only ever
+  read through its 32-bit half now renders as `int32` instead of `int64` (memory-based
+  pointer inference still wins), so `count_bits(int32 arg1)` and
+  `array_probe(int32* arg1, int32 arg2)` match their sources. Notepad gains at least one
+  `int32` parameter in 166 of 502 signatures.
 - The Decompile view no longer has the `L1 (structured)` / `L2 (vars)` checkboxes. It always
   renders the structured pseudo-C with the recovered signature, argument names and stack
   slots (the previous L2 output), and falls back to the raw listing for an address outside

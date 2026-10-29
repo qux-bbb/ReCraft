@@ -409,14 +409,25 @@ fn recover_x64(
     memo: &mut BTreeMap<u64, usize>,
     ranges: &HashMap<u64, (Address, Address)>,
 ) -> Result<ArgNames> {
-    let incoming = scan_incoming_args(session, start, end, depth, memo, ranges)?;
+    let scan = scan_incoming_args(session, start, end, depth, memo, ranges)?;
     let mut names = BTreeMap::new();
     for (index, reg) in X64_ARG_REGS.iter().enumerate() {
-        if incoming.contains(reg) {
+        if scan.incoming.contains(reg) {
             names.insert(*reg, format!("arg{}", index + 1));
         }
     }
-    let types = infer_pointer_types(session, start, end, &names)?;
+    let mut types = infer_pointer_types(session, start, end, &names)?;
+    // A parameter only ever read through its 32-bit half is an `int` in the source.
+    // Memory-based pointer inference wins over the read width.
+    for (reg, widths) in &scan.widths {
+        if names.contains_key(reg)
+            && !types.contains_key(reg)
+            && widths.len() == 1
+            && widths.contains(&4)
+        {
+            types.insert(*reg, ArgType::Int32);
+        }
+    }
     Ok(ArgNames {
         names,
         stack: BTreeMap::new(),
@@ -439,12 +450,20 @@ pub(crate) fn recover_arg_count(
         return Ok(*count);
     }
     let count = if session.image().is_64 {
-        scan_incoming_args(session, start, end, 0, memo, ranges)?.len()
+        scan_incoming_args(session, start, end, 0, memo, ranges)?
+            .incoming
+            .len()
     } else {
         recover_x86(session, start, end)?.count()
     };
     memo.insert(start.get(), count);
     Ok(count)
+}
+
+/// Registers whose incoming value the function consumes, and the widths those reads used.
+struct IncomingScan {
+    incoming: BTreeSet<Reg>,
+    widths: BTreeMap<Reg, BTreeSet<u8>>,
 }
 
 /// Registers whose incoming value the function consumes: read before their first write, or
@@ -456,17 +475,19 @@ fn scan_incoming_args(
     depth: usize,
     memo: &mut BTreeMap<u64, usize>,
     ranges: &HashMap<u64, (Address, Address)>,
-) -> Result<BTreeSet<Reg>> {
+) -> Result<IncomingScan> {
     let (lifted, exprs) = lift_function(session, start, end)?;
     let arg_registers: BTreeSet<Reg> = X64_ARG_REGS.into_iter().collect();
     let mut written: BTreeSet<Reg> = BTreeSet::new();
     let mut incoming: BTreeSet<Reg> = BTreeSet::new();
+    let mut widths: BTreeMap<Reg, BTreeSet<u8>> = BTreeMap::new();
 
     for item in &lifted {
         for stmt in &item.stmts {
             walk_stmt_reads(stmt, &exprs, &mut |view: &RegView| {
                 if arg_registers.contains(&view.base) && !written.contains(&view.base) {
                     incoming.insert(view.base);
+                    widths.entry(view.base).or_default().insert(view.width);
                 }
             });
             // A call consumes the argument registers its callee declares. Without this a
@@ -494,7 +515,7 @@ fn scan_incoming_args(
         }
     }
 
-    Ok(incoming)
+    Ok(IncomingScan { incoming, widths })
 }
 
 /// Argument registers an unmodelled instruction certainly writes.
@@ -613,7 +634,9 @@ fn call_arity(
     // recursing until the depth limit.
     memo.insert(target.get(), 0);
     let count = if session.image().is_64 {
-        scan_incoming_args(session, callee_start, callee_end, depth + 1, memo, ranges)?.len()
+        scan_incoming_args(session, callee_start, callee_end, depth + 1, memo, ranges)?
+            .incoming
+            .len()
     } else {
         recover_x86(session, callee_start, callee_end)?.count()
     };

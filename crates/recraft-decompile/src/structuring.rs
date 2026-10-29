@@ -4249,6 +4249,16 @@ mod tests {
     }
 
     #[test]
+    fn l2_types_scalar_arguments_by_read_width() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "count_bits").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("int32 count_bits(int32 arg1)"), "{text}");
+    }
+
+    #[test]
     fn l2_pointer_parameters_show_pointer_types() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;
@@ -4374,8 +4384,9 @@ mod tests {
         };
         let start = function_start(&session, "array_probe").unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
+        // The index is only read through `edx`, so it is a scalar `int`.
         assert!(
-            text.contains("int32 array_probe(int32* arg1, int64 arg2)"),
+            text.contains("int32 array_probe(int32* arg1, int32 arg2)"),
             "{text}"
         );
         assert!(text.contains("arg1["), "{text}");
