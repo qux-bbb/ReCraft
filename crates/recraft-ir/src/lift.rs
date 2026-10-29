@@ -112,6 +112,7 @@ impl Lifter {
             M::Movsd => self.lift_mov_float(insn, 8, &mut stmts),
             M::Movzx => self.lift_movx(insn, &mut stmts, false),
             M::Movsx | M::Movsxd => self.lift_movx(insn, &mut stmts, true),
+            M::Cdqe => self.lift_cdqe(&mut stmts),
             M::Lea => self.lift_lea(insn, &mut stmts),
             M::Add | M::Sub | M::And | M::Or | M::Xor => {
                 self.lift_binary(insn, &mut stmts);
@@ -880,6 +881,20 @@ impl Lifter {
 
     /// `bts`/`btr`/`btc`: set, reset or complement one bit of the destination. The flag
     /// definition (CF = the old bit) is kept so a later `jb`/`jae` can still read it.
+    /// `cdqe`: sign-extend `eax` into `rax` (the 64-bit form of `movsxd rax, eax`).
+    fn lift_cdqe(&mut self, stmts: &mut Vec<Stmt>) -> Flow {
+        let source = self.reg(RegView::new(Reg::Rax, 4, 0));
+        let value = self.push(Expr::Cast {
+            arg: source,
+            width: 8,
+            signed: true,
+        });
+        let reg = RegView::full(Reg::Rax);
+        stmts.push(Stmt::WriteReg { reg, value });
+        self.reg_env.insert(Reg::Rax, value);
+        Flow::Fallthrough
+    }
+
     fn lift_bit_modify(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
         use iced_x86::Mnemonic as M;
         let (Some(target), Some(bit)) = (self.read_operand(insn, 0), self.read_operand(insn, 1))
@@ -1344,6 +1359,26 @@ mod tests {
                 }
                 other => panic!("unexpected expr {other:?}"),
             },
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cdqe_sign_extends_eax() {
+        // cdqe
+        let (lifter, item) = lift_one(&[0x48, 0x98], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.name(), "rax");
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Cast {
+                        width: 8,
+                        signed: true,
+                        ..
+                    }
+                ));
+            }
             other => panic!("unexpected stmt {other:?}"),
         }
     }

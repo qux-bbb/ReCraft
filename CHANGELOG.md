@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bts`/`btr`/`btc` are lifted instead of kept as assembly: `bts ebx, 0x1c` renders as
   `ebx |= 0x10000000;` and `btr edx, 0x1c` as `edx &= 0xefffffff;` (a constant bit index is
   folded into the mask, and the old-bit flag definition is still available to a later
-  `jb`/`jae`). Notepad's listing loses 21 assembly lines.
+  `jb`/`jae`). `cdqe` renders as `rax = (int64)(eax);`. Notepad's listing loses 29 assembly
+  lines (intrinsic instructions 244 → 219).
 - Argument recovery no longer counts a zeroing idiom as an input: `xor r8d, r8d` at the top
   of a function used to look like a read of `r8` and invented a parameter, and pointer
   evidence was credited to whichever register happened to be the memory base even after it
