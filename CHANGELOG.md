@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the plain streaming entry point ignores them), and the UI receives them as
   `AiMessage::Reasoning`.
 
+### Changed
+
+- The Decompile view now shows IDA-style line numbers in a fixed left gutter instead of an
+  address prefix; the gutter stays put while the code scrolls horizontally. Clicking a row
+  selects that exact line and syncs the disassembly cursor; the listing is no longer
+  re-anchored/re-rendered on click, and an address group that used to highlight several
+  rows at once now highlights only the clicked row (or its first row when the selection
+  comes from another view). Hovering a row shows its address.
+
 ### Fixed
 
 - The disassembly view can now be scrolled up past its loaded window. The pane renders a fixed

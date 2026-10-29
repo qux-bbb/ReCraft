@@ -69,6 +69,8 @@ struct Palette {
     view: Color32,
     text: Color32,
     addr: Color32,
+    /// Pseudo-code line-number gutter (dim, like IDA's listing gutter).
+    line_number: Color32,
     bytes: Color32,
     mnemonic: Color32,
     /// Numeric literals inside operands (IDA colours immediates separately).
@@ -100,6 +102,7 @@ impl Palette {
         view: Color32::from_rgb(0x14, 0x14, 0x14),
         text: Color32::from_rgb(0xd4, 0xd4, 0xd4),
         addr: Color32::from_rgb(0xc9, 0xb4, 0x58),
+        line_number: Color32::from_rgb(0x9a, 0x9a, 0x9a),
         bytes: Color32::from_rgb(0x85, 0x85, 0x85),
         mnemonic: Color32::from_rgb(0x7e, 0x9e, 0xd0),
         number: Color32::from_rgb(0xb5, 0xce, 0xa8),
@@ -129,6 +132,7 @@ impl Palette {
         view: Color32::from_rgb(0xff, 0xff, 0xff),
         text: Color32::from_rgb(0x1e, 0x1e, 0x1e),
         addr: Color32::from_rgb(0x1a, 0x3f, 0x8f),
+        line_number: Color32::from_rgb(0x70, 0x70, 0x70),
         bytes: Color32::from_rgb(0x60, 0x60, 0x60),
         mnemonic: Color32::from_rgb(0x00, 0x50, 0xa0),
         number: Color32::from_rgb(0x0f, 0x6f, 0x9f),
@@ -640,6 +644,12 @@ enum Action {
     AiQuery,
     NavigateToDisasm(Address),
     SyncDisasm(Address),
+    /// Select one pseudo-C row (by line index) and sync the disassembly cursor to its
+    /// address. Unlike `SyncDisasm`, this keeps the pseudo-C listing in place.
+    SyncPseudoLine {
+        addr: Address,
+        line: usize,
+    },
     Forward,
     ApplyData(DataOp),
     EditPrototype,
@@ -697,6 +707,9 @@ pub struct ReCraftApp {
     key_pass: Option<u64>,
     pseudo_start: Address,
     pseudo: Option<Vec<PseudoLine>>,
+    /// Row clicked in the pseudo-C view (0-based line identity). `None` means follow the
+    /// disassembly address.
+    pseudo_selected_line: Option<usize>,
     pseudo_dirty: bool,
     pseudo_l1: bool,
     pseudo_l2: bool,
@@ -795,6 +808,7 @@ impl Default for ReCraftApp {
             key_pass: None,
             pseudo_start: Address::ZERO,
             pseudo: None,
+            pseudo_selected_line: None,
             pseudo_dirty: false,
             pseudo_l1: false,
             pseudo_l2: false,
@@ -1383,9 +1397,18 @@ impl ReCraftApp {
     /// Anchor the hex pane on the current disassembly selection (unless the user picked
     /// an explicit hex position).
     fn sync_hex(&mut self) {
-        let anchor = if self.tab == Tab::Pseudo
-            || (self.tab == Tab::Disasm && self.view_mode == ViewMode::Graph)
-        {
+        let anchor = if self.tab == Tab::Pseudo {
+            // Follow the active pseudo-C row, not the listing's first address.
+            self.pseudo
+                .as_ref()
+                .and_then(|lines| {
+                    self.active_pseudo_line(lines)
+                        .and_then(|index| lines.get(index))
+                        .map(|line| line.addr)
+                })
+                .or_else(|| self.disasm_rows.get(self.selected).map(|line| line.addr))
+                .or(Some(self.pseudo_start))
+        } else if self.tab == Tab::Disasm && self.view_mode == ViewMode::Graph {
             Some(self.pseudo_start)
         } else {
             self.disasm_rows.get(self.selected).map(|line| line.addr)
@@ -1588,6 +1611,8 @@ impl ReCraftApp {
     }
 
     fn refresh_pseudo(&mut self) {
+        // Line identities only make sense for the listing that produced them.
+        self.pseudo_selected_line = None;
         let Some(session) = self.session.as_mut() else {
             self.pseudo = None;
             self.pseudo_dirty = false;
@@ -4436,6 +4461,36 @@ impl ReCraftApp {
         }
     }
 
+    /// Geometry of one pseudo-C row: the line number stays at the viewport's left edge,
+    /// while the code text follows the horizontal scroll offset in `row.left()`.
+    fn pseudo_row_geometry(
+        viewport: egui::Rect,
+        row: egui::Rect,
+        gutter: f32,
+    ) -> (egui::Pos2, egui::Pos2, egui::Rect) {
+        let number_pos = egui::pos2(viewport.left() + gutter - 6.0, row.top() + 1.0);
+        let text_pos = egui::pos2(row.left() + gutter + 4.0, row.top() + 1.0);
+        let text_clip = egui::Rect::from_min_max(
+            egui::pos2((viewport.left() + gutter).min(viewport.right()), row.top()),
+            egui::pos2(viewport.right(), row.bottom()),
+        );
+        (number_pos, text_pos, text_clip)
+    }
+
+    /// Row to paint as the current pseudo-C line. The clicked row wins while it still
+    /// belongs to the disassembly address; otherwise the first line at that address wins,
+    /// so address-keyed groups never light up as a multi-row selection.
+    fn active_pseudo_line(&self, lines: &[PseudoLine]) -> Option<usize> {
+        let synced = self.disasm_rows.get(self.selected).map(|line| line.addr);
+        self.pseudo_selected_line
+            .filter(|&index| {
+                lines
+                    .get(index)
+                    .is_some_and(|line| synced == Some(line.addr))
+            })
+            .or_else(|| lines.iter().position(|line| synced == Some(line.addr)))
+    }
+
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Pseudo;
         let pal = self.palette();
@@ -4469,45 +4524,72 @@ impl ReCraftApp {
             ui.weak(self.t("ui_no_decompilation_for_this_address"));
             return;
         };
-        let synced = self.disasm_rows.get(self.selected).map(|line| line.addr);
+        let active_line = self.active_pseudo_line(lines);
+        // Fixed line-number gutter. The listing scrolls horizontally underneath the
+        // gutter (the text is clipped at its right edge), while the numbers stay put.
+        let digits = lines.len().max(1).to_string().len().max(2);
+        let number_width = ui
+            .painter()
+            .layout_no_wrap("0".repeat(digits), mono.clone(), pal.line_number)
+            .size()
+            .x;
+        let gutter = number_width + 12.0;
         let mut clicked = None;
         let mut jumped = None;
-        let width = ui.available_width().max(1100.0);
+        let width = gutter + ui.available_width().max(1100.0);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let viewport = ui.clip_rect();
                 ui.spacing_mut().item_spacing.y = 1.0;
-                for line in lines {
+                for (index, line) in lines.iter().enumerate() {
                     let (rect, response) = ui
                         .allocate_exact_size(egui::vec2(width, self.row_height()), Sense::click());
-                    if synced == Some(line.addr) {
-                        ui.painter().rect_filled(rect, 1.0, pal.selected_row);
-                    } else if response.hovered() {
-                        ui.painter().rect_filled(rect, 1.0, pal.hover_row);
+                    if rect.bottom() < viewport.top() || rect.top() > viewport.bottom() {
+                        continue;
                     }
-                    let mut job = LayoutJob::default();
-                    append(
-                        &mut job,
-                        &format!("{:#012x}  ", line.addr.get()),
-                        pal.addr,
-                        &mono,
+                    // The row highlight spans the whole visible row, gutter included.
+                    let row_rect = egui::Rect::from_min_max(
+                        egui::pos2(viewport.left(), rect.top()),
+                        egui::pos2(viewport.right(), rect.bottom()),
                     );
+                    if active_line == Some(index) {
+                        ui.painter().rect_filled(row_rect, 1.0, pal.selected_row);
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(row_rect, 1.0, pal.hover_row);
+                    }
+                    let (number_pos, text_pos, text_clip) =
+                        Self::pseudo_row_geometry(viewport, rect, gutter);
+                    ui.painter().text(
+                        number_pos,
+                        egui::Align2::RIGHT_TOP,
+                        (index + 1).to_string(),
+                        mono.clone(),
+                        pal.line_number,
+                    );
+                    let mut job = LayoutJob::default();
                     append(&mut job, &line.text, pal.text, &mono);
                     let galley = ui.painter().layout_job(job);
                     ui.painter()
-                        .galley(rect.left_top() + egui::vec2(4.0, 1.0), galley, pal.text);
+                        .with_clip_rect(text_clip)
+                        .galley(text_pos, galley, pal.text);
+                    let response = if response.hovered() {
+                        response.on_hover_text(format!("{:#x}", line.addr.get()))
+                    } else {
+                        response
+                    };
                     if response.clicked() {
-                        clicked = Some(line.addr);
+                        clicked = Some((index, line.addr));
                     }
                     if response.double_clicked() {
                         jumped = Some(line.addr);
                     }
                 }
             });
-        // Single click syncs the disassembly cursor without leaving pseudo-C; double-click
-        // jumps into the disassembly tab (IDA-like select vs. follow).
-        if let Some(addr) = clicked {
-            *action = Action::SyncDisasm(addr);
+        // Single click selects that exact row and syncs the disassembly cursor without
+        // leaving pseudo-C; double-click jumps into the disassembly tab.
+        if let Some((line, addr)) = clicked {
+            *action = Action::SyncPseudoLine { addr, line };
         }
         if let Some(addr) = jumped {
             *action = Action::NavigateToDisasm(addr);
@@ -4841,7 +4923,15 @@ impl ReCraftApp {
                 self.disasm_dirty = true;
                 self.disasm_scroll_to = Some(0.0);
                 self.pseudo_start = addr;
+                self.pseudo_selected_line = None;
                 self.pseudo_dirty = true;
+            }
+            Action::SyncPseudoLine { addr, line } => {
+                self.pseudo_selected_line = Some(line);
+                self.disasm_start = addr;
+                self.selected = 0;
+                self.disasm_dirty = true;
+                self.disasm_scroll_to = Some(0.0);
             }
             Action::ShowStructs => {
                 self.focus_pane(Pane::Structs);
@@ -6270,6 +6360,164 @@ mod tests {
         assert_eq!(app.disasm_start, target);
         assert_eq!(app.selected, 0);
         assert_eq!(app.pseudo_start, target);
+    }
+
+    #[test]
+    fn pseudo_line_click_selects_one_row_and_keeps_the_listing() {
+        let start = Address::new(0x140001000);
+        let mut app = ReCraftApp::default();
+        app.pseudo_start = start;
+        app.pseudo = Some(vec![
+            PseudoLine {
+                addr: start,
+                text: "// header".to_owned(),
+            },
+            PseudoLine {
+                addr: start,
+                text: "first();".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(start.get() + 0x10),
+                text: "second();".to_owned(),
+            },
+        ]);
+        app.disasm_rows = vec![DisasmLine {
+            addr: start,
+            len: 1,
+            raw: [0x90; 15],
+            mnemonic: "nop".to_owned(),
+            operands: String::new(),
+            name: None,
+            comment: None,
+            flags: Flags::code(),
+        }];
+        assert_eq!(
+            app.active_pseudo_line(app.pseudo.as_deref().unwrap()),
+            Some(0),
+            "without a click, the first line at the address is current"
+        );
+
+        let ctx = egui::Context::default();
+        app.apply_action(
+            &ctx,
+            Action::SyncPseudoLine {
+                addr: start,
+                line: 1,
+            },
+        );
+        assert_eq!(app.pseudo_selected_line, Some(1));
+        assert_eq!(
+            app.pseudo_start, start,
+            "the listing must not be re-anchored"
+        );
+        assert_eq!(app.disasm_start, start);
+        assert_eq!(app.selected, 0);
+        assert_eq!(
+            app.active_pseudo_line(app.pseudo.as_deref().unwrap()),
+            Some(1),
+            "the clicked row wins over the first line of the address group"
+        );
+
+        let next = Address::new(start.get() + 0x10);
+        app.apply_action(&ctx, Action::SyncDisasm(next));
+        assert_eq!(app.pseudo_selected_line, None);
+        assert_eq!(app.pseudo_start, next);
+    }
+
+    fn collect_text_runs(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.galley.job.text.clone(), text.pos)),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text_runs(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn pseudo_view_draws_line_numbers_instead_of_addresses() {
+        let start = Address::new(0x140001000);
+        let mut app = ReCraftApp::default();
+        app.pseudo_start = start;
+        app.pseudo = Some(vec![
+            PseudoLine {
+                addr: start,
+                text: "// header".to_owned(),
+            },
+            PseudoLine {
+                addr: start,
+                text: "return 0;".to_owned(),
+            },
+        ]);
+        app.pseudo_dirty = false;
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(input, |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_text_runs(&clipped.shape, &mut texts);
+        }
+
+        let number = texts
+            .iter()
+            .find(|(text, _)| text == "1")
+            .expect("expected a line-number gutter");
+        let code = texts
+            .iter()
+            .find(|(text, _)| text == "// header")
+            .expect("expected the first pseudo-C row");
+        assert!(
+            number.1.x < code.1.x,
+            "the line number must sit left of the code, got {number:?} and {code:?}"
+        );
+        assert!(
+            texts.iter().any(|(text, _)| text == "2"),
+            "expected the second pseudo-code row number, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|(text, _)| text == "return 0;"),
+            "expected the second pseudo-code row, got {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|(text, _)| text.contains("0x140001000")),
+            "the pseudo-C view must not show an address prefix"
+        );
+    }
+
+    #[test]
+    fn pseudo_gutter_stays_fixed_while_code_scrolls() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let row = egui::Rect::from_min_size(egui::pos2(0.0, 10.0), egui::vec2(1200.0, 15.0));
+        let scrolled =
+            egui::Rect::from_min_size(egui::pos2(-200.0, 10.0), egui::vec2(1200.0, 15.0));
+        let (number, text, clip) = ReCraftApp::pseudo_row_geometry(viewport, row, 40.0);
+        let (number_scrolled, text_scrolled, clip_scrolled) =
+            ReCraftApp::pseudo_row_geometry(viewport, scrolled, 40.0);
+
+        assert_eq!(
+            number, number_scrolled,
+            "line numbers must not scroll horizontally"
+        );
+        assert_eq!(
+            clip.left(),
+            clip_scrolled.left(),
+            "the code clip must stay fixed"
+        );
+        assert!(
+            (text.x - text_scrolled.x - 200.0).abs() < 0.01,
+            "code text should follow the horizontal scroll offset"
+        );
     }
 
     #[test]
