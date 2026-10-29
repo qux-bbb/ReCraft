@@ -950,6 +950,13 @@ impl Printer<'_> {
     fn stack_slot(&self, expr: ExprId) -> Option<(Reg, i64)> {
         let (op, lhs, rhs) = match &self.exprs[expr as usize] {
             Expr::Bin { op, lhs, rhs } => (op, *lhs, *rhs),
+            // A bare `[rsp]` / `[rbp]` write is the frame slot at offset 0 (`push`).
+            Expr::Reg(view)
+                if matches!(view.base, Reg::Rsp | Reg::Rbp)
+                    || self.frame_reg == Some(view.base) =>
+            {
+                return Some((view.base, 0));
+            }
             _ => return None,
         };
         let base_of = |id: ExprId, exprs: &[Expr]| match &exprs[id as usize] {

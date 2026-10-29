@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A bare frame-slot access is named like every other local: `*(u64*)(rsp)` and
+  `*(u64*)(rbp)` render as `var_0` (the `push`/`[rsp]` slot) instead of an untyped
+  dereference. Notepad's listing loses 56 such dereferences.
 - `bts`/`btr`/`btc` are lifted instead of kept as assembly: `bts ebx, 0x1c` renders as
   `ebx |= 0x10000000;` and `btr edx, 0x1c` as `edx &= 0xefffffff;` (a constant bit index is
   folded into the mask, and the old-bit flag definition is still available to a later
