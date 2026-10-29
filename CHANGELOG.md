@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Calls with more than four arguments now print the stack-passed ones: stores into the
+  outgoing argument area (`[rsp+0x20]`, `[rsp+0x28]`, ...) are collected until the call and
+  appended in slot order, resolving copies to the value they carry. A format-string call
+  reads `sub_1400083f8(rbx, 0x25, "%08lX-%04X-...", var_2f, (uint32)(var_33), ...)` and
+  `RtlVirtualUnwind` shows all eight arguments; notepad has 149 such calls. Only a call that
+  already shows its four register arguments is extended, so an unknown arity never places a
+  stack slot in the wrong position.
+- Slot names now follow stack-pointer changes inside a block as well: the displacement is
+  updated before each statement is printed, so a `push`/`sub rsp` early in a block no longer
+  leaves later accesses named as if the stack pointer had not moved (`&var_98` → `&var_50` in
+  notepad's unwind helper).
 - Scalar floating-point parameters and returns are typed: `xmm0`..`xmm3` read before being
   written become `f32`/`f64` parameters (the memory operand's width distinguishes `float`
   from `double`), and a function that leaves its result in `xmm0` without writing `eax` is

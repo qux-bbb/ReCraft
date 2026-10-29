@@ -177,6 +177,8 @@ pub(crate) fn lift_block(
         stack_delta: stack.map(|(entry, _)| entry),
         frame_base: stack.map_or(0, |(_, base)| base),
         pointer_offsets: BTreeMap::new(),
+        stack_args: BTreeMap::new(),
+        last_values: BTreeMap::new(),
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
@@ -281,6 +283,9 @@ pub(crate) fn lift_block(
                 written.insert(reg.base);
             }
             printer.retire_frame_alias(stmt);
+            // The stack displacement must follow `rsp` bookkeeping even though those
+            // statements are not printed.
+            printer.note_stack(stmt);
             if printer.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                 continue;
             }
@@ -301,7 +306,8 @@ pub(crate) fn lift_block(
             // old argument name, and an indirect call still prints the value it received.
             printer.note_write(stmt);
             printer.note_arg_alias(stmt);
-            printer.note_stack(stmt);
+            printer.note_value(stmt);
+            printer.note_stack_arg(stmt);
             if let Stmt::WriteReg { reg, value } = stmt
                 && let Some(slot) = arg_slot(reg.base)
             {
@@ -317,6 +323,7 @@ pub(crate) fn lift_block(
                 Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
             ) {
                 printer.arg_values = [None, None, None, None];
+                printer.stack_args.clear();
             }
         }
     }
@@ -796,6 +803,8 @@ pub fn pseudocode_l0(
         stack_delta: layout.1.map(|_| 0),
         frame_base: layout.1.unwrap_or(0),
         pointer_offsets: BTreeMap::new(),
+        stack_args: BTreeMap::new(),
+        last_values: BTreeMap::new(),
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -951,6 +960,14 @@ struct Printer<'a> {
     /// to their displacement from the function entry, so `[rbp-0x30]` and `[rsp+0x18]` that
     /// name the same slot get the same name.
     pointer_offsets: BTreeMap<Reg, i64>,
+    /// Values stored into the outgoing stack-argument area since the last call, keyed by
+    /// slot index (`[rsp+0x20]` is 0), so a call with more than four arguments can print
+    /// them too. Stores usually appear in descending order.
+    stack_args: BTreeMap<usize, String>,
+    /// Rendered value most recently written to each register in this block, so a value
+    /// carried through a copy into a stack argument keeps its expression
+    /// (`rcx = &var_60; var_28 = rcx;` records `&var_60`).
+    last_values: BTreeMap<Reg, String>,
 }
 
 impl Printer<'_> {
@@ -969,6 +986,9 @@ impl Printer<'_> {
                 && matches!(insn.stmts.last(), Some(Stmt::CallIndirect { .. }));
             for (index, stmt) in insn.stmts.iter().enumerate() {
                 self.retire_frame_alias(stmt);
+                // The stack displacement must follow `rsp` bookkeeping even though those
+                // statements are not printed.
+                self.note_stack(stmt);
                 if self.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                     continue;
                 }
@@ -986,7 +1006,8 @@ impl Printer<'_> {
                 }
                 self.note_write(stmt);
                 self.note_arg_alias(stmt);
-                self.note_stack(stmt);
+                self.note_value(stmt);
+                self.note_stack_arg(stmt);
                 if let Stmt::WriteReg { reg, value } = stmt
                     && let Some(slot) = arg_slot(reg.base)
                 {
@@ -1002,6 +1023,7 @@ impl Printer<'_> {
                     Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
                 ) {
                     self.arg_values = [None, None, None, None];
+                    self.stack_args.clear();
                 }
             }
             match insn.flow {
@@ -1084,6 +1106,7 @@ impl Printer<'_> {
             return;
         };
         if reg.base == Reg::Rsp {
+            self.stack_args.clear();
             match (self.stack_delta, stack_step(self.exprs, *value)) {
                 (Some(delta), Some(change)) => self.stack_delta = Some(delta + change),
                 _ => self.stack_delta = None,
@@ -1100,6 +1123,97 @@ impl Printer<'_> {
                 self.pointer_offsets.remove(&reg.base);
             }
         }
+    }
+
+    /// Record the value a write leaves in its register, resolving a plain copy to the
+    /// expression it copies so later stores and calls keep the expression.
+    fn note_value(&mut self, stmt: &Stmt) {
+        if let Stmt::WriteReg { reg, value } = stmt {
+            let text = match &self.exprs[*value as usize] {
+                Expr::Reg(view) => self
+                    .last_values
+                    .get(&view.base)
+                    .cloned()
+                    .unwrap_or_else(|| self.value_expr(*value)),
+                _ => self.value_expr(*value),
+            };
+            self.last_values.insert(reg.base, text);
+            return;
+        }
+        if matches!(
+            stmt,
+            Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+        ) {
+            for reg in [
+                Reg::Rax,
+                Reg::Rcx,
+                Reg::Rdx,
+                Reg::R8,
+                Reg::R9,
+                Reg::R10,
+                Reg::R11,
+            ] {
+                self.last_values.remove(&reg);
+            }
+        }
+    }
+
+    /// Record a store into the outgoing stack-argument area (`[rsp+0x20]`, `[rsp+0x28]`,
+    /// ...) so the following call can print it as argument 5 and beyond. A gap or an
+    /// unaligned slot invalidates what was collected.
+    fn note_stack_arg(&mut self, stmt: &Stmt) {
+        let (addr, value) = match stmt {
+            Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
+                (*addr, *value)
+            }
+            _ => return,
+        };
+        let (Some(delta), Some((base, offset))) = (self.stack_delta, self.stack_slot(addr)) else {
+            return;
+        };
+        let from_entry = if base == Reg::Rsp {
+            delta
+        } else if let Some(from_entry) = self.pointer_offsets.get(&base) {
+            *from_entry
+        } else {
+            return;
+        };
+        let slot = from_entry + offset - (delta + 0x20);
+        if slot < 0 {
+            // Shadow space reserved for the register arguments.
+            return;
+        }
+        if slot % 8 != 0 {
+            self.stack_args.clear();
+            return;
+        }
+        let index = (slot / 8) as usize;
+        if index > 8 {
+            // Beyond the usual few stack arguments: not worth tracking.
+            return;
+        }
+        let text = match &self.exprs[value as usize] {
+            Expr::Reg(view) => self
+                .last_values
+                .get(&view.base)
+                .cloned()
+                .unwrap_or_else(|| self.value_expr(value)),
+            _ => self.value_expr(value),
+        };
+        self.stack_args.insert(index, text);
+    }
+
+    /// Stack-passed arguments collected since the last call, in slot order. Only a
+    /// contiguous run from the first slot is returned: a hole means the argument order is
+    /// not fully known.
+    fn stack_arguments(&self) -> Vec<String> {
+        let mut arguments = Vec::new();
+        let mut index = 0;
+        while let Some(text) = self.stack_args.get(&index) {
+            arguments.push(text.clone());
+            index += 1;
+        }
+        arguments
     }
 
     fn note_write(&mut self, stmt: &Stmt) {
@@ -1459,7 +1573,7 @@ impl Printer<'_> {
                 match self.call_protos.get(&target.get()) {
                     Some(proto) => {
                         let count = proto.params.len().min(args.len());
-                        let rendered: Vec<String> = args
+                        let mut rendered: Vec<String> = args
                             .iter()
                             .take(count)
                             .enumerate()
@@ -1475,6 +1589,10 @@ impl Printer<'_> {
                                 }
                             })
                             .collect();
+                        // Parameters beyond the fourth travel on the stack.
+                        if rendered.len() >= 4 {
+                            rendered.extend(self.stack_arguments());
+                        }
                         format!("{name}({})", rendered.join(", "))
                     }
                     None => {
@@ -1488,11 +1606,17 @@ impl Printer<'_> {
                         if count == 0 {
                             format!("{name}()")
                         } else {
-                            let rendered: Vec<String> = args
+                            let mut rendered: Vec<String> = args
                                 .iter()
                                 .take(count)
                                 .map(|arg| self.arg_expr(*arg))
                                 .collect();
+                            // Only extend a call that already shows all four register
+                            // arguments: with fewer, the first stack slot's position among
+                            // the printed arguments would be unknown.
+                            if rendered.len() >= 4 {
+                                rendered.extend(self.stack_arguments());
+                            }
                             format!("{name}({})", rendered.join(", "))
                         }
                     }
@@ -1500,7 +1624,23 @@ impl Printer<'_> {
             }
             Stmt::CallIndirect { target } => match self.import_target(*target) {
                 Some(name) => {
-                    let args = self.indirect_args();
+                    let mut args = self.indirect_args();
+                    let stack = self.stack_arguments();
+                    if self
+                        .arg_values
+                        .iter()
+                        .filter(|value| value.is_some())
+                        .count()
+                        >= 4
+                        && !stack.is_empty()
+                    {
+                        let extra = stack.join(", ");
+                        if args.is_empty() {
+                            args = extra;
+                        } else {
+                            args = format!("{args}, {extra}");
+                        }
+                    }
                     if args.is_empty() {
                         format!("{name}()")
                     } else {
