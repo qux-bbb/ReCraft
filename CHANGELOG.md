@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Ordinal-only imports (COMCTL32 `#345`, shcore-path `#170`, ...) now resolve to a call
+  name too: `(**(u64*)(0x14002a420))()` reads `ord_170()`. Notepad's unresolved
+  through-IAT pointer calls drop 10 → 2.
 - A register write whose next mention in the same straight-line run is a full 32/64-bit
   redefinition is dropped: `rax = var_b8; r9d = 0; r8d = 0; rax = var_b0;` loses the first
   load. Calls, branches, labels and assembly stop the scan, a redefinition that reads the

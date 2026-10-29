@@ -846,20 +846,27 @@ fn import_names(session: &Session) -> HashMap<u64, String> {
     let mut names = HashMap::new();
     for module in &session.image().imports {
         for function in &module.functions {
-            if let Some(name) = &function.name {
-                // Keep the rendered call valid C even for decorated/ordinal names.
-                let sanitized: String = name
-                    .chars()
-                    .map(|ch| {
-                        if ch.is_ascii_alphanumeric() || ch == '_' {
-                            ch
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                names.insert(function.iat_va.get(), sanitized);
-            }
+            // Ordinal-only imports have no name; `ord_<n>` still resolves the call and
+            // reads better than a raw pointer dereference.
+            let Some(name) = function
+                .name
+                .clone()
+                .or_else(|| function.ordinal.map(|ordinal| format!("ord_{ordinal}")))
+            else {
+                continue;
+            };
+            // Keep the rendered call valid C even for decorated names.
+            let sanitized: String = name
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            names.insert(function.iat_va.get(), sanitized);
         }
     }
     names
