@@ -176,6 +176,7 @@ pub(crate) fn lift_block(
         arg_aliases: BTreeMap::new(),
         stack_delta: stack.map(|(entry, _)| entry),
         frame_base: stack.map_or(0, |(_, base)| base),
+        pointer_offsets: BTreeMap::new(),
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
@@ -386,6 +387,33 @@ fn popped_register(item: &LiftedInsn, exprs: &[Expr]) -> Option<Reg> {
             };
             (base.base == Reg::Rsp && pointer.base == Reg::Rsp && *op == recraft_ir::BinOp::Add)
                 .then_some(reg.base)
+        }
+        _ => None,
+    }
+}
+
+/// Displacement from the function entry of a stack address held in an expression
+/// (`rsp`, `rsp - 8`, `rsp + 0x30`), given the current `rsp` displacement.
+fn pointer_offset(exprs: &[Expr], value: ExprId, delta: Option<i64>) -> Option<i64> {
+    let delta = delta?;
+    match &exprs[value as usize] {
+        Expr::Reg(view) if view.base == Reg::Rsp => Some(delta),
+        Expr::Bin { op, lhs, rhs } => {
+            let Expr::Reg(view) = &exprs[*lhs as usize] else {
+                return None;
+            };
+            if view.base != Reg::Rsp {
+                return None;
+            }
+            let Expr::Const(amount) = &exprs[*rhs as usize] else {
+                return None;
+            };
+            let amount = *amount as i64;
+            match op {
+                recraft_ir::BinOp::Add => Some(delta + amount),
+                recraft_ir::BinOp::Sub => Some(delta - amount),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -767,6 +795,7 @@ pub fn pseudocode_l0(
         arg_aliases: BTreeMap::new(),
         stack_delta: layout.1.map(|_| 0),
         frame_base: layout.1.unwrap_or(0),
+        pointer_offsets: BTreeMap::new(),
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -918,6 +947,10 @@ struct Printer<'a> {
     /// Deepest `rsp` displacement of the function: names are relative to the bottom of the
     /// frame, which keeps locals positive and toolchain pushes distinct.
     frame_base: i64,
+    /// Registers that hold a stack address (the saved-`rsp` alias, a rebuilt `rbp`) mapped
+    /// to their displacement from the function entry, so `[rbp-0x30]` and `[rsp+0x18]` that
+    /// name the same slot get the same name.
+    pointer_offsets: BTreeMap<Reg, i64>,
 }
 
 impl Printer<'_> {
@@ -1020,13 +1053,21 @@ impl Printer<'_> {
         if matches!(
             stmt,
             Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
-        ) && let Some(frame) = self.frame_reg
-            && matches!(
-                frame,
-                Reg::Rax | Reg::Rcx | Reg::Rdx | Reg::R8 | Reg::R9 | Reg::R10 | Reg::R11
-            )
-        {
-            self.frame_reg = None;
+        ) {
+            for reg in [
+                Reg::Rax,
+                Reg::Rcx,
+                Reg::Rdx,
+                Reg::R8,
+                Reg::R9,
+                Reg::R10,
+                Reg::R11,
+            ] {
+                self.pointer_offsets.remove(&reg);
+                if self.frame_reg == Some(reg) {
+                    self.frame_reg = None;
+                }
+            }
         }
     }
 
@@ -1042,12 +1083,22 @@ impl Printer<'_> {
             }
             return;
         };
-        if reg.base != Reg::Rsp {
+        if reg.base == Reg::Rsp {
+            match (self.stack_delta, stack_step(self.exprs, *value)) {
+                (Some(delta), Some(change)) => self.stack_delta = Some(delta + change),
+                _ => self.stack_delta = None,
+            }
             return;
         }
-        match (self.stack_delta, stack_step(self.exprs, *value)) {
-            (Some(delta), Some(change)) => self.stack_delta = Some(delta + change),
-            _ => self.stack_delta = None,
+        // A register loaded with a stack address (`rbp = rsp - 8`, the saved-rsp alias)
+        // names slots on the same frame base.
+        match pointer_offset(self.exprs, *value, self.stack_delta) {
+            Some(offset) => {
+                self.pointer_offsets.insert(reg.base, offset);
+            }
+            None => {
+                self.pointer_offsets.remove(&reg.base);
+            }
         }
     }
 
@@ -1238,8 +1289,8 @@ impl Printer<'_> {
                 None => Self::stack_name(offset),
             });
         }
-        if self.frame_reg == Some(base) {
-            return Some(Self::stack_name(offset - self.frame_base));
+        if let Some(from_entry) = self.pointer_offsets.get(&base) {
+            return Some(Self::stack_name(offset + from_entry - self.frame_base));
         }
         let rebuilt_frame = base == Reg::Rbp && self.written.contains(&Reg::Rbp);
         if offset < 0 || rebuilt_frame {
