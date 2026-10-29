@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A temporary that only feeds one store folds into it:
+  `ecx = (uint32)(*(u16*)(rax)); *(u32*)((r8 + 8)) = ecx;` becomes
+  `*(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));`. The copy stays when the register is still
+  live afterwards, and calls/branches count as reads (16 sites in notepad).
 - A temporary built only for the return folds away: `ebx = 0x80004002; return ebx;` reads
   `return 0x80004002;`, and `rdx = (c ? a : b); return rdx;` reads `return (c ? a : b);`
   (29 sites in notepad).

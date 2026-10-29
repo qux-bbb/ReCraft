@@ -256,6 +256,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_store_copies(&mut lines);
     fold_carry_masks(&mut lines);
     drop_dead_register_writes(&mut lines);
+    fold_store_value_temporaries(&mut lines);
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
     merge_else_if(&mut lines);
@@ -2863,6 +2864,69 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// A temporary that exists only to be stored folds into the store:
+/// `ecx = (uint32)(*(u16*)(rax)); *(u32*)((r8 + 8)) = ecx;` becomes
+/// `*(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));`. The register must be dead after the store,
+/// otherwise the copy is kept and the value stays on its own line.
+fn fold_store_value_temporaries(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let indent = leading_spaces(&lines[index].text);
+        let Some((target, value)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        if wide_register_base(target).is_none()
+            || mentions_slot(value, target)
+            || leading_spaces(&lines[index + 1].text) != indent
+        {
+            index += 1;
+            continue;
+        }
+        let store = lines[index + 1].text.trim().to_owned();
+        let Some(head) = store.strip_suffix(&format!(" = {target};")) else {
+            index += 1;
+            continue;
+        };
+        if !head.starts_with("*(u") || !register_dead_after(lines, index + 1, target) {
+            index += 1;
+            continue;
+        }
+        lines[index + 1].text = format!("{}{head} = {value};", " ".repeat(indent));
+        lines.remove(index);
+        index += 1;
+    }
+}
+
+/// True when the register is not read again in the same straight-line run: the next mention
+/// is a full write, or the run ends (`}`, `return;`, end of listing). Calls, branches and
+/// assembly make the answer "still live" — they can read a register we do not print.
+fn register_dead_after(lines: &[PseudoLine], at: usize, target: &str) -> bool {
+    let indent = leading_spaces(&lines[at].text);
+    for line in &lines[at + 1..] {
+        let text = line.text.trim();
+        let line_indent = leading_spaces(&line.text);
+        if line_indent < indent || text == "}" || text == "return;" {
+            return true;
+        }
+        if line_indent != indent
+            || is_control_line(text)
+            || is_call_line(text)
+            || text.starts_with("__asm(")
+        {
+            return false;
+        }
+        if mentions_slot(text, target) {
+            return plain_assignment(text).is_some_and(|(lhs, rhs)| {
+                wide_register_base(lhs)
+                    .is_some_and(|base| wide_register_base(target).is_some_and(|own| base == own))
+                    && !reads_register(rhs, target)
+            });
+        }
+    }
+    true
+}
+
 /// `rdx = (c ? a : b); return rdx;` is a value built for the return: fold the assignment into
 /// the returning line (`return (c ? a : b);`) so the temporary does not appear at all.
 fn fold_assigned_returns(lines: &mut Vec<PseudoLine>) {
@@ -4668,6 +4732,21 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn store_value_temporaries_fold_into_the_store() {
+        let mut lines = vec![
+            test_line("    ecx = (uint32)(*(u16*)(rax));"),
+            test_line("    *(u32*)((r8 + 8)) = ecx;"),
+            test_line("    return;"),
+        ];
+        fold_store_value_temporaries(&mut lines);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(
+            lines[0].text,
+            "    *(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));"
+        );
     }
 
     #[test]
