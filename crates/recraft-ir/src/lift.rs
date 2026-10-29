@@ -141,6 +141,7 @@ impl Lifter {
                 self.lift_bt(insn);
                 Flow::Fallthrough
             }
+            M::Bts | M::Btr | M::Btc => self.lift_bit_modify(insn, &mut stmts),
             M::Imul => self.lift_imul(insn, &mut stmts),
             M::Push => self.lift_push(insn, &mut stmts),
             M::Pop => self.lift_pop(insn, &mut stmts),
@@ -877,6 +878,91 @@ impl Lifter {
         }
     }
 
+    /// `bts`/`btr`/`btc`: set, reset or complement one bit of the destination. The flag
+    /// definition (CF = the old bit) is kept so a later `jb`/`jae` can still read it.
+    fn lift_bit_modify(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Mnemonic as M;
+        let (Some(target), Some(bit)) = (self.read_operand(insn, 0), self.read_operand(insn, 1))
+        else {
+            return self.intrinsic(insn, stmts);
+        };
+        let width_bits = match insn.op_kind(0) {
+            iced_x86::OpKind::Register => (insn.op_register(0).size() * 8) as u64,
+            _ => memory_size_bytes(insn).map_or(64, |bytes| u64::from(bytes) * 8),
+        };
+        // The CPU masks the bit index to the operand width; a constant index is folded at
+        // lift time so the mask prints as one plain constant.
+        let constant_bit = match &self.exprs[bit as usize] {
+            Expr::Const(value) => Some(*value & (width_bits - 1)),
+            _ => None,
+        };
+        let bit = match constant_bit {
+            Some(value) => self.constant(value),
+            None => {
+                let mask = self.constant(width_bits - 1);
+                self.push(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: bit,
+                    rhs: mask,
+                })
+            }
+        };
+        let shifted = match constant_bit {
+            Some(value) => self.constant(1u64 << value),
+            None => {
+                let one = self.constant(1);
+                self.push(Expr::Bin {
+                    op: BinOp::Shl,
+                    lhs: one,
+                    rhs: bit,
+                })
+            }
+        };
+        let updated = match insn.mnemonic() {
+            M::Bts => self.push(Expr::Bin {
+                op: BinOp::Or,
+                lhs: target,
+                rhs: shifted,
+            }),
+            M::Btr => {
+                let inverted = match constant_bit {
+                    Some(value) => {
+                        let ones = if width_bits == 64 {
+                            u64::MAX
+                        } else {
+                            (1u64 << width_bits) - 1
+                        };
+                        self.constant(ones ^ (1u64 << value))
+                    }
+                    None => self.push(Expr::Un {
+                        op: UnOp::Not,
+                        arg: shifted,
+                    }),
+                };
+                self.push(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: target,
+                    rhs: inverted,
+                })
+            }
+            _ => self.push(Expr::Bin {
+                op: BinOp::Xor,
+                lhs: target,
+                rhs: shifted,
+            }),
+        };
+        self.last_cmp = Some(CmpState {
+            lhs: target,
+            rhs: bit,
+            source: CmpSource::BitTest,
+        });
+        if self.write_operand(insn, 0, updated, stmts) {
+            Flow::Fallthrough
+        } else {
+            self.intrinsic(insn, stmts)
+        }
+    }
+
     fn lift_imul(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
         // 2-operand: dst = dst * src; 3-operand: dst = src * imm. The one-operand form
         // writes rdx:rax and stays an intrinsic.
@@ -1258,6 +1344,43 @@ mod tests {
                 }
                 other => panic!("unexpected expr {other:?}"),
             },
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bit_set_and_reset_lift_to_masks() {
+        // bts eax, 0x1c
+        let (lifter, item) = lift_one(&[0x0f, 0xba, 0xe8, 0x1c], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Bin { op: BinOp::Or, .. }
+                ));
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+        // btr edx, 0x1c
+        let (lifter, item) = lift_one(&[0x0f, 0xba, 0xf2, 0x1c], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Bin { op: BinOp::And, .. }
+                ));
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+        // btc ecx, 3
+        let (lifter, item) = lift_one(&[0x0f, 0xba, 0xf9, 0x03], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Bin { op: BinOp::Xor, .. }
+                ));
+            }
             other => panic!("unexpected stmt {other:?}"),
         }
     }
