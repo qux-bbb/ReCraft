@@ -256,6 +256,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_store_copies(&mut lines);
     fold_carry_masks(&mut lines);
     drop_dead_register_writes(&mut lines);
+    drop_unused_register_writes(&mut lines);
     fold_store_value_temporaries(&mut lines);
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
@@ -2872,6 +2873,52 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// Drop a register write whose register is never mentioned again in the whole function
+/// (`rbp = &var_b1;` in a stub, a setup register whose call was inlined away). All spellings
+/// count (`rax`/`eax`/`al`), and a function containing assembly is skipped: the text can read
+/// a register without naming it (`rep movsb` uses `rsi`/`rdi`/`rcx`).
+fn drop_unused_register_writes(lines: &mut Vec<PseudoLine>) {
+    if lines
+        .iter()
+        .any(|line| line.text.trim_start().starts_with("__asm("))
+    {
+        return;
+    }
+    let mut mentions = [0usize; 16];
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        {
+            if let Some(base) = register_base_any(token) {
+                mentions[base as usize] += 1;
+            }
+        }
+    }
+    let mut index = 0;
+    while index < lines.len() {
+        let Some((target, _)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        let Some(base) = register_base_any(target) else {
+            index += 1;
+            continue;
+        };
+        // `rax`/`eax` is the return value: L1 prints a bare `return;` and the caller still
+        // reads it, so a write that only looks unused at this level must stay.
+        if base == 0 {
+            index += 1;
+            continue;
+        }
+        if mentions[base as usize] == 1 {
+            lines.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
 /// A temporary that exists only to be stored folds into the store:
 /// `ecx = (uint32)(*(u16*)(rax)); *(u32*)((r8 + 8)) = ecx;` becomes
 /// `*(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));`. The register must be dead after the store,
@@ -4743,6 +4790,28 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn unused_register_writes_are_dropped_but_not_the_return_register() {
+        let mut lines = vec![
+            test_line("    rbp = &var_b1;"),
+            test_line("    eax = var_8;"),
+            test_line("    rcx = 1;"),
+            test_line("    rcx += rdx;"),
+            test_line("    return;"),
+        ];
+        drop_unused_register_writes(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "    eax = var_8;",
+                "    rcx = 1;",
+                "    rcx += rdx;",
+                "    return;"
+            ]
+        );
     }
 
     #[test]

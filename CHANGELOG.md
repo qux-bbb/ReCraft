@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A register write whose register is never mentioned again in the whole function is dropped
+  (`rbp = &var_b1;` in a stub, setup registers from an inlined call). All spellings count,
+  `rax`/`eax` is kept because L1's bare `return;` still returns it, and a function containing
+  assembly is skipped since `rep movsb`-style text reads registers without naming them.
+  104 lines in notepad.
 - A temporary that only feeds one store folds into it:
   `ecx = (uint32)(*(u16*)(rax)); *(u32*)((r8 + 8)) = ecx;` becomes
   `*(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));`, and the same holds for a named stack slot
