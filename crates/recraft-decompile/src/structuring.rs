@@ -247,8 +247,11 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_single_use_temporaries(&mut lines);
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
-    // The rewritten loop conditions may now carry a negated comparison.
+    merge_else_if(&mut lines);
+    // The rewritten loop and `else if` conditions may now carry a negated comparison or the
+    // generator's extra parentheses.
     simplify_negated_conditions(&mut lines);
+    strip_condition_parentheses(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
@@ -2473,6 +2476,8 @@ fn simplify_negated_conditions(lines: &mut [PseudoLine]) {
             ("if", leading_spaces(&line.text))
         } else if text.starts_with("while (") {
             ("while", leading_spaces(&line.text))
+        } else if text.starts_with("} else if (") {
+            ("} else if", leading_spaces(&line.text))
         } else {
             continue;
         };
@@ -2512,6 +2517,8 @@ fn strip_condition_parentheses(lines: &mut [PseudoLine]) {
             ("if", " {")
         } else if text.starts_with("while (") {
             ("while", " {")
+        } else if text.starts_with("} else if (") {
+            ("} else if", " {")
         } else if text.starts_with("} while (") {
             ("} while", ";")
         } else {
@@ -3393,6 +3400,51 @@ fn intersect(
         }
     }
     left
+}
+
+/// Merge `} else { if (cond) { ... } }` into `} else if (cond) { ... }` when the nested
+/// `if` is the only statement of the else arm. Sources spell an else-if chain that way and
+/// the extra nesting hides the chain; the body keeps its meaning and only moves one level
+/// left.
+fn merge_else_if(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        if lines[index].text.trim() != "} else {" {
+            index += 1;
+            continue;
+        }
+        let else_indent = leading_spaces(&lines[index].text);
+        let nested = lines[index + 1].text.trim();
+        if leading_spaces(&lines[index + 1].text) != else_indent + 4
+            || !nested.starts_with("if (")
+            || !nested.ends_with(") {")
+        {
+            index += 1;
+            continue;
+        }
+        let Some(close) = matching_brace(lines, index + 1) else {
+            index += 1;
+            continue;
+        };
+        // The else arm must contain nothing but that `if`: its close brace is immediately
+        // followed by the else arm's own close brace.
+        if close + 1 >= lines.len()
+            || lines[close + 1].text.trim() != "}"
+            || leading_spaces(&lines[close + 1].text) != else_indent
+        {
+            index += 1;
+            continue;
+        }
+        let condition = nested.strip_prefix("if ").unwrap_or(nested);
+        lines[index].text = format!("{}}} else if {condition}", " ".repeat(else_indent));
+        for line in &mut lines[index + 2..close] {
+            let strip = leading_spaces(&line.text).min(4);
+            line.text = line.text[strip..].to_owned();
+        }
+        lines.remove(close);
+        lines.remove(index + 1);
+        index += 1;
+    }
 }
 
 /// Rewrite `while (1)` loops whose only exit test the structurer could not fold.
@@ -4373,6 +4425,36 @@ mod tests {
         // The loop's single exit test became a real condition instead of `while (1)`.
         assert!(!text.contains("while (1)"), "{text}");
         assert!(text.matches("do {").count() >= 2, "{text}");
+    }
+
+    #[test]
+    fn single_statement_else_arms_become_else_if() {
+        let mut lines = vec![
+            test_line("    if (a) {"),
+            test_line("        x = 1;"),
+            test_line("    } else {"),
+            test_line("        if (b) {"),
+            test_line("            x = 2;"),
+            test_line("        }"),
+            test_line("    }"),
+        ];
+        merge_else_if(&mut lines);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[2].text, "    } else if (b) {");
+        assert_eq!(lines[3].text, "        x = 2;");
+        assert_eq!(lines[4].text, "    }");
+
+        // An else arm with more than the nested `if` keeps its braces.
+        let mut lines = vec![
+            test_line("    } else {"),
+            test_line("        if (b) {"),
+            test_line("        }"),
+            test_line("        y = 2;"),
+            test_line("    }"),
+        ];
+        merge_else_if(&mut lines);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0].text, "    } else {");
     }
 
     #[test]

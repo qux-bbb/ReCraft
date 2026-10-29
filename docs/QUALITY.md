@@ -84,6 +84,7 @@ goto fallback functions: 0
 | 返回值 | `eax = expr; return;` → `return expr;`；`eax += x; return;` → `return (eax + x);`；只计算到寄存器、没有相邻赋值的值返回路径写成 `return eax;`/`return rax;`（`void` 保持裸 `return;`）；紧邻的单次使用临时量并入返回表达式（`eax = a; eax += b;` → `return (a + b);`）；比例 1 的乘除（`*(arg2 * 1)`）去掉 |
 | 跳表派发 | `switch` 前编译器生成的派发语句（表加载、`__asm("jmp rcx")`）被 `switch` 取代；仅当这段语句全是寄存器运算且以间接跳转结尾时删除，含调用/内存写入的块保持原样 |
 | 循环收敛 | 唯一出口是 `if (cond) break;` 的 `while (1)`：测试在循环体开头时写回 `while (!cond)`，在末尾时改写为 `do { ... } while (!cond)`；体内有 `continue` 时保持原样（`continue` 会先到达闩锁，改条件会跳过原语义） |
+| else-if 合并 | `} else { if (cond) { ... } }` 在 else 分支只有这一条语句时折叠为 `} else if (cond) { ... }`，分支体整体左移一级 |
 
 这些处理是**纯文本**的，因此只做能由文本证明安全的变换（例如参数传播要求复制位于
 任何分支之前的直线序言、寄存器为 callee-saved 且全函数只写一次）。不满足条件的

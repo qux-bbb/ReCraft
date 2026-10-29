@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `else` arms whose only statement is a nested `if` now render as `} else if (cond) {`, with
+  the arm body moved one level left, so an else-if ladder reads like the source instead of
+  gaining a level of nesting per branch. Notepad's listing merges 126 such arms.
 - `while (1)` loops whose only exit is one `if (condition) break;` now show that test as
   the loop condition: at the top of the body it becomes `while (!condition)`, at the end it
   becomes `do { ... } while (!condition)`. On notepad 47 of 83 unconditional loops become
