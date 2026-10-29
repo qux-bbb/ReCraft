@@ -84,7 +84,7 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Text mode operand colours](images/text-view.png)
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
-3. 点击函数 → 中间 **Decompile** 页签，勾选 **L2** 看结构化反编译与签名；**Disassembly**
+3. 点击函数 → 中间 **Decompile** 页签，直接显示结构化反编译与签名（没有 L0/L1/L2 开关）；**Disassembly**
    的 **Graph** 模式看 CFG。
    反编译与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
    工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在反编译里同步高亮，

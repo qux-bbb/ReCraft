@@ -21,7 +21,7 @@ use recraft_core::{
     CodeData, Command, CommentKind, DisasmLine, Flags, FunctionInfo, Session, StructDef,
     StructField,
 };
-use recraft_decompile::{PseudoLine, pseudocode_l0};
+use recraft_decompile::PseudoLine;
 
 use crate::i18n::{I18n, Lang};
 
@@ -757,8 +757,6 @@ pub struct ReCraftApp {
     /// disassembly address.
     pseudo_selected_line: Option<usize>,
     pseudo_dirty: bool,
-    pseudo_l1: bool,
-    pseudo_l2: bool,
     functions: Vec<FunctionInfo>,
     /// Names parallel to `functions` (for the side list), refreshed with it.
     function_labels: Vec<String>,
@@ -856,8 +854,6 @@ impl Default for ReCraftApp {
             pseudo: None,
             pseudo_selected_line: None,
             pseudo_dirty: false,
-            pseudo_l1: false,
-            pseudo_l2: false,
             functions: Vec::new(),
             function_labels: Vec::new(),
             functions_dirty: false,
@@ -1734,7 +1730,10 @@ impl ReCraftApp {
             self.pseudo_dirty = false;
             return;
         };
-        let code = if self.pseudo_l1 || self.pseudo_l2 {
+        let code = {
+            // The Decompile view always shows the structured pseudo-C with the recovered
+            // signature and argument names; `pseudocode_l2` itself falls back to the raw
+            // listing when the function is not in the analysed set.
             let function_start = session
                 .functions()
                 .ok()
@@ -1747,13 +1746,7 @@ impl ReCraftApp {
                         .map(|function| function.start)
                 })
                 .unwrap_or(self.pseudo_start);
-            if self.pseudo_l2 {
-                recraft_decompile::pseudocode_l2(session, function_start)
-            } else {
-                recraft_decompile::pseudocode_l1(session, function_start)
-            }
-        } else {
-            pseudocode_l0(session, self.pseudo_start, 400)
+            recraft_decompile::pseudocode_l2(session, function_start)
         };
         match code {
             Ok(code) => {
@@ -4611,26 +4604,7 @@ impl ReCraftApp {
         self.tab = Tab::Pseudo;
         let pal = self.palette();
         let mono = FontId::monospace(self.mono_size());
-        let l1_label = self.t("ui_l1_structured");
-        let l2_label = self.t("ui_l2_vars");
-        let mut l1 = self.pseudo_l1;
-        let mut l2 = self.pseudo_l2;
         ui.horizontal(|ui| {
-            if ui.checkbox(&mut l1, l1_label).changed() {
-                self.pseudo_l1 = l1;
-                if l1 {
-                    self.pseudo_l2 = false;
-                }
-                self.pseudo_dirty = true;
-            }
-            if ui.checkbox(&mut l2, l2_label).changed() {
-                self.pseudo_l2 = l2;
-                if l2 {
-                    self.pseudo_l1 = true;
-                }
-                self.pseudo_dirty = true;
-            }
-            ui.separator();
             ui.weak(self.t("ui_pseudo_click_hint"));
         });
         if self.pseudo_dirty {
@@ -6020,39 +5994,29 @@ mod tests {
             .expect("CFG not built for the selected function");
         assert!(!cfg.blocks.is_empty(), "CFG has no blocks");
 
-        // L1 structured pseudo-C for the selected function.
+        // The Decompile view renders the structured pseudo-C (signature + argument names)
+        // without an L1/L2 toggle.
         app.tab = Tab::Pseudo;
-        app.pseudo_l1 = true;
         app.pseudo_dirty = true;
         for frame in 0..2 {
             input.time = Some(frame as f64 / 60.0);
             let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
             output.textures_delta.clear();
         }
-        let pseudo = app.pseudo.as_ref().expect("L1 pseudo-C was not produced");
+        let pseudo = app.pseudo.as_ref().expect("pseudo-C was not produced");
         assert!(
             pseudo
                 .iter()
                 .any(|line| line.text.contains("L1 structure recovery")),
-            "L1 header missing"
+            "structure header missing"
         );
-
-        // L2 variant renders a real (non `_l1`) signature and argument names.
-        app.pseudo_l2 = true;
-        app.pseudo_dirty = true;
-        for frame in 0..2 {
-            input.time = Some(frame as f64 / 60.0);
-            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
-            output.textures_delta.clear();
-        }
-        let pseudo = app.pseudo.as_ref().expect("L2 pseudo-C was not produced");
         assert!(
             pseudo.iter().any(|line| !line.text.contains("_l1")
                 && line.text.ends_with('{')
                 && (line.text.starts_with("void ")
                     || line.text.starts_with("int32 ")
                     || line.text.starts_with("int64 "))),
-            "L2 signature missing"
+            "structured signature missing"
         );
 
         // AI proposal diff panel: render suggestions, then apply one through the bus.

@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Decompile view no longer has the `L1 (structured)` / `L2 (vars)` checkboxes. It always
+  renders the structured pseudo-C with the recovered signature, argument names and stack
+  slots (the previous L2 output), and falls back to the raw listing for an address outside
+  the analysed functions. The two locale keys for the removed toggles are gone.
 - One-line conditionals lost the generator's wrapping parentheses: `if ((eax == 0)) break;`
   now reads `if (eax == 0) break;`, and the same for `continue`, `return ...` and
   `goto loc_...` (`if`/`while`/`do-while` block headers already did this). Notepad's listing
