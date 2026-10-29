@@ -85,6 +85,9 @@ goto fallback functions: 0
 | 跳表派发 | `switch` 前编译器生成的派发语句（表加载、`__asm("jmp rcx")`）被 `switch` 取代；仅当这段语句全是寄存器运算且以间接跳转结尾时删除，含调用/内存写入的块保持原样 |
 | 循环收敛 | 唯一出口是 `if (cond) break;` 的 `while (1)`：测试在循环体开头时写回 `while (!cond)`，在末尾时改写为 `do { ... } while (!cond)`；体内有 `continue` 时保持原样（`continue` 会先到达闩锁，改条件会跳过原语义） |
 | else-if 合并 | `} else { if (cond) { ... } }` 在 else 分支只有这一条语句时折叠为 `} else if (cond) { ... }`，分支体整体左移一级 |
+| else 展平 | then 分支以 `return`/`break`/`continue`/`goto` 结尾时去掉冗余 `else`，else 分支体左移一级（早退风格） |
+| 栈槽地址 | `lea` 得到的栈槽地址写成 `&var_XX`；裸 `[rsp]`/`[rbp]` 槽写成 `var_0` |
+| 单行条件 | 单行 `if (cond) break/continue/return/goto;` 去掉生成器加的多余括号 |
 
 这些处理是**纯文本**的，因此只做能由文本证明安全的变换（例如参数传播要求复制位于
 任何分支之前的直线序言、寄存器为 callee-saved 且全函数只写一次）。不满足条件的
