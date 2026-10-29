@@ -252,6 +252,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // generator's extra parentheses.
     simplify_negated_conditions(&mut lines);
     strip_condition_parentheses(&mut lines);
+    strip_inline_condition_parentheses(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
@@ -3402,6 +3403,38 @@ fn intersect(
     left
 }
 
+/// Drop the generator's wrapping parentheses in one-line conditionals:
+/// `if ((x == 0)) break;` becomes `if (x == 0) break;`, and likewise for `continue`,
+/// `return ...` and `goto loc_...`.
+fn strip_inline_condition_parentheses(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        let text = line.text.trim();
+        let Some(rest) = text.strip_prefix("if ") else {
+            continue;
+        };
+        let Some(close) = matching_close(rest) else {
+            continue;
+        };
+        let tail = &rest[close + 1..];
+        let tail_ok = matches!(tail, " break;" | " continue;")
+            || (tail.starts_with(" return ") && tail.ends_with(';'))
+            || (tail.starts_with(" goto ") && tail.ends_with(';'));
+        if !tail_ok {
+            continue;
+        }
+        let condition = &rest[1..close];
+        if !condition.starts_with('(') || matching_close(condition) != Some(condition.len() - 1) {
+            continue;
+        }
+        let inner = &condition[1..condition.len() - 1];
+        if inner.is_empty() {
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&line.text));
+        line.text = format!("{indent}if ({inner}){tail}");
+    }
+}
+
 /// Merge `} else { if (cond) { ... } }` into `} else if (cond) { ... }` when the nested
 /// `if` is the only statement of the else arm. Sources spell an else-if chain that way and
 /// the extra nesting hides the chain; the body keeps its meaning and only moves one level
@@ -4425,6 +4458,23 @@ mod tests {
         // The loop's single exit test became a real condition instead of `while (1)`.
         assert!(!text.contains("while (1)"), "{text}");
         assert!(text.matches("do {").count() >= 2, "{text}");
+    }
+
+    #[test]
+    fn inline_conditions_lose_their_extra_parentheses() {
+        let mut lines = vec![
+            test_line("    if ((eax == 0)) break;"),
+            test_line("    if ((rdx != rax)) continue;"),
+            test_line("    if ((al != 0)) return sub_1(7);"),
+            test_line("    if ((rcx == 0)) goto loc_20;"),
+            test_line("    if (a && b) break;"),
+        ];
+        strip_inline_condition_parentheses(&mut lines);
+        assert_eq!(lines[0].text, "    if (eax == 0) break;");
+        assert_eq!(lines[1].text, "    if (rdx != rax) continue;");
+        assert_eq!(lines[2].text, "    if (al != 0) return sub_1(7);");
+        assert_eq!(lines[3].text, "    if (rcx == 0) goto loc_20;");
+        assert_eq!(lines[4].text, "    if (a && b) break;");
     }
 
     #[test]

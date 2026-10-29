@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- One-line conditionals lost the generator's wrapping parentheses: `if ((eax == 0)) break;`
+  now reads `if (eax == 0) break;`, and the same for `continue`, `return ...` and
+  `goto loc_...` (`if`/`while`/`do-while` block headers already did this). Notepad's listing
+  drops 1065 such pairs.
 - Argument-register setup consumed by a call is no longer printed twice. A direct call
   already renders the callee's parameters, and an indirect import call (`call [IAT]`) now
   prints the values last written to `rcx`/`rdx`/`r8`/`r9`, so the preceding copies are
