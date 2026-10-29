@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Scalar floating-point parameters and returns are typed: `xmm0`..`xmm3` read before being
+  written become `f32`/`f64` parameters (the memory operand's width distinguishes `float`
+  from `double`), and a function that leaves its result in `xmm0` without writing `eax` is
+  declared `f32`/`f64`. Corpus `float_math` now reads `int32 float_math(f32 arg1)` with
+  `arg1=xmm0` instead of an argument-less signature. Mixed integer/float parameter order is
+  not recoverable without a prototype, so those `xmmN` registers stay unnamed — except for
+  user prototypes, which map float parameters to `xmm0`..`xmm3` and keep their declared
+  order in the signature (`float scale(float factor, int count)`).
 - A register used only to carry a value into a store is folded into it:
   `rcx = &var_58; var_30 = rcx;` becomes `var_30 = &var_58;`. The copy is only removed when
   the register is redefined later in the same straight-line run, so a value a call or branch

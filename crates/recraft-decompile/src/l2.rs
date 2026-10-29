@@ -20,6 +20,9 @@ use recraft_ir::{BinOp, Expr, ExprId, Lifter, Reg, RegView, Stmt};
 /// Windows x64 integer argument registers, in declaration order.
 pub const X64_ARG_REGS: [Reg; 4] = [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9];
 
+/// x64 scalar floating-point argument registers (`float`/`double`).
+pub const X64_FLOAT_ARG_REGS: [Reg; 4] = [Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3];
+
 const MAX_ARG_SCAN_INSNS: usize = 4096;
 
 /// Recovered argument names for one function.
@@ -32,6 +35,9 @@ pub struct ArgNames {
     types: BTreeMap<Reg, ArgType>,
     /// Parameter types for x86 stack arguments (from a user prototype, else `int64`).
     stack_types: BTreeMap<(Reg, i64), ArgType>,
+    /// Parameter order from a user prototype: register types alone cannot tell a mixed
+    /// integer/float list apart, so the declared order is kept verbatim.
+    declared: Option<Vec<(ArgType, String)>>,
 }
 
 /// Parameter type inferred from how the argument is used.
@@ -47,6 +53,9 @@ pub enum ArgType {
     Int64Ptr,
     /// Mixed or unknown access widths behind a pointer.
     VoidPtr,
+    /// Scalar floating-point parameter (`xmm0`..`xmm3`).
+    F32,
+    F64,
 }
 
 impl ArgType {
@@ -59,6 +68,8 @@ impl ArgType {
             ArgType::Int32Ptr => "int32*",
             ArgType::Int64Ptr => "int64*",
             ArgType::VoidPtr => "void*",
+            ArgType::F32 => "f32",
+            ArgType::F64 => "f64",
         }
     }
 
@@ -89,6 +100,11 @@ impl ArgNames {
         self.types.get(&reg).is_some_and(|ty| ty.is_pointer())
     }
 
+    /// True when the register is one of the x64 floating-point argument registers.
+    pub fn is_float_arg(&self, reg: Reg) -> bool {
+        X64_FLOAT_ARG_REGS.contains(&reg)
+    }
+
     /// Element size in bytes for a pointer-typed argument (`None` for `void*`/scalars).
     pub fn pointer_elem_size(&self, reg: Reg) -> Option<u64> {
         self.types.get(&reg).and_then(|ty| match ty {
@@ -114,24 +130,51 @@ impl ArgNames {
 
     /// Number of recovered argument locations (register + stack).
     pub fn count(&self) -> usize {
-        self.names.len() + self.stack.len()
+        self.names
+            .keys()
+            .filter(|reg| X64_ARG_REGS.contains(reg))
+            .count()
+            + self.stack.len()
     }
 
     /// Build arguments from a parsed user prototype (x64 register arguments; at most
-    /// four slots are representable without stack-argument layout).
+    /// four integer and four floating-point slots are representable without stack-argument
+    /// layout).
     pub fn from_prototype(params: &[ProtoParam]) -> Self {
         let mut names = BTreeMap::new();
         let mut types = BTreeMap::new();
-        for (slot, param) in params.iter().take(X64_ARG_REGS.len()).enumerate() {
-            let reg = X64_ARG_REGS[slot];
+        let mut integer_slot = 0;
+        let mut float_slot = 0;
+        for param in params {
+            let reg = match param.ty {
+                ArgType::F32 | ArgType::F64 => {
+                    let Some(reg) = X64_FLOAT_ARG_REGS.get(float_slot).copied() else {
+                        break;
+                    };
+                    float_slot += 1;
+                    reg
+                }
+                _ => {
+                    let Some(reg) = X64_ARG_REGS.get(integer_slot).copied() else {
+                        break;
+                    };
+                    integer_slot += 1;
+                    reg
+                }
+            };
             names.insert(reg, param.name.clone());
             types.insert(reg, param.ty);
         }
+        let declared = params
+            .iter()
+            .map(|param| (param.ty, param.name.clone()))
+            .collect();
         ArgNames {
             names,
             stack: BTreeMap::new(),
             types,
             stack_types: BTreeMap::new(),
+            declared: Some(declared),
         }
     }
 
@@ -174,6 +217,18 @@ impl ArgNames {
     /// C parameter list (`int64 arg1, char* arg2`) or `void`.
     pub fn signature(&self) -> String {
         let mut params: Vec<String> = Vec::new();
+        if let Some(declared) = &self.declared {
+            params.extend(
+                declared
+                    .iter()
+                    .map(|(ty, name)| format!("{} {name}", ty.c_name())),
+            );
+            return if params.is_empty() {
+                "void".to_owned()
+            } else {
+                params.join(", ")
+            };
+        }
         // Fill gaps between recovered x64 argument registers: a function that reads rcx
         // and r8 still has the rdx parameter in its ABI, even if the body never uses it.
         if let Some(highest) = X64_ARG_REGS
@@ -198,6 +253,18 @@ impl ArgNames {
                 .unwrap_or(ArgType::Int64);
             params.push(format!("{} {name}", ty.c_name()));
         }
+        // A function whose parameters all arrive in registers: name the floating-point ones
+        // after the integer slots. Mixed integer/float parameter *order* is not recoverable
+        // without prototypes, so a function with integer arguments leaves `xmmN` unnamed.
+        if self.count() == 0 {
+            for reg in X64_FLOAT_ARG_REGS {
+                let Some(name) = self.names.get(&reg) else {
+                    continue;
+                };
+                let ty = self.types.get(&reg).copied().unwrap_or(ArgType::F32);
+                params.push(format!("{} {name}", ty.c_name()));
+            }
+        }
         if params.is_empty() {
             "void".to_owned()
         } else {
@@ -212,6 +279,11 @@ impl ArgNames {
             .iter()
             .map(|(reg, name)| format!("{name}={reg}"))
             .collect();
+        parts.extend(X64_FLOAT_ARG_REGS.iter().filter_map(|reg| {
+            self.names
+                .get(reg)
+                .map(|name| format!("{name}={}", reg.name64()))
+        }));
         parts.extend(
             self.stack_ordered()
                 .iter()
@@ -227,6 +299,9 @@ pub enum ReturnKind {
     Void,
     Int32,
     Int64,
+    /// Scalar floating-point return in `xmm0` (`f32`/`f64`).
+    F32,
+    F64,
 }
 
 impl ReturnKind {
@@ -235,6 +310,8 @@ impl ReturnKind {
             ReturnKind::Void => "void",
             ReturnKind::Int32 => "int32",
             ReturnKind::Int64 => "int64",
+            ReturnKind::F32 => "f32",
+            ReturnKind::F64 => "f64",
         }
     }
 }
@@ -314,12 +391,16 @@ fn detect_x86_abi(
 fn recover_return(session: &mut Session, start: Address, end: Address) -> Result<ReturnKind> {
     let (lifted, _exprs) = lift_function(session, start, end)?;
     let mut width: Option<u8> = None;
+    let mut float_width: Option<u8> = None;
     let mut call_like = false;
     for item in &lifted {
         for stmt in &item.stmts {
             match stmt {
                 Stmt::Call { .. } => call_like = true,
                 Stmt::WriteReg { reg, .. } if reg.base == Reg::Rax => width = Some(reg.width),
+                Stmt::WriteReg { reg, .. } if reg.base == Reg::Xmm0 => {
+                    float_width = Some(reg.width);
+                }
                 _ => {}
             }
         }
@@ -333,6 +414,10 @@ fn recover_return(session: &mut Session, start: Address, end: Address) -> Result
     Ok(match width {
         Some(8) => ReturnKind::Int64,
         Some(_) => ReturnKind::Int32,
+        // No integer return register is written: a value left in `xmm0` is a scalar float
+        // return (`float f(...)`).
+        None if float_width == Some(8) => ReturnKind::F64,
+        None if float_width.is_some_and(|width| width < 8) => ReturnKind::F32,
         None if call_like => ReturnKind::Int64,
         None => ReturnKind::Void,
     })
@@ -428,11 +513,33 @@ fn recover_x64(
             types.insert(*reg, ArgType::Int32);
         }
     }
+    // A function with no integer parameters can still take scalar floats in `xmm0`..: name
+    // them in slot order and type them from the read width. Mixed integer/float argument
+    // order is not recoverable without a prototype, so those stay raw registers.
+    if names.is_empty() {
+        for (index, reg) in X64_FLOAT_ARG_REGS.iter().enumerate() {
+            let Some(read_sizes) = scan.floats.get(reg) else {
+                continue;
+            };
+            // A 16-byte load/store is a vector operation, not a scalar parameter.
+            if read_sizes.contains(&16) && read_sizes.len() == 1 {
+                continue;
+            }
+            let ty = if read_sizes.contains(&8) {
+                ArgType::F64
+            } else {
+                ArgType::F32
+            };
+            names.insert(*reg, format!("arg{}", index + 1));
+            types.insert(*reg, ty);
+        }
+    }
     Ok(ArgNames {
         names,
         stack: BTreeMap::new(),
         types,
         stack_types: BTreeMap::new(),
+        declared: None,
     })
 }
 
@@ -464,6 +571,8 @@ pub(crate) fn recover_arg_count(
 struct IncomingScan {
     incoming: BTreeSet<Reg>,
     widths: BTreeMap<Reg, BTreeSet<u8>>,
+    /// Floating-point argument registers read before being written, with read widths.
+    floats: BTreeMap<Reg, BTreeSet<u8>>,
 }
 
 /// Registers whose incoming value the function consumes: read before their first write, or
@@ -481,6 +590,7 @@ fn scan_incoming_args(
     let mut written: BTreeSet<Reg> = BTreeSet::new();
     let mut incoming: BTreeSet<Reg> = BTreeSet::new();
     let mut widths: BTreeMap<Reg, BTreeSet<u8>> = BTreeMap::new();
+    let mut floats: BTreeMap<Reg, BTreeSet<u8>> = BTreeMap::new();
 
     for item in &lifted {
         for stmt in &item.stmts {
@@ -488,10 +598,14 @@ fn scan_incoming_args(
             // like an incoming `r8`; only live registers count (self-cancelling forms are
             // constants, see `walk_live_reads`).
             let mut reads: Vec<(Reg, u8)> = Vec::new();
+            let mut float_sizes: BTreeSet<u8> = BTreeSet::new();
             match stmt {
                 Stmt::WriteReg { value, .. } => {
                     walk_live_reads(&exprs, *value, &mut |view| {
                         reads.push((view.base, view.width));
+                    });
+                    walk_float_sizes(&exprs, *value, &mut |size| {
+                        float_sizes.insert(size);
                     });
                 }
                 Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
@@ -501,6 +615,12 @@ fn scan_incoming_args(
                     walk_live_reads(&exprs, *value, &mut |view| {
                         reads.push((view.base, view.width));
                     });
+                    walk_float_sizes(&exprs, *addr, &mut |size| {
+                        float_sizes.insert(size);
+                    });
+                    walk_float_sizes(&exprs, *value, &mut |size| {
+                        float_sizes.insert(size);
+                    });
                 }
                 Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
             }
@@ -509,10 +629,18 @@ fn scan_incoming_args(
                     incoming.insert(base);
                     widths.entry(base).or_default().insert(width);
                 }
+                if X64_FLOAT_ARG_REGS.contains(&base) && !written.contains(&base) {
+                    let sizes = floats.entry(base).or_default();
+                    sizes.insert(width);
+                    // The register view of an xmm operand is 16 bytes wide even for a
+                    // scalar op; the memory operand's size tells `float` from `double`.
+                    for size in &float_sizes {
+                        sizes.insert(*size);
+                    }
+                }
             }
             // A call consumes the argument registers its callee declares. Without this a
-            // wrapper that forwards its incoming `rcx` to a helper (`call_str` →
-            // `str_probe`) looks argument-less, and the call site loses the argument too.
+            // wrapper that forwards its incoming `rcx` to a helper (`call_str` 鈫?            // `str_probe`) looks argument-less, and the call site loses the argument too.
             if let Stmt::Call { target, args } = stmt {
                 let count = call_arity(session, *target, depth, memo, ranges)?;
                 for reg in X64_ARG_REGS.iter().take(count.min(args.len())) {
@@ -535,7 +663,37 @@ fn scan_incoming_args(
         }
     }
 
-    Ok(IncomingScan { incoming, widths })
+    Ok(IncomingScan {
+        incoming,
+        widths,
+        floats,
+    })
+}
+
+/// Visit the byte sizes of floating-point memory operands inside an expression.
+fn walk_float_sizes(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(u8)) {
+    match &exprs[id as usize] {
+        Expr::Const(_) | Expr::Temp(_) | Expr::Reg(_) => {}
+        Expr::Load { addr, .. } => walk_float_sizes(exprs, *addr, visit),
+        Expr::LoadFloat { addr, size } => {
+            visit(*size);
+            walk_float_sizes(exprs, *addr, visit);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            walk_float_sizes(exprs, *lhs, visit);
+            walk_float_sizes(exprs, *rhs, visit);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_float_sizes(exprs, *arg, visit),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            walk_float_sizes(exprs, *cond, visit);
+            walk_float_sizes(exprs, *then, visit);
+            walk_float_sizes(exprs, *otherwise, visit);
+        }
+    }
 }
 
 /// Visit the registers an expression really reads, ignoring self-cancelling forms that the
@@ -943,10 +1101,11 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
         stack,
         types: BTreeMap::new(),
         stack_types: BTreeMap::new(),
+        declared: None,
     })
 }
 
-/// Stack-pointer adjustment encoded in `rsp = rsp ± const` (push/pop/sub/add esp).
+/// Stack-pointer adjustment encoded in `rsp = rsp 卤 const` (push/pop/sub/add esp).
 fn rsp_adjustment(exprs: &[Expr], value: ExprId) -> Option<i64> {
     let Expr::Bin { op, lhs, rhs } = &exprs[value as usize] else {
         return None;
@@ -1153,6 +1312,12 @@ fn parse_return(text: &str) -> Option<ReturnKind> {
     if !pointer && (lower == "void" || lower.ends_with(" void")) {
         return Some(ReturnKind::Void);
     }
+    if !pointer && lower.contains("float") {
+        return Some(ReturnKind::F32);
+    }
+    if !pointer && lower.contains("double") {
+        return Some(ReturnKind::F64);
+    }
     if pointer || lower.contains("int64") || lower.contains("long long") || lower.contains("size_t")
     {
         return Some(ReturnKind::Int64);
@@ -1200,6 +1365,10 @@ fn parse_param(raw: &str, index: usize) -> Option<ProtoParam> {
         }
     } else if base.contains("int64") || base == "long long" || base == "size_t" {
         ArgType::Int64
+    } else if base == "float" {
+        ArgType::F32
+    } else if base == "double" {
+        ArgType::F64
     } else {
         ArgType::Int32
     };
@@ -1310,6 +1479,38 @@ mod tests {
         assert_eq!(
             args.signature(),
             "int64 arg1, int64 arg2, int64 arg3, int64 arg4"
+        );
+    }
+
+    #[test]
+    fn float_arguments_print_with_their_type() {
+        let mut args = ArgNames::default();
+        args.names.insert(Reg::Xmm0, "arg1".to_owned());
+        args.names.insert(Reg::Xmm1, "arg2".to_owned());
+        args.types.insert(Reg::Xmm0, ArgType::F32);
+        args.types.insert(Reg::Xmm1, ArgType::F64);
+        assert_eq!(args.signature(), "f32 arg1, f64 arg2");
+        assert_eq!(args.comment(), "arg1=xmm0, arg2=xmm1");
+        // Float parameters do not count as integer ABI slots.
+        assert_eq!(args.count(), 0);
+
+        // With integer arguments the float order is unknown, so xmm stays unnamed.
+        let mut mixed = ArgNames::default();
+        mixed.names.insert(Reg::Rcx, "arg1".to_owned());
+        mixed.names.insert(Reg::Xmm0, "arg2".to_owned());
+        assert_eq!(mixed.signature(), "int64 arg1");
+    }
+
+    #[test]
+    fn float_prototype_types_and_order_are_kept() {
+        let parsed = parse_prototype("float scale(float factor, int count)").expect("prototype");
+        assert_eq!(parsed.ret, ReturnKind::F32);
+        let args = ArgNames::from_prototype(&parsed.params);
+        assert_eq!(args.signature(), "f32 factor, int32 count");
+        assert_eq!(args.count(), 1);
+        assert_eq!(
+            parse_prototype("double half(double value)").unwrap().ret,
+            ReturnKind::F64
         );
     }
 

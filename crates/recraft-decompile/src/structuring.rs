@@ -1957,6 +1957,9 @@ fn fold_return_values(lines: &mut Vec<PseudoLine>, ret: ReturnKind) {
         ReturnKind::Void => return,
         ReturnKind::Int32 => "eax",
         ReturnKind::Int64 => "rax",
+        // A float result stays in `xmm0`; there is no variable to fold it into, so the
+        // statement keeps reading `return;`.
+        ReturnKind::F32 | ReturnKind::F64 => return,
     };
     // A value-returning function may compute only into the 32-bit half; both spellings
     // name the same machine register.
