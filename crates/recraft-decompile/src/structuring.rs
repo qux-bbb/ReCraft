@@ -826,9 +826,10 @@ impl Structurer {
                 self.labeled[current] = true;
             }
             self.emitted[current] = true;
+            let block_statements = lines.len();
             self.emit_simple(lines, current, level);
             if self.blocks[current].has_table {
-                self.emit_switch(lines, current, level);
+                self.emit_switch(lines, current, level, block_statements);
                 return;
             }
 
@@ -1415,11 +1416,24 @@ impl Structurer {
         Some(exit)
     }
 
-    fn emit_switch(&mut self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
+    fn emit_switch(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        block: usize,
+        level: usize,
+        block_statements: usize,
+    ) {
         let targets = self.blocks[block].table_targets.clone();
         if targets.is_empty() {
             self.emit_raw_flow(lines, block, level);
             return;
+        }
+        // The block's statements are the compiler's dispatch (bounds-scaled table load and
+        // indirect jump); `switch` already says what they do. Drop them only when the range
+        // holds nothing but register arithmetic and that jump, so a call or store that
+        // happens to share the block is never hidden.
+        if is_dispatch_only(&lines[block_statements..]) {
+            lines.truncate(block_statements);
         }
         let entry = self.blocks[block].entry;
         // Prefer a traced selector: map argument registers back to `argN` when intact.
@@ -1997,6 +2011,43 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
         index += 1;
         keep
     });
+}
+
+/// True for any general-purpose register spelling (`rax`/`eax`/`ax`/`al`, `r8d`, ...).
+fn is_machine_register(text: &str) -> bool {
+    const NAMED: [&str; 39] = [
+        "rax", "eax", "ax", "al", "ah", "rbx", "ebx", "bx", "bl", "bh", "rcx", "ecx", "cx", "cl",
+        "ch", "rdx", "edx", "dx", "dl", "dh", "rsi", "esi", "si", "sil", "rdi", "edi", "di", "dil",
+        "rsp", "esp", "sp", "spl", "rbp", "ebp", "bp", "bpl", "rip", "eip", "ip",
+    ];
+    if NAMED.contains(&text) {
+        return true;
+    }
+    let Some(rest) = text.strip_prefix('r') else {
+        return false;
+    };
+    matches!(
+        rest.trim_end_matches(['d', 'w', 'b']).parse::<u8>(),
+        Ok(8..=15)
+    )
+}
+
+/// True when the lines are only a jump-table dispatch: arithmetic on machine registers
+/// followed by the indirect jump itself.
+fn is_dispatch_only(lines: &[PseudoLine]) -> bool {
+    let Some((last, setup)) = lines.split_last() else {
+        return false;
+    };
+    if !last.text.trim().starts_with("__asm(\"jmp") {
+        return false;
+    }
+    setup.iter().all(|line| {
+        let text = line.text.trim();
+        plain_assignment(text)
+            .map(|(lhs, _)| lhs)
+            .or_else(|| parse_compound(text).map(|(lhs, _, _)| lhs))
+            .is_some_and(is_machine_register)
+    })
 }
 
 fn is_register_name(text: &str) -> bool {
@@ -3867,6 +3918,46 @@ mod tests {
         };
         let text = render(&mut session, "loopy");
         assert!(text.contains("while ("), "{text}");
+    }
+
+    #[test]
+    fn switch_replaces_the_jump_table_dispatch() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "switcher_big").unwrap();
+        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        assert!(text.contains("switch (ecx)"), "{text}");
+        assert!(!text.contains("__asm(\"jmp"), "dispatch left:\n{text}");
+        assert!(!text.contains("rdx = 0x140000000"), "base load:\n{text}");
+    }
+
+    #[test]
+    fn only_register_arithmetic_before_an_indirect_jump_is_dispatch_noise() {
+        let lines = vec![
+            test_line("    rax = (int64)(arg1);"),
+            test_line("    rdx = 0x140000000;"),
+            test_line("    ecx = *(u32*)(((rdx + (rax * 4)) + 0x1550));"),
+            test_line("    rcx += rdx;"),
+            test_line("    __asm(\"jmp rcx\");"),
+        ];
+        assert!(is_dispatch_only(&lines));
+        let mut with_store = lines.clone();
+        with_store.insert(1, test_line("    *(u32*)(0x140003000) = 1;"));
+        assert!(!is_dispatch_only(&with_store));
+        let mut with_call = lines.clone();
+        with_call.insert(0, test_line("    sub_1();"));
+        assert!(!is_dispatch_only(&with_call));
+    }
+
+    #[test]
+    fn machine_register_spellings_are_recognised() {
+        for name in ["rax", "eax", "ax", "al", "r8", "r8d", "r15b", "spl", "ip"] {
+            assert!(is_machine_register(name), "{name}");
+        }
+        for name in ["arg1", "var_20", "r16", "eaxx", "xmm0", "dil2"] {
+            assert!(!is_machine_register(name), "{name}");
+        }
     }
 
     #[test]

@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Jump-table functions no longer show the compiler's dispatch twice: the table-address
+  loads and the trailing `__asm("jmp rcx")` that precede a recovered `switch` are dropped
+  (the statements are replaced by the `switch` itself, and the body of each case is now a
+  folded `return <value>;`). The cleanup only fires when that block consists solely of
+  machine-register arithmetic ending in the indirect jump, so a call or a memory store
+  sharing the block stays visible.
 - Decompiled pseudo-C now returns the value the code computed instead of leaving it in a
   register: `eax = f(); return;` renders as `return f();`, `eax += x; return;` as
   `return (eax + x);`, and a value-returning path whose producer is not the adjacent

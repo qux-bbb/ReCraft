@@ -82,6 +82,7 @@ goto fallback functions: 0
 | 调用美化 | IAT 槽解析成 API 名，`rcx/rdx/r8/r9` 渲染为实参，栈地址写成 `&var_XX` |
 | 尾跳 | 目标越过函数末尾的跳转渲染为 `return sub_xxx();` |
 | 返回值 | `eax = expr; return;` → `return expr;`；`eax += x; return;` → `return (eax + x);`；只计算到寄存器、没有相邻赋值的值返回路径写成 `return eax;`/`return rax;`（`void` 保持裸 `return;`）；紧邻的单次使用临时量并入返回表达式（`eax = a; eax += b;` → `return (a + b);`）；比例 1 的乘除（`*(arg2 * 1)`）去掉 |
+| 跳表派发 | `switch` 前编译器生成的派发语句（表加载、`__asm("jmp rcx")`）被 `switch` 取代；仅当这段语句全是寄存器运算且以间接跳转结尾时删除，含调用/内存写入的块保持原样 |
 
 这些处理是**纯文本**的，因此只做能由文本证明安全的变换（例如参数传播要求复制位于
 任何分支之前的直线序言、寄存器为 callee-saved 且全函数只写一次）。不满足条件的
