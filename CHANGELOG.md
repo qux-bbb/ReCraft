@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `while (1)` loops whose only exit is one `if (condition) break;` now show that test as
+  the loop condition: at the top of the body it becomes `while (!condition)`, at the end it
+  becomes `do { ... } while (!condition)`. On notepad 47 of 83 unconditional loops become
+  real conditions, e.g. a table scan reads `while (rbx < rdi) { ... }`. A `continue` in the
+  body keeps the loop unchanged, because it would reach the latch before the test.
 - Signatures now follow arguments forwarded through direct calls. A call is treated as
   consuming the callee's argument registers (the callee's own signature is recovered
   depth-first through up to four wrapper levels, memoized, with one function-range query per

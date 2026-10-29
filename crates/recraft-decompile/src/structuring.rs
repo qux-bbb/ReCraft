@@ -246,6 +246,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     simplify_negated_conditions(&mut lines);
     fold_single_use_temporaries(&mut lines);
     strip_condition_parentheses(&mut lines);
+    fold_constant_loops(&mut lines);
+    // The rewritten loop conditions may now carry a negated comparison.
+    simplify_negated_conditions(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
@@ -3392,6 +3395,88 @@ fn intersect(
     left
 }
 
+/// Rewrite `while (1)` loops whose only exit test the structurer could not fold.
+///
+/// Compilers lower pre-tested loops and do-while loops to an unconditional loop with a
+/// single `if (cond) break;`. A test as the first body statement is the loop condition:
+/// `while (1) { if (c) break; body }` ≡ `while (!c) { body }`, because `continue` reaches
+/// the same test in both forms. A test as the last body statement is a do-while latch:
+/// `while (1) { body; if (c) break; }` ≡ `do { body } while (!c);` — but only when the body
+/// has no `continue`, which would reach the latch before the test in the original loop.
+fn fold_constant_loops(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].text.trim() != "while (1) {" {
+            index += 1;
+            continue;
+        }
+        let Some(close) = matching_brace(lines, index) else {
+            index += 1;
+            continue;
+        };
+        if close <= index + 1 {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&lines[index].text));
+        let body_indent = leading_spaces(&lines[index].text) + 4;
+        let first = &lines[index + 1];
+        if leading_spaces(&first.text) == body_indent
+            && let Some(condition) = break_test_condition(first.text.trim())
+        {
+            let condition = negate(strip_wrapping_parens(condition));
+            lines[index].text = format!("{indent}while ({condition}) {{");
+            lines.remove(index + 1);
+            index += 1;
+            continue;
+        }
+        let last = &lines[close - 1];
+        if leading_spaces(&last.text) == body_indent
+            && let Some(condition) = break_test_condition(last.text.trim())
+            && !lines[index + 1..close]
+                .iter()
+                .any(|line| line.text.trim() == "continue;")
+        {
+            let condition = negate(strip_wrapping_parens(condition));
+            lines[index].text = format!("{indent}do {{");
+            lines.remove(close);
+            lines[close - 1].text = format!("{indent}}} while ({condition});");
+            index += 1;
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// Index of the line closing the block opened on `start` (`{`/`}` balanced by text).
+fn matching_brace(lines: &[PseudoLine], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, line) in lines[start..].iter().enumerate() {
+        depth += line.text.matches('{').count();
+        depth = depth.saturating_sub(line.text.matches('}').count());
+        if depth == 0 {
+            return Some(start + offset);
+        }
+    }
+    None
+}
+
+/// Condition of a one-line `if (cond) break;` statement.
+fn break_test_condition(text: &str) -> Option<&str> {
+    let condition = text.strip_prefix("if (")?.strip_suffix(") break;")?;
+    Some(condition)
+}
+
+/// Strip one pair of parentheses wrapping the whole text (`(a >= b)` → `a >= b`).
+fn strip_wrapping_parens(text: &str) -> &str {
+    let text = text.trim();
+    if text.starts_with('(') && matching_close(text) == Some(text.len() - 1) {
+        &text[1..text.len() - 1]
+    } else {
+        text
+    }
+}
+
 fn negate(condition: &str) -> String {
     let trimmed = condition.trim();
     // Flip exactly one comparison operator. Replacing them in a chain would undo the
@@ -4285,8 +4370,44 @@ mod tests {
         let start = function_start(&session, "nested_loops").unwrap();
         let text = pseudocode_l1(&mut session, start).unwrap().text();
         assert!(!text.contains("goto loc_"), "{text}");
-        assert!(text.contains("while (1)"), "{text}");
-        assert!(text.contains("do {"), "{text}");
+        // The loop's single exit test became a real condition instead of `while (1)`.
+        assert!(!text.contains("while (1)"), "{text}");
+        assert!(text.matches("do {").count() >= 2, "{text}");
+    }
+
+    #[test]
+    fn constant_loops_take_the_break_test_as_their_condition() {
+        // Test first: it is the loop condition.
+        let mut lines = vec![
+            test_line("    while (1) {"),
+            test_line("        if ((i >= n /* signed */)) break;"),
+            test_line("        i += 1;"),
+            test_line("    }"),
+        ];
+        fold_constant_loops(&mut lines);
+        assert_eq!(lines[0].text, "    while (i < n /* signed */) {");
+        assert_eq!(lines.len(), 3);
+
+        // Test last: it is a do-while latch.
+        let mut lines = vec![
+            test_line("    while (1) {"),
+            test_line("        i += 1;"),
+            test_line("        if ((rdx == 0)) break;"),
+            test_line("    }"),
+        ];
+        fold_constant_loops(&mut lines);
+        assert_eq!(lines[0].text, "    do {");
+        assert_eq!(lines.last().unwrap().text, "    } while (rdx != 0);");
+
+        // A `continue` would reach the latch before the test, so the loop stays as is.
+        let mut lines = vec![
+            test_line("    while (1) {"),
+            test_line("        continue;"),
+            test_line("        if ((rdx == 0)) break;"),
+            test_line("    }"),
+        ];
+        fold_constant_loops(&mut lines);
+        assert_eq!(lines[0].text, "    while (1) {");
     }
 
     #[test]
