@@ -158,8 +158,8 @@ pub(crate) fn lift_block(
 
     let mut statements: Vec<PseudoLine> = Vec::new();
     let mut written = BTreeSet::new();
-    // Argument-register writes immediately consumed by a prototyped call are redundant:
-    // the call already renders its captured argument expressions.
+    // Argument-register writes consumed by a call are redundant: the call already renders
+    // its captured argument expressions.
     let mut flat: Vec<(usize, usize)> = Vec::new();
     for (item_index, item) in lifted.iter().enumerate() {
         for stmt_index in 0..item.stmts.len() {
@@ -168,10 +168,10 @@ pub(crate) fn lift_block(
     }
     let mut skip: HashSet<(usize, usize)> = HashSet::new();
     if session.image().is_64 {
-        // A call captures its argument expressions at the call site. Remove the
-        // preceding register setup for each captured argument, even when unrelated
-        // instructions sit between the setup and the call, as long as the register is
-        // not read in between.
+        // A direct call captures the argument expressions of the callee's declared
+        // parameters. Remove the preceding register setup for each captured argument, even
+        // when unrelated instructions sit between the setup and the call, as long as the
+        // register is not read in between.
         for (position, &(call_item, call_stmt)) in flat.iter().enumerate() {
             let Stmt::Call { target, args } = &lifted[call_item].stmts[call_stmt] else {
                 continue;
@@ -195,45 +195,56 @@ pub(crate) fn lift_block(
                 for previous in (0..position).rev() {
                     let (item_index, stmt_index) = flat[previous];
                     let stmt = &lifted[item_index].stmts[stmt_index];
-                    if stmt_reads_reg(stmt, &exprs, reg) {
-                        break;
-                    }
+                    // The defining write also reads the register (`xor edx, edx` is a
+                    // self-cancelling write), so it must be recognised before the
+                    // read check stops the scan.
                     if let Stmt::WriteReg {
                         reg: destination,
                         value,
                     } = stmt
                         && destination.base == reg
                     {
-                        if value == arg {
-                            let mut sources = BTreeSet::new();
-                            expr_regs(&exprs, *arg, &mut sources);
-                            // The expression is evaluated at the call site; it is only
-                            // safe to delete the setup when none of its inputs (and no
-                            // intervening call) can change before the call.
-                            let self_referential = sources.contains(&reg);
-                            let mut stable = !self_referential;
-                            for &(later_item, later_stmt) in &flat[previous + 1..position] {
-                                let later_stmt = &lifted[later_item].stmts[later_stmt];
-                                if matches!(
-                                    later_stmt,
-                                    Stmt::Call { .. }
-                                        | Stmt::CallIndirect { .. }
-                                        | Stmt::Intrinsic { .. }
-                                ) {
-                                    stable = false;
-                                    break;
-                                }
-                                if let Stmt::WriteReg { reg: later_reg, .. } = later_stmt
-                                    && sources.contains(&later_reg.base)
-                                {
-                                    stable = false;
-                                    break;
-                                }
-                            }
-                            if stable {
-                                skip.insert((item_index, stmt_index));
-                            }
+                        if value == arg
+                            && setup_is_stable(
+                                &exprs, &lifted, &flat, previous, position, *value, reg,
+                            )
+                        {
+                            skip.insert((item_index, stmt_index));
                         }
+                        break;
+                    }
+                    if stmt_reads_reg(stmt, &exprs, reg) {
+                        break;
+                    }
+                }
+            }
+        }
+        // An indirect import call (`call [IAT]`) renders its arguments from the values last
+        // written to the ABI registers, so the same setup lines are redundant.
+        for (position, &(call_item, call_stmt)) in flat.iter().enumerate() {
+            let Stmt::CallIndirect { target } = &lifted[call_item].stmts[call_stmt] else {
+                continue;
+            };
+            if !is_import_call(&exprs, *target, &imports) {
+                continue;
+            }
+            for reg in crate::l2::X64_ARG_REGS {
+                for previous in (0..position).rev() {
+                    let (item_index, stmt_index) = flat[previous];
+                    let stmt = &lifted[item_index].stmts[stmt_index];
+                    if let Stmt::WriteReg {
+                        reg: destination,
+                        value,
+                    } = stmt
+                        && destination.base == reg
+                    {
+                        if setup_is_stable(&exprs, &lifted, &flat, previous, position, *value, reg)
+                        {
+                            skip.insert((item_index, stmt_index));
+                        }
+                        break;
+                    }
+                    if stmt_reads_reg(stmt, &exprs, reg) {
                         break;
                     }
                 }
@@ -242,9 +253,7 @@ pub(crate) fn lift_block(
     }
     for (item_index, item) in lifted.iter().enumerate() {
         for (stmt_index, stmt) in item.stmts.iter().enumerate() {
-            if skip.contains(&(item_index, stmt_index)) {
-                continue;
-            }
+            let skipped = skip.contains(&(item_index, stmt_index));
             if let Stmt::WriteReg { reg, .. } = stmt {
                 written.insert(reg.base);
             }
@@ -259,13 +268,14 @@ pub(crate) fn lift_block(
                 stmt,
                 Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
             );
-            if pure && statements.last().is_some_and(|line| line.text == text) {
-                continue;
+            if !skipped && !(pure && statements.last().is_some_and(|line| line.text == text)) {
+                statements.push(PseudoLine {
+                    addr: item.addr,
+                    text: format!("{text};"),
+                });
             }
-            statements.push(PseudoLine {
-                addr: item.addr,
-                text: format!("{text};"),
-            });
+            // A skipped setup still happened on the machine: later reads must not show the
+            // old argument name, and an indirect call still prints the value it received.
             printer.note_write(stmt);
             printer.note_arg_alias(stmt);
             if let Stmt::WriteReg { reg, value } = stmt
@@ -349,30 +359,6 @@ fn expr_reads_reg(exprs: &[Expr], expr: ExprId, reg: Reg) -> bool {
     }
 }
 
-fn expr_regs(exprs: &[Expr], expr: ExprId, out: &mut BTreeSet<Reg>) {
-    match &exprs[expr as usize] {
-        Expr::Const(_) | Expr::Temp(_) => {}
-        Expr::Reg(view) => {
-            out.insert(view.base);
-        }
-        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => expr_regs(exprs, *addr, out),
-        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            expr_regs(exprs, *lhs, out);
-            expr_regs(exprs, *rhs, out);
-        }
-        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_regs(exprs, *arg, out),
-        Expr::Select {
-            cond,
-            then,
-            otherwise,
-        } => {
-            expr_regs(exprs, *cond, out);
-            expr_regs(exprs, *then, out);
-            expr_regs(exprs, *otherwise, out);
-        }
-    }
-}
-
 fn stmt_reads_reg(stmt: &Stmt, exprs: &[Expr], reg: Reg) -> bool {
     match stmt {
         Stmt::WriteReg { value, .. } => expr_reads_reg(exprs, *value, reg),
@@ -383,6 +369,127 @@ fn stmt_reads_reg(stmt: &Stmt, exprs: &[Expr], reg: Reg) -> bool {
         Stmt::CallIndirect { target } => expr_reads_reg(exprs, *target, reg),
         Stmt::Intrinsic { .. } => false,
     }
+}
+
+/// Registers an expression really depends on, ignoring self-cancelling forms the printer
+/// folds to a constant (`xor eax, eax`, `sub eax, eax`, `and eax, 0`). A register setup
+/// whose inputs are untouched can be evaluated at the call site instead.
+fn expr_live_regs(exprs: &[Expr], expr: ExprId, out: &mut BTreeSet<Reg>) {
+    match &exprs[expr as usize] {
+        Expr::Const(_) | Expr::Temp(_) => {}
+        Expr::Reg(view) => {
+            out.insert(view.base);
+        }
+        Expr::Bin { op, lhs, rhs } => {
+            if same_value(exprs, *lhs, *rhs) && matches!(op, BinOp::Xor | BinOp::Sub) {
+                return;
+            }
+            if *op == BinOp::And
+                && (matches!(exprs[*lhs as usize], Expr::Const(0))
+                    || matches!(exprs[*rhs as usize], Expr::Const(0)))
+            {
+                return;
+            }
+            expr_live_regs(exprs, *lhs, out);
+            expr_live_regs(exprs, *rhs, out);
+        }
+        Expr::Cmp { lhs, rhs, .. } => {
+            expr_live_regs(exprs, *lhs, out);
+            expr_live_regs(exprs, *rhs, out);
+        }
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => {
+            expr_live_regs(exprs, *addr, out);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_live_regs(exprs, *arg, out),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_live_regs(exprs, *cond, out);
+            expr_live_regs(exprs, *then, out);
+            expr_live_regs(exprs, *otherwise, out);
+        }
+    }
+}
+
+/// True when two expressions are the same value even if they are distinct arena entries
+/// (the lifter materialises a fresh register read for each operand).
+fn same_value(exprs: &[Expr], left: ExprId, right: ExprId) -> bool {
+    match (&exprs[left as usize], &exprs[right as usize]) {
+        (Expr::Reg(a), Expr::Reg(b)) => a == b,
+        (Expr::Const(a), Expr::Const(b)) => a == b,
+        (Expr::Temp(a), Expr::Temp(b)) => a == b,
+        _ => left == right,
+    }
+}
+
+/// True when an indirect call target is a load of an import slot, which the printer renders
+/// as a named call with an argument list.
+fn is_import_call(exprs: &[Expr], target: ExprId, imports: &HashMap<u64, String>) -> bool {
+    let Expr::Load { addr, .. } = exprs[target as usize] else {
+        return false;
+    };
+    matches!(exprs[addr as usize], Expr::Const(value) if imports.contains_key(&value))
+}
+
+/// True when a value expression reads memory, so a store before the call could change it.
+fn expr_has_load(exprs: &[Expr], expr: ExprId) -> bool {
+    match &exprs[expr as usize] {
+        Expr::Load { .. } | Expr::LoadFloat { .. } => true,
+        Expr::Const(_) | Expr::Temp(_) | Expr::Reg(_) => false,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_has_load(exprs, *lhs) || expr_has_load(exprs, *rhs)
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_has_load(exprs, *arg),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_has_load(exprs, *cond)
+                || expr_has_load(exprs, *then)
+                || expr_has_load(exprs, *otherwise)
+        }
+    }
+}
+
+/// Whether a register setup can be deferred to the call site: the value must not read the
+/// destination register itself, none of its inputs may change between the write and the
+/// call, and a memory read must not be invalidated by a store in between.
+fn setup_is_stable(
+    exprs: &[Expr],
+    lifted: &[recraft_ir::LiftedInsn],
+    flat: &[(usize, usize)],
+    previous: usize,
+    position: usize,
+    value: ExprId,
+    register: Reg,
+) -> bool {
+    let mut sources = BTreeSet::new();
+    expr_live_regs(exprs, value, &mut sources);
+    if sources.contains(&register) {
+        return false;
+    }
+    let reads_memory = expr_has_load(exprs, value);
+    for &(item_index, stmt_index) in &flat[previous + 1..position] {
+        let stmt = &lifted[item_index].stmts[stmt_index];
+        if matches!(
+            stmt,
+            Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+        ) {
+            return false;
+        }
+        if reads_memory && matches!(stmt, Stmt::Store { .. } | Stmt::StoreFloat { .. }) {
+            return false;
+        }
+        if let Stmt::WriteReg { reg, .. } = stmt
+            && sources.contains(&reg.base)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Alignment padding (`int3`) and `nop` are compiler artifacts, not source code.
@@ -1356,6 +1463,46 @@ mod tests {
             "import names must be valid C identifiers: {:?}",
             names.values().take(8).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn self_cancelling_setup_values_are_deferred_to_the_call() {
+        let decode = |bytes: &[u8]| {
+            recraft_decode::decode(bytes, Address::new(0x1000), recraft_decode::Mode::X64)
+                .expect("decoded")
+        };
+        let mut lifter = Lifter::new();
+        let xor = lifter.lift(&decode(&[0x33, 0xd2])); // xor edx, edx
+        let nop = lifter.lift(&decode(&[0x90])); // nop
+        let exprs = lifter.into_exprs();
+        let lifted = vec![xor, nop];
+        let flat = vec![(0usize, 0usize), (1, 0)];
+        let Stmt::WriteReg { value, .. } = &lifted[0].stmts[0] else {
+            panic!("xor must write a register");
+        };
+        let mut live = BTreeSet::new();
+        expr_live_regs(&exprs, *value, &mut live);
+        assert!(live.is_empty(), "xor edx, edx depends on {live:?}");
+        assert!(setup_is_stable(
+            &exprs,
+            &lifted,
+            &flat,
+            0,
+            1,
+            *value,
+            Reg::Rdx
+        ));
+
+        // A plain copy keeps its source live.
+        let mut lifter = Lifter::new();
+        let mov = lifter.lift(&decode(&[0x8b, 0xc1])); // mov eax, ecx
+        let exprs = lifter.into_exprs();
+        let Stmt::WriteReg { value, .. } = &mov.stmts[0] else {
+            panic!("mov must write a register");
+        };
+        let mut live = BTreeSet::new();
+        expr_live_regs(&exprs, *value, &mut live);
+        assert_eq!(live, BTreeSet::from([Reg::Rcx]));
     }
 
     #[test]

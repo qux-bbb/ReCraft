@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Argument-register setup consumed by a call is no longer printed twice. A direct call
+  already renders the callee's parameters, and an indirect import call (`call [IAT]`) now
+  prints the values last written to `rcx`/`rdx`/`r8`/`r9`, so the preceding copies are
+  dropped when none of their inputs change before the call (and no store invalidates a
+  memory read); self-cancelling forms such as `xor edx, edx` count as constants. On notepad
+  the listing loses 2525 setup lines (6585 → 4060), e.g. `GetProcessHeap(); HeapFree(rax, 0,
+  rbx);` instead of two extra register copies.
 - `else` arms whose only statement is a nested `if` now render as `} else if (cond) {`, with
   the arm body moved one level left, so an else-if ladder reads like the source instead of
   gaining a level of nesting per branch. Notepad's listing merges 126 such arms.
