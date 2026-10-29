@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A compiled `bool` return (`al = 1; return eax;`) folds into `return 1;`: the constant moves
+  onto the returning line when it is immediately followed by the `eax` return. Non-constant
+  byte values keep their explicit write so the width stays visible. 33 such returns in
+  notepad, 6 left that read a byte register.
 - Ordinal-only imports (COMCTL32 `#345`, shcore-path `#170`, ...) now resolve to a call
   name too: `(**(u64*)(0x14002a420))()` reads `ord_170()`. Notepad's unresolved
   through-IAT pointer calls drop 10 → 2.

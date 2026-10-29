@@ -284,6 +284,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         // The folded `return` reads the value's temporary, so give that temporary the same
         // single-use inlining chance as a condition.
         fold_single_use_temporaries(&mut lines);
+        fold_constant_byte_returns(&mut lines);
     }
     lines.push(PseudoLine {
         addr: start,
@@ -2861,6 +2862,41 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// `al = 1; return eax;` is how a compiled `bool` return looks: fold the constant into the
+/// return so the value sits on the line that returns it (`return 1;`). Only constants are
+/// folded — a byte register read would hide the width it was produced at.
+fn fold_constant_byte_returns(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let indent = leading_spaces(&lines[index].text);
+        if leading_spaces(&lines[index + 1].text) != indent
+            || lines[index + 1].text.trim() != "return eax;"
+        {
+            index += 1;
+            continue;
+        }
+        let text = lines[index].text.trim();
+        let Some(value) = text
+            .strip_prefix("al = ")
+            .and_then(|rest| rest.strip_suffix(';'))
+        else {
+            index += 1;
+            continue;
+        };
+        let constant = value
+            .strip_prefix("0x")
+            .map(|digits| i64::from_str_radix(digits, 16).is_ok())
+            .unwrap_or_else(|| value.parse::<i64>().is_ok());
+        if !constant {
+            index += 1;
+            continue;
+        }
+        lines[index].text = format!("{}return {value};", " ".repeat(indent));
+        lines.remove(index + 1);
+        index += 1;
+    }
+}
+
 /// Drop a register write whose next mention in the same straight-line run is a full write to
 /// the same 32/64-bit register: the value is never read. Copies like
 /// `rax = var_b8; r9d = 0; r8d = 0; rax = var_b0;` are compiler register shuffling and only
@@ -4608,6 +4644,20 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn constant_byte_returns_fold_into_the_return() {
+        let mut lines = vec![
+            test_line("        al = 1;"),
+            test_line("        return eax;"),
+            test_line("        al = dil;"),
+            test_line("        return eax;"),
+        ];
+        fold_constant_byte_returns(&mut lines);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[0].text, "        return 1;");
+        assert_eq!(lines[1].text, "        al = dil;");
     }
 
     #[test]
