@@ -551,6 +551,50 @@ fn follow_tokens(operands: &str) -> Vec<String> {
         .collect()
 }
 
+/// Characters that can spell a symbol name in pseudo-C. `$`, `@` and `?` cover IDA-style
+/// names and MSVC decorations; Unicode letters cover user renames.
+fn is_pseudo_symbol_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '$' | '@' | '?')
+}
+
+/// Expand a caret index in a pseudo-C line to the whole symbol token around it.
+///
+/// The caret index comes from the laid-out text, which reports the closest character
+/// boundary: clicking the right half of a name's last letter lands on the following `(`
+/// instead. Trying the previous character too keeps the whole name clickable.
+fn pseudo_symbol_at(text: &str, char_index: usize) -> Option<&str> {
+    fn token_at(text: &str, char_index: usize) -> Option<&str> {
+        let (byte, first) = text.char_indices().nth(char_index)?;
+        if !is_pseudo_symbol_char(first) {
+            return None;
+        }
+        let start = text[..byte]
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !is_pseudo_symbol_char(*ch))
+            .map_or(0, |(offset, ch)| offset + ch.len_utf8());
+        let end = text[byte..]
+            .char_indices()
+            .find(|(_, ch)| !is_pseudo_symbol_char(*ch))
+            .map_or(text.len(), |(offset, _)| byte + offset);
+        Some(&text[start..end])
+    }
+    token_at(text, char_index).or_else(|| {
+        char_index
+            .checked_sub(1)
+            .and_then(|previous| token_at(text, previous))
+    })
+}
+
+/// Address encoded in an IDA-style `sub_<hex>` auto name.
+fn sub_symbol_address(symbol: &str) -> Option<Address> {
+    let hex = symbol.strip_prefix("sub_")?;
+    if hex.is_empty() || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(hex, 16).ok().map(Address::new)
+}
+
 /// Selected rename suggestion in the AI panel (index into `ai_proposals`).
 type AiSelection = Option<usize>;
 
@@ -643,6 +687,8 @@ enum Action {
     AiPolish,
     AiQuery,
     NavigateToDisasm(Address),
+    /// Open a callee's pseudo-C body in the Decompile pane (double-click on its name).
+    EnterFunction(Address),
     SyncDisasm(Address),
     /// Select one pseudo-C row (by line index) and sync the disassembly cursor to its
     /// address. Unlike `SyncDisasm`, this keeps the pseudo-C listing in place.
@@ -1055,6 +1101,73 @@ impl ReCraftApp {
         None
     }
 
+    /// Function whose pseudo-C listing is on screen: the function containing
+    /// [`Self::pseudo_start`], mirroring the anchor `refresh_pseudo` decompiles.
+    fn pseudo_function_start(&self) -> Option<Address> {
+        self.function_containing(self.pseudo_start)
+            .map(|function| function.start)
+    }
+
+    fn function_containing(&self, addr: Address) -> Option<&FunctionInfo> {
+        self.functions
+            .iter()
+            .find(|function| addr >= function.start && addr < function.end)
+    }
+
+    /// Resolve a symbol printed by the decompiler to the function a double-click enters.
+    ///
+    /// Callee names follow the decompiler's own naming rules (`resolve_name`): the stored
+    /// name at the target, which the Functions refresh mirrors into
+    /// [`Self::function_labels`], or the `sub_<hex>` fallback for targets that still have no
+    /// name. Anything else (locals, keywords, data symbols) stays unresolved.
+    fn pseudo_function_named(&self, symbol: &str) -> Option<Address> {
+        // An auto name encodes its address, which stays unambiguous if a user renamed some
+        // other function to the same text.
+        if let Some(address) = sub_symbol_address(symbol)
+            && let Some(function) = self.function_containing(address)
+        {
+            return Some(function.start);
+        }
+        let index = self
+            .function_labels
+            .iter()
+            .position(|label| label == symbol)?;
+        self.functions.get(index).map(|function| function.start)
+    }
+
+    /// Action produced by double-clicking at `char_index` of a pseudo-C row.
+    fn pseudo_double_click(&self, text: &str, char_index: usize, addr: Address) -> Action {
+        match pseudo_symbol_at(text, char_index)
+            .and_then(|symbol| self.pseudo_function_named(symbol))
+        {
+            // Stay put for the function's own name (header or recursive call): the
+            // listing already shows it.
+            Some(start) if self.pseudo_function_start() != Some(start) => {
+                Action::EnterFunction(start)
+            }
+            _ => Action::NavigateToDisasm(addr),
+        }
+    }
+
+    /// Character index of `pointer` inside one laid-out pseudo-C row. Returns `None` when
+    /// the pointer is outside the code area (the line-number gutter or past the text), so
+    /// those clicks keep their old meaning.
+    fn pseudo_char_index_at(
+        pointer: egui::Pos2,
+        text_pos: egui::Pos2,
+        text_clip: egui::Rect,
+        galley: &egui::Galley,
+    ) -> Option<usize> {
+        if !text_clip.contains(pointer) {
+            return None;
+        }
+        let local = pointer - text_pos;
+        if local.x < 0.0 || local.x > galley.size().x {
+            return None;
+        }
+        Some(galley.cursor_from_pos(local).index.0)
+    }
+
     fn after_open(&mut self) {
         let entry = self
             .session
@@ -1237,6 +1350,9 @@ impl ReCraftApp {
             Ok(_) => {
                 self.disasm_dirty = true;
                 self.pseudo_dirty = true;
+                // Function labels feed the Functions list and the pseudo-C symbol lookup
+                // (double-clicking a callee name), so a rename must refresh them too.
+                self.functions_dirty = true;
                 self.set_status(self.t_args(
                     "ui_changed_addr",
                     &[("addr", &format!("{:#x}", edit.addr.get()))],
@@ -4515,7 +4631,7 @@ impl ReCraftApp {
                 self.pseudo_dirty = true;
             }
             ui.separator();
-            ui.weak(self.t("ui_click_selects_syncs_double_click_jumps_to_disassembly"));
+            ui.weak(self.t("ui_pseudo_click_hint"));
         });
         if self.pseudo_dirty {
             return;
@@ -4525,6 +4641,8 @@ impl ReCraftApp {
             return;
         };
         let active_line = self.active_pseudo_line(lines);
+        // Function whose body this listing shows: its own name is not a jump target.
+        let current_function = self.pseudo_function_start();
         // Fixed line-number gutter. The listing scrolls horizontally underneath the
         // gutter (the text is clipped at its right edge), while the numbers stay put.
         let digits = lines.len().max(1).to_string().len().max(2);
@@ -4535,7 +4653,7 @@ impl ReCraftApp {
             .x;
         let gutter = number_width + 12.0;
         let mut clicked = None;
-        let mut jumped = None;
+        let mut double_clicked = None;
         let width = gutter + ui.available_width().max(1100.0);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
@@ -4570,29 +4688,58 @@ impl ReCraftApp {
                     let mut job = LayoutJob::default();
                     append(&mut job, &line.text, pal.text, &mono);
                     let galley = ui.painter().layout_job(job);
-                    ui.painter()
-                        .with_clip_rect(text_clip)
-                        .galley(text_pos, galley, pal.text);
-                    let response = if response.hovered() {
-                        response.on_hover_text(format!("{:#x}", line.addr.get()))
-                    } else {
-                        response
+                    ui.painter().with_clip_rect(text_clip).galley(
+                        text_pos,
+                        galley.clone(),
+                        pal.text,
+                    );
+                    // Symbol under the pointer, so callee names can advertise the
+                    // double-click that opens their body.
+                    let pointer = response
+                        .interact_pointer_pos()
+                        .or_else(|| response.hover_pos());
+                    let char_index = pointer.and_then(|pointer| {
+                        Self::pseudo_char_index_at(pointer, text_pos, text_clip, &galley)
+                    });
+                    let symbol =
+                        char_index.and_then(|char_index| pseudo_symbol_at(&line.text, char_index));
+                    let callee = symbol.and_then(|symbol| self.pseudo_function_named(symbol));
+                    let response = match (callee, symbol) {
+                        (Some(start), Some(name)) if Some(start) != current_function => {
+                            let addr = format!("{:#x}", start.get());
+                            response
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(self.t_args(
+                                    "ui_double_click_to_enter_function",
+                                    &[("name", name), ("addr", &addr)],
+                                ))
+                        }
+                        _ if response.hovered() => {
+                            response.on_hover_text(format!("{:#x}", line.addr.get()))
+                        }
+                        _ => response,
                     };
                     if response.clicked() {
                         clicked = Some((index, line.addr));
                     }
                     if response.double_clicked() {
-                        jumped = Some(line.addr);
+                        double_clicked = Some(match char_index {
+                            Some(char_index) => {
+                                self.pseudo_double_click(&line.text, char_index, line.addr)
+                            }
+                            None => Action::NavigateToDisasm(line.addr),
+                        });
                     }
                 }
             });
         // Single click selects that exact row and syncs the disassembly cursor without
-        // leaving pseudo-C; double-click jumps into the disassembly tab.
+        // leaving pseudo-C; double-click opens a callee's body, and otherwise jumps into
+        // the disassembly tab.
         if let Some((line, addr)) = clicked {
             *action = Action::SyncPseudoLine { addr, line };
         }
-        if let Some(addr) = jumped {
-            *action = Action::NavigateToDisasm(addr);
+        if let Some(double_click) = double_clicked {
+            *action = double_click;
         }
     }
 
@@ -4916,6 +5063,27 @@ impl ReCraftApp {
                 self.tab = Tab::Disasm;
                 self.view_mode = ViewMode::Text;
                 self.focus_pane(Pane::View);
+            }
+            Action::EnterFunction(start) => {
+                // Like IDA's decompiler: the listing follows the callee and the Decompile
+                // pane stays in front. Entering the function already on screen must not
+                // append a duplicate history entry.
+                if self.pseudo_function_start() == Some(start) {
+                    return;
+                }
+                self.navigate(start);
+                self.tab = Tab::Pseudo;
+                self.focus_pane(Pane::Pseudo);
+                let name = self
+                    .functions
+                    .iter()
+                    .position(|function| function.start == start)
+                    .and_then(|index| self.function_labels.get(index).cloned())
+                    .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+                let addr = format!("{:#x}", start.get());
+                self.set_status(
+                    self.t_args("ui_entered_function", &[("name", &name), ("addr", &addr)]),
+                );
             }
             Action::SyncDisasm(addr) => {
                 self.disasm_start = addr;
@@ -6365,32 +6533,34 @@ mod tests {
     #[test]
     fn pseudo_line_click_selects_one_row_and_keeps_the_listing() {
         let start = Address::new(0x140001000);
-        let mut app = ReCraftApp::default();
-        app.pseudo_start = start;
-        app.pseudo = Some(vec![
-            PseudoLine {
+        let mut app = ReCraftApp {
+            pseudo_start: start,
+            pseudo: Some(vec![
+                PseudoLine {
+                    addr: start,
+                    text: "// header".to_owned(),
+                },
+                PseudoLine {
+                    addr: start,
+                    text: "first();".to_owned(),
+                },
+                PseudoLine {
+                    addr: Address::new(start.get() + 0x10),
+                    text: "second();".to_owned(),
+                },
+            ]),
+            disasm_rows: vec![DisasmLine {
                 addr: start,
-                text: "// header".to_owned(),
-            },
-            PseudoLine {
-                addr: start,
-                text: "first();".to_owned(),
-            },
-            PseudoLine {
-                addr: Address::new(start.get() + 0x10),
-                text: "second();".to_owned(),
-            },
-        ]);
-        app.disasm_rows = vec![DisasmLine {
-            addr: start,
-            len: 1,
-            raw: [0x90; 15],
-            mnemonic: "nop".to_owned(),
-            operands: String::new(),
-            name: None,
-            comment: None,
-            flags: Flags::code(),
-        }];
+                len: 1,
+                raw: [0x90; 15],
+                mnemonic: "nop".to_owned(),
+                operands: String::new(),
+                name: None,
+                comment: None,
+                flags: Flags::code(),
+            }],
+            ..ReCraftApp::default()
+        };
         assert_eq!(
             app.active_pseudo_line(app.pseudo.as_deref().unwrap()),
             Some(0),
@@ -6424,6 +6594,187 @@ mod tests {
         assert_eq!(app.pseudo_start, next);
     }
 
+    #[test]
+    fn pseudo_symbol_at_expands_to_the_whole_token() {
+        let text = "  result = sub_140001100(a1, arg_2);";
+        let start = text.find("sub_140001100").unwrap();
+        assert_eq!(pseudo_symbol_at(text, start), Some("sub_140001100"));
+        assert_eq!(pseudo_symbol_at(text, start + 5), Some("sub_140001100"));
+        // The caret from the layout reports the closest boundary, so the right half of the
+        // last letter points at `(`; the previous character still names the token.
+        assert_eq!(
+            pseudo_symbol_at(text, start + "sub_140001100".len()),
+            Some("sub_140001100")
+        );
+        assert_eq!(pseudo_symbol_at("  a1 = b2;", 2), Some("a1"));
+        assert_eq!(
+            pseudo_symbol_at("  a1 = b2;", 5),
+            None,
+            "`=` is not a symbol"
+        );
+        assert_eq!(
+            pseudo_symbol_at("  return 0;", 20),
+            None,
+            "index past the end"
+        );
+        assert_eq!(pseudo_symbol_at("", 0), None);
+        // Character (not byte) indexing must hold for non-ASCII user renames.
+        assert_eq!(pseudo_symbol_at("  fn名(x);", 2), Some("fn名"));
+    }
+
+    #[test]
+    fn sub_symbol_address_parses_auto_names() {
+        assert_eq!(
+            sub_symbol_address("sub_140001100").map(|addr| addr.get()),
+            Some(0x140001100)
+        );
+        assert_eq!(
+            sub_symbol_address("sub_401000").map(|addr| addr.get()),
+            Some(0x401000)
+        );
+        assert_eq!(sub_symbol_address("sub_"), None);
+        assert_eq!(sub_symbol_address("sub_xyz"), None);
+        assert_eq!(sub_symbol_address("main"), None);
+    }
+
+    #[test]
+    fn auto_names_resolve_to_their_own_address() {
+        let real = Address::new(0x140001100);
+        let impostor = Address::new(0x140001500);
+        let app = ReCraftApp {
+            functions: vec![
+                FunctionInfo {
+                    start: real,
+                    end: Address::new(0x140001200),
+                },
+                FunctionInfo {
+                    start: impostor,
+                    end: Address::new(0x140001600),
+                },
+            ],
+            // Two functions share the text: the auto name still means the address it spells.
+            function_labels: vec!["sub_140001100".to_owned(), "sub_140001100".to_owned()],
+            ..ReCraftApp::default()
+        };
+        assert_eq!(app.pseudo_function_named("sub_140001100"), Some(real));
+    }
+
+    #[test]
+    fn pseudo_double_click_enters_a_callee_function() {
+        let caller = Address::new(0x140001000);
+        let callee = Address::new(0x140001100);
+        let renamed = Address::new(0x140001300);
+        let app = ReCraftApp {
+            pseudo_start: caller,
+            functions: vec![
+                FunctionInfo {
+                    start: caller,
+                    end: callee,
+                },
+                FunctionInfo {
+                    start: callee,
+                    end: renamed,
+                },
+                FunctionInfo {
+                    start: renamed,
+                    end: Address::new(0x140001400),
+                },
+            ],
+            function_labels: vec![
+                "main".to_owned(),
+                "sub_140001100".to_owned(),
+                "decrypt".to_owned(),
+            ],
+            ..ReCraftApp::default()
+        };
+
+        // An auto-named callee opens its body from anywhere inside the token.
+        let call = "  sub_140001100(arg_1);";
+        let start = call.find("sub_140001100").unwrap();
+        assert_eq!(
+            app.pseudo_double_click(call, start, caller),
+            Action::EnterFunction(callee)
+        );
+        assert_eq!(
+            app.pseudo_double_click(call, start + 11, caller),
+            Action::EnterFunction(callee)
+        );
+        // A renamed callee resolves through the stored name.
+        let named = "  decrypt(buf);";
+        assert_eq!(
+            app.pseudo_double_click(named, 2, caller),
+            Action::EnterFunction(renamed)
+        );
+        // The function already on screen (header or recursive call) is not re-entered.
+        let own = "  main();";
+        assert_eq!(
+            app.pseudo_double_click(own, 2, caller),
+            Action::NavigateToDisasm(caller)
+        );
+        // Non-symbol text keeps the old behaviour: jump to this row's disassembly.
+        let plain = "  return 0;";
+        assert_eq!(
+            app.pseudo_double_click(plain, 4, caller),
+            Action::NavigateToDisasm(caller)
+        );
+        // A `sub_<hex>` call target that is not a defined function stays a plain jump.
+        let stray = "  sub_140009000();";
+        assert_eq!(
+            app.pseudo_double_click(stray, 2, caller),
+            Action::NavigateToDisasm(caller)
+        );
+    }
+
+    #[test]
+    fn enter_function_opens_the_callee_listing_and_back_returns() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("enter.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        if app.functions.len() < 2 {
+            return;
+        }
+        let caller = app.functions[0].start;
+        let callee = app.functions[1].start;
+        app.navigate(caller);
+        app.tick();
+        let history_before = app.history.len();
+
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::EnterFunction(callee));
+        assert_eq!(
+            app.pseudo_start, callee,
+            "the listing must follow the callee"
+        );
+        assert_eq!(app.disasm_start, callee);
+        assert!(
+            matches!(app.tab, Tab::Pseudo),
+            "entering a function keeps the decompiler in front"
+        );
+        assert_eq!(app.history.len(), history_before + 1);
+        assert_eq!(app.history.last(), Some(&callee));
+        app.tick();
+        assert!(app.pseudo.is_some(), "the callee listing must render");
+
+        // Entering the function already on screen must not push another history entry.
+        app.apply_action(&ctx, Action::EnterFunction(callee));
+        assert_eq!(app.history.len(), history_before + 1);
+
+        // Back returns to the caller, like every other navigation.
+        app.apply_action(&ctx, Action::Back);
+        assert_eq!(app.pseudo_start, caller);
+    }
+
     fn collect_text_runs(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
         match shape {
             egui::Shape::Text(text) => out.push((text.galley.job.text.clone(), text.pos)),
@@ -6436,22 +6787,128 @@ mod tests {
         }
     }
 
+    /// Screen position of the middle of `char_index` in the first text run equal to `needle`.
+    fn char_click_pos(shape: &egui::Shape, needle: &str, char_index: usize) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.job.text == needle => {
+                let start = text
+                    .galley
+                    .pos_from_cursor(egui::text::CCursor::new(char_index));
+                let end = text
+                    .galley
+                    .pos_from_cursor(egui::text::CCursor::new(char_index + 1));
+                Some(egui::pos2(
+                    text.pos.x + (start.center().x + end.center().x) / 2.0,
+                    text.pos.y + start.center().y,
+                ))
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .find_map(|shape| char_click_pos(shape, needle, char_index)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn double_clicking_a_callee_name_in_the_view_enters_it() {
+        let caller = Address::new(0x140001000);
+        let callee = Address::new(0x140001100);
+        let line_text = "sub_140001100();";
+        let mut app = ReCraftApp {
+            pseudo_start: caller,
+            functions: vec![
+                FunctionInfo {
+                    start: caller,
+                    end: callee,
+                },
+                FunctionInfo {
+                    start: callee,
+                    end: Address::new(0x140001200),
+                },
+            ],
+            function_labels: vec!["main".to_owned(), "sub_140001100".to_owned()],
+            pseudo: Some(vec![PseudoLine {
+                addr: caller,
+                text: line_text.to_owned(),
+            }]),
+            ..ReCraftApp::default()
+        };
+
+        let ctx = egui::Context::default();
+        let base = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 500.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base.clone(), |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, line_text, 2))
+            .expect("the pseudo-C line must be on screen");
+
+        let click = |time: f64| {
+            let mut input = base.clone();
+            input.time = Some(time);
+            input.events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            input
+        };
+
+        // First click: selection only, the listing stays put.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(0.1), |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        assert!(
+            matches!(action, Action::SyncPseudoLine { .. }),
+            "a single click must only select the row, got {action:?}"
+        );
+
+        // Second click inside the double-click window: enter the callee.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(0.2), |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(
+            action,
+            Action::EnterFunction(callee),
+            "double-clicking the callee name must enter that function"
+        );
+    }
+
     #[test]
     fn pseudo_view_draws_line_numbers_instead_of_addresses() {
         let start = Address::new(0x140001000);
-        let mut app = ReCraftApp::default();
-        app.pseudo_start = start;
-        app.pseudo = Some(vec![
-            PseudoLine {
-                addr: start,
-                text: "// header".to_owned(),
-            },
-            PseudoLine {
-                addr: start,
-                text: "return 0;".to_owned(),
-            },
-        ]);
-        app.pseudo_dirty = false;
+        let mut app = ReCraftApp {
+            pseudo_start: start,
+            pseudo: Some(vec![
+                PseudoLine {
+                    addr: start,
+                    text: "// header".to_owned(),
+                },
+                PseudoLine {
+                    addr: start,
+                    text: "return 0;".to_owned(),
+                },
+            ]),
+            ..ReCraftApp::default()
+        };
 
         let ctx = egui::Context::default();
         let input = egui::RawInput {

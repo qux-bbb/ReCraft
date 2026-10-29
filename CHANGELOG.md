@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- In the Decompile view, double-clicking a callee's name now enters that function (its
+  pseudo-C replaces the listing and `Back` returns to the caller) instead of jumping to the
+  disassembly row under the pointer. Callee names are resolved with the decompiler's own
+  naming rules (stored name or `sub_<hex>`), a callee tooltip and pointing-hand cursor
+  advertise the click, and double-clicks on anything else (locals, keywords, the current
+  function's own name, the line-number gutter) still jump to the disassembly. Renaming a
+  function now refreshes the Functions labels immediately, so the new name resolves without
+  re-analysis.
 - The Decompile view now shows IDA-style line numbers in a fixed left gutter instead of an
   address prefix; the gutter stays put while the code scrolls horizontally. Clicking a row
   selects that exact line and syncs the disassembly cursor; the listing is no longer
