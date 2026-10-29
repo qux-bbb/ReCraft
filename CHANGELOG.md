@@ -111,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A stack store that feeds a call (arguments 5 and beyond live on the stack) is no longer
+  dropped as a dead callee-save spill or dead local: `RtlVirtualUnwind`'s outgoing
+  `var_20`/`var_28`/`var_30` slots are kept, and a saved register is only treated as dead
+  when no call can read its slot. Slots reached through a saved `rsp` copy are named
+  `frame_XX` instead of `var_XX`, so they no longer collide with the current frame's locals.
+- The saved-`rsp` alias is retired when a call clobbers its register, so a later
+  `test rax, rax` reads `if (rax != 0)` instead of the bogus `if (frame != 0)`.
 - A load-modify-store fold no longer drops the loaded value when a later statement still
   reads its register, most visibly a counter update that returns the new value: corpus
   `corpus_counter_bump` used to render `*(u32*)(...) += 1; return;`, losing the returned

@@ -1993,8 +1993,9 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
             continue;
         }
         if references.len() == 1 {
-            // The saved value is never restored or read; the store is dead.
-            remove.insert(*save_index);
+            // A single reference may just be an outgoing stack argument that a later
+            // call reads, so it is only clearly dead when the value is never handed to a
+            // call: keep it otherwise.
             continue;
         }
         let expected_restore = format!("{reg} = {slot};");
@@ -2812,6 +2813,11 @@ fn drop_dead_slot_stores(lines: &mut Vec<PseudoLine>) {
                 continue;
             }
             if is_control_line(text) {
+                break;
+            }
+            // A call can read the outgoing stack area (arguments 5+), so a slot store is
+            // not dead just because no later statement names it.
+            if contains_call(text) {
                 break;
             }
             if mentions_slot(text, slot) {

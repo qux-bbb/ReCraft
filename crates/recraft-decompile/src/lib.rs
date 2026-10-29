@@ -870,6 +870,19 @@ impl Printer<'_> {
         {
             self.frame_reg = None;
         }
+        // A call or an unmodelled instruction clobbers the caller-saved registers, so a
+        // saved rsp copy held in one of them is gone even without an explicit write.
+        if matches!(
+            stmt,
+            Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
+        ) && let Some(frame) = self.frame_reg
+            && matches!(
+                frame,
+                Reg::Rax | Reg::Rcx | Reg::Rdx | Reg::R8 | Reg::R9 | Reg::R10 | Reg::R11
+            )
+        {
+            self.frame_reg = None;
+        }
     }
 
     /// Records a register write so later reads no longer render as `argN`.
@@ -1034,6 +1047,14 @@ impl Printer<'_> {
         }
     }
 
+    fn frame_name(offset: i64) -> String {
+        if offset < 0 {
+            format!("frame_n{:x}", -offset)
+        } else {
+            format!("frame_{offset:x}")
+        }
+    }
+
     /// C spelling for a load/store width (16-byte operands are SSE vectors).
     fn scalar_type(size: u8) -> String {
         match size {
@@ -1054,8 +1075,13 @@ impl Printer<'_> {
         if let Some(name) = self.args.and_then(|args| args.name_for_stack(base, offset)) {
             return Some(name.to_owned());
         }
+        // A saved copy of rsp reaches the frame as it was *before* the prologue adjusted
+        // rsp, so its slots are not the current frame's `var_XX` and must not share names.
+        if self.frame_reg == Some(base) {
+            return Some(Self::frame_name(offset));
+        }
         let rebuilt_frame = base == Reg::Rbp && self.written.contains(&Reg::Rbp);
-        if base == Reg::Rsp || offset < 0 || rebuilt_frame || self.frame_reg == Some(base) {
+        if base == Reg::Rsp || offset < 0 || rebuilt_frame {
             return Some(Self::stack_name(offset));
         }
         None
