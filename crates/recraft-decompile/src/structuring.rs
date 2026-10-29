@@ -2311,6 +2311,14 @@ fn mentions_slot(text: &str, slot: &str) -> bool {
         .any(|token| token == slot)
 }
 
+/// A stack-slot name as the printer emits it (`var_20`, `var_n48`, `frame_10`).
+fn is_stack_slot_name(text: &str) -> bool {
+    ["var_", "frame_"].iter().any(|prefix| {
+        text.strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty())
+    })
+}
+
 fn indent(level: usize) -> String {
     "    ".repeat(level)
 }
@@ -2888,7 +2896,10 @@ fn fold_store_value_temporaries(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         };
-        if !head.starts_with("*(u") || !register_dead_after(lines, index + 1, target) {
+        // The destination may be memory (`*(u32*)(...)`) or a named stack slot.
+        if !(head.starts_with("*(u") || is_stack_slot_name(head))
+            || !register_dead_after(lines, index + 1, target)
+        {
             index += 1;
             continue;
         }
@@ -4747,6 +4758,17 @@ mod tests {
             lines[0].text,
             "    *(u32*)((r8 + 8)) = (uint32)(*(u16*)(rax));"
         );
+
+        // A named stack slot as the destination folds the same way.
+        let mut lines = vec![
+            test_line("    ecx = 0;"),
+            test_line("    var_8 = ecx;"),
+            test_line("    eax = var_8;"),
+            test_line("    return;"),
+        ];
+        fold_store_value_temporaries(&mut lines);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[0].text, "    var_8 = 0;");
     }
 
     #[test]
