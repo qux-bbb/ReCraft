@@ -37,6 +37,8 @@ enum CmpSource {
     ZeroOnly,
     /// `bt`: only CF (= the tested bit) is meaningful.
     BitTest,
+    /// `neg`: zero/sign flags describe the result, and CF is "operand was non-zero".
+    Negate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,6 +145,7 @@ impl Lifter {
                 Flow::Fallthrough
             }
             M::Bts | M::Btr | M::Btc => self.lift_bit_modify(insn, &mut stmts),
+            M::Sbb => self.lift_sbb(insn, &mut stmts),
             M::Imul => self.lift_imul(insn, &mut stmts),
             M::Push => self.lift_push(insn, &mut stmts),
             M::Pop => self.lift_pop(insn, &mut stmts),
@@ -578,7 +581,7 @@ impl Lifter {
             self.last_cmp = Some(CmpState {
                 lhs,
                 rhs: zero,
-                source: CmpSource::ZeroOnly,
+                source: CmpSource::Negate,
             });
         }
         if !self.write_operand(insn, 0, result, stmts) {
@@ -857,6 +860,20 @@ impl Lifter {
                     rhs: zero,
                 })
             }
+            CmpSource::Negate => {
+                // `neg` sets CF from the operand being non-zero, while ZF/SF describe the
+                // result: `jb`/`jae` mean "operand was non-zero", not "result < 0".
+                let kind = match kind {
+                    CondKind::UnsignedLt => CondKind::Ne,
+                    CondKind::UnsignedGe => CondKind::Eq,
+                    other => other,
+                };
+                self.push(Expr::Cmp {
+                    kind,
+                    lhs: state.lhs,
+                    rhs: state.rhs,
+                })
+            }
         };
         if consume {
             self.last_cmp = None;
@@ -892,6 +909,38 @@ impl Lifter {
         let reg = RegView::full(Reg::Rax);
         stmts.push(Stmt::WriteReg { reg, value });
         self.reg_env.insert(Reg::Rax, value);
+        Flow::Fallthrough
+    }
+
+    /// `sbb x, x` materialises the carry flag as `0`/`-1`: `x = CF ? -1 : 0`. The two-operand
+    /// form with different operands subtracts with borrow and stays assembly.
+    fn lift_sbb(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        let (Some(destination), Some(source)) =
+            (self.read_operand(insn, 0), self.read_operand(insn, 1))
+        else {
+            return self.intrinsic(insn, stmts);
+        };
+        if !matches!(
+            (&self.exprs[destination as usize], &self.exprs[source as usize]),
+            (Expr::Reg(lhs), Expr::Reg(rhs)) if lhs == rhs
+        ) {
+            return self.intrinsic(insn, stmts);
+        }
+        let Some(condition) = self.condition_expr(CondKind::UnsignedLt, false) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let minus_one = self.constant(u64::MAX);
+        let zero = self.constant(0);
+        let value = self.push(Expr::Select {
+            cond: condition,
+            then: minus_one,
+            otherwise: zero,
+        });
+        if !self.write_operand(insn, 0, value, stmts) {
+            return self.intrinsic(insn, stmts);
+        }
+        // The carry flag has been consumed into the value.
+        self.last_cmp = None;
         Flow::Fallthrough
     }
 
@@ -1361,6 +1410,35 @@ mod tests {
             },
             other => panic!("unexpected stmt {other:?}"),
         }
+    }
+
+    #[test]
+    fn sbb_with_itself_materialises_the_carry_flag() {
+        // cmp eax, 5; sbb ecx, ecx — lift both, the state carries the comparison.
+        let cmp = recraft_decode::decode(
+            &[0x83, 0xf8, 0x05],
+            Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("decoded");
+        let sbb = recraft_decode::decode(
+            &[0x19, 0xc9],
+            Address::new(0x1003),
+            recraft_decode::Mode::X64,
+        )
+        .expect("decoded");
+        let mut lifter = Lifter::new();
+        lifter.lift(&cmp);
+        let item = lifter.lift(&sbb);
+        let Some(Stmt::WriteReg { reg, value }) = item.stmts.last() else {
+            panic!("unexpected stmts {:?}", item.stmts);
+        };
+        assert_eq!(reg.name(), "ecx");
+        assert!(matches!(lifter.expr(*value), Expr::Select { .. }));
+
+        // sbb edx, eax (different operands) stays assembly.
+        let (_, item) = lift_one(&[0x19, 0xc2], 0x1000);
+        assert!(matches!(item.stmts.first(), Some(Stmt::Intrinsic { .. })));
     }
 
     #[test]

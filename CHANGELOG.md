@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `sbb x, x` is lifted as the carry mask it is (`x = cond ? -1 : 0`) instead of assembly, and
+  its usual consumers fold into one statement: `x = -(x)` becomes the boolean
+  `x = (cond ? 1 : 0)` and `x &= y` the conditional mask `x = (cond ? y : 0)`. The carry
+  flag is derived from the right producer: a `cmp`/`sub` gives an unsigned borrow, a `neg`
+  gives "operand was non-zero" (`jb`/`jae` after a `neg` now read as `!= 0`/`== 0`), and a
+  `bt` gives the tested bit. Notepad's 54 `sbb` assembly lines disappear and the intrinsic
+  count drops 219 → 172 (coverage 99.5%).
 - Calls with more than four arguments now print the stack-passed ones: stores into the
   outgoing argument area (`[rsp+0x20]`, `[rsp+0x28]`, ...) are collected until the call and
   appended in slot order, resolving copies to the value they carry. A format-string call

@@ -251,6 +251,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     simplify_negated_conditions(&mut lines);
     fold_single_use_temporaries(&mut lines);
     fold_store_copies(&mut lines);
+    fold_carry_masks(&mut lines);
     strip_condition_parentheses(&mut lines);
     fold_constant_loops(&mut lines);
     merge_else_if(&mut lines);
@@ -2780,6 +2781,59 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// Fold the consumers of a `sbb x, x` carry mask (`x = cond ? -1 : 0`):
+/// `x = -(x)` turns the branches into `1`/`0` (a boolean), and `x &= y` selects `y`
+/// (a conditional mask). Both stay one statement instead of spreading the idiom over two.
+fn fold_carry_masks(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let Some((slot, value)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        let Some((condition, then, otherwise)) = parse_const_select(value) else {
+            index += 1;
+            continue;
+        };
+        if !((then == -1 && otherwise == 0) || (then == 0 && otherwise == -1)) {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&lines[index].text));
+        let next = lines[index + 1].text.trim();
+        if next == format!("{slot} = -({slot});") {
+            lines[index].text = format!(
+                "{indent}{slot} = ({condition} ? {} : {});",
+                -then, -otherwise
+            );
+            lines.remove(index + 1);
+            continue;
+        }
+        if let Some(mask) = next
+            .strip_prefix(&format!("{slot} &= "))
+            .and_then(|rest| rest.strip_suffix(';'))
+        {
+            let (then, otherwise) = if then == -1 { (mask, "0") } else { ("0", mask) };
+            lines[index].text = format!("{indent}{slot} = ({condition} ? {then} : {otherwise});");
+            lines.remove(index + 1);
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// Parse `((cond) ? -1 : 0)` into `(cond, -1, 0)`.
+fn parse_const_select(value: &str) -> Option<(&str, i64, i64)> {
+    let inner = value.strip_prefix('(')?.strip_suffix(')')?;
+    let (condition, rest) = inner.rsplit_once(" ? ")?;
+    let (then, otherwise) = rest.split_once(" : ")?;
+    Some((
+        condition.trim(),
+        then.trim().parse().ok()?,
+        otherwise.trim().parse().ok()?,
+    ))
+}
+
 /// Fold a register round-trip that only feeds one store: `rax = &var_20; var_30 = rax;`
 /// followed by another write to `rax` becomes `var_30 = &var_20;`. The value is consumed by
 /// the store and the register is redefined right after, so nothing else can read it.
@@ -4363,6 +4417,25 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn carry_masks_fold_into_boolean_or_masked_value() {
+        let mut lines = vec![
+            test_line("    edx = ((ecx != 0) ? -1 : 0);"),
+            test_line("    edx = -(edx);"),
+        ];
+        fold_carry_masks(&mut lines);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].text, "    edx = ((ecx != 0) ? 1 : 0);");
+
+        let mut lines = vec![
+            test_line("    rdi = ((rax != 0) ? -1 : 0);"),
+            test_line("    rdi &= rcx;"),
+        ];
+        fold_carry_masks(&mut lines);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].text, "    rdi = ((rax != 0) ? rcx : 0);");
     }
 
     #[test]
