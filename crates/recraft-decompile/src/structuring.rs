@@ -4249,6 +4249,22 @@ mod tests {
     }
 
     #[test]
+    fn l2_ignores_zeroing_idioms_and_follows_pointer_origins() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "bytes_op").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        // `xor r8d, r8d` must not become a parameter, and the pointer copied through
+        // `r10`/`rdx` still belongs to the first argument.
+        assert!(
+            text.contains("int32 bytes_op(void* arg1, int32 arg2)"),
+            "{text}"
+        );
+        assert!(!text.contains("arg3"), "{text}");
+    }
+
+    #[test]
     fn l2_types_scalar_arguments_by_read_width() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;

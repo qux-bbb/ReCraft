@@ -484,12 +484,32 @@ fn scan_incoming_args(
 
     for item in &lifted {
         for stmt in &item.stmts {
-            walk_stmt_reads(stmt, &exprs, &mut |view: &RegView| {
-                if arg_registers.contains(&view.base) && !written.contains(&view.base) {
-                    incoming.insert(view.base);
-                    widths.entry(view.base).or_default().insert(view.width);
+            // A write's value is read *before* the write, so `xor r8d, r8d` must not look
+            // like an incoming `r8`; only live registers count (self-cancelling forms are
+            // constants, see `walk_live_reads`).
+            let mut reads: Vec<(Reg, u8)> = Vec::new();
+            match stmt {
+                Stmt::WriteReg { value, .. } => {
+                    walk_live_reads(&exprs, *value, &mut |view| {
+                        reads.push((view.base, view.width));
+                    });
                 }
-            });
+                Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
+                    walk_live_reads(&exprs, *addr, &mut |view| {
+                        reads.push((view.base, view.width));
+                    });
+                    walk_live_reads(&exprs, *value, &mut |view| {
+                        reads.push((view.base, view.width));
+                    });
+                }
+                Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
+            }
+            for (base, width) in reads {
+                if arg_registers.contains(&base) && !written.contains(&base) {
+                    incoming.insert(base);
+                    widths.entry(base).or_default().insert(width);
+                }
+            }
             // A call consumes the argument registers its callee declares. Without this a
             // wrapper that forwards its incoming `rcx` to a helper (`call_str` →
             // `str_probe`) looks argument-less, and the call site loses the argument too.
@@ -516,6 +536,45 @@ fn scan_incoming_args(
     }
 
     Ok(IncomingScan { incoming, widths })
+}
+
+/// Visit the registers an expression really reads, ignoring self-cancelling forms that the
+/// printer folds to a constant (`xor edx, edx`, `sub edx, edx`, `and edx, 0`).
+fn walk_live_reads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(&RegView)) {
+    match &exprs[id as usize] {
+        Expr::Reg(view) => visit(view),
+        Expr::Const(_) | Expr::Temp(_) => {}
+        Expr::Bin { op, lhs, rhs } => {
+            if crate::same_value(exprs, *lhs, *rhs) && matches!(op, BinOp::Xor | BinOp::Sub) {
+                return;
+            }
+            if *op == BinOp::And
+                && (matches!(exprs[*lhs as usize], Expr::Const(0))
+                    || matches!(exprs[*rhs as usize], Expr::Const(0)))
+            {
+                return;
+            }
+            walk_live_reads(exprs, *lhs, visit);
+            walk_live_reads(exprs, *rhs, visit);
+        }
+        Expr::Cmp { lhs, rhs, .. } => {
+            walk_live_reads(exprs, *lhs, visit);
+            walk_live_reads(exprs, *rhs, visit);
+        }
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => {
+            walk_live_reads(exprs, *addr, visit);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_live_reads(exprs, *arg, visit),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            walk_live_reads(exprs, *cond, visit);
+            walk_live_reads(exprs, *then, visit);
+            walk_live_reads(exprs, *otherwise, visit);
+        }
+    }
 }
 
 /// Argument registers an unmodelled instruction certainly writes.
@@ -658,31 +717,69 @@ fn infer_pointer_types(
     if names.is_empty() {
         return Ok(BTreeMap::new());
     }
+    let (lifted, exprs) = lift_function(session, start, end)?;
+    let mut written: BTreeSet<Reg> = BTreeSet::new();
+    // `r10 = arg1` keeps the argument's pointee evidence as long as neither side is
+    // overwritten; the printer names field/array accesses through such a copy the same way.
+    let mut aliases: BTreeMap<Reg, Reg> = BTreeMap::new();
     let mut sizes: BTreeMap<Reg, BTreeSet<u8>> = BTreeMap::new();
-    let mut addr = start;
-    while addr < end {
-        let Some(insn) = session.insn_at(addr)? else {
-            break;
-        };
-        if insn.is_invalid() {
-            break;
-        }
-        if insn.has_memory_operand() {
-            // Indexed (base + index*scale) accesses are pointer evidence too: the base
-            // register still points at the array/data the element is loaded from.
-            let base = insn.memory_base();
-            if let Some(view) = recraft_ir::from_iced(base)
-                && names.contains_key(&view.base)
-                && let Some(size) = access_size(insn.memory_size())
-            {
-                sizes.entry(view.base).or_default().insert(size);
+    for item in &lifted {
+        for stmt in &item.stmts {
+            let mut evidence: Vec<(ExprId, u8)> = Vec::new();
+            match stmt {
+                Stmt::WriteReg { value, .. } => {
+                    visit_loads(&exprs, *value, &mut |addr, size| {
+                        evidence.push((addr, size))
+                    });
+                }
+                Stmt::Store { addr, value, size } => {
+                    evidence.push((*addr, *size));
+                    visit_loads(&exprs, *addr, &mut |load, width| {
+                        evidence.push((load, width))
+                    });
+                    visit_loads(&exprs, *value, &mut |load, width| {
+                        evidence.push((load, width))
+                    });
+                }
+                Stmt::StoreFloat { addr, value, .. } => {
+                    visit_loads(&exprs, *addr, &mut |load, width| {
+                        evidence.push((load, width))
+                    });
+                    visit_loads(&exprs, *value, &mut |load, width| {
+                        evidence.push((load, width))
+                    });
+                }
+                Stmt::Call { args, .. } => {
+                    for arg in args {
+                        visit_loads(&exprs, *arg, &mut |load, width| {
+                            evidence.push((load, width))
+                        });
+                    }
+                }
+                Stmt::CallIndirect { target } => {
+                    visit_loads(&exprs, *target, &mut |load, width| {
+                        evidence.push((load, width))
+                    });
+                }
+                Stmt::Intrinsic { .. } => {}
+            }
+            for (addr, size) in evidence {
+                if let Some(reg) = pointer_argument(&exprs, addr, names, &aliases, size) {
+                    sizes.entry(reg).or_default().insert(size);
+                }
+            }
+            if let Stmt::WriteReg { reg, value } = stmt {
+                let base = reg.base;
+                written.insert(base);
+                aliases.remove(&base);
+                if base != Reg::Rsp
+                    && let Expr::Reg(source) = &exprs[*value as usize]
+                    && source.base != base
+                {
+                    aliases.insert(base, source.base);
+                }
             }
         }
-        let next = insn.next_addr();
-        if next <= addr || next >= end {
-            break;
-        }
-        addr = next;
     }
     let mut types = BTreeMap::new();
     for (reg, observed) in sizes {
@@ -701,16 +798,86 @@ fn infer_pointer_types(
     Ok(types)
 }
 
-/// Byte width of a memory operand (SIMD/FPU sizes are not pointer candidates).
-fn access_size(size: iced_x86::MemorySize) -> Option<u8> {
-    use iced_x86::MemorySize as S;
-    Some(match size {
-        S::UInt8 | S::Int8 => 1,
-        S::UInt16 | S::Int16 => 2,
-        S::UInt32 | S::Int32 => 4,
-        S::UInt64 | S::Int64 => 8,
-        _ => return None,
-    })
+/// Visit every memory load inside an expression with its address and width.
+fn visit_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId, u8)) {
+    match &exprs[id as usize] {
+        Expr::Load { addr, size } => {
+            visit(*addr, *size);
+            visit_loads(exprs, *addr, visit);
+        }
+        Expr::LoadFloat { addr, .. } => visit_loads(exprs, *addr, visit),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            visit_loads(exprs, *lhs, visit);
+            visit_loads(exprs, *rhs, visit);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => visit_loads(exprs, *arg, visit),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            visit_loads(exprs, *cond, visit);
+            visit_loads(exprs, *then, visit);
+            visit_loads(exprs, *otherwise, visit);
+        }
+        Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
+    }
+}
+
+/// Argument register whose pointer the memory address is based on, if the access width
+/// identifies a pointee type. The address only has to originate from the argument: a copy
+/// (`r10 = arg1`) or pointer arithmetic (`arg1 + 8`) keeps the pointee evidence.
+fn pointer_argument(
+    exprs: &[Expr],
+    address: ExprId,
+    names: &BTreeMap<Reg, String>,
+    aliases: &BTreeMap<Reg, Reg>,
+    size: u8,
+) -> Option<Reg> {
+    if !matches!(size, 1 | 2 | 4 | 8) {
+        return None;
+    }
+    let mut candidates = Vec::new();
+    address_registers(exprs, address, &mut candidates);
+    for view in candidates {
+        let source = resolve_alias(aliases, view.base);
+        if names.contains_key(&source) {
+            return Some(source);
+        }
+    }
+    None
+}
+
+/// Registers of an address expression in preference order: the unscaled base first, then
+/// fallbacks. A scaled index (`idx * 4`, `idx << 2`) is an element index, not the pointee.
+fn address_registers(exprs: &[Expr], id: ExprId, out: &mut Vec<RegView>) {
+    match &exprs[id as usize] {
+        Expr::Reg(view) => out.push(*view),
+        Expr::Cast { arg, .. } => address_registers(exprs, *arg, out),
+        Expr::Bin {
+            op: BinOp::Add | BinOp::Sub,
+            lhs,
+            rhs,
+        } => {
+            address_registers(exprs, *lhs, out);
+            address_registers(exprs, *rhs, out);
+        }
+        _ => {}
+    }
+}
+
+/// Follow `dst = src` copies back to the register that still holds the argument
+/// (`rdx = r10; r10 = rcx` resolves to `rcx`). Reassigning a copy drops its alias, so the
+/// chain stops at whichever register was overwritten last.
+fn resolve_alias(aliases: &BTreeMap<Reg, Reg>, reg: Reg) -> Reg {
+    let mut current = reg;
+    for _ in 0..8 {
+        match aliases.get(&current) {
+            Some(next) if *next != current => current = *next,
+            _ => break,
+        }
+    }
+    current
 }
 
 fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
@@ -827,17 +994,6 @@ fn stack_add(exprs: &[Expr], id: ExprId) -> Option<(Reg, i64)> {
     None
 }
 
-fn walk_stmt_reads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(&RegView)) {
-    match stmt {
-        Stmt::WriteReg { value, .. } => walk_expr(exprs, *value, visit),
-        Stmt::Store { addr, value, .. } | Stmt::StoreFloat { addr, value, .. } => {
-            walk_expr(exprs, *addr, visit);
-            walk_expr(exprs, *value, visit);
-        }
-        Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
-    }
-}
-
 fn walk_stmt_loads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(ExprId)) {
     match stmt {
         Stmt::WriteReg { value, .. } => walk_expr_loads(exprs, *value, visit),
@@ -871,28 +1027,6 @@ fn walk_expr_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId)) {
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_expr_loads(exprs, *arg, visit),
         Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
-    }
-}
-
-fn walk_expr(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(&RegView)) {
-    match &exprs[id as usize] {
-        Expr::Reg(view) => visit(view),
-        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => walk_expr(exprs, *addr, visit),
-        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            walk_expr(exprs, *lhs, visit);
-            walk_expr(exprs, *rhs, visit);
-        }
-        Expr::Select {
-            cond,
-            then,
-            otherwise,
-        } => {
-            walk_expr(exprs, *cond, visit);
-            walk_expr(exprs, *then, visit);
-            walk_expr(exprs, *otherwise, visit);
-        }
-        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_expr(exprs, *arg, visit),
-        Expr::Const(_) | Expr::Temp(_) => {}
     }
 }
 

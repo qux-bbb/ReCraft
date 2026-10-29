@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Argument recovery no longer counts a zeroing idiom as an input: `xor r8d, r8d` at the top
+  of a function used to look like a read of `r8` and invented a parameter, and pointer
+  evidence was credited to whichever register happened to be the memory base even after it
+  was reassigned (`bytes_op` typed its `int len` as `int32*`). Reads now ignore
+  self-cancelling forms, and a pointer type follows the address back to the argument that
+  originated it, through register copies (`r10 = arg1`, `rdx = r10`). On notepad the
+  four-parameter signatures fall from 104 to 62 (most of those carried a phantom `r8`/`r9`),
+  and corpus `bytes_op` now reads `int32 bytes_op(void* arg1, int32 arg2)` like its
+  two-parameter source.
 - Scalar parameters are typed from the width the body reads them with: an argument only ever
   read through its 32-bit half now renders as `int32` instead of `int64` (memory-based
   pointer inference still wins), so `count_bits(int32 arg1)` and
