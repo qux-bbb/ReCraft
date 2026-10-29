@@ -20,7 +20,7 @@ use recraft_decode::iced_x86;
 use recraft_ir::{Flow, Reg};
 
 use crate::l2::{ReturnKind, X64_ARG_REGS, parse_prototype};
-use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block, recover_args};
+use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
 pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode> {
@@ -110,6 +110,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         .iter()
         .map(|function| (function.start.get(), (function.start, function.end)))
         .collect();
+    // Shared across every call target of this function, so a chain of wrappers is scanned
+    // once instead of once per caller.
+    let mut arity_memo: BTreeMap<u64, usize> = BTreeMap::new();
     for target in bodies.iter().flat_map(|body| body.calls.iter().copied()) {
         if target == start.get() {
             if let Some(info) = info.as_ref()
@@ -143,10 +146,15 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
                 target_start = next_start;
                 target_end = next_end;
             }
-            if let Ok(args) = recover_args(session, target_start, target_end)
-                && args.count() > 0
+            if let Ok(count) = crate::l2::recover_arg_count(
+                session,
+                target_start,
+                target_end,
+                &mut arity_memo,
+                &ranges,
+            ) && count > 0
             {
-                call_arg_counts.insert(target, args.count());
+                call_arg_counts.insert(target, count);
             }
         }
     }
@@ -2496,17 +2504,21 @@ fn simplify_negated_conditions(lines: &mut [PseudoLine]) {
 fn strip_condition_parentheses(lines: &mut [PseudoLine]) {
     for line in lines.iter_mut() {
         let text = line.text.trim();
-        let keyword = if text.starts_with("if (") {
-            "if"
+        // `do { ... } while (...)` carries a leading brace and a flat `;` terminator.
+        let (keyword, terminator) = if text.starts_with("if (") {
+            ("if", " {")
         } else if text.starts_with("while (") {
-            "while"
+            ("while", " {")
+        } else if text.starts_with("} while (") {
+            ("} while", ";")
         } else {
             continue;
         };
+        let closing = format!("){terminator}");
         let Some(condition) = text
             .strip_prefix(keyword)
             .and_then(|rest| rest.trim_start().strip_prefix('('))
-            .and_then(|rest| rest.strip_suffix(") {"))
+            .and_then(|rest| rest.strip_suffix(closing.as_str()))
         else {
             continue;
         };
@@ -2518,7 +2530,7 @@ fn strip_condition_parentheses(lines: &mut [PseudoLine]) {
             continue;
         }
         let indent = " ".repeat(leading_spaces(&line.text));
-        line.text = format!("{indent}{keyword} ({inner}) {{");
+        line.text = format!("{indent}{keyword} ({inner}){terminator}");
     }
 }
 
@@ -4074,6 +4086,17 @@ mod tests {
         let start = function_start(&session, "str_probe").unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
         assert!(text.contains("int32 str_probe(char* arg1)"), "{text}");
+    }
+
+    #[test]
+    fn l2_signature_follows_a_forwarded_argument() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "call_str").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("int32 call_str(int64 arg1)"), "{text}");
+        assert!(text.contains("str_probe(arg1)"), "{text}");
     }
 
     #[test]

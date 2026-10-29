@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Signatures now follow arguments forwarded through direct calls. A call is treated as
+  consuming the callee's argument registers (the callee's own signature is recovered
+  depth-first through up to four wrapper levels, memoized, with one function-range query per
+  decompile), so corpus `call_str` renders `int32 call_str(int64 arg1)` with
+  `str_probe(arg1)` instead of `void` + `str_probe(rcx)`, and notepad wrappers like
+  `sub_1400030e8` show the four registers they pass through. Unmodelled instructions report
+  the registers they write, so `cpuid` and `sbb edx, edx` no longer invent parameters: on
+  notepad, 40 of 502 signatures change — 33 gain the registers they forward, 2 drop such
+  phantom arguments, the rest get a more precise pointer type.
 - Jump-table functions no longer show the compiler's dispatch twice: the table-address
   loads and the trailing `__asm("jmp rcx")` that precede a recovered `switch` are dropped
   (the statements are replaced by the `switch` itself, and the body of each case is now a
@@ -50,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `do { ... } while (...)` conditions no longer keep the generator's extra parentheses:
+  `while ((ecx != 0));` renders as `while (ecx != 0);`, the same cleanup `if`/`while`
+  already had.
 - Branches that follow an arithmetic instruction now test the value that instruction
   produced. `sub ecx, 1; jne` used to print `ecx != 1` (the pre-write operand, subtracting
   a second time when read), and `shr ecx, 1; jne` reused the flags of an older `add`, so a

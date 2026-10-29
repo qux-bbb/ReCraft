@@ -10,7 +10,7 @@
 //!   `[ebp+8]`, `[ebp+0xc]`, ... are `arg1..`; without one `[esp+4]`, `[esp+8]`, ... are.
 //! - Stack slots are named `var_XX` by the printer; types/SSA come later.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use recraft_common::{Address, Result};
 use recraft_core::Session;
@@ -340,8 +340,36 @@ fn recover_return(session: &mut Session, start: Address, end: Address) -> Result
 
 /// Find argument locations that the function reads before writing.
 pub fn recover_args(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
+    let ranges = function_ranges(session)?;
+    let mut memo = BTreeMap::new();
+    recover_args_at(session, start, end, 0, &mut memo, &ranges)
+}
+
+/// All defined functions keyed by start, so a nested scan does not query the project once
+/// per call site.
+fn function_ranges(session: &Session) -> Result<HashMap<u64, (Address, Address)>> {
+    Ok(session
+        .functions()?
+        .into_iter()
+        .map(|function| (function.start.get(), (function.start, function.end)))
+        .collect())
+}
+
+/// How deep a direct-call chain is followed while a callee's argument count is needed.
+/// A chain of wrappers is common (an API forwarded through a helper), while cycles and
+/// very deep chains stop at the limit and simply contribute no extra arguments.
+const MAX_CALL_DEPTH: usize = 4;
+
+fn recover_args_at(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    depth: usize,
+    memo: &mut BTreeMap<u64, usize>,
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Result<ArgNames> {
     if session.image().is_64 {
-        recover_x64(session, start, end)
+        recover_x64(session, start, end, depth, memo, ranges)
     } else {
         recover_x86(session, start, end)
     }
@@ -373,25 +401,15 @@ fn lift_function(
     Ok((lifted, lifter.into_exprs()))
 }
 
-fn recover_x64(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
-    let (lifted, exprs) = lift_function(session, start, end)?;
-    let arg_registers: BTreeSet<Reg> = X64_ARG_REGS.into_iter().collect();
-    let mut written: BTreeSet<Reg> = BTreeSet::new();
-    let mut incoming: BTreeSet<Reg> = BTreeSet::new();
-
-    for item in &lifted {
-        for stmt in &item.stmts {
-            walk_stmt_reads(stmt, &exprs, &mut |view: &RegView| {
-                if arg_registers.contains(&view.base) && !written.contains(&view.base) {
-                    incoming.insert(view.base);
-                }
-            });
-            if let Stmt::WriteReg { reg, .. } = stmt {
-                written.insert(reg.base);
-            }
-        }
-    }
-
+fn recover_x64(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    depth: usize,
+    memo: &mut BTreeMap<u64, usize>,
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Result<ArgNames> {
+    let incoming = scan_incoming_args(session, start, end, depth, memo, ranges)?;
     let mut names = BTreeMap::new();
     for (index, reg) in X64_ARG_REGS.iter().enumerate() {
         if incoming.contains(reg) {
@@ -405,6 +423,202 @@ fn recover_x64(session: &mut Session, start: Address, end: Address) -> Result<Ar
         types,
         stack_types: BTreeMap::new(),
     })
+}
+
+/// Argument count of the function at `[start, end)`, without the pointer-type inference
+/// (which rescans the whole range). Used while following direct calls, where only the
+/// arity matters.
+pub(crate) fn recover_arg_count(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    memo: &mut BTreeMap<u64, usize>,
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Result<usize> {
+    if let Some(count) = memo.get(&start.get()) {
+        return Ok(*count);
+    }
+    let count = if session.image().is_64 {
+        scan_incoming_args(session, start, end, 0, memo, ranges)?.len()
+    } else {
+        recover_x86(session, start, end)?.count()
+    };
+    memo.insert(start.get(), count);
+    Ok(count)
+}
+
+/// Registers whose incoming value the function consumes: read before their first write, or
+/// consumed as an argument by a direct call.
+fn scan_incoming_args(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    depth: usize,
+    memo: &mut BTreeMap<u64, usize>,
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Result<BTreeSet<Reg>> {
+    let (lifted, exprs) = lift_function(session, start, end)?;
+    let arg_registers: BTreeSet<Reg> = X64_ARG_REGS.into_iter().collect();
+    let mut written: BTreeSet<Reg> = BTreeSet::new();
+    let mut incoming: BTreeSet<Reg> = BTreeSet::new();
+
+    for item in &lifted {
+        for stmt in &item.stmts {
+            walk_stmt_reads(stmt, &exprs, &mut |view: &RegView| {
+                if arg_registers.contains(&view.base) && !written.contains(&view.base) {
+                    incoming.insert(view.base);
+                }
+            });
+            // A call consumes the argument registers its callee declares. Without this a
+            // wrapper that forwards its incoming `rcx` to a helper (`call_str` →
+            // `str_probe`) looks argument-less, and the call site loses the argument too.
+            if let Stmt::Call { target, args } = stmt {
+                let count = call_arity(session, *target, depth, memo, ranges)?;
+                for reg in X64_ARG_REGS.iter().take(count.min(args.len())) {
+                    if !written.contains(reg) {
+                        incoming.insert(*reg);
+                    }
+                }
+            }
+            if let Stmt::WriteReg { reg, .. } = stmt {
+                written.insert(reg.base);
+            }
+            // An unmodelled instruction may write an argument register (`cpuid` writes
+            // `ecx`/`edx`, a bit test updates its first operand). Treating that register
+            // as written keeps its later reads from looking like parameters.
+            if let Stmt::Intrinsic { text } = stmt {
+                for reg in clobbered_arg_registers(text) {
+                    written.insert(reg);
+                }
+            }
+        }
+    }
+
+    Ok(incoming)
+}
+
+/// Argument registers an unmodelled instruction certainly writes.
+///
+/// The IR keeps unsupported instructions as assembly text, so the mnemonic and the first
+/// register operand stand in for a write set: implicit outputs are listed (`cpuid`,
+/// `rdtsc`, `rep` string ops), otherwise the first register outside a `[...]` memory
+/// operand is the destination. A memory operand's base register is only read, so
+/// `lock cmpxchg [rcx], rdx` does not hide a later use of `rcx`.
+fn clobbered_arg_registers(text: &str) -> Vec<Reg> {
+    let text = text.trim().to_ascii_lowercase();
+    if matches!(text.as_str(), "int3" | "nop") {
+        return Vec::new();
+    }
+    // Prefixes sit in front of the mnemonic (`lock cmpxchg`, `rep movsb`).
+    let mut rest = text.as_str();
+    loop {
+        let stripped = ["lock ", "rep ", "repne ", "repe ", "bnd "]
+            .iter()
+            .find_map(|prefix| rest.strip_prefix(prefix));
+        match stripped {
+            Some(remaining) => rest = remaining,
+            None => break,
+        }
+    }
+    let (mnemonic, operands) = rest.split_once(' ').unwrap_or((rest, ""));
+    let implicit: &[Reg] = match mnemonic {
+        "cpuid" => &[Reg::Rax, Reg::Rbx, Reg::Rcx, Reg::Rdx],
+        "rdtsc" | "rdtscp" => &[Reg::Rax, Reg::Rdx, Reg::Rcx],
+        "syscall" => &[Reg::Rcx, Reg::R11],
+        name if name.starts_with("movs")
+            || name.starts_with("stos")
+            || name.starts_with("lods")
+            || name.starts_with("scas")
+            || name.starts_with("cmps") =>
+        {
+            &[Reg::Rsi, Reg::Rdi, Reg::Rcx]
+        }
+        _ => &[],
+    };
+    let mut written: Vec<Reg> = implicit.to_vec();
+    if let Some(reg) = first_argument_register(operands) {
+        written.push(reg);
+    }
+    written
+}
+
+/// First argument register named outside a `[...]` memory operand in an operand list.
+fn first_argument_register(operands: &str) -> Option<Reg> {
+    let mut depth = 0usize;
+    let mut token = String::new();
+    for ch in operands.chars().chain(std::iter::once(' ')) {
+        match ch {
+            '[' => {
+                depth += 1;
+                token.clear();
+            }
+            ']' => {
+                depth = depth.saturating_sub(1);
+                token.clear();
+            }
+            _ if ch.is_ascii_alphanumeric() || ch == '_' => {
+                if depth == 0 {
+                    token.push(ch);
+                }
+            }
+            _ => {
+                if let Some(reg) = arg_register(&token) {
+                    return Some(reg);
+                }
+                token.clear();
+            }
+        }
+    }
+    None
+}
+
+/// Map a register spelling to the ABI argument register it aliases.
+fn arg_register(name: &str) -> Option<Reg> {
+    Some(match name {
+        "rax" | "eax" | "ax" | "al" | "ah" => Reg::Rax,
+        "rcx" | "ecx" | "cx" | "cl" | "ch" => Reg::Rcx,
+        "rdx" | "edx" | "dx" | "dl" | "dh" => Reg::Rdx,
+        "r8" | "r8d" | "r8w" | "r8b" => Reg::R8,
+        "r9" | "r9d" | "r9w" | "r9b" => Reg::R9,
+        _ => return None,
+    })
+}
+
+/// Number of arguments a direct call target consumes: a user prototype when present, else
+/// the target's own recovered signature depth-first. Unknown targets (imports, thunks with
+/// no recoverable body) consume nothing, so the caller's captured values still drive the
+/// call-site rendering.
+fn call_arity(
+    session: &mut Session,
+    target: Address,
+    depth: usize,
+    memo: &mut BTreeMap<u64, usize>,
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Result<usize> {
+    if let Some(text) = session.prototype_at(target)?
+        && let Some(proto) = parse_prototype(&text)
+    {
+        return Ok(proto.params.len());
+    }
+    if let Some(count) = memo.get(&target.get()) {
+        return Ok(*count);
+    }
+    if depth >= MAX_CALL_DEPTH {
+        return Ok(0);
+    }
+    let Some((callee_start, callee_end)) = ranges.get(&target.get()).copied() else {
+        return Ok(0);
+    };
+    // Insert the placeholder first so a recursive call chain stops here instead of
+    // recursing until the depth limit.
+    memo.insert(target.get(), 0);
+    let count = if session.image().is_64 {
+        scan_incoming_args(session, callee_start, callee_end, depth + 1, memo, ranges)?.len()
+    } else {
+        recover_x86(session, callee_start, callee_end)?.count()
+    };
+    memo.insert(target.get(), count);
+    Ok(count)
 }
 
 /// Infer pointer parameter types from accesses through the argument register.
@@ -862,6 +1076,25 @@ mod tests {
         assert_eq!(ptr.params[0].ty, ArgType::CharPtr);
 
         assert!(parse_prototype("int (*callback)(int)").is_none());
+    }
+
+    #[test]
+    fn unmodelled_instructions_report_the_argument_registers_they_write() {
+        assert!(clobbered_arg_registers("cpuid").contains(&Reg::Rcx));
+        assert!(clobbered_arg_registers("cpuid").contains(&Reg::Rdx));
+        assert_eq!(clobbered_arg_registers("btr edx, 0x1f"), vec![Reg::Rdx]);
+        assert_eq!(clobbered_arg_registers("sbb edx, edx"), vec![Reg::Rdx]);
+        // A memory operand only reads its base register.
+        assert_eq!(
+            clobbered_arg_registers("lock cmpxchg [rcx], rdx"),
+            vec![Reg::Rdx]
+        );
+        assert_eq!(
+            clobbered_arg_registers("rep movsb"),
+            vec![Reg::Rsi, Reg::Rdi, Reg::Rcx]
+        );
+        assert!(clobbered_arg_registers("pshufd xmm1, xmm1, 0x0").is_empty());
+        assert!(clobbered_arg_registers("nop").is_empty());
     }
     use std::path::PathBuf;
 
