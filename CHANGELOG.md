@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A captured argument value survives a stack store between its setup and the call: a store
+  to a `var_XX` slot cannot change memory reached through a pointer argument, so it no
+  longer blocks the setup removal. Notepad's argument-setup lines drop from 4060 to 3949.
 - Taking the address of a local now reads as such: `rax = (rsp + 0x30);` and
   `rcx = (rsp + 0x68);` render as `rax = &var_30;` / `rcx = &var_68;`, so a pointer passed to
   an out-parameter is visible as `RtlLookupFunctionEntry(rdi, &var_50, 0)`. The frame setup

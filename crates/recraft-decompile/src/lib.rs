@@ -480,7 +480,10 @@ fn setup_is_stable(
         ) {
             return false;
         }
-        if reads_memory && matches!(stmt, Stmt::Store { .. } | Stmt::StoreFloat { .. }) {
+        if reads_memory
+            && let Some(addr) = store_address(stmt)
+            && !is_stack_address(exprs, addr)
+        {
             return false;
         }
         if let Stmt::WriteReg { reg, .. } = stmt
@@ -490,6 +493,37 @@ fn setup_is_stable(
         }
     }
     true
+}
+
+/// Address of a memory store, if the statement writes memory.
+fn store_address(stmt: &Stmt) -> Option<ExprId> {
+    match stmt {
+        Stmt::Store { addr, .. } | Stmt::StoreFloat { addr, .. } => Some(*addr),
+        _ => None,
+    }
+}
+
+/// True when an address can only target the current frame: a stack store cannot change the
+/// value a later `*(u64*)(arg)` load sees, so it does not make a captured argument stale.
+fn is_stack_address(exprs: &[Expr], address: ExprId) -> bool {
+    match &exprs[address as usize] {
+        Expr::Reg(view) => matches!(view.base, Reg::Rsp | Reg::Rbp),
+        Expr::Const(_) | Expr::Temp(_) => false,
+        Expr::Load { addr, .. } | Expr::LoadFloat { addr, .. } => is_stack_address(exprs, *addr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            is_stack_address(exprs, *lhs) || is_stack_address(exprs, *rhs)
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => is_stack_address(exprs, *arg),
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            is_stack_address(exprs, *cond)
+                || is_stack_address(exprs, *then)
+                || is_stack_address(exprs, *otherwise)
+        }
+    }
 }
 
 /// Alignment padding (`int3`) and `nop` are compiler artifacts, not source code.
