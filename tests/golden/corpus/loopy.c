@@ -11,7 +11,7 @@ void loopy_l1(void) {
             edx += eax;
             r8d += eax;
             eax += 2;
-        } while ((eax < r9d /* signed */));
+        } while (eax < r9d /* signed */);
     }
     eax = ((eax >= ecx /* signed */) ? r10d : eax);
     eax += r8d;

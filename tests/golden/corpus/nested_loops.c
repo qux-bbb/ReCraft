@@ -12,7 +12,7 @@ void nested_loops_l1(void) {
     xmm2 = 0;
     ebp = *(u32*)(0xADDR);
     edi = 0;
-    while (1) {
+    do {
         edx = 0;
         xmm1 = r11d;
         __asm("pshufd xmm1, xmm1, 0xADDR");
@@ -33,7 +33,7 @@ void nested_loops_l1(void) {
                     xmm0 += xmm3;
                     xmm0 *= xmm1;
                     xmm2 += xmm0;
-                } while ((edx < ecx /* signed */));
+                } while (edx < ecx /* signed */);
             }
         }
         r8d = 0;
@@ -55,20 +55,19 @@ void nested_loops_l1(void) {
                 r10d = ecx;
                 edx = (rdx + (rcx * 2));
                 do {
-                    ecx = (rax + (r11 * 1));
+                    ecx = (rax + r11);
                     r8d += eax;
                     r9d += ecx;
                     eax += edi;
                     r10 -= 1;
-                } while ((r10 != 1));
+                } while (r10 != 0);
             }
-            eax = (r9 + (r8 * 1));
+            eax = (r9 + r8);
             esi += eax;
         }
         r11d += 1;
         edi += 2;
-        if ((r11d >= ebx /* signed */)) break;
-    }
+    } while (r11d < ebx /* signed */);
     xmm2 += xmm4;
     xmm0 = xmm2;
     xmm0 >>= 8;

@@ -6,6 +6,6 @@ void count_bits_l1(void) {
         edx &= 1;
         eax += edx;
         ecx >>= 1;
-    } while (((eax + edx) != 0));
+    } while (ecx != 0);
     return;
 }

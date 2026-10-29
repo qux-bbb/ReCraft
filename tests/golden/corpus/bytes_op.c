@@ -26,7 +26,7 @@ void bytes_op_l1(void) {
                 __asm("punpcklwd xmm1, xmm0");
                 rax -= r10;
                 xmm2 += xmm1;
-            } while ((rax < r9 /* signed */));
+            } while (rax < r9 /* signed */);
             xmm2 += xmm3;
             xmm0 = xmm2;
             xmm0 >>= 8;
@@ -46,28 +46,26 @@ void bytes_op_l1(void) {
     rcx = r11;
     rcx -= rax;
     if (rcx < 2 /* signed */) {
-        ecx = (uint32)(*(u8*)((rax + (r10 * 1))));
+        ecx = (uint32)(*(u8*)((rax + r10)));
         r9d += ecx;
     } else {
-        *(u64*)(rsp) = rbx;
         rbx = (r11 - 1);
         do {
-            ecx = (uint32)(*(u8*)((r10 + (rax * 1))));
+            ecx = (uint32)(*(u8*)((r10 + rax)));
             r8d += ecx;
-            ecx = (uint32)(*(u8*)(((r10 + (rax * 1)) + 1)));
+            ecx = (uint32)(*(u8*)(((r10 + rax) + 1)));
             edx += ecx;
             rax += 2;
-        } while ((rax < rbx /* signed */));
-        rbx = *(u64*)(rsp);
+        } while (rax < rbx /* signed */);
         if (rax < r11 /* signed */) {
-            ecx = (uint32)(*(u8*)((rax + (r10 * 1))));
+            ecx = (uint32)(*(u8*)((rax + r10)));
             r9d += ecx;
-            eax = (rdx + (r8 * 1));
+            eax = (rdx + r8);
             eax += r9d;
             return;
         }
     }
-    eax = (rdx + (r8 * 1));
+    eax = (rdx + r8);
     eax += r9d;
     return;
 }

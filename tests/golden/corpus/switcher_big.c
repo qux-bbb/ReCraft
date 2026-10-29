@@ -4,11 +4,6 @@ void switcher_big_l1(void) {
         eax = 0xADDR;
         return;
     }
-    rax = (int64)(ecx);
-    rdx = 0xADDR;
-    ecx = *(u32*)(((rdx + (rax * 4)) + 0xADDR));
-    rcx += rdx;
-    __asm("jmp rcx");
     /* jump table: 20 targets, selector=ecx */
     switch (ecx) {
         case 0: {

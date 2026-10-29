@@ -7,6 +7,6 @@ void branchy_l1(void) {
         eax = ((edx < -0xADDR /* signed */) ? ecx : eax);
         return;
     }
-    eax = (rcx + (rcx * 1));
+    eax = (rcx + rcx);
     return;
 }
