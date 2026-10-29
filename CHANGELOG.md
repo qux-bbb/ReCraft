@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The frame-alias line is no longer printed: `mov rbp, rsp` (or `mov r11, rsp` in an exception
+  frame) only sets up the alias used to name frame-relative slots, and the alias is never read
+  back in pseudo-C. The bookkeeping still runs, so `var_nXX`/`frame_XX` naming is unchanged;
+  96 lines in notepad.
 - A loop-invariant setup at the top of a `while (1)` body hoists above the loop, so the
   sentinel test becomes a real condition: `while (1) { rax = &var_30; if (rcx <= rax) break;
   ... }` now reads `rax = &var_30; while (rcx > rax) { ... }`. The setup is only moved when

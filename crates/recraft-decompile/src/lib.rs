@@ -309,7 +309,10 @@ pub(crate) fn lift_block(
                 stmt,
                 Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
             );
-            if !skipped && !(pure && statements.last().is_some_and(|line| line.text == text)) {
+            if !skipped
+                && !printer.is_frame_alias(stmt)
+                && !(pure && statements.last().is_some_and(|line| line.text == text))
+            {
                 statements.push(PseudoLine {
                     addr: item.addr,
                     text: format!("{text};"),
@@ -1013,7 +1016,9 @@ impl Printer<'_> {
                     continue;
                 }
                 let text = self.stmt(stmt);
-                if tail_call && index + 1 == insn.stmts.len() {
+                if self.is_frame_alias(stmt) {
+                    // Bookkeeping below still runs; only the informative line is skipped.
+                } else if tail_call && index + 1 == insn.stmts.len() {
                     lines.push(PseudoLine {
                         addr: insn.addr,
                         text: format!("    return {text};"),
@@ -1247,6 +1252,17 @@ impl Printer<'_> {
                 self.frame_reg = Some(reg.base);
             }
         }
+    }
+
+    /// `mov rbp, rsp` only establishes the alias used to name frame-relative slots; the line
+    /// tells the reader nothing (the alias is never read back in pseudo-C), so it is not
+    /// printed while the bookkeeping still runs.
+    fn is_frame_alias(&self, stmt: &Stmt) -> bool {
+        let Stmt::WriteReg { reg, value } = stmt else {
+            return false;
+        };
+        reg.base != Reg::Rsp
+            && matches!(self.exprs[*value as usize], Expr::Reg(view) if view.base == Reg::Rsp)
     }
 
     fn is_noop_write(&mut self, stmt: &Stmt) -> bool {
