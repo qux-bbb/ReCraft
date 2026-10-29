@@ -2741,27 +2741,20 @@ fn simplify_negated_conditions(lines: &mut [PseudoLine]) {
 /// is removed, so operator precedence inside the condition is untouched.
 fn strip_condition_parentheses(lines: &mut [PseudoLine]) {
     for line in lines.iter_mut() {
-        let text = line.text.trim();
-        // `do { ... } while (...)` carries a leading brace and a flat `;` terminator.
-        let (keyword, terminator) = if text.starts_with("if (") {
-            ("if", " {")
-        } else if text.starts_with("while (") {
-            ("while", " {")
-        } else if text.starts_with("} else if (") {
-            ("} else if", " {")
-        } else if text.starts_with("} while (") {
-            ("} while", ";")
-        } else {
-            continue;
-        };
-        let closing = format!("){terminator}");
-        let Some(condition) = text
-            .strip_prefix(keyword)
-            .and_then(|rest| rest.trim_start().strip_prefix('('))
-            .and_then(|rest| rest.strip_suffix(closing.as_str()))
+        let text = line.text.clone();
+        let trimmed = text.trim();
+        // `if (`, `while (`, `} else if (`, `} while (` — the condition starts right after.
+        let Some(open) = ["if (", "while (", "} else if (", "} while ("]
+            .iter()
+            .find_map(|prefix| trimmed.starts_with(prefix).then(|| prefix.len() - 1))
         else {
             continue;
         };
+        let offset = leading_spaces(&text) + open;
+        let Some(close) = matching_close(&text[offset..]).map(|index| offset + index) else {
+            continue;
+        };
+        let condition = &text[offset + 1..close];
         if !condition.starts_with('(') || matching_close(condition) != Some(condition.len() - 1) {
             continue;
         }
@@ -2769,8 +2762,8 @@ fn strip_condition_parentheses(lines: &mut [PseudoLine]) {
         if inner.is_empty() {
             continue;
         }
-        let indent = " ".repeat(leading_spaces(&line.text));
-        line.text = format!("{indent}{keyword} ({inner}){terminator}");
+        // Keep whatever follows the `)` — a block `{`, `;`, or a single statement.
+        line.text = format!("{}{}{}", &text[..offset + 1], inner, &text[close..]);
     }
 }
 
@@ -4874,6 +4867,25 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn single_line_conditions_lose_the_double_parentheses() {
+        let mut lines = vec![
+            test_line("    if ((al == 0)) return;"),
+            test_line("    if ((x)) {"),
+            test_line("        if ((a) && (b)) break;"),
+        ];
+        strip_condition_parentheses(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "    if (al == 0) return;",
+                "    if (x) {",
+                "        if ((a) && (b)) break;",
+            ]
+        );
     }
 
     #[test]

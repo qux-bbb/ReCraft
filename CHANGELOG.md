@@ -198,6 +198,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Redundant parentheses around a condition are stripped in single-line branches too:
+  `if ((al == 0)) return;` now reads `if (al == 0) return;`. The pass matches the closing
+  parenthesis structurally instead of assuming a `{` terminator, and a genuinely needed pair
+  (`if ((a) && (b))`) is left alone.
 - A call argument that is a bare register no longer turns into the address of a stack slot:
   `helper(rbp)` used to print `helper(&var_0)` once `rbp` had been written, because a bare
   `[rbp]` access and the pointer value were treated alike. Only a real stack-slot address
