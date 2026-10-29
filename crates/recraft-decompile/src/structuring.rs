@@ -4877,6 +4877,29 @@ mod tests {
     }
 
     #[test]
+    fn assigned_returns_fold_into_the_return() {
+        let mut lines = vec![
+            test_line("    ebx = 0x80004002;"),
+            test_line("    return ebx;"),
+            test_line("    rdx = ((eax == 0) ? arg1 : rdx);"),
+            test_line("    return rdx;"),
+            test_line("    rsi = rbp;"),
+            test_line("    rsi += 1;"),
+        ];
+        fold_assigned_returns(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "    return 0x80004002;",
+                "    return ((eax == 0) ? arg1 : rdx);",
+                "    rsi = rbp;",
+                "    rsi += 1;",
+            ]
+        );
+    }
+
+    #[test]
     fn invariant_loop_setups_hoist_above_the_loop() {
         let mut lines = vec![
             test_line("    while (1) {"),
