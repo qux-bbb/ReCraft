@@ -1118,6 +1118,19 @@ impl Printer<'_> {
         }
     }
 
+    /// Render a value that is stored or assigned. A stack-slot address becomes `&var_XX`,
+    /// which is how the source spells a local passed or kept by pointer.
+    fn value_expr(&self, id: ExprId) -> String {
+        // A bare register (`mov r11, rsp`) is the frame pointer itself, not `&var_0`.
+        if !matches!(self.exprs[id as usize], Expr::Reg(_))
+            && let Some((base, offset)) = self.stack_slot(id)
+            && let Some(name) = self.stack_reference(base, offset)
+        {
+            return format!("&{name}");
+        }
+        self.expr(id)
+    }
+
     fn stmt(&self, stmt: &Stmt) -> String {
         match stmt {
             Stmt::WriteReg { reg, value } => {
@@ -1129,7 +1142,7 @@ impl Printer<'_> {
                 } else {
                     reg.name().to_owned()
                 };
-                format!("{name} = {}", self.expr(*value))
+                format!("{name} = {}", self.value_expr(*value))
             }
             Stmt::Store { addr, value, size } => {
                 // Writes never use incoming argument names: storing to a caller's
@@ -1137,17 +1150,17 @@ impl Printer<'_> {
                 if let Some((base, offset)) = self.stack_slot(*addr)
                     && let Some(name) = self.stack_reference(base, offset)
                 {
-                    format!("{name} = {}", self.expr(*value))
+                    format!("{name} = {}", self.value_expr(*value))
                 } else if let Some(index) = self.array_access(*addr) {
-                    format!("{index} = {}", self.expr(*value))
+                    format!("{index} = {}", self.value_expr(*value))
                 } else if let Some(field) = self.field_access(*addr) {
-                    format!("{field} = {}", self.expr(*value))
+                    format!("{field} = {}", self.value_expr(*value))
                 } else {
                     format!(
                         "*({}*)({}) = {}",
                         Self::scalar_type(*size),
                         self.expr(*addr),
-                        self.expr(*value)
+                        self.value_expr(*value)
                     )
                 }
             }
@@ -1155,17 +1168,17 @@ impl Printer<'_> {
                 if let Some((base, offset)) = self.stack_slot(*addr)
                     && let Some(name) = self.stack_reference(base, offset)
                 {
-                    format!("{name} = {}", self.expr(*value))
+                    format!("{name} = {}", self.value_expr(*value))
                 } else if let Some(index) = self.array_access(*addr) {
-                    format!("{index} = {}", self.expr(*value))
+                    format!("{index} = {}", self.value_expr(*value))
                 } else if let Some(field) = self.field_access(*addr) {
-                    format!("{field} = {}", self.expr(*value))
+                    format!("{field} = {}", self.value_expr(*value))
                 } else {
                     format!(
                         "*({}*)({}) = {}",
                         Self::float_type(*size),
                         self.expr(*addr),
-                        self.expr(*value)
+                        self.value_expr(*value)
                     )
                 }
             }

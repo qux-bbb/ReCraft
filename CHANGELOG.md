@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Taking the address of a local now reads as such: `rax = (rsp + 0x30);` and
+  `rcx = (rsp + 0x68);` render as `rax = &var_30;` / `rcx = &var_68;`, so a pointer passed to
+  an out-parameter is visible as `RtlLookupFunctionEntry(rdi, &var_50, 0)`. The frame setup
+  keeps `frame = rsp`. Notepad's listing converts 348 such assignments.
 - A bare frame-slot access is named like every other local: `*(u64*)(rsp)` and
   `*(u64*)(rbp)` render as `var_0` (the `push`/`[rsp]` slot) instead of an untyped
   dereference. Notepad's listing loses 56 such dereferences.
