@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Branches that follow an arithmetic instruction now test the value that instruction
+  produced. `sub ecx, 1; jne` used to print `ecx != 1` (the pre-write operand, subtracting
+  a second time when read), and `shr ecx, 1; jne` reused the flags of an older `add`, so a
+  loop condition could compare the wrong registers and the printed loop need not terminate
+  the way the machine does. The lifter records the destination register as the flag source
+  for `add`/`sub`/`and`/`or`/`xor`/`inc`/`dec`/`shl`/`shr`/`sar`/`neg`: `sub ecx, 1; jne`
+  now reads `ecx != 0`, `shr ecx, 1; jne` reads `ecx != 0`, and corpus `count_bits` ends in
+  `while (ecx != 0)` matching its source. Unsigned conditions after arithmetic (which need
+  CF and cannot be expressed against the result) fall back to the existing "unmodelled
+  flags" assembly instead of printing a wrong condition.
 - The disassembly view can now be scrolled up past its loaded window. The pane renders a fixed
   window of 400 instructions, so its scroll area could only move inside that window: at the top
   edge the wheel did nothing and earlier code was unreachable. When the wheel keeps turning

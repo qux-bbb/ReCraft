@@ -18,6 +18,17 @@ use recraft_decode::{Insn, iced_x86};
 use crate::expr::{BinOp, CondKind, Expr, ExprId, Flow, LiftedInsn, Stmt, UnOp};
 use crate::reg::{Reg, RegView, from_iced};
 
+/// Register view of the instruction's destination, when that destination is a register.
+///
+/// Flags that describe a write are read at a later branch, when the destination already
+/// holds the result; naming that register is the only spelling that still matches.
+fn written_register_view(insn: &Insn) -> Option<RegView> {
+    if insn.op_kind(0) != iced_x86::OpKind::Register {
+        return None;
+    }
+    from_iced(insn.op_register(0))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CmpSource {
     /// `cmp` / `sub`: full arithmetic flags are available.
@@ -493,22 +504,23 @@ impl Lifter {
             return;
         };
         let result = self.push(Expr::Bin { op, lhs, rhs });
-        if insn.mnemonic() == M::Sub {
-            // `sub` produces full arithmetic flags relative to its operands.
-            self.last_cmp = Some(CmpState {
-                lhs,
-                rhs,
-                source: CmpSource::Arithmetic,
-            });
-        } else {
-            // For add/and/or/xor only the zero flag meaning is trustworthy.
-            let zero = self.constant(0);
-            self.last_cmp = Some(CmpState {
-                lhs: result,
-                rhs: zero,
-                source: CmpSource::ZeroOnly,
-            });
-        }
+        // Every two-operand arithmetic instruction writes its destination, so a later
+        // branch sees the *new* value: comparing `lhs` again (`sub ecx, 1; jne` →
+        // `ecx != 1`) would subtract twice. The zero/sign flags describe the result, and
+        // the destination register holds it, so name that register instead. Only equality
+        // and sign predicates are trustworthy after arithmetic (OF is not modelled).
+        let zero = self.constant(0);
+        let lhs = match written_register_view(insn) {
+            Some(view) => self.reg(view),
+            // A memory destination cannot be re-read cheaply; the result expression is the
+            // best available approximation.
+            None => result,
+        };
+        self.last_cmp = Some(CmpState {
+            lhs,
+            rhs: zero,
+            source: CmpSource::ZeroOnly,
+        });
         if !self.write_operand(insn, 0, result, stmts) {
             stmts.push(Stmt::Intrinsic { text: insn.asm() });
         }
@@ -528,8 +540,12 @@ impl Lifter {
         let one = self.constant(1);
         let result = self.push(Expr::Bin { op, lhs, rhs: one });
         let zero = self.constant(0);
+        let lhs = match written_register_view(insn) {
+            Some(view) => self.reg(view),
+            None => result,
+        };
         self.last_cmp = Some(CmpState {
-            lhs: result,
+            lhs,
             rhs: zero,
             source: CmpSource::ZeroOnly,
         });
@@ -550,6 +566,19 @@ impl Lifter {
             return;
         };
         let result = self.push(Expr::Un { op, arg });
+        if insn.mnemonic() == M::Neg {
+            // `neg` sets its flags from the result; `not` leaves them untouched.
+            let zero = self.constant(0);
+            let lhs = match written_register_view(insn) {
+                Some(view) => self.reg(view),
+                None => result,
+            };
+            self.last_cmp = Some(CmpState {
+                lhs,
+                rhs: zero,
+                source: CmpSource::ZeroOnly,
+            });
+        }
         if !self.write_operand(insn, 0, result, stmts) {
             stmts.push(Stmt::Intrinsic { text: insn.asm() });
         }
@@ -570,6 +599,21 @@ impl Lifter {
             return;
         };
         let result = self.push(Expr::Bin { op, lhs, rhs });
+        if matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar) {
+            // A shift sets SF and ZF from its own result. Keeping the flags of an older
+            // instruction would print a condition that does not hold (`shr ecx, 1; jne`
+            // would test the previous `add`). Rotates leave SF/ZF untouched.
+            let zero = self.constant(0);
+            let lhs = match written_register_view(insn) {
+                Some(view) => self.reg(view),
+                None => result,
+            };
+            self.last_cmp = Some(CmpState {
+                lhs,
+                rhs: zero,
+                source: CmpSource::ZeroOnly,
+            });
+        }
         if !self.write_operand(insn, 0, result, stmts) {
             stmts.push(Stmt::Intrinsic { text: insn.asm() });
         }
