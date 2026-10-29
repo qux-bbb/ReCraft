@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! L1 structure recovery: basic blocks 閳?`if`/`else` and `while` skeletons.
+//! L1 structure recovery: basic blocks 闁?`if`/`else` and `while` skeletons.
 //!
 //! Conservative by design. Dominators and post-dominators drive if/else diamonds and
 //! natural loops; anything the structurer cannot prove (switch tables, irreducible
@@ -100,6 +100,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             &arg_structs,
             None,
             &no_counts,
+            None,
         )?);
     }
     // Infer argument counts for direct call targets from the callee's prologue. This
@@ -166,21 +167,25 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     } else {
         vec![BTreeSet::new(); cfg.blocks.len()]
     };
-    if args.is_some() || !call_arg_counts.is_empty() {
-        let mut seeded = Vec::with_capacity(cfg.blocks.len());
-        for (index, block) in cfg.blocks.iter().enumerate() {
-            seeded.push(lift_block(
-                session,
-                block.start,
-                block.end,
-                args,
-                &arg_structs,
-                Some(&seeds[index]),
-                &call_arg_counts,
-            )?);
-        }
-        bodies = seeded;
+    // Stack-slot naming needs each block's entry displacement. The first lifting pass
+    // recorded the block-local net/min, so propagate those over the CFG and name every slot
+    // relative to the bottom of the frame: the prologue, body and epilogue then agree on
+    // what `var_XX` means.
+    let (entry_stack, frame_base) = entry_stack_deltas(&cfg, &bodies);
+    let mut seeded = Vec::with_capacity(cfg.blocks.len());
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        seeded.push(lift_block(
+            session,
+            block.start,
+            block.end,
+            args,
+            &arg_structs,
+            Some(&seeds[index]),
+            &call_arg_counts,
+            entry_stack[index].map(|entry| (entry, frame_base)),
+        )?);
     }
+    bodies = seeded;
     let mut structurer = Structurer::new(
         &cfg,
         bodies,
@@ -297,7 +302,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
 
 /// Which registers may already have been overwritten whenever a block is entered.
 ///
-/// Forward may-write dataflow: `in[b] = 閳?out[pred]`, `out[b] = in[b] 閳?written[b]`.
+/// Forward may-write dataflow: `in[b] = 闁?out[pred]`, `out[b] = in[b] 闁?written[b]`.
 /// The function entry starts empty (incoming argument registers are intact there).
 fn entry_written(cfg: &Cfg, written: &[BTreeSet<Reg>]) -> Vec<BTreeSet<Reg>> {
     let count = written.len();
@@ -1786,6 +1791,59 @@ fn nested_loop_leaves_parent(
         }
     }
     false
+}
+
+/// `rsp` displacement at each block entry, plus the depth of the frame bottom.
+///
+/// Propagation stops at a block whose stack-pointer updates are not constant steps, and a
+/// block reached with two different displacements is left unknown (an alloca or a dynamic
+/// stack adjustment); such blocks keep the unnormalised names.
+fn entry_stack_deltas(cfg: &Cfg, bodies: &[BlockLift]) -> (Vec<Option<i64>>, i64) {
+    let count = cfg.blocks.len();
+    let mut entry: Vec<Option<i64>> = vec![None; count];
+    let mut conflict = vec![false; count];
+    if count > 0 {
+        entry[0] = Some(0);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            let (Some(start), Some(net)) = (entry[index], bodies[index].stack_net) else {
+                continue;
+            };
+            let next = start + net;
+            for &(target, _) in &block.edges {
+                if target >= count || conflict[target] {
+                    continue;
+                }
+                match entry[target] {
+                    None => {
+                        entry[target] = Some(next);
+                        changed = true;
+                    }
+                    Some(existing) if existing != next => {
+                        conflict[target] = true;
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for (index, conflicted) in conflict.iter().enumerate() {
+        if *conflicted {
+            entry[index] = None;
+        }
+    }
+    let frame_base = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| Some(entry[index]? + bodies[index].stack_min?))
+        .min()
+        .unwrap_or(0);
+    (entry, frame_base)
 }
 
 /// Instruction addresses of matched `push`/`pop` pairs. The value a push stores is read
@@ -3652,9 +3710,9 @@ fn merge_else_if(lines: &mut Vec<PseudoLine>) {
 ///
 /// Compilers lower pre-tested loops and do-while loops to an unconditional loop with a
 /// single `if (cond) break;`. A test as the first body statement is the loop condition:
-/// `while (1) { if (c) break; body }` 閳?`while (!c) { body }`, because `continue` reaches
+/// `while (1) { if (c) break; body }` 闁?`while (!c) { body }`, because `continue` reaches
 /// the same test in both forms. A test as the last body statement is a do-while latch:
-/// `while (1) { body; if (c) break; }` 閳?`do { body } while (!c);` 閳?but only when the body
+/// `while (1) { body; if (c) break; }` 闁?`do { body } while (!c);` 闁?but only when the body
 /// has no `continue`, which would reach the latch before the test in the original loop.
 fn fold_constant_loops(lines: &mut Vec<PseudoLine>) {
     let mut index = 0;
@@ -3720,7 +3778,7 @@ fn break_test_condition(text: &str) -> Option<&str> {
     Some(condition)
 }
 
-/// Strip one pair of parentheses wrapping the whole text (`(a >= b)` 閳?`a >= b`).
+/// Strip one pair of parentheses wrapping the whole text (`(a >= b)` 闁?`a >= b`).
 fn strip_wrapping_parens(text: &str) -> &str {
     let text = text.trim();
     if text.starts_with('(') && matching_close(text) == Some(text.len() - 1) {
@@ -4263,6 +4321,8 @@ mod tests {
                 calls: BTreeSet::new(),
                 pushes,
                 pops,
+                stack_net: None,
+                stack_min: None,
             }
         }
         let entry = body(vec![(0x10, Reg::Rbx), (0x11, Reg::Rdi)], Vec::new());

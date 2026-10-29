@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Stack-slot names are now one space per function: every block's `rsp` displacement is
+  propagated over the control-flow graph and slots are named relative to the bottom of the
+  frame, so the prologue, the body and every epilogue agree on what `var_XX` means. A
+  register saved at entry and restored at exit is therefore recognised even when the two
+  accesses sit at different stack depths, and the `frame_XX` names introduced for a saved
+  `rsp` copy become ordinary `var_XX` slots. A block reached with two different
+  displacements (an `alloca`, a dynamic adjustment) keeps the previous names.
 - Matched `push`/`pop` pairs are treated as bookkeeping and left out of the listing: a
   register saved at entry and restored on the way out no longer shows as
   `var_n8 = rbx;` / `rbx = ...;`. Pairs are matched per register in LIFO order and only

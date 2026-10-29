@@ -50,6 +50,10 @@ pub(crate) struct BlockLift {
     pub pushes: Vec<(u64, Reg)>,
     /// `pop reg` statements in the block: (instruction address, register).
     pub pops: Vec<(u64, Reg)>,
+    /// Net `rsp` displacement of the block, when every update is a constant step.
+    pub stack_net: Option<i64>,
+    /// Deepest `rsp` displacement reached inside the block (relative to its entry).
+    pub stack_min: Option<i64>,
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
@@ -57,6 +61,7 @@ pub(crate) struct BlockLift {
 /// `seed` carries registers already overwritten on every path reaching this block, so
 /// argument names are not shown for clobbered values. `arg_structs` maps argument
 /// registers to user-defined struct layouts (`apply_type`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lift_block(
     session: &mut Session,
     start: Address,
@@ -65,6 +70,9 @@ pub(crate) fn lift_block(
     arg_structs: &BTreeMap<Reg, StructDef>,
     seed: Option<&BTreeSet<Reg>>,
     call_arg_counts: &HashMap<u64, usize>,
+    // `(entry displacement, frame base)` for stack-slot naming; `None` keeps names
+    // relative to the block's own `rsp`.
+    stack: Option<(i64, i64)>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -75,6 +83,8 @@ pub(crate) fn lift_block(
             calls: BTreeSet::new(),
             pushes: Vec::new(),
             pops: Vec::new(),
+            stack_net: None,
+            stack_min: None,
         });
     }
     let mut lifter = Lifter::new();
@@ -104,6 +114,8 @@ pub(crate) fn lift_block(
             calls: BTreeSet::new(),
             pushes: Vec::new(),
             pops: Vec::new(),
+            stack_net: None,
+            stack_min: None,
         });
     }
 
@@ -162,6 +174,8 @@ pub(crate) fn lift_block(
         frame_reg: None,
         arg_values: [None, None, None, None],
         arg_aliases: BTreeMap::new(),
+        stack_delta: stack.map(|(entry, _)| entry),
+        frame_base: stack.map_or(0, |(_, base)| base),
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
@@ -286,6 +300,7 @@ pub(crate) fn lift_block(
             // old argument name, and an indirect call still prints the value it received.
             printer.note_write(stmt);
             printer.note_arg_alias(stmt);
+            printer.note_stack(stmt);
             if let Stmt::WriteReg { reg, value } = stmt
                 && let Some(slot) = arg_slot(reg.base)
             {
@@ -319,6 +334,7 @@ pub(crate) fn lift_block(
             pops.push((address, reg));
         }
     }
+    let (stack_net, stack_min) = stack_layout(&exprs, &lifted);
     Ok(BlockLift {
         statements,
         condition,
@@ -327,6 +343,8 @@ pub(crate) fn lift_block(
         calls,
         pushes,
         pops,
+        stack_net,
+        stack_min,
     })
 }
 
@@ -369,6 +387,59 @@ fn popped_register(item: &LiftedInsn, exprs: &[Expr]) -> Option<Reg> {
             (base.base == Reg::Rsp && pointer.base == Reg::Rsp && *op == recraft_ir::BinOp::Add)
                 .then_some(reg.base)
         }
+        _ => None,
+    }
+}
+
+/// Net and minimum `rsp` displacement of a lifted instruction list: `(net, min)`. Both are
+/// `None` once a stack-pointer update is not a constant step (`and rsp, -16`, `mov rsp,
+/// rbp`), because later slot names would be guesses.
+fn stack_layout(exprs: &[Expr], items: &[LiftedInsn]) -> (Option<i64>, Option<i64>) {
+    let mut delta: i64 = 0;
+    let mut min: i64 = 0;
+    let mut known = true;
+    for item in items {
+        for stmt in &item.stmts {
+            match stmt {
+                Stmt::WriteReg { reg, value } if reg.base == Reg::Rsp => {
+                    match stack_step(exprs, *value) {
+                        Some(change) => {
+                            delta += change;
+                            min = min.min(delta);
+                        }
+                        None => known = false,
+                    }
+                }
+                Stmt::Intrinsic { text } if text.contains("rsp") => known = false,
+                _ => {}
+            }
+        }
+    }
+    if known {
+        (Some(delta), Some(min))
+    } else {
+        (None, None)
+    }
+}
+
+/// Signed `rsp` change of `rsp = rsp + k` / `rsp = rsp - k`.
+fn stack_step(exprs: &[Expr], value: ExprId) -> Option<i64> {
+    let Expr::Bin { op, lhs, rhs } = &exprs[value as usize] else {
+        return None;
+    };
+    let Expr::Reg(pointer) = &exprs[*lhs as usize] else {
+        return None;
+    };
+    if pointer.base != Reg::Rsp {
+        return None;
+    }
+    let Expr::Const(amount) = &exprs[*rhs as usize] else {
+        return None;
+    };
+    let amount = *amount as i64;
+    match op {
+        recraft_ir::BinOp::Add => Some(amount),
+        recraft_ir::BinOp::Sub => Some(-amount),
         _ => None,
     }
 }
@@ -677,6 +748,7 @@ pub fn pseudocode_l0(
     let no_structs: BTreeMap<Reg, StructDef> = BTreeMap::new();
     let no_protos: HashMap<u64, crate::l2::ProtoSig> = HashMap::new();
     let no_counts: HashMap<u64, usize> = HashMap::new();
+    let layout = stack_layout(&exprs, &lifted);
     let mut printer = Printer {
         exprs: &exprs,
         names: &names,
@@ -693,6 +765,8 @@ pub fn pseudocode_l0(
         frame_reg: None,
         arg_values: [None, None, None, None],
         arg_aliases: BTreeMap::new(),
+        stack_delta: layout.1.map(|_| 0),
+        frame_base: layout.1.unwrap_or(0),
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -837,6 +911,13 @@ struct Printer<'a> {
     /// Registers that still hold an incoming argument copied from its ABI register
     /// (`rsi = arg1`), so later reads print the parameter name instead of the register.
     arg_aliases: BTreeMap<Reg, String>,
+    /// Current `rsp` displacement relative to the function entry, when every stack-pointer
+    /// update so far is a constant step. Slot names are normalised with it so that
+    /// `[rsp]`-relative accesses mean the same memory at any stack depth.
+    stack_delta: Option<i64>,
+    /// Deepest `rsp` displacement of the function: names are relative to the bottom of the
+    /// frame, which keeps locals positive and toolchain pushes distinct.
+    frame_base: i64,
 }
 
 impl Printer<'_> {
@@ -872,6 +953,7 @@ impl Printer<'_> {
                 }
                 self.note_write(stmt);
                 self.note_arg_alias(stmt);
+                self.note_stack(stmt);
                 if let Stmt::WriteReg { reg, value } = stmt
                     && let Some(slot) = arg_slot(reg.base)
                 {
@@ -949,6 +1031,26 @@ impl Printer<'_> {
     }
 
     /// Records a register write so later reads no longer render as `argN`.
+    /// Track the stack-pointer displacement so slot names stay meaningful across the
+    /// prologue, the body and the epilogue.
+    fn note_stack(&mut self, stmt: &Stmt) {
+        let Stmt::WriteReg { reg, value } = stmt else {
+            if let Stmt::Intrinsic { text } = stmt
+                && text.contains("rsp")
+            {
+                self.stack_delta = None;
+            }
+            return;
+        };
+        if reg.base != Reg::Rsp {
+            return;
+        }
+        match (self.stack_delta, stack_step(self.exprs, *value)) {
+            (Some(delta), Some(change)) => self.stack_delta = Some(delta + change),
+            _ => self.stack_delta = None,
+        }
+    }
+
     fn note_write(&mut self, stmt: &Stmt) {
         if let Stmt::WriteReg { reg, value } = stmt {
             self.written.insert(reg.base);
@@ -1110,14 +1212,6 @@ impl Printer<'_> {
         }
     }
 
-    fn frame_name(offset: i64) -> String {
-        if offset < 0 {
-            format!("frame_n{:x}", -offset)
-        } else {
-            format!("frame_{offset:x}")
-        }
-    }
-
     /// C spelling for a load/store width (16-byte operands are SSE vectors).
     fn scalar_type(size: u8) -> String {
         match size {
@@ -1138,13 +1232,17 @@ impl Printer<'_> {
         if let Some(name) = self.args.and_then(|args| args.name_for_stack(base, offset)) {
             return Some(name.to_owned());
         }
-        // A saved copy of rsp reaches the frame as it was *before* the prologue adjusted
-        // rsp, so its slots are not the current frame's `var_XX` and must not share names.
+        if base == Reg::Rsp {
+            return Some(match self.stack_delta {
+                Some(delta) => Self::stack_name(offset + delta - self.frame_base),
+                None => Self::stack_name(offset),
+            });
+        }
         if self.frame_reg == Some(base) {
-            return Some(Self::frame_name(offset));
+            return Some(Self::stack_name(offset - self.frame_base));
         }
         let rebuilt_frame = base == Reg::Rbp && self.written.contains(&Reg::Rbp);
-        if base == Reg::Rsp || offset < 0 || rebuilt_frame {
+        if offset < 0 || rebuilt_frame {
             return Some(Self::stack_name(offset));
         }
         None
