@@ -169,6 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A call argument that is a bare register no longer turns into the address of a stack slot:
+  `helper(rbp)` used to print `helper(&var_0)` once `rbp` had been written, because a bare
+  `[rbp]` access and the pointer value were treated alike. Only a real stack-slot address
+  gets the `&var_XX` form now.
 - A stack store that feeds a call (arguments 5 and beyond live on the stack) is no longer
   dropped as a dead callee-save spill or dead local: `RtlVirtualUnwind`'s outgoing
   `var_20`/`var_28`/`var_30` slots are kept, and a saved register is only treated as dead

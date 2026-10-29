@@ -1684,9 +1684,11 @@ impl Printer<'_> {
     }
 
     /// Render a value passed to a call. A stack-slot address becomes `&var_XX`, which is
-    /// how the source would pass a local by pointer.
+    /// how the source would pass a local by pointer. A bare register is the value it holds
+    /// (`helper(rbp)`), not the address of the slot at offset zero.
     fn arg_expr(&self, id: ExprId) -> String {
-        if let Some((base, offset)) = self.stack_slot(id)
+        if !matches!(self.exprs[id as usize], Expr::Reg(_))
+            && let Some((base, offset)) = self.stack_slot(id)
             && let Some(name) = self.stack_reference(base, offset)
         {
             return format!("&{name}");
