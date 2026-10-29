@@ -46,6 +46,10 @@ pub(crate) struct BlockLift {
     pub written: BTreeSet<Reg>,
     /// Direct call targets seen in the block (for one-pass signature inference).
     pub calls: BTreeSet<u64>,
+    /// `push reg` statements in the block: (instruction address, register).
+    pub pushes: Vec<(u64, Reg)>,
+    /// `pop reg` statements in the block: (instruction address, register).
+    pub pops: Vec<(u64, Reg)>,
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
@@ -69,6 +73,8 @@ pub(crate) fn lift_block(
             flow: Flow::Fallthrough,
             written: BTreeSet::new(),
             calls: BTreeSet::new(),
+            pushes: Vec::new(),
+            pops: Vec::new(),
         });
     }
     let mut lifter = Lifter::new();
@@ -96,6 +102,8 @@ pub(crate) fn lift_block(
             flow: Flow::Fallthrough,
             written: BTreeSet::new(),
             calls: BTreeSet::new(),
+            pushes: Vec::new(),
+            pops: Vec::new(),
         });
     }
 
@@ -301,13 +309,68 @@ pub(crate) fn lift_block(
         Flow::CondGoto { cond, .. } => Some(printer.expr(cond)),
         _ => None,
     };
+    let mut pushes = Vec::new();
+    let mut pops = Vec::new();
+    for item in &lifted {
+        let address = item.addr.get();
+        if let Some(reg) = pushed_register(item, &exprs) {
+            pushes.push((address, reg));
+        } else if let Some(reg) = popped_register(item, &exprs) {
+            pops.push((address, reg));
+        }
+    }
     Ok(BlockLift {
         statements,
         condition,
         flow: last.flow,
         written,
         calls,
+        pushes,
+        pops,
     })
+}
+
+/// `push reg`: a store below the stack pointer followed by the pointer update.
+fn pushed_register(item: &LiftedInsn, exprs: &[Expr]) -> Option<Reg> {
+    match item.stmts.as_slice() {
+        [
+            Stmt::Store { addr, value, .. },
+            Stmt::WriteReg { reg, value: new },
+        ] if reg.base == Reg::Rsp && addr == new => match &exprs[*value as usize] {
+            Expr::Reg(view) => Some(view.base),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `pop reg`: a load from the stack pointer followed by the pointer update.
+fn popped_register(item: &LiftedInsn, exprs: &[Expr]) -> Option<Reg> {
+    match item.stmts.as_slice() {
+        [
+            Stmt::WriteReg { reg, value },
+            Stmt::WriteReg {
+                reg: rsp,
+                value: new,
+            },
+        ] if rsp.base == Reg::Rsp && reg.base != Reg::Rsp => {
+            let Expr::Load { addr, .. } = &exprs[*value as usize] else {
+                return None;
+            };
+            let Expr::Reg(base) = &exprs[*addr as usize] else {
+                return None;
+            };
+            let Expr::Bin { op, lhs, .. } = &exprs[*new as usize] else {
+                return None;
+            };
+            let Expr::Reg(pointer) = &exprs[*lhs as usize] else {
+                return None;
+            };
+            (base.base == Reg::Rsp && pointer.base == Reg::Rsp && *op == recraft_ir::BinOp::Add)
+                .then_some(reg.base)
+        }
+        _ => None,
+    }
 }
 
 /// Number of leading call arguments to print for a call without a user prototype.

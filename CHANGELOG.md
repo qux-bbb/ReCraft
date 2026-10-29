@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Matched `push`/`pop` pairs are treated as bookkeeping and left out of the listing: a
+  register saved at entry and restored on the way out no longer shows as
+  `var_n8 = rbx;` / `rbx = ...;`. Pairs are matched per register in LIFO order and only
+  when every push has a pop, so a `push` that feeds a call's stack arguments stays visible.
+  A lone prologue spill whose restore is not in the listing is hidden as well; after the
+  first branch or call the same store may be a stack argument, so it is kept.
 - A captured argument value survives a stack store between its setup and the call: a store
   to a `var_XX` slot cannot change memory reached through a pointer argument, so it no
   longer blocks the setup removal. Notepad's argument-setup lines drop from 4060 to 3949.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! L1 structure recovery: basic blocks → `if`/`else` and `while` skeletons.
+//! L1 structure recovery: basic blocks 閳?`if`/`else` and `while` skeletons.
 //!
 //! Conservative by design. Dominators and post-dominators drive if/else diamonds and
 //! natural loops; anything the structurer cannot prove (switch tables, irreducible
@@ -297,7 +297,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
 
 /// Which registers may already have been overwritten whenever a block is entered.
 ///
-/// Forward may-write dataflow: `in[b] = ∪ out[pred]`, `out[b] = in[b] ∪ written[b]`.
+/// Forward may-write dataflow: `in[b] = 閳?out[pred]`, `out[b] = in[b] 閳?written[b]`.
 /// The function entry starts empty (incoming argument registers are intact there).
 fn entry_written(cfg: &Cfg, written: &[BTreeSet<Reg>]) -> Vec<BTreeSet<Reg>> {
     let count = written.len();
@@ -371,6 +371,8 @@ struct Structurer {
     emitted: Vec<bool>,
     labeled: Vec<bool>,
     bodies: Vec<BlockLift>,
+    /// Instruction addresses of `push`/`pop` bookkeeping kept out of the listing.
+    hidden: BTreeSet<u64>,
     args: Option<ArgNames>,
     /// Exclusive end of the analysed function. CFG construction can follow a tail `jmp`
     /// into the next function; such blocks are foreign code and only the jump back to the
@@ -470,6 +472,13 @@ impl Structurer {
             fallback_headers: BTreeSet::new(),
             emitted,
             labeled: vec![false; bodies.len()],
+            hidden: hidden_push_pop_pairs(
+                cfg.blocks
+                    .iter()
+                    .map(|block| block.start)
+                    .zip(bodies.iter()),
+                end,
+            ),
             bodies,
             args,
             end,
@@ -1639,6 +1648,9 @@ impl Structurer {
 
     fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
         for statement in &self.bodies[block].statements {
+            if self.hidden.contains(&statement.addr.get()) {
+                continue;
+            }
             lines.push(PseudoLine {
                 addr: statement.addr,
                 text: format!("{}{}", indent(level), statement.text),
@@ -1774,6 +1786,46 @@ fn nested_loop_leaves_parent(
         }
     }
     false
+}
+
+/// Instruction addresses of matched `push`/`pop` pairs. The value a push stores is read
+/// only by the matching pop, so both lines are compiler bookkeeping rather than source
+/// logic. Pairs are matched per register in LIFO order (the first push is read by the last
+/// pop) and only when the counts agree, so an unbalanced use (e.g. `push` as a stack
+/// argument) keeps every line visible.
+fn hidden_push_pop_pairs<'a>(
+    blocks: impl Iterator<Item = (Address, &'a BlockLift)>,
+    end: Address,
+) -> BTreeSet<u64> {
+    let mut pushes: BTreeMap<Reg, Vec<u64>> = BTreeMap::new();
+    let mut pops: BTreeMap<Reg, Vec<u64>> = BTreeMap::new();
+    for (start, body) in blocks {
+        // A tail jump can pull the next function's blocks into the CFG; its `pop`s must not
+        // pair with this function's `push`es.
+        if start >= end {
+            continue;
+        }
+        for &(addr, reg) in &body.pushes {
+            pushes.entry(reg).or_default().push(addr);
+        }
+        for &(addr, reg) in &body.pops {
+            pops.entry(reg).or_default().push(addr);
+        }
+    }
+    let mut hidden = BTreeSet::new();
+    for (reg, saved) in &pushes {
+        let Some(restored) = pops.get(reg) else {
+            continue;
+        };
+        if saved.is_empty() || saved.len() != restored.len() {
+            continue;
+        }
+        for (push, pop) in saved.iter().zip(restored.iter().rev()) {
+            hidden.insert(*push);
+            hidden.insert(*pop);
+        }
+    }
+    hidden
 }
 
 fn is_callee_saved(reg: &str) -> bool {
@@ -1982,6 +2034,11 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
     }
 
     let mut remove = BTreeSet::new();
+    // Index of the first branch or call: prologue spills precede it.
+    let first_control = lines.iter().position(|line| {
+        let text = line.text.trim();
+        is_control_line(text) || is_call_line(text)
+    });
     for (slot, (reg, save_index)) in &saves {
         let references: Vec<usize> = lines
             .iter()
@@ -1993,9 +2050,12 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
             continue;
         }
         if references.len() == 1 {
-            // A single reference may just be an outgoing stack argument that a later
-            // call reads, so it is only clearly dead when the value is never handed to a
-            // call: keep it otherwise.
+            // A lone store in the prologue is a spill whose restore never made it into the
+            // listing. After the first branch or call it may instead be an outgoing stack
+            // argument that the call reads, so it is kept.
+            if first_control.is_none_or(|control| *save_index < control) {
+                remove.insert(*save_index);
+            }
             continue;
         }
         let expected_restore = format!("{reg} = {slot};");
@@ -2025,6 +2085,20 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
         index += 1;
         keep
     });
+}
+
+/// A call statement (`Api(...);`, `sub_x(...);`, `(*rax)(...);`), as opposed to a
+/// declaration or a branch.
+fn is_call_line(text: &str) -> bool {
+    let text = text.trim();
+    if !text.ends_with(");") || text.starts_with("return ") {
+        return false;
+    }
+    text.starts_with("(*")
+        || text
+            .split('(')
+            .next()
+            .is_some_and(|head| is_identifier(head.trim()))
 }
 
 /// True for any general-purpose register spelling (`rax`/`eax`/`ax`/`al`, `r8d`, ...).
@@ -3578,9 +3652,9 @@ fn merge_else_if(lines: &mut Vec<PseudoLine>) {
 ///
 /// Compilers lower pre-tested loops and do-while loops to an unconditional loop with a
 /// single `if (cond) break;`. A test as the first body statement is the loop condition:
-/// `while (1) { if (c) break; body }` ≡ `while (!c) { body }`, because `continue` reaches
+/// `while (1) { if (c) break; body }` 閳?`while (!c) { body }`, because `continue` reaches
 /// the same test in both forms. A test as the last body statement is a do-while latch:
-/// `while (1) { body; if (c) break; }` ≡ `do { body } while (!c);` — but only when the body
+/// `while (1) { body; if (c) break; }` 閳?`do { body } while (!c);` 閳?but only when the body
 /// has no `continue`, which would reach the latch before the test in the original loop.
 fn fold_constant_loops(lines: &mut Vec<PseudoLine>) {
     let mut index = 0;
@@ -3646,7 +3720,7 @@ fn break_test_condition(text: &str) -> Option<&str> {
     Some(condition)
 }
 
-/// Strip one pair of parentheses wrapping the whole text (`(a >= b)` → `a >= b`).
+/// Strip one pair of parentheses wrapping the whole text (`(a >= b)` 閳?`a >= b`).
 fn strip_wrapping_parens(text: &str) -> &str {
     let text = text.trim();
     if text.starts_with('(') && matching_close(text) == Some(text.len() - 1) {
@@ -4121,9 +4195,19 @@ mod tests {
 
     #[test]
     fn single_reference_saves_are_kept_for_outgoing_stack_arguments() {
-        let mut lines = vec![test_line("    var_n8 = rdi;"), test_line("    var_8 = 0;")];
+        // A prologue spill whose restore is not in the listing is dead bookkeeping.
+        let mut lines = vec![test_line("    var_n8 = rdi;"), test_line("    eax = 1;")];
         hide_callee_saves(&mut lines);
-        assert_eq!(lines.len(), 2, "a lone store may be a stack argument");
+        assert_eq!(lines.len(), 1, "a lone prologue spill is hidden");
+
+        // The same store after a call may be a stack argument that the call reads.
+        let mut lines = vec![
+            test_line("    Api();"),
+            test_line("    var_n8 = rdi;"),
+            test_line("    eax = 1;"),
+        ];
+        hide_callee_saves(&mut lines);
+        assert_eq!(lines.len(), 3, "a stack argument stays visible");
 
         let mut lines = vec![
             test_line("    var_20 = rbx;"),
@@ -4166,6 +4250,49 @@ mod tests {
         ];
         flatten_terminating_else(&mut lines);
         assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    #[test]
+    fn matched_push_pop_pairs_are_hidden() {
+        fn body(pushes: Vec<(u64, Reg)>, pops: Vec<(u64, Reg)>) -> BlockLift {
+            BlockLift {
+                statements: Vec::new(),
+                condition: None,
+                flow: Flow::Fallthrough,
+                written: BTreeSet::new(),
+                calls: BTreeSet::new(),
+                pushes,
+                pops,
+            }
+        }
+        let entry = body(vec![(0x10, Reg::Rbx), (0x11, Reg::Rdi)], Vec::new());
+        let exit = body(Vec::new(), vec![(0x50, Reg::Rdi), (0x51, Reg::Rbx)]);
+        let blocks = [
+            (Address::new(0x1000), &entry),
+            (Address::new(0x1040), &exit),
+        ];
+        let hidden = hidden_push_pop_pairs(blocks.into_iter(), Address::new(0x1060));
+        assert_eq!(hidden, BTreeSet::from([0x10, 0x11, 0x50, 0x51]));
+
+        // An unbalanced push (a stack argument) keeps everything visible.
+        let entry = body(vec![(0x10, Reg::Rbx), (0x11, Reg::Rcx)], Vec::new());
+        let exit = body(Vec::new(), vec![(0x50, Reg::Rbx)]);
+        let blocks = [
+            (Address::new(0x1000), &entry),
+            (Address::new(0x1040), &exit),
+        ];
+        let hidden = hidden_push_pop_pairs(blocks.into_iter(), Address::new(0x1060));
+        assert_eq!(hidden, BTreeSet::from([0x10, 0x50]));
+
+        // A pop past the function end belongs to the next function.
+        let entry = body(vec![(0x10, Reg::Rbx)], Vec::new());
+        let exit = body(Vec::new(), vec![(0x90, Reg::Rbx)]);
+        let blocks = [
+            (Address::new(0x1000), &entry),
+            (Address::new(0x2000), &exit),
+        ];
+        let hidden = hidden_push_pop_pairs(blocks.into_iter(), Address::new(0x1100));
+        assert!(hidden.is_empty(), "{hidden:?}");
     }
 
     fn analyzed_corpus() -> Option<(Session, TempDir)> {
