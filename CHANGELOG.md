@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The disassembly view can now be scrolled up past its loaded window. The pane renders a fixed
+  window of 400 instructions, so its scroll area could only move inside that window: at the top
+  edge the wheel did nothing and earlier code was unreachable. When the wheel keeps turning
+  against the top/bottom edge the view now loads another page (50 instructions) above/below and
+  compensates the scroll offset by the pixel height of the rows it added, so the text on screen
+  stays put. Paging with `PageUp`/`PageDown`/`ArrowUp`/`ArrowDown` also stepped by
+  `rows * first row length` bytes, which landed in the middle of variable-length instructions
+  and decoded garbage (and could walk below the image and blank the view); stepping now uses
+  real instruction boundaries via the new `Session::rewind`/`Session::advance` (swept from the
+  nearest analysed function start, `int3` padding included), keeps the cursor line and stops at
+  the segment start. `G`, follow, back/forward and hex-tab sync now reset the scroll position so
+  a jumped-to address is actually visible.
+- Keyboard shortcuts and paging no longer fire twice on frames where egui runs a second layout
+  pass (`request_discard`): one key press used to scroll the disassembly by two pages.
 - The built-in DeepSeek provider preset now offers the live model ids `deepseek-flash` and
   `deepseek-v4-pro`. The previous `deepseek-chat` / `deepseek-reasoner` ids were retired on
   2026-07-24 and no longer resolve, so the preset defaulted to a model the API rejects.

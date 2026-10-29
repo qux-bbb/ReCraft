@@ -26,6 +26,10 @@ use recraft_decompile::{PseudoLine, pseudocode_l0};
 use crate::i18n::{I18n, Lang};
 
 const DISASM_ROWS: usize = 400;
+/// Instructions loaded per page when the wheel runs off the end of the disassembly window.
+const DISASM_SCROLL_ROWS: usize = 50;
+/// Distance from a window edge (in rows) at which the wheel loads the next page.
+const DISASM_SCROLL_MARGIN_ROWS: f32 = 3.0;
 const MONO_SIZE: f32 = 12.5;
 const ROW_HEIGHT: f32 = 15.0;
 const ZOOM_MIN: f32 = 0.75;
@@ -683,6 +687,14 @@ pub struct ReCraftApp {
     disasm_rows: Vec<DisasmLine>,
     selected: usize,
     disasm_dirty: bool,
+    /// Vertical scroll offset of the disassembly view, as reported by the scroll area.
+    disasm_offset: f32,
+    /// One-shot scroll offset to apply on the next frame (keeps rows in place when the
+    /// window is re-anchored or reset).
+    disasm_scroll_to: Option<f32>,
+    /// Last egui pass that consumed keyboard input, so a multi-pass frame only handles a key
+    /// press once.
+    key_pass: Option<u64>,
     pseudo_start: Address,
     pseudo: Option<Vec<PseudoLine>>,
     pseudo_dirty: bool,
@@ -778,6 +790,9 @@ impl Default for ReCraftApp {
             disasm_rows: Vec::new(),
             selected: 0,
             disasm_dirty: false,
+            disasm_offset: 0.0,
+            disasm_scroll_to: None,
+            key_pass: None,
             pseudo_start: Address::ZERO,
             pseudo: None,
             pseudo_dirty: false,
@@ -1035,6 +1050,7 @@ impl ReCraftApp {
         self.disasm_start = entry;
         self.selected = 0;
         self.disasm_dirty = true;
+        self.disasm_scroll_to = Some(0.0);
         self.pseudo_start = entry;
         self.pseudo_dirty = true;
         self.functions_dirty = true;
@@ -1057,6 +1073,8 @@ impl ReCraftApp {
         self.disasm_start = addr;
         self.selected = 0;
         self.disasm_dirty = true;
+        // A jump must show the target, not wherever the previous view happened to be scrolled.
+        self.disasm_scroll_to = Some(0.0);
         self.pseudo_start = addr;
         self.pseudo_dirty = true;
         self.history.truncate(self.history_pos + 1);
@@ -1162,6 +1180,7 @@ impl ReCraftApp {
         self.pseudo_start = addr;
         self.selected = 0;
         self.disasm_dirty = true;
+        self.disasm_scroll_to = Some(0.0);
         self.pseudo_dirty = true;
     }
 
@@ -1176,6 +1195,7 @@ impl ReCraftApp {
         self.pseudo_start = addr;
         self.selected = 0;
         self.disasm_dirty = true;
+        self.disasm_scroll_to = Some(0.0);
         self.pseudo_dirty = true;
     }
 
@@ -4014,160 +4034,159 @@ impl ReCraftApp {
         let redo_menu = self.t("ui_redo");
         let mut clicked_row = None;
         let mut follow = false;
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let header = format!(
-                    "{:<14}{:<46}{:<9}{:<36}{}",
-                    self.t("ui_address"),
-                    self.t("ui_bytes"),
-                    self.t("ui_mnemonic"),
-                    self.t("ui_operands"),
-                    self.t("ui_comment_2"),
-                );
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(header)
-                            .monospace()
-                            .strong()
-                            .size(self.mono_size()),
-                    )
-                    .truncate(),
-                );
-                let width = ui.available_width().max(1000.0);
-                for (index, line) in self.disasm_rows.iter().enumerate() {
-                    // IDA renders names as inline labels above the instruction instead of a
-                    // dedicated "Name" column.
-                    let label_height = if line.name.is_some() {
-                        self.mono_size() + 1.0
-                    } else {
-                        0.0
-                    };
-                    let row_height = self.row_height() + label_height;
-                    // One full-row hit area, like IDA: the whole line is selectable and
-                    // double-click follows the operand instead of only the address cell.
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click());
-                    if index == self.selected {
-                        ui.painter().rect_filled(rect, 1.0, pal.selected_row);
-                    } else if response.hovered() {
-                        ui.painter().rect_filled(rect, 1.0, pal.hover_row);
-                    }
-                    if let Some(name) = line.name.as_deref() {
-                        ui.painter().text(
-                            rect.left_top() + egui::vec2(4.0, 1.0),
-                            egui::Align2::LEFT_TOP,
-                            format!("{name}:"),
-                            mono.clone(),
-                            pal.name,
-                        );
-                    }
-                    let bytes = line
-                        .bytes()
-                        .iter()
-                        .map(|byte| format!("{byte:02x} "))
-                        .collect::<String>();
-                    let mut job = LayoutJob::default();
-                    append(
-                        &mut job,
-                        &format!("{:#012x}  ", line.addr.get()),
-                        pal.addr,
-                        &mono,
-                    );
-                    append(&mut job, &format!("{bytes:<46}"), pal.bytes, &mono);
-                    append(
-                        &mut job,
-                        &format!("{:<9}", line.mnemonic),
-                        pal.mnemonic,
-                        &mono,
-                    );
-                    let operands = format!("{:<36}", line.operands);
-                    append_operands(&mut job, &operands, pal, &mono);
-                    append(
-                        &mut job,
-                        line.comment.as_deref().unwrap_or(""),
-                        pal.comment,
-                        &mono,
-                    );
-                    let galley = ui.painter().layout_job(job);
-                    ui.painter().galley(
-                        rect.left_top() + egui::vec2(4.0, label_height + 1.0),
-                        galley,
-                        Color32::WHITE,
-                    );
-                    if response.clicked() || response.secondary_clicked() {
-                        clicked_row = Some(index);
-                    }
-                    if response.double_clicked() {
-                        clicked_row = Some(index);
-                        follow = true;
-                    }
-                    response.context_menu(|ui| {
-                        if ui.button(follow_menu.as_str()).clicked() {
-                            *action = Action::Follow;
-                            ui.close();
-                        }
-                        if ui.button(rename_menu.as_str()).clicked() {
-                            *action = Action::EditName;
-                            ui.close();
-                        }
-                        if ui.button(comment_menu.as_str()).clicked() {
-                            *action = Action::EditComment;
-                            ui.close();
-                        }
-                        if ui.button(xrefs_menu.as_str()).clicked() {
-                            *action = Action::ShowXrefs;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button(self.t("ui_mark_as_code_c")).clicked() {
-                            *action = Action::ApplyData(DataOp::Code);
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_mark_as_data_d")).clicked() {
-                            *action = Action::ApplyData(DataOp::Data);
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_mark_as_string_a")).clicked() {
-                            *action = Action::ApplyData(DataOp::Ascii);
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_undefine_u")).clicked() {
-                            *action = Action::ApplyData(DataOp::Unknown);
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_create_function_p")).clicked() {
-                            *action = Action::ApplyData(DataOp::DefineFunction);
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_remove_function")).clicked() {
-                            *action = Action::ApplyData(DataOp::UndefineFunction);
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_edit_prototype")).clicked() {
-                            *action = Action::EditPrototype;
-                            ui.close();
-                        }
-                        if ui.button(self.t("ui_structures")).clicked() {
-                            *action = Action::ShowStructs;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button(copy_menu.as_str()).clicked() {
-                            ui.ctx().copy_text(format!("{:#x}", line.addr.get()));
-                            ui.close();
-                        }
-                        if ui.button(undo_menu.as_str()).clicked() {
-                            *action = Action::Undo;
-                            ui.close();
-                        }
-                        if ui.button(redo_menu.as_str()).clicked() {
-                            *action = Action::Redo;
-                            ui.close();
-                        }
-                    });
+        let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+        if let Some(offset) = self.disasm_scroll_to.take() {
+            area = area.vertical_scroll_offset(offset);
+        }
+        let scroll = area.show(ui, |ui| {
+            let header = format!(
+                "{:<14}{:<46}{:<9}{:<36}{}",
+                self.t("ui_address"),
+                self.t("ui_bytes"),
+                self.t("ui_mnemonic"),
+                self.t("ui_operands"),
+                self.t("ui_comment_2"),
+            );
+            ui.add(
+                egui::Label::new(
+                    RichText::new(header)
+                        .monospace()
+                        .strong()
+                        .size(self.mono_size()),
+                )
+                .truncate(),
+            );
+            let width = ui.available_width().max(1000.0);
+            for (index, line) in self.disasm_rows.iter().enumerate() {
+                // IDA renders names as inline labels above the instruction instead of a
+                // dedicated "Name" column.
+                let label_height = self.disasm_label_height(line);
+                let row_height = self.row_height() + label_height;
+                // One full-row hit area, like IDA: the whole line is selectable and
+                // double-click follows the operand instead of only the address cell.
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click());
+                if index == self.selected {
+                    ui.painter().rect_filled(rect, 1.0, pal.selected_row);
+                } else if response.hovered() {
+                    ui.painter().rect_filled(rect, 1.0, pal.hover_row);
                 }
-            });
+                if let Some(name) = line.name.as_deref() {
+                    ui.painter().text(
+                        rect.left_top() + egui::vec2(4.0, 1.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{name}:"),
+                        mono.clone(),
+                        pal.name,
+                    );
+                }
+                let bytes = line
+                    .bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x} "))
+                    .collect::<String>();
+                let mut job = LayoutJob::default();
+                append(
+                    &mut job,
+                    &format!("{:#012x}  ", line.addr.get()),
+                    pal.addr,
+                    &mono,
+                );
+                append(&mut job, &format!("{bytes:<46}"), pal.bytes, &mono);
+                append(
+                    &mut job,
+                    &format!("{:<9}", line.mnemonic),
+                    pal.mnemonic,
+                    &mono,
+                );
+                let operands = format!("{:<36}", line.operands);
+                append_operands(&mut job, &operands, pal, &mono);
+                append(
+                    &mut job,
+                    line.comment.as_deref().unwrap_or(""),
+                    pal.comment,
+                    &mono,
+                );
+                let galley = ui.painter().layout_job(job);
+                ui.painter().galley(
+                    rect.left_top() + egui::vec2(4.0, label_height + 1.0),
+                    galley,
+                    Color32::WHITE,
+                );
+                if response.clicked() || response.secondary_clicked() {
+                    clicked_row = Some(index);
+                }
+                if response.double_clicked() {
+                    clicked_row = Some(index);
+                    follow = true;
+                }
+                response.context_menu(|ui| {
+                    if ui.button(follow_menu.as_str()).clicked() {
+                        *action = Action::Follow;
+                        ui.close();
+                    }
+                    if ui.button(rename_menu.as_str()).clicked() {
+                        *action = Action::EditName;
+                        ui.close();
+                    }
+                    if ui.button(comment_menu.as_str()).clicked() {
+                        *action = Action::EditComment;
+                        ui.close();
+                    }
+                    if ui.button(xrefs_menu.as_str()).clicked() {
+                        *action = Action::ShowXrefs;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(self.t("ui_mark_as_code_c")).clicked() {
+                        *action = Action::ApplyData(DataOp::Code);
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_mark_as_data_d")).clicked() {
+                        *action = Action::ApplyData(DataOp::Data);
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_mark_as_string_a")).clicked() {
+                        *action = Action::ApplyData(DataOp::Ascii);
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_undefine_u")).clicked() {
+                        *action = Action::ApplyData(DataOp::Unknown);
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_create_function_p")).clicked() {
+                        *action = Action::ApplyData(DataOp::DefineFunction);
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_remove_function")).clicked() {
+                        *action = Action::ApplyData(DataOp::UndefineFunction);
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_edit_prototype")).clicked() {
+                        *action = Action::EditPrototype;
+                        ui.close();
+                    }
+                    if ui.button(self.t("ui_structures")).clicked() {
+                        *action = Action::ShowStructs;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(copy_menu.as_str()).clicked() {
+                        ui.ctx().copy_text(format!("{:#x}", line.addr.get()));
+                        ui.close();
+                    }
+                    if ui.button(undo_menu.as_str()).clicked() {
+                        *action = Action::Undo;
+                        ui.close();
+                    }
+                    if ui.button(redo_menu.as_str()).clicked() {
+                        *action = Action::Redo;
+                        ui.close();
+                    }
+                });
+            }
+        });
+        self.follow_disasm_scroll(ui, &scroll);
         if let Some(index) = clicked_row {
             self.selected = index;
         }
@@ -4190,6 +4209,106 @@ impl ReCraftApp {
                 ui.weak(self.t("ui_synchronized_with_hex_view"));
             });
         }
+    }
+
+    /// Extra height a row needs for the inline name label IDA draws above an instruction.
+    fn disasm_label_height(&self, line: &DisasmLine) -> f32 {
+        if line.name.is_some() {
+            self.mono_size() + 1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Pixel pitch of one rendered row: the allocated height plus the item spacing the layout
+    /// inserts after it (kept in sync with `disasm_view`).
+    fn disasm_row_pitch(&self, ui: &egui::Ui, line: &DisasmLine) -> f32 {
+        self.row_height() + self.disasm_label_height(line) + ui.spacing().item_spacing.y
+    }
+
+    /// Let the wheel keep scrolling past the ends of the loaded window.
+    ///
+    /// The pane holds a fixed window of instructions, so a plain `ScrollArea` can only scroll
+    /// *inside* it: at the top edge the wheel does nothing and earlier code is unreachable
+    /// (the "cannot page up" report). When the wheel keeps turning against an edge, load one
+    /// more page of instructions above/below and shift the scroll offset by the pixel height of
+    /// the rows that were added/removed, so the text on screen does not move.
+    fn follow_disasm_scroll(
+        &mut self,
+        ui: &egui::Ui,
+        scroll: &egui::scroll_area::ScrollAreaOutput<()>,
+    ) {
+        self.disasm_offset = scroll.state.offset.y;
+        let wheel = ui.input(|input| input.smooth_scroll_delta().y);
+        if wheel == 0.0 || !ui.rect_contains_pointer(scroll.inner_rect) {
+            return;
+        }
+        let margin = self.row_height() * DISASM_SCROLL_MARGIN_ROWS;
+        let at_top = scroll.state.offset.y <= margin;
+        let at_bottom =
+            scroll.state.offset.y + scroll.inner_rect.height() + margin >= scroll.content_size.y;
+        let direction = if wheel > 0.0 && at_top {
+            -1
+        } else if wheel < 0.0 && at_bottom {
+            1
+        } else {
+            return;
+        };
+        if let Some(offset) = self.extend_disasm_window(ui, direction) {
+            self.disasm_scroll_to = Some(offset);
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Load one page of instructions above (`-1`) or below (`+1`) the window and return the
+    /// scroll offset that keeps the visible rows in place.
+    fn extend_disasm_window(&mut self, ui: &egui::Ui, direction: i32) -> Option<f32> {
+        let anchor = self.disasm_start;
+        let session = self.session.as_mut()?;
+        let target = if direction < 0 {
+            session.rewind(anchor, DISASM_SCROLL_ROWS).ok()?
+        } else {
+            session.advance(anchor, DISASM_SCROLL_ROWS).ok()?
+        };
+        if target == anchor {
+            // Already at the start/end of the image.
+            return None;
+        }
+        let offset = self.disasm_offset;
+        let cursor = self.disasm_rows.get(self.selected).map(|line| line.addr);
+        let removed_px: f32 = if direction > 0 {
+            self.disasm_rows
+                .iter()
+                .take_while(|line| line.addr < target)
+                .map(|line| self.disasm_row_pitch(ui, line))
+                .sum()
+        } else {
+            0.0
+        };
+        self.disasm_start = target;
+        self.refresh_disasm();
+        let added_px: f32 = if direction < 0 {
+            self.disasm_rows
+                .iter()
+                .take_while(|line| line.addr < anchor)
+                .map(|line| self.disasm_row_pitch(ui, line))
+                .sum()
+        } else {
+            0.0
+        };
+        // Keep the cursor on the same instruction (the rows above it changed index).
+        if let Some(addr) = cursor
+            && let Some(index) = self.disasm_rows.iter().position(|line| line.addr == addr)
+        {
+            self.selected = index;
+        }
+        let offset = if direction < 0 {
+            offset + added_px
+        } else {
+            (offset - removed_px).max(0.0)
+        };
+        self.disasm_offset = offset;
+        Some(offset)
     }
 
     /// IDA-style navigation band: segment map of the image with a marker for the current
@@ -4564,6 +4683,14 @@ impl ReCraftApp {
     // ------------------------------------------------------------- actions --
 
     fn handle_keys(&mut self, ctx: &egui::Context) -> Action {
+        // egui may run several layout passes for one frame (`request_discard`); the same key
+        // event is visible in each pass, so only the first pass may act on it or shortcuts
+        // (paging, undo, ...) fire twice per key press.
+        let pass = ctx.cumulative_pass_nr();
+        if self.key_pass == Some(pass) {
+            return Action::None;
+        }
+        self.key_pass = Some(pass);
         if self.palette.is_some() {
             if ctx.input(|input| input.key_pressed(Key::Escape)) {
                 return Action::TogglePalette;
@@ -4712,6 +4839,7 @@ impl ReCraftApp {
                 self.disasm_start = addr;
                 self.selected = 0;
                 self.disasm_dirty = true;
+                self.disasm_scroll_to = Some(0.0);
                 self.pseudo_start = addr;
                 self.pseudo_dirty = true;
             }
@@ -5101,25 +5229,41 @@ impl ReCraftApp {
         let _ = ctx;
     }
 
+    /// Move the loaded window by `rows` instructions (negative = earlier code).
+    ///
+    /// Stepping is done on real instruction boundaries: the old implementation subtracted
+    /// `rows * first_row.len()` bytes, which landed inside instructions and made the view
+    /// decode garbage as soon as the instruction sizes varied.
     fn shift_window(&mut self, rows: i32) {
-        if self.session.is_none() {
+        if self.session.is_none() || rows == 0 {
             return;
         }
-        let row_size = self
-            .disasm_rows
-            .first()
-            .map(|line| u64::from(line.len))
-            .unwrap_or(1)
-            .max(1);
-        let delta = (rows.unsigned_abs() as u64).saturating_mul(row_size);
-        let new_start = if rows >= 0 {
-            Address::new(self.disasm_start.get().saturating_add(delta))
-        } else {
-            Address::new(self.disasm_start.get().saturating_sub(delta))
+        let anchor = self.disasm_start;
+        let next = {
+            let Some(session) = self.session.as_mut() else {
+                return;
+            };
+            let result = if rows < 0 {
+                session.rewind(anchor, rows.unsigned_abs() as usize)
+            } else {
+                session.advance(anchor, rows as usize)
+            };
+            match result {
+                Ok(addr) => addr,
+                Err(error) => {
+                    self.set_error(error);
+                    return;
+                }
+            }
         };
-        self.disasm_start = new_start;
-        self.disasm_dirty = true;
-        self.selected = 0;
+        if next == anchor {
+            // Already at the start/end of the image.
+            return;
+        }
+        self.disasm_start = next;
+        self.refresh_disasm();
+        // Keep the cursor index so it stays on the same screen line, like IDA paging.
+        self.selected = self.selected.min(self.disasm_rows.len().saturating_sub(1));
     }
 
     fn update_inner(&mut self, root: &mut egui::Ui) {
@@ -6928,6 +7072,220 @@ mod tests {
             app.edit.is_some(),
             "Rename command should open the edit dialog"
         );
+    }
+
+    /// Address/y of every disassembly row painted in a frame (`0x...` galleys carry the row).
+    fn painted_rows(output: &egui::FullOutput) -> Vec<(u64, egui::Pos2)> {
+        let mut rows = Vec::new();
+        for clipped in &output.shapes {
+            if let egui::Shape::Text(text) = &clipped.shape {
+                let s = text.galley.text();
+                if let Some(rest) = s.strip_prefix("0x") {
+                    let digits: String =
+                        rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+                    if digits.len() >= 8
+                        && let Ok(addr) = u64::from_str_radix(&digits, 16)
+                    {
+                        rows.push((addr, text.pos));
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    /// Headless app with notepad.exe analysed and shown in text view.
+    fn headless_disassembly() -> Option<(ReCraftApp, egui::Context, egui::RawInput)> {
+        let bytes = std::fs::read("C:/Windows/System32/notepad.exe").ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-scroll.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        // Analysis gives the session function starts, which is what the paging walk anchors on.
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.view_mode = ViewMode::Text;
+        app.focus_pane(Pane::View);
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        Some((app, ctx, input))
+    }
+
+    /// Wheel scrolling at the top edge used to stop dead because the view only holds a fixed
+    /// window of instructions; it must now load code above the window instead.
+    #[test]
+    fn headless_disassembly_wheel_reaches_code_above_the_window() {
+        let Some((mut app, ctx, mut input)) = headless_disassembly() else {
+            return;
+        };
+        let mut frame = 0.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        let (target, pos) = {
+            let output = step(&mut input, &mut app);
+            let rows = painted_rows(&output);
+            rows.iter()
+                .find(|(_, pos)| pos.y > 200.0 && pos.y < 700.0 && pos.x > 100.0)
+                .copied()
+                .expect("a visible disassembly row")
+        };
+        let pointer = pos + egui::vec2(200.0, 4.0);
+        input.events.push(egui::Event::PointerMoved(pointer));
+        let output = step(&mut input, &mut app);
+        let y_of = |output: &egui::FullOutput| {
+            painted_rows(output)
+                .iter()
+                .find(|(addr, _)| *addr == target)
+                .map(|(_, pos)| pos.y)
+        };
+        let base_y = y_of(&output).expect("row painted before scrolling");
+        let anchor = app.disasm_start;
+        let anchor_rows: Vec<Address> = app
+            .disasm_rows
+            .iter()
+            .take(6)
+            .map(|line| line.addr)
+            .collect();
+
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 8.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut output = output;
+        for _ in 0..40 {
+            output = step(&mut input, &mut app);
+        }
+
+        assert!(
+            app.disasm_start < anchor,
+            "wheel up at the top edge did not load earlier code: start stayed {:#x}",
+            app.disasm_start.get()
+        );
+        // The rows must stay on the real instruction stream: the previous anchor is still
+        // decoded at the same place, with no byte drift.
+        let index = app
+            .disasm_rows
+            .iter()
+            .position(|line| line.addr == anchor)
+            .expect("previous anchor still in the window");
+        assert!(
+            index >= 1,
+            "window did not grow above the previous anchor ({index})"
+        );
+        let followed: Vec<Address> = app
+            .disasm_rows
+            .iter()
+            .skip(index)
+            .take(6)
+            .map(|line| line.addr)
+            .collect();
+        assert_eq!(
+            followed, anchor_rows,
+            "re-anchored window is not instruction aligned"
+        );
+        // Seamless: only the wheel itself moved the text, not the page that was loaded.
+        let after_y = y_of(&output).expect("row still painted after re-anchoring");
+        assert!(
+            (after_y - base_y).abs() < 2.0 * app.row_height(),
+            "re-anchoring moved the text by {} px",
+            after_y - base_y
+        );
+    }
+
+    /// PageUp must move the window by whole instructions, not by a byte guess made from the
+    /// first row's length (which used to land mid-instruction and show garbage).
+    #[test]
+    fn headless_page_up_moves_by_instructions() {
+        let Some((mut app, ctx, mut input)) = headless_disassembly() else {
+            return;
+        };
+        let mut frame = 0.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        step(&mut input, &mut app);
+        let anchor = app.disasm_start;
+        let old_rows: Vec<Address> = app.disasm_rows.iter().map(|line| line.addr).collect();
+        assert!(old_rows.len() > 100);
+
+        // Reference stream decoded from the first executable byte of the image (a boundary the
+        // loader guarantees), independent of the paging code under test.
+        let segment_start = app
+            .session
+            .as_ref()
+            .unwrap()
+            .segments()
+            .iter()
+            .filter(|segment| segment.perm.is_executable())
+            .map(|segment| segment.range.start)
+            .min()
+            .unwrap();
+        let reference: Vec<Address> = app
+            .session
+            .as_mut()
+            .unwrap()
+            .disasm(segment_start, 2000)
+            .unwrap()
+            .iter()
+            .map(|line| line.addr)
+            .collect();
+        let position = reference
+            .iter()
+            .position(|addr| *addr == anchor)
+            .expect("entry in the reference stream");
+        assert!(
+            position >= 20,
+            "reference stream too short before the entry"
+        );
+
+        input.events.push(egui::Event::Key {
+            key: egui::Key::PageUp,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        step(&mut input, &mut app);
+        step(&mut input, &mut app);
+
+        assert!(
+            app.disasm_start < anchor,
+            "PageUp did not move the window up"
+        );
+        assert_eq!(
+            app.disasm_start,
+            reference[position - 20],
+            "PageUp must land 20 real instructions back, not 20 byte-guesses"
+        );
+        assert_eq!(
+            app.disasm_rows[20].addr, anchor,
+            "PageUp did not move by 20 instructions"
+        );
+        assert_eq!(app.disasm_rows[21].addr, old_rows[1]);
     }
 
     /// Runs the background worker function directly (no UI thread): it must persist

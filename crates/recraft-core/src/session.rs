@@ -35,6 +35,8 @@ const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
 const FLAGS_CACHE_PAGES: usize = 1024;
 const DECODE_CACHE_ENTRIES: usize = 65_536;
+/// Upper bound on the instruction sweep used to find the instruction before an address.
+const SWEEP_LIMIT: usize = 50_000;
 
 /// `func.flags` bit marking functions produced by automatic analysis (derived data).
 pub const FUNC_FLAG_AUTO: u32 = 1;
@@ -1103,6 +1105,146 @@ impl Session {
         }
         Ok(lines)
     }
+
+    /// Address of the instruction that ends exactly at `addr` (its predecessor), if any.
+    ///
+    /// This is the fallback used when no linear sweep can be anchored before `addr`: it scans
+    /// the 15-byte window before `addr` and keeps the latest start whose decode ends on `addr`.
+    /// Prefer [`Session::rewind`], which sweeps from a known boundary and cannot pick an
+    /// overlapping decode.
+    pub fn prev_insn(&mut self, addr: Address) -> Result<Option<Address>> {
+        let Some(segment) = self.segment_containing(addr).cloned() else {
+            return Ok(None);
+        };
+        let lowest = addr.get().saturating_sub(15).max(segment.range.start.get());
+        let mut candidate = addr.get().saturating_sub(1);
+        loop {
+            if candidate < lowest {
+                return Ok(None);
+            }
+            let mut raw = [0u8; 15];
+            let read = self.read_at(Address::new(candidate), &mut raw)?;
+            if read > 0
+                && let Some(insn) = decode(&raw[..read], Address::new(candidate), self.mode)
+                && insn.next_addr() == addr
+            {
+                return Ok(Some(Address::new(candidate)));
+            }
+            candidate = match candidate.checked_sub(1) {
+                Some(previous) => previous,
+                None => return Ok(None),
+            };
+        }
+    }
+
+    /// Nearest instruction boundary strictly before `addr`.
+    ///
+    /// Analysed function starts are guaranteed boundaries, so the latest one before `addr` is
+    /// the closest place a linear sweep can start. Without analysis data (or before the first
+    /// function of a segment) the segment start is used instead.
+    fn instruction_anchor(&mut self, addr: Address) -> Result<Address> {
+        let segment_start = self
+            .segment_containing(addr)
+            .map(|segment| segment.range.start)
+            .unwrap_or(addr);
+        let Ok(functions) = self.functions() else {
+            return Ok(segment_start);
+        };
+        Ok(functions
+            .iter()
+            .filter(|function| function.start >= segment_start && function.start < addr)
+            .map(|function| function.start)
+            .max()
+            .unwrap_or(segment_start))
+    }
+
+    /// Collect the instruction starts in `anchor..addr` (the last `limit` of them).
+    ///
+    /// Returns the starts plus whether the sweep landed exactly on `addr`; when it does not,
+    /// `addr` is not on the instruction stream this project sees and no boundary is known.
+    fn sweep_starts(
+        &mut self,
+        anchor: Address,
+        addr: Address,
+        limit: usize,
+    ) -> Result<(VecDeque<Address>, bool)> {
+        let mut starts: VecDeque<Address> = VecDeque::new();
+        let mut probe = anchor;
+        // Bound the sweep so an address far past the nearest function cannot stall the UI.
+        for _ in 0..SWEEP_LIMIT {
+            if probe >= addr {
+                break;
+            }
+            starts.push_back(probe);
+            if starts.len() > limit {
+                starts.pop_front();
+            }
+            match self.insn_at(probe)? {
+                Some(insn) => probe = insn.next_addr(),
+                None => break,
+            }
+        }
+        Ok((starts, probe == addr))
+    }
+
+    /// Walk `rows` instructions backwards from `addr`, stopping at the segment start.
+    ///
+    /// Use this instead of subtracting bytes: instructions are variable-length, so a byte
+    /// offset lands in the middle of an instruction and the view then decodes nonsense. The
+    /// walk sweeps forward from the nearest known boundary before `addr` (a function start, else
+    /// the segment start) and takes the last `rows` instruction addresses; overlapping decodes
+    /// and `int3` padding are therefore seen the same way the rest of the app sees them.
+    pub fn rewind(&mut self, addr: Address, rows: usize) -> Result<Address> {
+        if rows == 0 {
+            return Ok(addr);
+        }
+        let mut cursor = addr;
+        let mut remaining = rows;
+        // Each sweep only covers one anchor..cursor span; crossing a function boundary needs
+        // the next anchor, hence the (bounded) loop.
+        for _ in 0..64 {
+            if remaining == 0 {
+                return Ok(cursor);
+            }
+            let anchor = self.instruction_anchor(cursor)?;
+            if anchor >= cursor {
+                break;
+            }
+            let (starts, aligned) = self.sweep_starts(anchor, cursor, remaining)?;
+            if !aligned || starts.is_empty() {
+                break;
+            }
+            let taken = starts.len();
+            cursor = starts[0];
+            remaining -= taken;
+        }
+        if remaining == 0 {
+            return Ok(cursor);
+        }
+        // No sweep reached `cursor`: fall back to the byte window. Padding (`int3`) and data
+        // regions decode unambiguously here; real code is covered by the sweep above.
+        for _ in 0..remaining {
+            match self.prev_insn(cursor)? {
+                Some(previous) => cursor = previous,
+                None => break,
+            }
+        }
+        Ok(cursor)
+    }
+
+    /// Walk `rows` instructions forwards from `addr`, stopping at the segment end.
+    pub fn advance(&mut self, addr: Address, rows: usize) -> Result<Address> {
+        let mut cursor = addr;
+        for _ in 0..rows {
+            match self.insn_at(cursor)? {
+                Some(insn) if self.segment_containing(insn.next_addr()).is_some() => {
+                    cursor = insn.next_addr();
+                }
+                _ => break,
+            }
+        }
+        Ok(cursor)
+    }
 }
 
 fn write_segments(conn: &Connection, segments: &[Segment]) -> Result<()> {
@@ -1244,6 +1386,92 @@ mod tests {
         assert_eq!(lines[0].addr, entry);
         assert!(!lines[0].mnemonic.is_empty());
         assert_ne!(lines[0].len, 0);
+    }
+
+    #[test]
+    fn rewind_and_advance_stay_on_instruction_boundaries() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let rows = session.disasm(entry, 40).unwrap();
+        assert!(rows.len() >= 20, "fixture needs a few instructions");
+        let addresses: Vec<Address> = rows.iter().map(|row| row.addr).collect();
+
+        // Every row is `rows` instructions after the entry, even though instruction lengths
+        // differ (subtracting a byte count used to land inside an instruction).
+        for (index, expected) in addresses.iter().enumerate().take(17).skip(1) {
+            assert_eq!(
+                session.advance(entry, index).unwrap(),
+                *expected,
+                "advance({index}) is not instruction aligned"
+            );
+            assert_eq!(
+                session.rewind(*expected, index).unwrap(),
+                entry,
+                "rewind({index}) is not instruction aligned"
+            );
+        }
+        // Walking further back leaves the function and crosses the `int3` padding; the walk
+        // must stay byte-exact instead of stalling on a mid-instruction decode.
+        let padding = session.rewind(entry, 1).unwrap();
+        assert_eq!(padding.get(), entry.get() - 1);
+        assert_ne!(session.rewind(entry, 40).unwrap(), entry);
+    }
+
+    #[test]
+    fn rewind_stops_at_the_segment_start() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let first_code = session
+            .segments()
+            .iter()
+            .filter(|segment| segment.perm.is_executable())
+            .map(|segment| segment.range.start)
+            .min()
+            .unwrap();
+        // No image bytes exist before the segment: rewinding saturates instead of walking out
+        // of the image (which used to blank the disassembly view).
+        assert_eq!(session.rewind(first_code, 50).unwrap(), first_code);
+        assert!(session.prev_insn(first_code).unwrap().is_none());
+    }
+
+    /// Projects with analysis data have function starts, and the entry itself is usually one of
+    /// them: rewinding from a function start must still find earlier instructions instead of
+    /// falling back to a byte scan.
+    #[test]
+    fn rewind_works_from_a_function_start() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let rows = session.disasm(entry, 8).unwrap();
+        // The entry function, plus a function that ends right before the entry's padding.
+        session
+            .execute(Command::DefineFunc {
+                start: entry,
+                end: rows.last().unwrap().addr,
+            })
+            .unwrap();
+
+        // 20 instructions before the entry are inside the padding that precedes it, and the
+        // rows after them must still decode into the entry when swept forward.
+        let back = session.rewind(entry, 1).unwrap();
+        assert_eq!(
+            back.get(),
+            entry.get() - 1,
+            "should step into the int3 padding"
+        );
+        let anchor = session.rewind(entry, 16).unwrap();
+        let resumed = session.advance(anchor, 16).unwrap();
+        assert_eq!(
+            resumed, entry,
+            "rewind/advance disagree across the function start"
+        );
     }
 
     #[test]
