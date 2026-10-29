@@ -96,6 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A load-modify-store fold no longer drops the loaded value when a later statement still
+  reads its register, most visibly a counter update that returns the new value: corpus
+  `corpus_counter_bump` used to render `*(u32*)(...) += 1; return;`, losing the returned
+  counter, and now keeps the load and ends in `return eax;`.
 - A `while (1)` loop emitted for a loop header that carries statements (the structurer's
   fallback when the test cannot sit on a `do-while` latch) broke on the condition that
   *stays* in the loop instead of its negation, so the printed loop left when the machine

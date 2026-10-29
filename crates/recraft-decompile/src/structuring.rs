@@ -2874,6 +2874,12 @@ fn fold_load_modify_store(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         }
+        // The fold drops the instruction that defined `register`. If a later statement still
+        // reads it (notably `return;` returning `eax`), the value would be lost.
+        if register_read_before_write(lines, index + 3, register) {
+            index += 1;
+            continue;
+        }
         let indent = " ".repeat(leading_spaces(&lines[index].text));
         let addr = lines[index].addr;
         lines.splice(
@@ -2885,6 +2891,33 @@ fn fold_load_modify_store(lines: &mut Vec<PseudoLine>) {
         );
         index += 1;
     }
+}
+
+/// True when `register` is read on some later statement before being completely redefined.
+/// `return;` counts as a read of `eax`/`rax`, since that is the value the caller receives.
+fn register_read_before_write(lines: &[PseudoLine], start: usize, register: &str) -> bool {
+    for line in &lines[start..] {
+        let text = line.text.trim();
+        if text == "return;" && matches!(register, "eax" | "rax") {
+            return true;
+        }
+        let assignment = plain_assignment(text);
+        let compound = parse_compound(text);
+        let writes = assignment.is_some_and(|(lhs, _)| lhs == register)
+            || compound.is_some_and(|(lhs, _, _)| lhs == register);
+        if !mentions_slot(text, register) {
+            if writes {
+                return false;
+            }
+            continue;
+        }
+        // The register is mentioned: a write that reads it still uses the old value, a
+        // plain write kills the definition, anything else reads it.
+        let reads_own_value = assignment.is_some_and(|(_, rhs)| mentions_slot(rhs, register))
+            || compound.is_some_and(|(_, _, value)| mentions_slot(value, register));
+        return reads_own_value || !writes;
+    }
+    false
 }
 
 /// Parse `r = *(T)(a);` into `(r, T, a)`.
@@ -4304,6 +4337,18 @@ mod tests {
     }
 
     #[test]
+    fn l2_keeps_the_value_of_a_folded_counter_update() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "corpus_counter_bump").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        // The increment stays visible *and* the loaded value is not lost to the caller.
+        assert!(text.contains("eax = *(u32*)("), "{text}");
+        assert!(text.contains("return eax;"), "{text}");
+    }
+
+    #[test]
     fn l2_ignores_zeroing_idioms_and_follows_pointer_origins() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;
@@ -4715,11 +4760,9 @@ mod tests {
             test_line("    eax = (eax - 1);"),
             test_line("    *(u32*)(rdi) = eax;"),
             test_line("    rax = (rax ^ rsp);"),
-            test_line("    if (!(eax == 0)) {"),
         ];
         fold_compound_assignments(&mut lines);
         fold_load_modify_store(&mut lines);
-        simplify_negated_conditions(&mut lines);
         let text = lines
             .iter()
             .map(|line| line.text.as_str())
@@ -4727,9 +4770,23 @@ mod tests {
             .join("\n");
         assert!(text.contains("*(u32*)(rdi) -= 1;"), "{text}");
         assert!(text.contains("rax ^= rsp;"), "{text}");
-        assert!(text.contains("if ((eax != 0)) {"), "{text}");
         assert!(!text.contains("eax = (eax - 1);"), "{text}");
         assert!(!text.contains("*(u32*)(rdi) = eax;"), "{text}");
+
+        // A later read keeps the loaded value alive: `return;` returns `eax`.
+        let mut lines = vec![
+            test_line("    eax = *(u32*)(rdi);"),
+            test_line("    eax += 1;"),
+            test_line("    *(u32*)(rdi) = eax;"),
+            test_line("    return;"),
+        ];
+        fold_load_modify_store(&mut lines);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert_eq!(lines[0].text, "    eax = *(u32*)(rdi);");
+
+        let mut lines = vec![test_line("    if (!(eax == 0)) {")];
+        simplify_negated_conditions(&mut lines);
+        assert_eq!(lines[0].text, "    if ((eax != 0)) {");
 
         let mut lines = vec![
             test_line("    eax = (eax + -0x30);"),
