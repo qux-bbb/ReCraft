@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A temporary built only for the return folds away: `ebx = 0x80004002; return ebx;` reads
+  `return 0x80004002;`, and `rdx = (c ? a : b); return rdx;` reads `return (c ? a : b);`
+  (29 sites in notepad).
 - A compiled `bool` return (`al = 1; return eax;`) folds into `return 1;`: the constant moves
   onto the returning line when it is immediately followed by the `eax` return. Non-constant
   byte values keep their explicit write so the width stays visible. 33 such returns in

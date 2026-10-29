@@ -285,6 +285,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         // single-use inlining chance as a condition.
         fold_single_use_temporaries(&mut lines);
         fold_constant_byte_returns(&mut lines);
+        fold_assigned_returns(&mut lines);
     }
     lines.push(PseudoLine {
         addr: start,
@@ -2860,6 +2861,29 @@ fn is_identifier(text: &str) -> bool {
         .next()
         .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// `rdx = (c ? a : b); return rdx;` is a value built for the return: fold the assignment into
+/// the returning line (`return (c ? a : b);`) so the temporary does not appear at all.
+fn fold_assigned_returns(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let indent = leading_spaces(&lines[index].text);
+        let Some((target, value)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        if wide_register_base(target).is_none()
+            || leading_spaces(&lines[index + 1].text) != indent
+            || lines[index + 1].text.trim() != format!("return {target};")
+        {
+            index += 1;
+            continue;
+        }
+        lines[index].text = format!("{}return {value};", " ".repeat(indent));
+        lines.remove(index + 1);
+        index += 1;
+    }
 }
 
 /// `al = 1; return eax;` is how a compiled `bool` return looks: fold the constant into the
