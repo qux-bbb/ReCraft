@@ -19,7 +19,7 @@ use recraft_core::Session;
 use recraft_decode::iced_x86;
 use recraft_ir::{Flow, Reg};
 
-use crate::l2::{X64_ARG_REGS, parse_prototype};
+use crate::l2::{ReturnKind, X64_ARG_REGS, parse_prototype};
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block, recover_args};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
@@ -250,6 +250,14 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     hide_callee_saves(&mut lines);
     propagate_argument_copies(&mut lines);
     materialize_missing_labels(&mut lines);
+    // Runs last: the return value is folded only once every rewrite that can move or drop
+    // the producing statement has settled.
+    if let Some(info) = info.as_ref() {
+        fold_return_values(&mut lines, info.ret);
+        // The folded `return` reads the value's temporary, so give that temporary the same
+        // single-use inlining chance as a condition.
+        fold_single_use_temporaries(&mut lines);
+    }
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -1796,6 +1804,79 @@ fn hide_epilogue_restores(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// Fold the value left in the return register into the `return` statement:
+/// `eax = f(); return;` becomes `return f();`, `eax += x; return;` becomes
+/// `return (eax + x);`, and a bare `return;` in a value-returning function at least reads
+/// `return eax;`. The compiler leaves the result in `eax`/`rax`, so the folded form states
+/// what the source returned rather than naming a scratch register after the fact.
+///
+/// Only a statement directly above the `return` at the same brace depth is folded: there
+/// the value is computed unconditionally on the path that returns. Other paths keep their
+/// bare `return;` unless the return register is written somewhere in the function, so a
+/// `void`-looking tail never invents a value.
+fn fold_return_values(lines: &mut Vec<PseudoLine>, ret: ReturnKind) {
+    let register = match ret {
+        ReturnKind::Void => return,
+        ReturnKind::Int32 => "eax",
+        ReturnKind::Int64 => "rax",
+    };
+    // A value-returning function may compute only into the 32-bit half; both spellings
+    // name the same machine register.
+    let is_return_register = |name: &str| name == "eax" || name == "rax";
+    let writes_return_register = lines.iter().any(|line| {
+        let text = line.text.trim();
+        plain_assignment(text).is_some_and(|(lhs, _)| is_return_register(lhs))
+            || parse_compound(text).is_some_and(|(lhs, _, _)| is_return_register(lhs))
+    });
+    // (return line, statement to remove, replacement), applied bottom-up so removing a
+    // statement does not shift a return that was already handled.
+    let mut folds: Vec<(usize, Option<usize>, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.text.trim() != "return;" {
+            continue;
+        }
+        let spaces = leading_spaces(&line.text);
+        let replacement = index.checked_sub(1).and_then(|previous| {
+            let statement = lines[previous].text.trim();
+            // The value is only certain when the assignment is the immediately preceding
+            // statement of the same block: a closing brace or a label starts another path.
+            let same_block = leading_spaces(&lines[previous].text) == spaces
+                && !statement.starts_with('}')
+                && !statement.starts_with("loc_")
+                && statement.ends_with(';');
+            if !same_block {
+                return None;
+            }
+            if let Some((lhs, rhs)) = plain_assignment(statement) {
+                return is_return_register(lhs).then(|| (previous, format!("return {rhs};")));
+            }
+            if let Some((lhs, op, value)) = parse_compound(statement) {
+                return is_return_register(lhs)
+                    .then(|| (previous, format!("return ({lhs} {op} {value});")));
+            }
+            // A call as the last statement leaves its result in the return register.
+            (statement.ends_with(");") && contains_call(statement) && !statement.contains(" = "))
+                .then(|| (previous, format!("return {statement}")))
+        });
+        let replacement = match replacement {
+            Some((previous, text)) => (Some(previous), text),
+            None if writes_return_register => (None, format!("return {register};")),
+            None => continue,
+        };
+        folds.push((
+            index,
+            replacement.0,
+            format!("{}{}", " ".repeat(spaces), replacement.1),
+        ));
+    }
+    for (index, previous, text) in folds.into_iter().rev() {
+        lines[index].text = text;
+        if let Some(previous) = previous {
+            lines.remove(previous);
+        }
+    }
+}
+
 /// Last-resort repair for a `goto` whose target block was emitted without a label: insert
 /// the label in front of the first statement carrying that address. Emitted lines keep the
 /// instruction address, so the jump lands at the right place even when the structurer
@@ -2552,8 +2633,27 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
             lines.remove(index);
             continue;
         }
-        if trimmed == format!("return {lhs};") {
-            lines[index + 1].text = format!("{indent}return {rhs};");
+        if let Some(expression) = trimmed
+            .strip_prefix("return ")
+            .and_then(|rest| rest.strip_suffix(';'))
+        {
+            // A returned expression is evaluated right after the assignment, so the
+            // temporary can be inlined the same way as a condition.
+            if expression.contains("&&") || expression.contains("||") {
+                index += 1;
+                continue;
+            }
+            if expression
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .filter(|token| *token == lhs)
+                .count()
+                != 1
+            {
+                index += 1;
+                continue;
+            }
+            lines[index + 1].text =
+                format!("{indent}return {};", replace_token(expression, lhs, rhs));
             lines.remove(index);
             continue;
         }
@@ -4015,8 +4115,7 @@ mod tests {
             text.contains("int32 __stdcall stdcall_add(int32 a, int32 b)"),
             "{text}"
         );
-        assert!(text.contains("eax = a;"), "{text}");
-        assert!(text.contains("eax += b;"), "{text}");
+        assert!(text.contains("return (a + b);"), "{text}");
     }
 
     #[test]
@@ -4222,6 +4321,68 @@ mod tests {
         fold_single_use_temporaries(&mut lines);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "    return 7;");
+        // The same holds for an expression around the temporary, as produced by
+        // `fold_return_values`.
+        let mut lines = vec![
+            test_line("    eax = r8d;"),
+            test_line("    return (eax + 1);"),
+        ];
+        fold_single_use_temporaries(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "    return (r8d + 1);");
+    }
+
+    #[test]
+    fn returns_carry_the_value_left_in_the_return_register() {
+        let mut lines = vec![test_line("    eax = sub_1();"), test_line("    return;")];
+        fold_return_values(&mut lines, ReturnKind::Int32);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "    return sub_1();");
+
+        let mut lines = vec![test_line("    eax += ebx;"), test_line("    return;")];
+        fold_return_values(&mut lines, ReturnKind::Int32);
+        assert_eq!(lines[0].text, "    return (eax + ebx);");
+
+        // A value computed on another path: the return still names the register.
+        let mut lines = vec![
+            test_line("    if (flag) {"),
+            test_line("        eax = 1;"),
+            test_line("    }"),
+            test_line("    return;"),
+        ];
+        fold_return_values(&mut lines, ReturnKind::Int32);
+        assert_eq!(lines.last().unwrap().text, "    return eax;");
+
+        // A call as the last statement leaves its result in the return register.
+        let mut lines = vec![test_line("    rax = sub_2(1);"), test_line("    return;")];
+        fold_return_values(&mut lines, ReturnKind::Int64);
+        assert_eq!(lines[0].text, "    return sub_2(1);");
+
+        let mut lines = vec![test_line("    sub_3(rax);"), test_line("    return;")];
+        fold_return_values(&mut lines, ReturnKind::Int64);
+        assert_eq!(lines[0].text, "    return sub_3(rax);");
+    }
+
+    #[test]
+    fn l2_returns_the_computed_value() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "add_leaf").unwrap();
+        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        assert!(text.contains("return (arg1 + arg2);"), "{text}");
+        assert!(!text.contains("return;"), "{text}");
+    }
+
+    #[test]
+    fn void_and_unused_return_registers_keep_a_bare_return() {
+        let mut lines = vec![test_line("    eax = 1;"), test_line("    return;")];
+        fold_return_values(&mut lines, ReturnKind::Void);
+        assert_eq!(lines[1].text, "    return;");
+
+        let mut lines = vec![test_line("    return;")];
+        fold_return_values(&mut lines, ReturnKind::Int32);
+        assert_eq!(lines[0].text, "    return;");
     }
 
     #[test]

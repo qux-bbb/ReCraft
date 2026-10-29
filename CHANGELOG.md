@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Decompiled pseudo-C now returns the value the code computed instead of leaving it in a
+  register: `eax = f(); return;` renders as `return f();`, `eax += x; return;` as
+  `return (eax + x);`, and a value-returning path whose producer is not the adjacent
+  statement names the return register (`return eax;` / `return rax;`) rather than a bare
+  `return;`. A single-use temporary written just above the return is inlined into it, so
+  `eax = a; eax += b; return;` becomes `return (a + b);`. Void functions keep the bare
+  `return;`, and the multiply-by-one that scaled addressing leaves behind
+  (`(arg2 * 1)`) is dropped. On the corpus, `add_leaf` now reads
+  `return (arg1 + arg2);`.
 - In the Decompile view, double-clicking a callee's name now enters that function (its
   pseudo-C replaces the listing and `Back` returns to the caller) instead of jumping to the
   disassembly row under the pointer. Callee names are resolved with the decompiler's own

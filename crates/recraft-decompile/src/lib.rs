@@ -1237,6 +1237,14 @@ impl Printer<'_> {
                         _ => {}
                     }
                 }
+                if rhs_text == "1" && matches!(op, BinOp::Mul | BinOp::Div) {
+                    // `lea eax, [rcx + rdx*1]` and scaled address arithmetic spell a
+                    // multiply by one that the source never had.
+                    return lhs_text;
+                }
+                if lhs_text == "1" && matches!(op, BinOp::Mul) {
+                    return rhs_text;
+                }
                 if lhs_text == "0" {
                     match op {
                         BinOp::Add | BinOp::Or | BinOp::Xor => return rhs_text,
