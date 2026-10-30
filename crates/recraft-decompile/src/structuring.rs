@@ -6322,7 +6322,7 @@ mod tests {
             external: Vec::new(),
             jump_tables: BTreeMap::new(),
         };
-        let mut lift =
+        let lift =
             |arg_writes: Vec<(usize, Option<String>, BTreeSet<Reg>)>, written: Reg| BlockLift {
                 statements: Vec::new(),
                 condition: None,
