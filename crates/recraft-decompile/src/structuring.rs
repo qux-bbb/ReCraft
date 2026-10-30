@@ -440,6 +440,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
     name_structure_instances(&mut lines);
+    name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
     lines.push(PseudoLine {
@@ -704,6 +705,131 @@ fn count_arguments(arguments: &str) -> usize {
         }
     }
     count
+}
+
+/// Handle-typed arguments of well-known APIs: (API, argument index, name). Specific kinds come
+/// first so a slot passed to several APIs gets the most telling name.
+const HANDLE_SLOTS: &[(&str, usize, &str)] = &[
+    ("ReleaseMutex", 0, "hMutex"),
+    ("ReleaseSemaphore", 0, "hSemaphore"),
+    ("SetEvent", 0, "hEvent"),
+    ("ResetEvent", 0, "hEvent"),
+    ("RegCloseKey", 0, "hKey"),
+    ("FindClose", 0, "hFind"),
+    ("FreeLibrary", 0, "hModule"),
+    ("DestroyWindow", 0, "hwnd"),
+    ("DestroyMenu", 0, "hMenu"),
+    ("ImageList_Destroy", 0, "himl"),
+    ("WindowsDeleteString", 0, "hstring"),
+    ("ReleaseDC", 1, "hdc"),
+    ("CloseHandle", 0, "hObject"),
+    ("DeleteObject", 0, "hObject"),
+    ("WaitForSingleObject", 0, "hObject"),
+    ("WaitForSingleObjectEx", 0, "hObject"),
+];
+
+/// Name the slot that a handle API receives, so `CloseHandle(var_28)` reads
+/// `CloseHandle(hObject)`. Runs after the structure names, which claim their slots first.
+fn name_handle_slots(lines: &mut [PseudoLine]) {
+    let mut assigned: Vec<(u64, &'static str)> = Vec::new();
+    for (api, index, name) in HANDLE_SLOTS {
+        for line in lines.iter() {
+            let text = line.text.as_str();
+            if !text.contains(&format!("{api}(")) {
+                continue;
+            }
+            let Some(arguments) = call_arguments(text, api) else {
+                continue;
+            };
+            let Some(argument) = top_level_argument(arguments, *index) else {
+                continue;
+            };
+            let Some(slot) = slot_name_address(argument.trim()) else {
+                continue;
+            };
+            if !assigned.iter().any(|(existing, _)| *existing == slot) {
+                assigned.push((slot, name));
+            }
+        }
+    }
+    if assigned.is_empty() {
+        return;
+    }
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| !token.is_empty())
+        {
+            used.insert(token.to_owned());
+        }
+    }
+    for (slot, stem) in assigned {
+        let from = format!("var_{slot:x}");
+        // The structure pass may already have named this slot.
+        if !used.contains(&from) {
+            continue;
+        }
+        let mut name = stem.to_owned();
+        let mut suffix = 2;
+        while used.contains(&name) {
+            name = format!("{stem}{suffix}");
+            suffix += 1;
+        }
+        used.insert(name.clone());
+        for line in lines.iter_mut() {
+            line.text = replace_token(&line.text, &from, &name);
+        }
+    }
+}
+
+/// The raw argument list of the first `api(` call in `text`.
+fn call_arguments<'a>(text: &'a str, api: &str) -> Option<&'a str> {
+    let start = text.find(&format!("{api}("))? + api.len() + 1;
+    let rest = &text[start..];
+    let mut depth = 1usize;
+    for (offset, ch) in rest.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&rest[..offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The `index`-th top-level argument of `arguments`.
+fn top_level_argument(arguments: &str, index: usize) -> Option<&str> {
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut current = 0usize;
+    for (offset, ch) in arguments.char_indices() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if current == index {
+                    return Some(&arguments[start..offset]);
+                }
+                current += 1;
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    (current == index).then(|| &arguments[start..])
+}
+
+/// The frame displacement of a bare `var_XX` argument.
+fn slot_name_address(argument: &str) -> Option<u64> {
+    let digits = argument.strip_prefix("var_")?;
+    u64::from_str_radix(digits, 16).ok()
 }
 
 /// The name a structure instance takes when an API fills it: a `RECT` is a rectangle, a
@@ -6875,6 +7001,35 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn handle_arguments_get_a_name() {
+        let mut lines = vec![
+            test_line("    var_28 = 0;"),
+            test_line("    CloseHandle(var_28);"),
+        ];
+        name_handle_slots(&mut lines);
+        assert_eq!(lines[0].text, "    hObject = 0;");
+        assert_eq!(lines[1].text, "    CloseHandle(hObject);");
+
+        // The more telling kind wins over the generic handle name.
+        let mut lines = vec![
+            test_line("    ReleaseMutex(var_30);"),
+            test_line("    CloseHandle(var_30);"),
+        ];
+        name_handle_slots(&mut lines);
+        assert_eq!(lines[0].text, "    ReleaseMutex(hMutex);");
+        assert_eq!(lines[1].text, "    CloseHandle(hMutex);");
+
+        // The argument index of the entry is used (ReleaseDC's device context is second).
+        let mut lines = vec![test_line("    ReleaseDC(hwnd, var_40);")];
+        name_handle_slots(&mut lines);
+        assert_eq!(lines[0].text, "    ReleaseDC(hwnd, hdc);");
+
+        // A computed argument is not a slot and keeps its text.
+        let mut lines = vec![test_line("    CloseHandle(var_18 + 4);")];
+        name_handle_slots(&mut lines);
+        assert_eq!(lines[0].text, "    CloseHandle(var_18 + 4);");
     }
     #[test]
     fn structure_instances_get_a_name() {

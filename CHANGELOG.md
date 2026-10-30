@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A slot that a handle API receives gets a handle name: `CloseHandle(var_88)` reads
+  `CloseHandle(hObject)`, `RegCloseKey(var_38)` `RegCloseKey(hKey)`, `ReleaseMutex`
+  `hMutex`, `SetEvent`/`ResetEvent` `hEvent`, `DestroyWindow` `hwnd`, `WindowsDeleteString`
+  `hstring`, `FreeLibrary` `hModule`, `FindClose` `hFind`, `DestroyMenu` `hMenu`,
+  `ImageList_Destroy` `himl`, and `ReleaseDC`'s second argument `hdc`. A slot that several
+  APIs receive takes the most telling kind (a mutex handle stays `hMutex` even when it is
+  later closed). Notepad: 120 named handle uses across 9 functions. Slots only ever freed
+  with `CoTaskMemFree` keep their number: a generic `pBuffer` was not clearly better.
 - A structure that an API fills gets a real name: `GetClientRect(hwnd, &var_30)` turns the
   slot into `rect`, so the code reads
   `rect = 0; GetClientRect(hwnd, &rect); edx = rect.bottom; edx -= rect.top;` instead of
