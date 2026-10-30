@@ -599,12 +599,14 @@ fn popped_register(item: &LiftedInsn, exprs: &[Expr]) -> Option<Reg> {
 }
 
 /// Net and minimum `rsp` displacement of a lifted instruction list: `(net, min)`. Both are
-/// `None` once a stack-pointer update is not a constant step (`and rsp, -16`, `mov rsp,
-/// rbp`), because later slot names would be guesses.
+/// `None` once a stack-pointer update cannot be resolved (`and rsp, -16`), because later slot
+/// names would be guesses. A register known to hold a stack address makes the update
+/// resolvable: the epilogue's `lea r11, [rsp+0x50]; …; mov rsp, r11` restores the frame.
 fn stack_layout(exprs: &[Expr], items: &[LiftedInsn]) -> (Option<i64>, Option<i64>) {
     let mut delta: i64 = 0;
     let mut min: i64 = 0;
     let mut known = true;
+    let mut offsets: BTreeMap<Reg, i64> = BTreeMap::new();
     for item in items {
         for stmt in &item.stmts {
             match stmt {
@@ -614,7 +616,23 @@ fn stack_layout(exprs: &[Expr], items: &[LiftedInsn]) -> (Option<i64>, Option<i6
                             delta += change;
                             min = min.min(delta);
                         }
-                        None => known = false,
+                        None => match stack_offset(exprs, *value, delta, &offsets) {
+                            Some(offset) => {
+                                delta = offset;
+                                min = min.min(delta);
+                            }
+                            None => known = false,
+                        },
+                    }
+                }
+                Stmt::WriteReg { reg, value } => {
+                    match stack_offset(exprs, *value, delta, &offsets) {
+                        Some(offset) if reg.width == 8 => {
+                            offsets.insert(reg.base, offset);
+                        }
+                        _ => {
+                            offsets.remove(&reg.base);
+                        }
                     }
                 }
                 Stmt::Intrinsic { text } if text.contains("rsp") => known = false,
@@ -626,6 +644,40 @@ fn stack_layout(exprs: &[Expr], items: &[LiftedInsn]) -> (Option<i64>, Option<i6
         (Some(delta), Some(min))
     } else {
         (None, None)
+    }
+}
+
+/// Displacement from the block entry of a stack address held in an expression, given the
+/// current `rsp` displacement and the registers already known to hold one.
+fn stack_offset(
+    exprs: &[Expr],
+    value: ExprId,
+    delta: i64,
+    offsets: &BTreeMap<Reg, i64>,
+) -> Option<i64> {
+    match &exprs[value as usize] {
+        Expr::Reg(view) if view.base == Reg::Rsp => Some(delta),
+        Expr::Reg(view) => offsets.get(&view.base).copied(),
+        Expr::Bin { op, lhs, rhs } => {
+            let Expr::Reg(view) = &exprs[*lhs as usize] else {
+                return None;
+            };
+            let Expr::Const(amount) = &exprs[*rhs as usize] else {
+                return None;
+            };
+            let amount = *amount as i64;
+            let from_entry = if view.base == Reg::Rsp {
+                delta
+            } else {
+                *offsets.get(&view.base)?
+            };
+            match op {
+                BinOp::Add => Some(from_entry + amount),
+                BinOp::Sub => Some(from_entry - amount),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1366,10 +1418,13 @@ impl Printer<'_> {
         };
         if reg.base == Reg::Rsp {
             self.stack_args.clear();
-            match (self.stack_delta, stack_step(self.exprs, *value)) {
-                (Some(delta), Some(change)) => self.stack_delta = Some(delta + change),
-                _ => self.stack_delta = None,
-            }
+            self.stack_delta = match (self.stack_delta, stack_step(self.exprs, *value)) {
+                (Some(delta), Some(change)) => Some(delta + change),
+                // `mov rsp, r11` after `lea r11, [rsp+0x50]` restores the frame through a
+                // register; the displacement is known when that register is.
+                (_, None) => self.pointer_value(*value),
+                (None, Some(_)) => None,
+            };
             return;
         }
         // A register loaded with a stack address (`rbp = rsp - 8`, `rbp = rax - 0x148`

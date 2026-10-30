@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Epilogues that restore the frame pointer through a register no longer lose the stack
+  displacement. A tail such as `lea r11, [rsp+0x50]; mov rsp, r11; pop r14; pop rdi; pop rbp`
+  used to make the whole block's `rsp` layout unknown, so every slot in the function fell
+  back to a raw offset (`var_n48`); a register already known to hold a stack address now
+  resolves the update, and the printer restores the displacement through the same value.
+  Notepad: `var_nXXXX` names 47 → **18**, two single-block functions change
+  (`sub_14001f420` now reads `var_20`/`var_24` instead of `var_n48`/`var_n44`), L2 lines
+  unchanged at 30 272, `goto loc_` unchanged at 475.
 - Frames built through the saved-`rsp` alias keep their slot names. A prologue such as
   `mov rax, rsp; push ...; lea rbp, [rax-0x148]` was not resolved: naming a register from a
   stack address only understood `rsp` itself, so `[rbp-0x30]` printed as `var_n30` instead of
