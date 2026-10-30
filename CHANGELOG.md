@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Decompiling the largest notepad function got **9× faster**: the post-processing passes
+- Decompiling the largest notepad function got **12× faster**: the post-processing passes
   used to rescan the whole function for every candidate (token counts for the single-use
   temporary fold, label-reference counts for the label tidy pass). Token frequencies are
   now collected once and maintained as folds happen, jump targets are collected in a
