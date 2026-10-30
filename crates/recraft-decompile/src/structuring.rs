@@ -107,6 +107,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             &imports,
             None,
             None,
+            None,
         )?);
     }
     // The prologue's frame pointer is the base for `[rbp + disp]` in every block. Blocks
@@ -128,6 +129,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
                 &imports,
                 None,
                 None,
+                None,
             )?;
             probe
                 .stack_pointers
@@ -145,6 +147,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         .map(|body| body.alias_writes.clone())
         .collect();
     let entry_aliases = entry_alias_map(&cfg, &alias_effects, args);
+    // Argument-register values also survive a block split when every path agrees and no call
+    // in between clobbered them, so a call in a later block still prints its arguments.
+    let entry_arg_values = entry_arg_value_map(&cfg, &bodies);
     // Infer argument counts for direct call targets from the callee's prologue. This
     // lets unknown calls render `sub(a, b)` with the right arity instead of dropping
     // arguments or printing all four ABI registers.
@@ -252,6 +257,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             &imports,
             frame_pointer,
             Some(&entry_aliases[index]),
+            Some(&entry_arg_values[index]),
         )?);
     }
     bodies = seeded;
@@ -403,6 +409,59 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         lines,
         literals,
     })
+}
+
+/// Rendered argument-register values that hold on entry to each block.
+///
+/// Must-analysis over the four x64 argument slots: a value is inherited only when every
+/// predecessor leaves the same text in that register. Calls clear the slots, so a call site
+/// never inherits a value that an intervening call would have destroyed.
+fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 4]> {
+    let count = bodies.len();
+    let mut predecessors = vec![Vec::new(); count];
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        for (target, _) in &block.edges {
+            if *target < count {
+                predecessors[*target].push(index);
+            }
+        }
+    }
+    let mut entering: Vec<[Option<String>; 4]> = vec![Default::default(); count];
+    let mut leaving: Vec<[Option<String>; 4]> = vec![Default::default(); count];
+    for _ in 0..(count + 4) {
+        let mut changed = false;
+        for block in 0..count {
+            let mut set: [Option<String>; 4] = Default::default();
+            if block != cfg.entry
+                && let Some(&first) = predecessors[block].first()
+            {
+                set = leaving[first].clone();
+                for &pred in &predecessors[block][1..] {
+                    for slot in 0..4 {
+                        if set[slot] != leaving[pred][slot] {
+                            set[slot] = None;
+                        }
+                    }
+                }
+            }
+            if set != entering[block] {
+                entering[block] = set.clone();
+                changed = true;
+            }
+            let mut out = set;
+            for (slot, value) in &bodies[block].arg_writes {
+                out[*slot] = value.clone();
+            }
+            if out != leaving[block] {
+                leaving[block] = out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    entering
 }
 
 /// Which argument copies hold on entry to each block.
@@ -5852,6 +5911,7 @@ mod tests {
                 stack_min: None,
                 stack_pointers: Vec::new(),
                 alias_writes: Vec::new(),
+                arg_writes: Vec::new(),
                 literals: Vec::new(),
             }
         }

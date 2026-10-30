@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Calls whose argument setup was split across a block boundary now print their arguments.
+  The printer's argument-register values are carried with the same must-analysis as the
+  aliases (intersection over the predecessors, cleared by calls), so a call in a later block
+  prints what an earlier block loaded. Only values that name no live register are carried —
+  constants, string literals and stack slots — because a stored string like
+  `*(u64*)((rcx + 8))` would read the register's *new* value in another block. Notepad:
+  empty Win32 API calls 433 → **337** (41 functions), e.g. `ReleaseSRWLockExclusive()` now
+  prints its lock argument, L2 lines 30 276 → 30 277, `goto loc_` unchanged at 475.
 - Pointer-typed arguments now spell field accesses in every block, not just in the block
   that copies them. `r14 = arg4` followed by `mov ecx, [r14+0xC]` used to print
   `*(u32*)((r14 + 0xc))` because the alias was only tracked inside one basic block; the

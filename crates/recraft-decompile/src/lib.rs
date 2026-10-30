@@ -57,6 +57,10 @@ pub(crate) struct BlockLift {
     /// Registers written from a stack address in this block, with their displacement from
     /// the function entry (the frame pointer established by the prologue).
     pub stack_pointers: Vec<(Reg, i64)>,
+    /// Writes to the x64 argument registers in order: the rendered value, or None when the
+    /// register was clobbered (a call). Lets a call in a later block print arguments set up
+    /// on the way there.
+    pub arg_writes: Vec<(usize, Option<String>)>,
     /// Effect of the block on argument aliases: each written register maps to the register
     /// it copies (`Some`) or to `None` when it no longer holds a parameter copy. Applied in
     /// order, it carries `rsi = arg1` across block boundaries.
@@ -93,6 +97,8 @@ pub(crate) fn lift_block(
     frame_pointer: Option<(Reg, i64)>,
     // `register -> argument register` aliases that hold on entry to the block.
     entry_aliases: Option<&BTreeMap<Reg, Reg>>,
+    // Rendered values known to be in the x64 argument registers on entry to the block.
+    entry_arg_values: Option<&[Option<String>; 4]>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -107,6 +113,7 @@ pub(crate) fn lift_block(
             stack_min: None,
             stack_pointers: Vec::new(),
             alias_writes: Vec::new(),
+            arg_writes: Vec::new(),
             literals: Vec::new(),
         });
     }
@@ -151,6 +158,7 @@ pub(crate) fn lift_block(
             stack_min: None,
             stack_pointers: Vec::new(),
             alias_writes: Vec::new(),
+            arg_writes: Vec::new(),
             literals: Vec::new(),
         });
     }
@@ -207,7 +215,9 @@ pub(crate) fn lift_block(
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
         frame_reg: None,
-        arg_values: [None, None, None, None],
+        arg_values: entry_arg_values
+            .cloned()
+            .unwrap_or([None, None, None, None]),
         arg_aliases: BTreeMap::new(),
         stack_delta: stack.map(|(entry, _)| entry),
         frame_base: stack.map_or(0, |(_, base)| base),
@@ -221,6 +231,7 @@ pub(crate) fn lift_block(
     let mut written = BTreeSet::new();
     let mut stack_pointers: Vec<(Reg, i64)> = Vec::new();
     let mut alias_effect: BTreeMap<Reg, Option<Reg>> = BTreeMap::new();
+    let mut arg_writes: Vec<(usize, Option<String>)> = Vec::new();
     // Argument-register writes consumed by a call are redundant: the call already renders
     // its captured argument expressions.
     let mut flat: Vec<(usize, usize)> = Vec::new();
@@ -390,7 +401,15 @@ pub(crate) fn lift_block(
                 } else {
                     reg.name().to_owned()
                 };
-                printer.arg_values[slot] = Some(rendered);
+                printer.arg_values[slot] = Some(rendered.clone());
+                // Only a value that names no live register can be re-printed in a later
+                // block: a string like `*(u64*)((rcx + 8))` would read the register's new
+                // value there. Stack slots (`var_XX`, `&var_XX`) are frame-relative and stay
+                // valid, so `Rsp`/`Rbp` are allowed.
+                let mut live = BTreeSet::new();
+                expr_live_regs(&exprs, *value, &mut live);
+                let stable = live.iter().all(|reg| matches!(reg, Reg::Rsp | Reg::Rbp));
+                arg_writes.push((slot, stable.then_some(rendered)));
             }
             if matches!(
                 stmt,
@@ -398,6 +417,9 @@ pub(crate) fn lift_block(
             ) {
                 printer.arg_values = [None, None, None, None];
                 printer.stack_args.clear();
+                for slot in 0..4 {
+                    arg_writes.push((slot, None));
+                }
             }
         }
     }
@@ -429,6 +451,7 @@ pub(crate) fn lift_block(
         stack_min,
         stack_pointers,
         alias_writes: alias_effect.into_iter().collect(),
+        arg_writes,
         literals: literal_references(&literals),
     })
 }
