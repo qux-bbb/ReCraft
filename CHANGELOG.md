@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Cross references are IDA's `xrefs to …` **dialog** instead of a docked tab: `X` (only —
+  `F7` is retired) opens a window titled after the selected item, with `Direction`
+  (`Up`/`Down`), `Type` (`c` call, `j` jump, `o` offset, `r` read, `w` write), `Address`
+  (`main:loc_1400010b9`) and `Text` columns. Each row shows the instruction at the other
+  end, with the referenced string appended as `lea rdx, [0x…]  ; 'flag{…}'`. `Down` rows
+  are new: selecting an instruction also lists what it references. `OK`/Enter follows the
+  selected row, `Cancel`/Esc closes, `Search` filters the columns and `Help` shows the
+  type-letter legend; arrow keys move the cursor and the footer reports `Line N of M`.
 - The frame-alias line is no longer printed: `mov rbp, rsp` (or `mov r11, rsp` in an exception
   frame) only sets up the alias used to name frame-relative slots, and the alias is never read
   back in pseudo-C. The bookkeeping still runs, so `var_nXX`/`frame_XX` naming is unchanged;

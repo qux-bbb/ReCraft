@@ -59,7 +59,7 @@ applied 3 proposal(s) through the command bus (undoable)
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
    图标）及其下方 **Graph overview**；右侧**文档标签区**按固定顺序显示 **Disassembly、
-   Decompile、Hex、Strings、Local Types、Imports、Exports、AI**（Names、Xrefs、Segments
+   Decompile、Hex、Strings、Local Types、Imports、Exports、AI**（Names、Segments
    默认隐藏，可从 **Views** 菜单打开）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、
    字节、函数、与 Hex 同步提示）。
    **Disassembly 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
@@ -71,7 +71,7 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
-   `F7` Xrefs、`F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`Space` 切换
+   `F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`X` 打开交叉引用对话框；`Space` 切换
    Disassembly 的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
    （Text/Decompile/Hex）。
    **Strings** 采用 IDA 风格四列：**Address（段:地址）/ Length（hex）/ Type（C/C16）/
@@ -95,14 +95,17 @@ applied 3 proposal(s) through the command bus (undoable)
    **数据/类型操作**：反汇编行按 `C`（代码）/`D`（数据）/`A`（字符串数据）/`U`（取消定义）/
    `P`（建函数），或右键菜单选择；**右键 → Structures…** 打开结构体窗口，可定义
    `0:tag:u32, 16:value:i32` 布局并绑定到当前函数参数槽；右键 **Edit prototype…** 编辑函数原型。
-   左侧 **Functions** 有过滤框（名字/地址）；**Decompile** 行点击反跳反汇编；**Xrefs**
-   显示引用类型，双击直接跟随到反汇编。
+   左侧 **Functions** 有过滤框（名字/地址）；**Decompile** 行点击反跳反汇编；**`X`** 弹出 IDA 风格的
+   **交叉引用对话框**（标题为 `xrefs to <名字>`），四列为 **Direction（`Up` 引用进来 / `Down`
+   引用出去）、Type（`c` call、`j` jump、`o` offset、`r` read、`w` write）、Address
+   （`main:loc_1400010b9`）、Text（引用处指令，字符串以 `; 'flag{…}'` 附在行尾）**；
+   单击选中、双击或 `OK`/Enter 跟随并关闭、`Cancel`/Esc 关闭，`Search` 过滤，`Help` 显示类型图例。
 5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
    选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），证据链接可跳转。
    **Query** 可输入 `urls` / `callers of CreateFileW` / `text http` 做离线检索（点击结果跳转）；
    **Explain** 离线解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量
    （保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），启用后 **Polish** 在后台线程润色。
-6. **Strings/Xrefs/Imports** 页签展示引用与 API 分类；UI 支持 EN/zh-CN 切换。
+6. **Strings/Imports** 页签与 **`X`** 交叉引用对话框展示引用与 API 分类；UI 支持 EN/zh-CN 切换。
 
 ## 对接 MCP 客户端
 

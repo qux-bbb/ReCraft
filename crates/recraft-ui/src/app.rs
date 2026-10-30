@@ -19,7 +19,7 @@ use egui::{Color32, FontId, Key, RichText, Sense};
 use recraft_common::{Address, AddressRange};
 use recraft_core::{
     CodeData, Command, CommentKind, DisasmLine, Flags, FunctionInfo, Session, StructDef,
-    StructField,
+    StructField, XrefEntry,
 };
 use recraft_decompile::PseudoLine;
 
@@ -196,7 +196,6 @@ enum Pane {
     Strings,
     Imports,
     Exports,
-    Xrefs,
     Names,
     Segments,
     Structs,
@@ -206,7 +205,7 @@ enum Pane {
 }
 
 impl Pane {
-    fn all() -> [Pane; 13] {
+    fn all() -> [Pane; 12] {
         [
             // Default document tabs, in tab order.
             Pane::View,
@@ -218,7 +217,6 @@ impl Pane {
             Pane::Exports,
             // Hidden by default, reachable from the Views menu.
             Pane::Names,
-            Pane::Xrefs,
             Pane::Segments,
             // Panels.
             Pane::Functions,
@@ -237,7 +235,6 @@ impl Pane {
             Pane::Strings => "pane_strings",
             Pane::Imports => "pane_imports",
             Pane::Exports => "pane_exports",
-            Pane::Xrefs => "pane_xrefs",
             Pane::Names => "pane_names",
             Pane::Segments => "pane_segments",
             Pane::Structs => "pane_local_types",
@@ -254,7 +251,6 @@ impl Pane {
             Pane::Names => Some("F3"),
             Pane::Strings => Some("F4"),
             Pane::Imports => Some("F6"),
-            Pane::Xrefs => Some("F7"),
             Pane::Segments => Some("F8"),
             Pane::Hex => Some("F9"),
             Pane::Ai => Some("F10"),
@@ -299,7 +295,6 @@ impl egui_dock::TabViewer for DockViewer<'_> {
             Pane::Functions => self.app.functions_list(ui, self.action),
             Pane::Strings => self.app.strings_list(ui, self.action),
             Pane::Imports => self.app.imports_list(ui, self.action),
-            Pane::Xrefs => self.app.xrefs_list(ui, self.action),
             Pane::Names => self.app.names_list(ui, self.action),
             Pane::Segments => self.app.segments_list(ui, self.action),
             Pane::Ai => self.app.ai_panel(ui, self.action),
@@ -347,6 +342,46 @@ struct StringRow {
     raw: Vec<u8>,
     /// Resolved symbol name at the address, if any.
     name: Option<String>,
+}
+
+/// One row of the xrefs dialog, laid out like IDA's `xrefs to …` window: direction,
+/// type letter, address and the text at the other end of the reference.
+#[derive(Debug)]
+struct XrefRow {
+    /// `true` for a reference into the selected item (`Up`), `false` for one leaving it
+    /// (`Down`).
+    up: bool,
+    /// Single-letter xref type (`c` call, `j` jump, `o` offset, `r` read, `w` write).
+    kind: char,
+    /// Spelled-out kind (`call`, `jump`, `data`) for the tooltip.
+    kind_name: &'static str,
+    /// The other end of the reference; following the row navigates here.
+    addr: Address,
+    /// `main:loc_1400010b9`-style label for the address column.
+    label: String,
+    /// Instruction (or data) text of the referencing site.
+    text: String,
+}
+
+/// State of the open `xrefs to …` dialog. Like IDA's dialog it is a snapshot: the rows
+/// are built when it opens (and again when an edit makes them stale) and stay put while
+/// the listing behind it is navigated.
+struct XrefDialog {
+    /// Address the dialog was opened for (`xrefs to <target>`).
+    target: Address,
+    rows: Vec<XrefRow>,
+    /// Cursor into `rows`, moved with the arrow keys or a click.
+    selected: usize,
+    /// `Search` box text; matches the address, label or text columns.
+    filter: String,
+    /// Whether the `Search` box is visible.
+    search: bool,
+    /// Focus the search box on the next frame (set when `Search` opens it).
+    search_focus: bool,
+    /// Whether the type-letter legend is visible.
+    help: bool,
+    /// Rows must be rebuilt (analysis or an edit changed the project).
+    dirty: bool,
 }
 
 /// Decode stored string bytes according to the analysis encoding id.
@@ -459,7 +494,7 @@ struct EditState {
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
 /// resurrecting the old arrangement. The theme is stored alongside the dock state.
-const LAYOUT_VERSION: u32 = 8;
+const LAYOUT_VERSION: u32 = 9;
 
 fn default_zoom() -> f32 {
     1.0
@@ -869,9 +904,8 @@ pub struct ReCraftApp {
     names_filter: String,
     imports: Vec<ImportRow>,
     imports_dirty: bool,
-    xrefs: Vec<(Address, &'static str)>,
-    xrefs_for: Option<Address>,
-    xrefs_dirty: bool,
+    /// Open IDA-style `xrefs to …` dialog (`X`), frozen on the address it was opened for.
+    xref_dialog: Option<XrefDialog>,
     cfg: Option<recraft_analysis::Cfg>,
     cfg_for: Option<Address>,
     cfg_dirty: bool,
@@ -967,9 +1001,7 @@ impl Default for ReCraftApp {
             names_filter: String::new(),
             imports: Vec::new(),
             imports_dirty: false,
-            xrefs: Vec::new(),
-            xrefs_for: None,
-            xrefs_dirty: false,
+            xref_dialog: None,
             cfg: None,
             cfg_for: None,
             graph_zoom: 1.0,
@@ -1310,7 +1342,7 @@ impl ReCraftApp {
         self.functions_dirty = true;
         self.strings_dirty = true;
         self.imports_dirty = true;
-        self.xrefs_for = None;
+        self.xref_dialog = None;
         self.cfg_dirty = true;
         self.cfg_for = None;
         self.history.clear();
@@ -1388,7 +1420,9 @@ impl ReCraftApp {
                 self.functions_dirty = true;
                 self.strings_dirty = true;
                 self.imports_dirty = true;
-                self.xrefs_dirty = true;
+                if let Some(dialog) = self.xref_dialog.as_mut() {
+                    dialog.dirty = true;
+                }
                 self.cfg_dirty = true;
                 let op_label = self.t(match op {
                     DataOp::Code => "ui_op_code",
@@ -1707,7 +1741,9 @@ impl ReCraftApp {
                 self.pseudo_dirty = true;
                 self.strings_dirty = true;
                 self.imports_dirty = true;
-                self.xrefs_for = None;
+                if let Some(dialog) = self.xref_dialog.as_mut() {
+                    dialog.dirty = true;
+                }
                 self.cfg_dirty = true;
                 self.cfg_for = None;
                 self.set_status(self.t_args(
@@ -2103,35 +2139,53 @@ impl ReCraftApp {
         self.imports_dirty = false;
     }
 
+    /// Rebuild the open dialog's rows when they are missing or stale.
     fn refresh_xrefs(&mut self) {
-        let Some(current) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
-            self.xrefs.clear();
-            self.xrefs_for = None;
+        let Some(target) = self.xref_dialog.as_ref().map(|dialog| dialog.target) else {
             return;
         };
-        if self.xrefs_for == Some(current) && !self.xrefs_dirty {
+        if !self.xref_dialog.as_ref().is_some_and(|dialog| dialog.dirty) {
             return;
         }
-        let Some(session) = self.session.as_ref() else {
-            self.xrefs.clear();
-            self.xrefs_for = None;
-            return;
+        let (rows, failure) = {
+            let Some(session) = self.session.as_mut() else {
+                self.xref_dialog = None;
+                return;
+            };
+            let mut rows: Vec<XrefRow> = Vec::new();
+            let mut failure = None;
+            // Incoming references first (`Up`), then the ones leaving the target
+            // (`Down`), exactly like IDA's xrefs dialog.
+            for (up, entries) in [
+                (true, session.xrefs_to(target)),
+                (false, session.xrefs_from(target)),
+            ] {
+                match entries {
+                    Ok(entries) => {
+                        for xref in entries {
+                            rows.push(xref_row(
+                                session,
+                                &self.functions,
+                                &self.function_labels,
+                                &self.strings,
+                                target,
+                                xref,
+                                up,
+                            ));
+                        }
+                    }
+                    Err(error) => failure = Some(error),
+                }
+            }
+            (rows, failure)
         };
-        match session.xrefs_to(current) {
-            Ok(rows) => {
-                self.xrefs = rows
-                    .iter()
-                    .map(|xref| (xref.from, xref_kind_name(xref.kind)))
-                    .collect();
-                self.xrefs_for = Some(current);
-                self.xrefs_dirty = false;
-            }
-            Err(error) => {
-                self.xrefs.clear();
-                self.xrefs_for = Some(current);
-                self.xrefs_dirty = false;
-                self.set_error(error);
-            }
+        if let Some(error) = failure {
+            self.set_error(error);
+        }
+        if let Some(dialog) = self.xref_dialog.as_mut() {
+            dialog.selected = dialog.selected.min(rows.len().saturating_sub(1));
+            dialog.rows = rows;
+            dialog.dirty = false;
         }
     }
 
@@ -3226,33 +3280,6 @@ impl ReCraftApp {
                     }
                     if response.double_clicked() {
                         *action = Action::NavigateToDisasm(target);
-                    }
-                }
-            });
-    }
-
-    fn xrefs_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let Some(addr) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
-            ui.weak(self.t("ui_no_selection"));
-            return;
-        };
-        ui.weak(format!("{} {:#x}", self.t("ui_references_to"), addr.get()));
-        if self.xrefs.is_empty() {
-            ui.weak(self.t("ui_no_references"));
-        }
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (from, kind) in &self.xrefs {
-                    let label = format!("<- {:#012x}  {kind}", from.get());
-                    let response = ui
-                        .selectable_label(false, label)
-                        .on_hover_text(self.t("ui_double_click_to_follow_into_disassembly"));
-                    if response.clicked() {
-                        *action = Action::Navigate(*from);
-                    }
-                    if response.double_clicked() {
-                        *action = Action::NavigateToDisasm(*from);
                     }
                 }
             });
@@ -5116,6 +5143,282 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA's dialog title: `xrefs to <name>`, falling back to the bare address.
+    fn xrefs_title(&self, target: Address) -> String {
+        let name = self
+            .session
+            .as_ref()
+            .and_then(|session| session.name_at(target).ok().flatten())
+            .or_else(|| {
+                string_literal_at(&self.strings, target).map(|text| quote_literal(&text, 40))
+            });
+        match name {
+            Some(name) => format!("{} {name} ({:#x})", self.t("ui_xrefs_to"), target.get()),
+            None => format!("{} {:#x}", self.t("ui_xrefs_to"), target.get()),
+        }
+    }
+
+    /// IDA-style `xrefs to …` dialog (`X`): a snapshot of the references around the address
+    /// it was opened on. `OK`/Enter follows the selected row, `Cancel`/Esc closes,
+    /// `Search` filters the columns and `Help` explains the type letters.
+    fn xrefs_window(&mut self, ctx: &egui::Context, action: &mut Action) {
+        let Some(mut dialog) = self.xref_dialog.take() else {
+            return;
+        };
+        let pal = self.palette();
+        let mono = FontId::monospace(self.mono_size());
+        let scale = self.mono_size() / MONO_SIZE;
+        let row_h = self.row_height().max(16.0);
+        let dir_w = 72.0 * scale;
+        let type_w = 40.0 * scale;
+        let addr_w = 300.0 * scale;
+        let text_x = dir_w + type_w + addr_w;
+        let title = self.xrefs_title(dialog.target);
+        let up_label = self.t("ui_up");
+        let down_label = self.t("ui_down");
+        let dir_head = self.t("ui_direction");
+        let type_head = self.t("ui_type");
+        let addr_head = self.t("ui_address");
+        let text_head = self.t("ui_text");
+        let ok_label = self.t("ui_ok");
+        let cancel_label = self.t("ui_cancel");
+        let search_label = self.t("ui_search");
+        let help_label = self.t("ui_help");
+        let no_refs = self.t("ui_no_references");
+        let no_match = self.t("ui_no_match");
+        let search_hint = self.t("ui_xrefs_search_hint");
+        let help_text = self.t("ui_xrefs_help");
+        let mut open = true;
+        let mut close = false;
+        let mut follow = None;
+        // IDA's dialog opens centered; a user-moved position is remembered per id.
+        let default_size = egui::vec2(760.0, 380.0);
+        let default_pos = ctx.content_rect().center() - default_size / 2.0;
+        egui::Window::new(title)
+            .id(egui::Id::new("recraft_xrefs_dialog"))
+            .collapsible(false)
+            .resizable(true)
+            .default_pos(default_pos)
+            .default_size(default_size)
+            .min_width(480.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let mut typing = false;
+                if dialog.search {
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut dialog.filter)
+                            .desired_width(320.0)
+                            .hint_text(search_hint.as_str()),
+                    );
+                    if dialog.search_focus {
+                        response.request_focus();
+                        dialog.search_focus = false;
+                    }
+                    typing = response.has_focus();
+                }
+                let visible = xref_matches(&dialog.rows, &dialog.filter);
+                if let Some(&first) = visible.first()
+                    && !visible.contains(&dialog.selected)
+                {
+                    dialog.selected = first;
+                }
+                // IDA's keys: arrows move the cursor, Enter is OK, Esc is Cancel. The
+                // search box owns the arrows/Enter while it is being typed into.
+                let mut move_by = 0i32;
+                let mut scroll_to_selected = false;
+                if !typing {
+                    if ui.input(|input| input.key_pressed(Key::ArrowDown)) {
+                        move_by = 1;
+                    }
+                    if ui.input(|input| input.key_pressed(Key::ArrowUp)) {
+                        move_by = -1;
+                    }
+                    if ui.input(|input| input.key_pressed(Key::Enter))
+                        && let Some(row) = dialog.rows.get(dialog.selected)
+                    {
+                        follow = Some(row.addr);
+                    }
+                }
+                if ui.input(|input| input.key_pressed(Key::Escape)) {
+                    close = true;
+                }
+                if move_by != 0
+                    && !visible.is_empty()
+                    && let Some(position) =
+                        visible.iter().position(|index| *index == dialog.selected)
+                {
+                    let next = (position as i32 + move_by).clamp(0, visible.len() as i32 - 1);
+                    dialog.selected = visible[next as usize];
+                    scroll_to_selected = true;
+                }
+                let width = ui.available_width().max(420.0);
+                let char_w = ui
+                    .painter()
+                    .layout_no_wrap("0".to_owned(), mono.clone(), pal.text)
+                    .size()
+                    .x
+                    .max(1.0);
+                let (header, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+                let painter = ui.painter_at(header);
+                for (x, text) in [
+                    (4.0, dir_head.as_str()),
+                    (dir_w, type_head.as_str()),
+                    (dir_w + type_w, addr_head.as_str()),
+                    (text_x, text_head.as_str()),
+                ] {
+                    painter.text(
+                        egui::pos2(header.left() + x, header.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        text,
+                        mono.clone(),
+                        pal.bytes,
+                    );
+                }
+                ui.separator();
+                if visible.is_empty() {
+                    // An empty table and a filtered-away table read differently, as in IDA.
+                    ui.weak(if dialog.rows.is_empty() {
+                        no_refs.as_str()
+                    } else {
+                        no_match.as_str()
+                    });
+                }
+                let text_chars = (((width - text_x) / char_w).floor() as usize).max(16);
+                let label_chars = (((addr_w - 8.0) / char_w).floor() as usize).max(8);
+                // Fill the dialog: the list scrolls while the button row stays pinned below.
+                let list_height = (ui.available_height() - 36.0).max(80.0);
+                let mut clicked_row = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("recraft_xrefs_rows")
+                    .auto_shrink([false, false])
+                    .max_height(list_height)
+                    .show(ui, |ui| {
+                        for &index in &visible {
+                            let row = &dialog.rows[index];
+                            let (rect, response) =
+                                ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
+                            if index == dialog.selected {
+                                ui.painter().rect_filled(rect, 1.0, pal.selected_row);
+                                if scroll_to_selected {
+                                    ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                                }
+                            } else if response.hovered() {
+                                ui.painter().rect_filled(rect, 1.0, pal.hover_row);
+                            }
+                            let painter = ui.painter_at(rect);
+                            let y = rect.center().y;
+                            painter.text(
+                                egui::pos2(rect.left() + 4.0, y),
+                                egui::Align2::LEFT_CENTER,
+                                if row.up {
+                                    up_label.as_str()
+                                } else {
+                                    down_label.as_str()
+                                },
+                                mono.clone(),
+                                pal.line_number,
+                            );
+                            painter.text(
+                                egui::pos2(rect.left() + dir_w, y),
+                                egui::Align2::LEFT_CENTER,
+                                row.kind.to_string(),
+                                mono.clone(),
+                                pal.mnemonic,
+                            );
+                            painter.text(
+                                egui::pos2(rect.left() + dir_w + type_w, y),
+                                egui::Align2::LEFT_CENTER,
+                                elide_chars(&row.label, label_chars),
+                                mono.clone(),
+                                pal.addr,
+                            );
+                            let mut job = LayoutJob::default();
+                            append_operands(
+                                &mut job,
+                                &elide_chars(&row.text, text_chars),
+                                pal,
+                                &mono,
+                            );
+                            let galley = painter.layout_job(job);
+                            painter.galley(
+                                egui::pos2(rect.left() + text_x, y - galley.size().y * 0.5),
+                                galley,
+                                pal.text,
+                            );
+                            let response = response.on_hover_text(format!(
+                                "{} {}\n{}\n{}",
+                                if row.up {
+                                    up_label.as_str()
+                                } else {
+                                    down_label.as_str()
+                                },
+                                row.kind_name,
+                                row.label,
+                                row.text,
+                            ));
+                            if response.clicked() {
+                                clicked_row = Some(index);
+                            }
+                            if response.double_clicked() {
+                                clicked_row = Some(index);
+                                follow = Some(row.addr);
+                            }
+                        }
+                    });
+                if let Some(index) = clicked_row {
+                    dialog.selected = index;
+                }
+                ui.separator();
+                let total = visible.len();
+                let line_no = visible
+                    .iter()
+                    .position(|index| *index == dialog.selected)
+                    .map_or(0, |position| position + 1);
+                let status = self.t_args(
+                    "ui_line_n_of_m",
+                    &[
+                        ("line", &line_no.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                );
+                ui.horizontal(|ui| {
+                    // IDA's status line: `Line N of M`; nothing to number when empty.
+                    ui.weak(if total == 0 { "" } else { status.as_str() });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(help_label.as_str()).clicked() {
+                            dialog.help = !dialog.help;
+                        }
+                        if ui.button(search_label.as_str()).clicked() {
+                            dialog.search = !dialog.search;
+                            dialog.search_focus = dialog.search;
+                            if !dialog.search {
+                                dialog.filter.clear();
+                            }
+                        }
+                        if ui.button(cancel_label.as_str()).clicked() {
+                            close = true;
+                        }
+                        if ui.button(ok_label.as_str()).clicked()
+                            && let Some(row) = dialog.rows.get(dialog.selected)
+                        {
+                            follow = Some(row.addr);
+                        }
+                    });
+                });
+                if dialog.help {
+                    ui.weak(help_text.as_str());
+                }
+            });
+        if let Some(addr) = follow {
+            *action = Action::NavigateToDisasm(addr);
+            self.xref_dialog = None;
+        } else if open && !close {
+            self.xref_dialog = Some(dialog);
+        } else {
+            self.xref_dialog = None;
+        }
+    }
+
     // ------------------------------------------------------------- actions --
 
     fn handle_keys(&mut self, ctx: &egui::Context) -> Action {
@@ -5132,6 +5435,11 @@ impl ReCraftApp {
                 return Action::TogglePalette;
             }
             // The palette's text field owns the keyboard while it is open.
+            return Action::None;
+        }
+        if self.xref_dialog.is_some() {
+            // The xrefs dialog handles its own keys (arrows/Enter/Esc); nothing behind it
+            // may react to them.
             return Action::None;
         }
         if self.edit.is_some() || self.goto.is_some() || ctx.egui_wants_keyboard_input() {
@@ -5178,8 +5486,6 @@ impl ReCraftApp {
                 action = Action::FocusPane(Pane::Strings);
             } else if input.key_pressed(Key::F6) {
                 action = Action::FocusPane(Pane::Imports);
-            } else if input.key_pressed(Key::F7) {
-                action = Action::FocusPane(Pane::Xrefs);
             } else if input.key_pressed(Key::F8) {
                 action = Action::FocusPane(Pane::Segments);
             } else if input.key_pressed(Key::F9) {
@@ -5650,7 +5956,22 @@ impl ReCraftApp {
                 }
             }
             Action::ShowXrefs => {
-                self.focus_pane(Pane::Xrefs);
+                let Some(addr) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
+                    return;
+                };
+                if self.session.is_none() {
+                    return;
+                }
+                self.xref_dialog = Some(XrefDialog {
+                    target: addr,
+                    rows: Vec::new(),
+                    selected: 0,
+                    filter: String::new(),
+                    search: false,
+                    search_focus: false,
+                    help: false,
+                    dirty: true,
+                });
                 self.refresh_xrefs();
             }
             Action::EditName | Action::EditComment => {
@@ -5761,6 +6082,7 @@ impl ReCraftApp {
         self.edit_window(&ctx, &mut action);
         self.goto_window(&ctx, &mut action);
         self.palette_window(&ctx, &mut action);
+        self.xrefs_window(&ctx, &mut action);
         self.apply_action(&ctx, action);
         self.persist_layout_if_changed();
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -5998,6 +6320,208 @@ fn xref_kind_name(kind: i64) -> &'static str {
     }
 }
 
+/// Single-letter xref type, as IDA's xrefs dialog shows it: `c` call, `j` jump,
+/// `o` address taken, `r` data read, `w` data write.
+///
+/// One data xref is stored per instruction, so the offset/read/write split is derived
+/// from the instruction text at the referencing site.
+fn xref_type_letter(kind: i64, site_text: &str) -> char {
+    match kind {
+        recraft_analysis::XREF_CALL => 'c',
+        recraft_analysis::XREF_JUMP => 'j',
+        recraft_analysis::XREF_DATA => data_xref_letter(site_text),
+        _ => '?',
+    }
+}
+
+fn data_xref_letter(site_text: &str) -> char {
+    let mut parts = site_text.splitn(2, ' ');
+    let mnemonic = parts.next().unwrap_or_default().to_ascii_lowercase();
+    if mnemonic == "lea" {
+        return 'o';
+    }
+    // A store writes its (first) memory operand; everything else reads.
+    const STORES: [&str; 13] = [
+        "mov", "movzx", "movsx", "movsxd", "movaps", "movups", "movdqa", "movdqu", "movss",
+        "movsd", "movq", "xchg", "cmpxchg",
+    ];
+    let destination = parts
+        .next()
+        .unwrap_or_default()
+        .split(',')
+        .next()
+        .unwrap_or_default();
+    if destination.contains('[') && STORES.contains(&mnemonic.as_str()) {
+        'w'
+    } else {
+        'r'
+    }
+}
+
+/// Index of the function containing `addr` (`functions` is sorted by start address).
+fn function_at(functions: &[FunctionInfo], addr: Address) -> Option<usize> {
+    let index = functions.partition_point(|function| function.start <= addr);
+    let index = index.checked_sub(1)?;
+    (addr < functions[index].end).then_some(index)
+}
+
+/// Address-column label the way IDA writes xrefs: the symbol at a function or data
+/// start, `main:loc_1400010b9` for an unnamed location inside a function, and
+/// `loc_`/`unk_` for anything else.
+fn xref_label(
+    addr: Address,
+    name: Option<&str>,
+    function: Option<(&str, Address)>,
+    code: bool,
+) -> String {
+    match (function, name) {
+        (Some((function, start)), _) if addr == start => name.unwrap_or(function).to_owned(),
+        (Some((function, _)), Some(name)) => format!("{function}:{name}"),
+        (Some((function, _)), None) => format!("{function}:loc_{:x}", addr.get()),
+        (None, Some(name)) => name.to_owned(),
+        (None, None) if code => format!("loc_{:x}", addr.get()),
+        (None, None) => format!("unk_{:x}", addr.get()),
+    }
+}
+
+/// Build one row of the Xrefs table. `current` is the selected address (the item whose
+/// references are listed); `xref` points into it for `up` rows and out of it otherwise.
+fn xref_row(
+    session: &mut Session,
+    functions: &[FunctionInfo],
+    function_labels: &[String],
+    strings: &[StringRow],
+    current: Address,
+    xref: XrefEntry,
+    up: bool,
+) -> XrefRow {
+    // The other end: the referencing instruction for `Up`, the referenced item for `Down`.
+    let site = if up { xref.from } else { xref.to };
+    let name = session.name_at(site).ok().flatten();
+    let function = function_at(functions, site).and_then(|index| {
+        function_labels
+            .get(index)
+            .map(|label| (label.as_str(), functions[index].start))
+    });
+    let code = is_code_at(session, site);
+    let label = xref_label(site, name.as_deref(), function, code);
+    let mut text = site_text(session, strings, site).unwrap_or_else(|| label.clone());
+    // The type letter describes how the *referencing* instruction touches the target:
+    // for `Down` rows that is the selected address, not the target shown in `addr`.
+    let letter = if up {
+        xref_type_letter(xref.kind, &text)
+    } else {
+        let referencing = site_text(session, strings, current).unwrap_or_default();
+        xref_type_letter(xref.kind, &referencing)
+    };
+    // IDA appends the referenced string to the referencing line:
+    // `lea rdx, Str2  ; 'flag{...}'`.
+    if up && let Some(literal) = string_literal_at(strings, current) {
+        text.push_str("  ; ");
+        text.push_str(&quote_literal(&literal, 64));
+    }
+    XrefRow {
+        up,
+        kind: letter,
+        kind_name: xref_kind_name(xref.kind),
+        addr: site,
+        label,
+        text,
+    }
+}
+
+/// Text at `addr` for the text column: the instruction, the stored string, or a short
+/// data preview. `None` when the address holds nothing readable.
+fn site_text(session: &mut Session, strings: &[StringRow], addr: Address) -> Option<String> {
+    if is_code_at(session, addr)
+        && let Some(line) = session.disasm(addr, 1).ok()?.into_iter().next()
+    {
+        let text = format!("{} {}", line.mnemonic, line.operands);
+        return Some(text.trim_end().to_owned());
+    }
+    if let Some(literal) = string_literal_at(strings, addr) {
+        return Some(format!("db {}", quote_literal(&literal, 64)));
+    }
+    data_preview(session, addr)
+}
+
+/// Whether `addr` holds code. Analysis does not persist a code flag for every decoded
+/// instruction, so the containing segment's permission decides; an explicit data
+/// definition still wins over an executable segment.
+fn is_code_at(session: &mut Session, addr: Address) -> bool {
+    let defined_data = session
+        .flags_at(addr)
+        .map(|flags| flags.is_data())
+        .unwrap_or(false);
+    !defined_data
+        && session
+            .segment_containing(addr)
+            .is_some_and(|segment| segment.perm.is_executable())
+}
+
+/// `db 48 65 6c 6c 6f` preview of up to eight bytes at `addr`.
+fn data_preview(session: &mut Session, addr: Address) -> Option<String> {
+    let mut bytes = [0u8; 8];
+    let read = session.read_at(addr, &mut bytes).ok()?;
+    if read == 0 {
+        return None;
+    }
+    let hex = bytes[..read]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!("db {hex}"))
+}
+
+/// Text of the stored string covering `addr`. The character offset into a pooled run is
+/// applied, so a substring literal shows only its own tail.
+fn string_literal_at(strings: &[StringRow], addr: Address) -> Option<String> {
+    let (index, offset) = string_row_at(strings, addr)?;
+    let row = strings.get(index)?;
+    let skip = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+        usize::try_from(offset / 2).ok()?
+    } else {
+        usize::try_from(offset).ok()?
+    };
+    Some(row.text.chars().skip(skip).collect())
+}
+
+/// Quote a literal the way the listing does (`'…'`), escaping it and eliding long text.
+fn quote_literal(text: &str, max_chars: usize) -> String {
+    let escaped = text
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace(['\r', '\n'], " ");
+    format!("'{}'", elide_chars(&escaped, max_chars))
+}
+
+/// Shorten `text` to `max_chars` characters, ending in `…` when it was cut.
+fn elide_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Indices of the rows matching the dialog's search text, which (like IDA's Search)
+/// applies to the address, label and text columns.
+fn xref_matches(rows: &[XrefRow], filter: &str) -> Vec<usize> {
+    let filter = filter.trim().to_lowercase();
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            filter.is_empty()
+                || row.label.to_lowercase().contains(&filter)
+                || row.text.to_lowercase().contains(&filter)
+                || format!("{:#x}", row.addr.get()).contains(&filter)
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// Background worker: its own `Session` (separate SQLite connection) keeps the UI
 /// responsive; `cancel` is polled by the analysis pass.
 fn run_analysis_job(project: &Path, cancel: &Arc<AtomicBool>) -> AnalysisMessage {
@@ -6178,7 +6702,6 @@ mod tests {
             Pane::Functions,
             Pane::Strings,
             Pane::Imports,
-            Pane::Xrefs,
             Pane::Names,
             Pane::Segments,
             Pane::Ai,
@@ -6210,6 +6733,16 @@ mod tests {
         }
         assert!(!app.strings.is_empty(), "strings panel data missing");
         assert!(!app.imports.is_empty(), "imports panel data missing");
+
+        // The xrefs dialog (`X`) renders over the dock instead of owning a tab.
+        app.apply_action(&ctx, Action::ShowXrefs);
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        assert!(app.xref_dialog.is_some(), "xrefs dialog did not open");
+        app.xref_dialog = None;
 
         // Code View: build and render the CFG for the entry function.
         app.tab = Tab::Disasm;
@@ -6284,7 +6817,7 @@ mod tests {
     }
 
     #[test]
-    fn x_shortcut_opens_the_xrefs_panel() {
+    fn x_shortcut_opens_the_xrefs_dialog() {
         let Some(bytes) = sample_pe() else {
             return;
         };
@@ -6306,6 +6839,21 @@ mod tests {
         };
         let mut first = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
         first.textures_delta.clear();
+        // F7 is not a shortcut for the xrefs dialog any more; only `X` opens it.
+        input.events.push(egui::Event::Key {
+            key: egui::Key::F7,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut second = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        second.textures_delta.clear();
+        assert!(
+            app.xref_dialog.is_none(),
+            "F7 must not open the xrefs dialog"
+        );
+        input.events.clear();
         input.events.push(egui::Event::Key {
             key: egui::Key::X,
             physical_key: None,
@@ -6313,15 +6861,266 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let mut second = ctx.run_ui(input, |ui| app.update_inner(ui));
-        second.textures_delta.clear();
-        assert!(
-            app.dock
-                .as_ref()
-                .and_then(|state| state.find_tab(&Pane::Xrefs))
-                .is_some(),
-            "X should focus the xrefs pane"
+        let mut third = ctx.run_ui(input, |ui| app.update_inner(ui));
+        third.textures_delta.clear();
+        let dialog = app
+            .xref_dialog
+            .as_ref()
+            .expect("X should open the xrefs dialog");
+        assert_eq!(
+            Some(dialog.target),
+            app.disasm_rows.get(app.selected).map(|line| line.addr),
+            "the dialog must open on the selected address"
         );
+    }
+
+    #[test]
+    fn xref_labels_follow_ida_style() {
+        let main = Address::new(0x140001000);
+        let inside = Address::new(0x1400010b9);
+        assert_eq!(
+            xref_label(main, Some("main"), Some(("main", main)), true),
+            "main"
+        );
+        assert_eq!(
+            xref_label(inside, None, Some(("main", main)), true),
+            "main:loc_1400010b9"
+        );
+        assert_eq!(
+            xref_label(inside, Some("decode_loop"), Some(("main", main)), true),
+            "main:decode_loop"
+        );
+        assert_eq!(
+            xref_label(Address::new(0x140003000), None, None, false),
+            "unk_140003000"
+        );
+        assert_eq!(
+            xref_label(Address::new(0x140003000), Some("g_flag"), None, false),
+            "g_flag"
+        );
+    }
+
+    #[test]
+    fn data_xref_letters_split_offsets_reads_and_writes() {
+        assert_eq!(data_xref_letter("lea rdx, [rip+0x3000]"), 'o');
+        assert_eq!(data_xref_letter("mov rax, [rbx]"), 'r');
+        assert_eq!(data_xref_letter("mov [rsp+8], rax"), 'w');
+        assert_eq!(data_xref_letter("cmp [rbx], eax"), 'r');
+        assert_eq!(data_xref_letter("db 48 65"), 'r');
+    }
+
+    #[test]
+    fn elide_chars_keeps_short_text() {
+        assert_eq!(elide_chars("flag{abc}", 32), "flag{abc}");
+        assert_eq!(elide_chars("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn xref_search_matches_every_column() {
+        let rows = [
+            XrefRow {
+                up: true,
+                kind: 'o',
+                kind_name: "data",
+                addr: Address::new(0x140001321),
+                label: "sub_1400012dc:loc_140001321".to_owned(),
+                text: "lea rcx, [0x14002e7f0]  ; 'ETW0'".to_owned(),
+            },
+            XrefRow {
+                up: false,
+                kind: 'c',
+                kind_name: "call",
+                addr: Address::new(0x140001000),
+                label: "sub_140001000".to_owned(),
+                text: "push rbp".to_owned(),
+            },
+        ];
+        assert_eq!(xref_matches(&rows, ""), vec![0, 1]);
+        assert_eq!(xref_matches(&rows, "etw0"), vec![0], "text column");
+        assert_eq!(
+            xref_matches(&rows, "0x140001321"),
+            vec![0],
+            "address column"
+        );
+        assert_eq!(
+            xref_matches(&rows, "sub_140001000"),
+            vec![1],
+            "label column"
+        );
+        assert!(xref_matches(&rows, "no-such-row").is_empty());
+    }
+
+    /// The xrefs dialog mirrors IDA's: `Up` rows carry the referencing instruction plus
+    /// the referenced literal, `Down` rows describe the target.
+    #[test]
+    fn xrefs_table_matches_ida_layout() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-xref-table.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).unwrap();
+        recraft_analysis::persist_strings(&mut session, &strings).unwrap();
+
+        // A string taken with `lea`: IDA lists it as `Up  o  main:loc_…  lea rdx, Str2`.
+        let mut picked = None;
+        for xref in session
+            .all_xrefs(Some(recraft_analysis::XREF_DATA))
+            .unwrap()
+        {
+            if !strings.iter().any(|row| row.addr == xref.to) {
+                continue;
+            }
+            let Ok(lines) = session.disasm(xref.from, 1) else {
+                continue;
+            };
+            if lines.first().is_some_and(|line| line.mnemonic == "lea") {
+                picked = Some(xref);
+                break;
+            }
+        }
+        let Some(xref) = picked else {
+            return;
+        };
+        let target = xref.to;
+
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        // `after_open` only marks the side lists dirty; load them before building rows so
+        // function labels and string literals resolve.
+        app.refresh_functions();
+        app.refresh_strings();
+        assert!(!app.functions.is_empty(), "analysis produced no functions");
+        let ctx = egui::Context::default();
+        app.disasm_start = target;
+        app.disasm_dirty = true;
+        app.refresh_disasm();
+        app.selected = 0;
+        app.apply_action(&ctx, Action::ShowXrefs);
+
+        let dialog = app.xref_dialog.as_ref().expect("X did not open the dialog");
+        assert_eq!(dialog.target, target, "dialog must freeze on the selection");
+        let row = dialog
+            .rows
+            .iter()
+            .find(|row| row.up && row.addr == xref.from)
+            .expect("missing Up row for the lea reference");
+        assert_eq!(row.kind, 'o', "lea references are offsets: {row:?}");
+        assert!(
+            row.label.contains(':'),
+            "address label should be `func:loc_…`, got {:?}",
+            row.label
+        );
+        assert!(row.text.starts_with("lea"), "text: {:?}", row.text);
+        assert!(
+            row.text.contains('\'') && row.text.ends_with('\''),
+            "referenced literal should be appended: {:?}",
+            row.text
+        );
+
+        // The same reference seen from the instruction: a `Down` row onto the literal.
+        app.disasm_start = xref.from;
+        app.disasm_dirty = true;
+        app.refresh_disasm();
+        app.selected = 0;
+        app.apply_action(&ctx, Action::ShowXrefs);
+        let dialog = app
+            .xref_dialog
+            .as_ref()
+            .expect("reopening the dialog failed");
+        assert_eq!(dialog.target, xref.from);
+        let down = dialog
+            .rows
+            .iter()
+            .find(|row| !row.up && row.addr == target)
+            .expect("missing Down row for the lea target");
+        assert_eq!(down.kind, 'o', "lea is still an offset: {down:?}");
+        assert!(
+            down.text.starts_with("db '"),
+            "Down text should show the literal: {:?}",
+            down.text
+        );
+
+        // `Down` rows point at the callee and describe it.
+        let call = app
+            .session
+            .as_ref()
+            .unwrap()
+            .all_xrefs(Some(recraft_analysis::XREF_CALL))
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("no call xref in the sample");
+        let down = xref_row(
+            app.session.as_mut().unwrap(),
+            &[],
+            &[],
+            &[],
+            call.from,
+            call,
+            false,
+        );
+        assert!(!down.up);
+        assert_eq!(down.kind, 'c');
+        assert_eq!(down.addr, call.to);
+        assert!(!down.text.is_empty(), "Down row has no text");
+
+        // The dialog is a window over the listing, not a dock tab.
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut shapes = 0;
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            shapes += output.shapes.len();
+        }
+        assert!(shapes > 0, "the xrefs dialog drew nothing");
+        assert!(app.xref_dialog.is_some(), "the dialog should stay open");
+
+        // Enter is IDA's OK: follow the selected row and close.
+        input.events.clear();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        input.time = Some(0.1);
+        let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(app.xref_dialog.is_none(), "Enter should close the dialog");
+        assert_eq!(
+            app.disasm_start, target,
+            "Enter should follow the selected row"
+        );
+
+        // Esc closes it too, like IDA's Cancel.
+        app.apply_action(&ctx, Action::ShowXrefs);
+        input.events.clear();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        input.time = Some(0.2);
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(app.xref_dialog.is_none(), "Esc should close the dialog");
     }
 
     #[test]
@@ -7509,7 +8308,7 @@ mod tests {
             state.find_tab(&Pane::Ai).is_none(),
             "the AI tab is never part of the dock"
         );
-        for hidden in [Pane::Names, Pane::Xrefs, Pane::Segments] {
+        for hidden in [Pane::Names, Pane::Segments] {
             assert!(
                 state.find_tab(&hidden).is_none(),
                 "{hidden:?} should be hidden by default"
