@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `MSG` joins `RECT` in the known-structure table. `GetMessageW`/`PeekMessageW`/
+  `TranslateMessage`/`DispatchMessageW` take a `MSG*`, so later member accesses print
+  `var_40.hwnd`, `var_40.message`, `var_40.wParam`, `var_40.lParam`, `var_40.time`,
+  `var_40.pt.x`/`.pt.y` instead of the bare slots (`if (var_40.message == 0x50)`,
+  `return var_40.wParam;`). The rewriter is now idempotent — a second message-loop call in
+  the same function no longer re-prefixes names that are already member paths
+  (`var_40.hwnd.wParam`). Notepad: 3 message fields across 1 function, 30 struct field
+  accesses in total, lines and gotos unchanged.
 - A `RECT` filled by `GetClientRect`/`GetWindowRect` now has field names. Those two APIs
   take a `RECT*`, so the four 32-bit slots at the passed `&var_XX` are the structure's
   fields; later reads and stores print `var_30.left`, `var_30.top`, `var_30.right`,

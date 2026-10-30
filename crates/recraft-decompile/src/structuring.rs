@@ -478,46 +478,67 @@ fn take_adjacent_arguments(lines: &mut Vec<PseudoLine>, limit: usize) -> Vec<Str
     }
     arguments
 }
-/// Win32 APIs that fill a `RECT` through a pointer argument.
-const RECT_APIS: [&str; 2] = ["GetClientRect", "GetWindowRect"];
+/// A Win32 structure that an API fills through a pointer argument: the APIs that reveal it
+/// (`&var_XX` in their argument list) and the fields as (byte offset, name).
+struct KnownStruct {
+    apis: &'static [&'static str],
+    fields: &'static [(&'static str, &'static str)],
+}
 
-/// `RECT` fields (32-bit `LONG` layout) as (byte offset from the structure start, name).
-/// The structure's first field is not named: `&var_XX` and the 16-byte clears stay as they
-/// are, and `var_XX` itself is the structure, not its first member.
-const RECT_FIELDS: [(&str, &str); 3] = [("4", "top"), ("8", "right"), ("c", "bottom")];
+/// `RECT` is filled by the rectangle getters; `MSG` by the message-loop calls. Field names
+/// are applied to later member accesses only, so the address passed to the API and the wide
+/// clear before it keep the plain slot name.
+const KNOWN_STRUCTS: [KnownStruct; 2] = [
+    KnownStruct {
+        apis: &["GetClientRect", "GetWindowRect"],
+        fields: &[("0", "left"), ("4", "top"), ("8", "right"), ("c", "bottom")],
+    },
+    KnownStruct {
+        apis: &[
+            "GetMessageW",
+            "PeekMessageW",
+            "DispatchMessageW",
+            "TranslateMessage",
+        ],
+        fields: &[
+            ("0", "hwnd"),
+            ("8", "message"),
+            ("10", "wParam"),
+            ("18", "lParam"),
+            ("20", "time"),
+            ("28", "pt.x"),
+            ("2c", "pt.y"),
+        ],
+    },
+];
 
 /// `GetClientRect(hwnd, &var_30)` makes the four 32-bit slots starting at `var_30` a `RECT`;
 /// naming the later slots after their fields reads like the structure the API fills.
 fn name_known_struct_fields(lines: &mut [PseudoLine]) {
     for index in 0..lines.len() {
         let text = lines[index].text.clone();
-        if !RECT_APIS
-            .iter()
-            .any(|api| text.contains(&format!("{api}(")))
-        {
+        let Some(structure) = KNOWN_STRUCTS.iter().find(|structure| {
+            structure
+                .apis
+                .iter()
+                .any(|api| text.contains(&format!("{api}(")))
+        }) else {
             continue;
-        }
+        };
         let Some(base) = slot_address_after(&text, "&var_") else {
             continue;
         };
-        // The first field is named only where the slot is read: `&var_30` and the wide clear
-        // before the call stay as they are.
-        let from = format!("var_{base:x}");
-        let to = format!("var_{base:x}.left");
-        for line in lines.iter_mut().skip(index + 1) {
-            let rename = line.text.trim_start().starts_with(&format!("{from} ="));
-            if !rename {
-                line.text = rename_struct_slot(&line.text, &from, &to, true);
-            }
-        }
-        for (delta, field) in RECT_FIELDS {
+        for (delta, field) in structure.fields {
             let Ok(offset) = u64::from_str_radix(delta, 16) else {
                 continue;
             };
             let from = format!("var_{:x}", base + offset);
             let to = format!("var_{base:x}.{field}");
+            // The structure's first field is named only where the slot is read: an address
+            // (`&var_30`) and a wide clear (`var_30 = xmm0;`) keep the plain name.
+            let skip_target = *delta == "0";
             for line in lines.iter_mut().skip(index + 1) {
-                line.text = rename_struct_slot(&line.text, &from, &to, false);
+                line.text = rename_struct_slot(&line.text, &from, &to, skip_target);
             }
         }
     }
@@ -554,11 +575,13 @@ fn rename_struct_slot(text: &str, from: &str, to: &str, skip_target: bool) -> St
         let address_taken = before.trim_end().ends_with('&');
         let trimmed = after.trim_start();
         let pointer_base = trimmed.starts_with('+') || trimmed.starts_with('-');
+        // Already a member path (`var_30.left`) or the tail of one: never rename twice.
+        let member = trimmed.starts_with('.') || before.trim_end().ends_with('.');
         let target = skip_target
             && before.trim().is_empty()
             && (trimmed.starts_with('=') || trimmed.starts_with('+') || trimmed.starts_with('-'));
         out.push_str(before);
-        if boundary && !address_taken && !pointer_base && !target {
+        if boundary && !address_taken && !pointer_base && !member && !target {
             out.push_str(to);
         } else {
             out.push_str(from);
@@ -6446,6 +6469,28 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn msg_arguments_name_their_fields() {
+        let mut lines = vec![
+            test_line("    var_40 = xmm0;"),
+            test_line("    GetMessageW(&var_40, 0, 0, 0);"),
+            test_line("    if (var_48 == 0x50) {"),
+            test_line("        return var_50;"),
+            test_line("    }"),
+        ];
+        name_known_struct_fields(&mut lines);
+        assert_eq!(lines[2].text, "    if (var_40.message == 0x50) {");
+        assert_eq!(lines[3].text, "        return var_40.wParam;");
+
+        // A second message call must not re-prefix the fields already named.
+        let mut lines = vec![
+            test_line("    GetMessageW(&var_40, 0, 0, 0);"),
+            test_line("    TranslateMessage(&var_40);"),
+            test_line("    return var_50;"),
+        ];
+        name_known_struct_fields(&mut lines);
+        assert_eq!(lines[2].text, "    return var_40.wParam;");
     }
     #[test]
     fn rect_arguments_name_their_fields() {
