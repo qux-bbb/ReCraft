@@ -274,6 +274,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         bodies,
         info.as_ref().map(|info| info.args.clone()),
         function.end,
+        call_arg_counts.clone(),
     );
     structurer.compute_rpo();
     structurer.compute_dominators();
@@ -455,6 +456,27 @@ fn hide_frame_pointer_setups(lines: &mut Vec<PseudoLine>) {
     });
 }
 
+/// Consume up to `limit` argument setups immediately above a tail call, in ABI order
+/// (`rcx`, `rdx`, `r8`, `r9`). A setup is only taken when it is the last remaining line and
+/// assigns the next register, so the values are still live in those registers at the call.
+fn take_adjacent_arguments(lines: &mut Vec<PseudoLine>, limit: usize) -> Vec<String> {
+    const ABI: [&str; 4] = ["rcx", "rdx", "r8", "r9"];
+    let mut arguments = Vec::new();
+    for register in ABI.iter().take(limit.min(ABI.len())) {
+        let Some(last) = lines.last() else {
+            break;
+        };
+        let Some((lhs, rhs)) = plain_assignment(&last.text) else {
+            break;
+        };
+        if lhs != *register || rhs.is_empty() {
+            break;
+        }
+        arguments.push(rhs.to_owned());
+        lines.pop();
+    }
+    arguments
+}
 /// `do { ... } while (1);` is the structurer's no-condition loop; `while (1) { ... }` reads
 /// the same and is idiomatic C, so the `do` form is rewritten.
 fn normalize_infinite_loops(lines: &mut [PseudoLine]) {
@@ -686,6 +708,9 @@ struct Structurer {
     /// Top-level loops whose inner exit leaves the loop: their whole body is emitted as
     /// labels so one jump cannot place the enclosing continuation on the wrong path.
     flat_headers: BTreeSet<usize>,
+    /// Inferred argument counts for direct call targets, used to bound how many setup lines
+    /// a tail call may take as arguments.
+    call_arg_counts: HashMap<u64, usize>,
     emitted: Vec<bool>,
     labeled: Vec<bool>,
     bodies: Vec<BlockLift>,
@@ -699,7 +724,13 @@ struct Structurer {
 }
 
 impl Structurer {
-    fn new(cfg: &Cfg, bodies: Vec<BlockLift>, args: Option<ArgNames>, end: Address) -> Self {
+    fn new(
+        cfg: &Cfg,
+        bodies: Vec<BlockLift>,
+        args: Option<ArgNames>,
+        end: Address,
+        call_arg_counts: HashMap<u64, usize>,
+    ) -> Self {
         let index_of =
             |address: Address| cfg.blocks.iter().position(|block| block.start == address);
         let mut blocks = Vec::with_capacity(cfg.blocks.len());
@@ -789,6 +820,7 @@ impl Structurer {
             loop_stack: Vec::new(),
             fallback_headers: BTreeSet::new(),
             flat_headers: BTreeSet::new(),
+            call_arg_counts,
             emitted,
             labeled: vec![false; bodies.len()],
             hidden: hidden_push_pop_pairs(
@@ -1153,9 +1185,28 @@ impl Structurer {
                 }
                 Flow::Goto(address) => {
                     if address.get() >= self.end.get() {
+                        // A tail call keeps the caller's argument setup when it sits on the
+                        // immediately preceding lines, bounded by the callee's arity (the
+                        // same rule the cross-block call fill uses for direct calls).
+                        let limit = self
+                            .call_arg_counts
+                            .get(&address.get())
+                            .copied()
+                            .unwrap_or(1);
+                        let arguments = take_adjacent_arguments(lines, limit);
+                        let call = if arguments.is_empty() {
+                            format!("{}return sub_{:x}();", indent(level), address.get())
+                        } else {
+                            format!(
+                                "{}return sub_{:x}({});",
+                                indent(level),
+                                address.get(),
+                                arguments.join(", ")
+                            )
+                        };
                         lines.push(PseudoLine {
                             addr: self.blocks[current].entry,
-                            text: format!("{}return sub_{:x}();", indent(level), address.get()),
+                            text: call,
                         });
                         return;
                     }
@@ -6229,6 +6280,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tail_call_takes_adjacent_argument_setups() {
+        let mut lines = vec![test_line("    rdx = rsi;"), test_line("    rcx = var_10;")];
+        let arguments = take_adjacent_arguments(&mut lines, 2);
+        assert_eq!(arguments, vec!["var_10".to_owned(), "rsi".to_owned()]);
+        assert!(lines.is_empty());
+
+        // A setup that is not the next ABI register stops the scan.
+        let mut lines = vec![test_line("    rcx = var_10;"), test_line("    var_20 = 1;")];
+        assert!(take_adjacent_arguments(&mut lines, 4).is_empty());
+        assert_eq!(lines.len(), 2);
+    }
     #[test]
     fn infinite_do_while_is_written_as_a_while_loop() {
         let mut lines = vec![

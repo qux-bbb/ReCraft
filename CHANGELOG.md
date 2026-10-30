@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tail calls keep their arguments. A function ending in `rcx = 0x140027590; return sub_140001c64();`
+  used to drop the value because the structured tail-call emitter only printed the target;
+  the setup lines immediately above the jump are now consumed in ABI order (bounded by the
+  callee's recovered arity, so an unknown callee only takes `rcx`) and printed as the call's
+  arguments. Notepad: empty tail calls 74 → **63**, 48 tail calls now show arguments
+  (`return sub_140023d8c(*(u64*)(0x140036648))`), L2 lines 30 265 → 30 254.
 - The structurer's no-condition loop is printed as `while (1) { ... }` instead of
   `do { ... } while (1);`. Both are infinite loops, but the `while` form is what a compiler
   emits and what source code reads; the rewrite also visits nested loops (a `do` inside a
