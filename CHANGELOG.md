@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The pseudo-C header names the level that produced it: the decompile view used to claim
+  "L1 structure recovery" even for the L2 signature view. The first comment is now
+  `// L1 …` or `// L2 …` depending on the entry point; L1 text and every golden snapshot are
+  unchanged. The analyses added this session also got unit tests: the argument-alias
+  dataflow (a copy holds only when every path agrees, and an overwrite in one arm clears it)
+  and the stack layout of a register-based frame restore (`lea r11, [rsp+0x50]; mov rsp,
+  r11`).
 - Epilogues that restore the frame pointer through a register no longer lose the stack
   displacement. A tail such as `lea r11, [rsp+0x50]; mov rsp, r11; pop r14; pop rdi; pop rbp`
   used to make the whole block's `rsp` layout unknown, so every slot in the function fell

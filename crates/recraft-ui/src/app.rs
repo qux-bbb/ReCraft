@@ -6773,7 +6773,7 @@ mod tests {
         assert!(
             pseudo
                 .iter()
-                .any(|line| line.text.contains("L1 structure recovery")),
+                .any(|line| line.text.contains("structure recovery")),
             "structure header missing"
         );
         assert!(

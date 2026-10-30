@@ -146,7 +146,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         .iter()
         .map(|body| body.alias_writes.clone())
         .collect();
-    let entry_aliases = entry_alias_map(&cfg, &alias_effects, args);
+    let entry_aliases = entry_alias_map(&cfg, &alias_effects, &|reg| {
+        args.is_some_and(|args| args.name_for(reg).is_some())
+    });
     // Argument-register values also survive a block split when every path agrees and no call
     // in between clobbered them, so a call in a later block still prints its arguments.
     let entry_arg_values = entry_arg_value_map(&cfg, &bodies);
@@ -287,7 +289,11 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     let mut lines = Vec::with_capacity(64);
     lines.push(PseudoLine {
         addr: start,
-        text: format!("// L1 structure recovery ({} blocks)", cfg.blocks.len()),
+        text: format!(
+            "// {} structure recovery ({} blocks)",
+            if info.is_some() { "L2" } else { "L1" },
+            cfg.blocks.len()
+        ),
     });
     match &info {
         Some(info) => {
@@ -472,7 +478,7 @@ fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 
 fn entry_alias_map(
     cfg: &Cfg,
     effects: &[Vec<(Reg, Option<Reg>)>],
-    args: Option<&ArgNames>,
+    is_argument: &dyn Fn(Reg) -> bool,
 ) -> Vec<BTreeMap<Reg, Reg>> {
     let count = effects.len();
     let mut predecessors = vec![Vec::new(); count];
@@ -492,7 +498,7 @@ fn entry_alias_map(
                 // Argument registers hold their own value on entry.
                 [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9]
                     .into_iter()
-                    .filter(|reg| args.is_some_and(|args| args.name_for(*reg).is_some()))
+                    .filter(|reg| is_argument(*reg))
                     .map(|reg| (reg, reg))
                     .collect()
             } else {
@@ -523,7 +529,7 @@ fn entry_alias_map(
                     }
                     out.get(&source)
                         .copied()
-                        .or_else(|| args.and_then(|args| args.name_for(source).map(|_| source)))
+                        .or_else(|| is_argument(source).then_some(source))
                 });
                 match target {
                     Some(target) => {
@@ -5176,6 +5182,7 @@ fn negate(condition: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Expr, ExprId, LiftedInsn, RegView, Stmt, stack_layout};
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
 
@@ -6135,6 +6142,99 @@ mod tests {
         );
     }
 
+    #[test]
+    fn alias_dataflow_requires_every_path_to_agree() {
+        let address = |value: u64| Address::new(value);
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: address(start),
+            end: address(start + 0x10),
+            insns: Vec::new(),
+            edges,
+        };
+        let cfg = Cfg {
+            function: address(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(
+                    0,
+                    0x1000,
+                    vec![(1, EdgeKind::Taken), (2, EdgeKind::Fallthrough)],
+                ),
+                block(1, 0x1010, vec![(3, EdgeKind::Unconditional)]),
+                block(2, 0x1020, vec![(3, EdgeKind::Unconditional)]),
+                block(3, 0x1030, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: BTreeMap::new(),
+        };
+        // Only one arm copies arg4 into r14: the join cannot trust the alias.
+        let effects = vec![
+            Vec::new(),
+            vec![(Reg::R14, Some(Reg::R9))],
+            Vec::new(),
+            Vec::new(),
+        ];
+        let is_argument = |reg: Reg| reg == Reg::R9;
+        let aliases = entry_alias_map(&cfg, &effects, &is_argument);
+        assert!(!aliases[3].contains_key(&Reg::R14));
+        // Both arms copying the same argument makes it hold at the join.
+        let effects = vec![
+            Vec::new(),
+            vec![(Reg::R14, Some(Reg::R9))],
+            vec![(Reg::R14, Some(Reg::R9))],
+            Vec::new(),
+        ];
+        let is_argument = |reg: Reg| reg == Reg::R9;
+        let aliases = entry_alias_map(&cfg, &effects, &is_argument);
+        assert_eq!(aliases[3].get(&Reg::R14), Some(&Reg::R9));
+        // An overwrite in one arm clears the other arm's alias.
+        let effects = vec![
+            Vec::new(),
+            vec![(Reg::R14, Some(Reg::R9))],
+            vec![(Reg::R14, None)],
+            Vec::new(),
+        ];
+        let is_argument = |reg: Reg| reg == Reg::R9;
+        let aliases = entry_alias_map(&cfg, &effects, &is_argument);
+        assert!(!aliases[3].contains_key(&Reg::R14));
+    }
+
+    #[test]
+    fn stack_layout_resolves_a_register_restore() {
+        let address = |value: u64| Address::new(value);
+        let rsp = Expr::Reg(RegView::full(Reg::Rsp));
+        let r11 = Expr::Reg(RegView::full(Reg::R11));
+        let exprs = vec![
+            rsp,
+            r11,
+            Expr::Const(0x50),
+            Expr::Bin {
+                op: recraft_ir::BinOp::Add,
+                lhs: 0,
+                rhs: 2,
+            },
+        ];
+        let stmt = |reg: Reg, value: ExprId| Stmt::WriteReg {
+            reg: RegView::full(reg),
+            value,
+        };
+        let items = vec![
+            LiftedInsn {
+                addr: address(0x1000),
+                // `lea r11, [rsp+0x50]`
+                stmts: vec![stmt(Reg::R11, 3)],
+                flow: Flow::Fallthrough,
+            },
+            LiftedInsn {
+                addr: address(0x1004),
+                stmts: vec![stmt(Reg::Rsp, 1)],
+                flow: Flow::Fallthrough,
+            },
+        ];
+        // The second instruction is `mov rsp, r11`; the layout must use r11's offset.
+        assert_eq!(stack_layout(&exprs, &items), (Some(0x50), Some(0)));
+    }
     #[test]
     fn dataflow_marks_arguments_written_on_any_path() {
         let address = |value: u64| Address::new(value);
