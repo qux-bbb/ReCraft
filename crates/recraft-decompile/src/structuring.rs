@@ -439,6 +439,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_noop_statements(&mut lines);
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
+    name_structure_instances(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
     lines.push(PseudoLine {
@@ -703,6 +704,74 @@ fn count_arguments(arguments: &str) -> usize {
         }
     }
     count
+}
+
+/// The name a structure instance takes when an API fills it: a `RECT` is a rectangle, a
+/// `POINT` a position, a `MSG` a message.
+fn structure_instance_name(kind: &str) -> &'static str {
+    match kind {
+        "RECT" => "rect",
+        "POINT" => "pt",
+        _ => "msg",
+    }
+}
+
+/// Give the slots that a known API fills a name, so the structure reads `rect.bottom`
+/// instead of `var_30.bottom`. Runs after [`name_known_struct_fields`], which produced the
+/// member accesses.
+fn name_structure_instances(lines: &mut [PseudoLine]) {
+    let mut instances: Vec<(u64, &'static str)> = Vec::new();
+    for line in lines.iter() {
+        let text = line.text.clone();
+        let Some(structure) = KNOWN_STRUCTS.iter().find(|structure| {
+            structure
+                .apis
+                .iter()
+                .any(|api| text.contains(&format!("{api}(")))
+        }) else {
+            continue;
+        };
+        let Some(base) = slot_address_after(&text, "&var_") else {
+            continue;
+        };
+        let kind = if structure.fields.iter().any(|(_, field)| *field == "right") {
+            "RECT"
+        } else if structure.fields.iter().any(|(_, field)| *field == "hwnd") {
+            "MSG"
+        } else {
+            "POINT"
+        };
+        if !instances.iter().any(|(existing, _)| *existing == base) {
+            instances.push((base, kind));
+        }
+    }
+    if instances.is_empty() {
+        return;
+    }
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| !token.is_empty())
+        {
+            used.insert(token.to_owned());
+        }
+    }
+    for (base, kind) in instances {
+        let stem = structure_instance_name(kind);
+        let mut name = stem.to_owned();
+        let mut suffix = 2;
+        while used.contains(&name) {
+            name = format!("{stem}{suffix}");
+            suffix += 1;
+        }
+        used.insert(name.clone());
+        let from = format!("var_{base:x}");
+        for line in lines.iter_mut() {
+            line.text = replace_token(&line.text, &from, &name);
+        }
+    }
 }
 
 fn name_known_struct_fields(lines: &mut [PseudoLine]) {
@@ -6806,6 +6875,31 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn structure_instances_get_a_name() {
+        let mut lines = vec![
+            test_line("    var_30 = 0;"),
+            test_line("    GetClientRect(hwnd, &var_30);"),
+            test_line("    edi = var_30.bottom;"),
+        ];
+        name_known_struct_fields(&mut lines);
+        name_structure_instances(&mut lines);
+        assert_eq!(lines[0].text, "    rect = 0;");
+        assert_eq!(lines[1].text, "    GetClientRect(hwnd, &rect);");
+        assert_eq!(lines[2].text, "    edi = rect.bottom;");
+
+        // A name already used by the function gets a suffix.
+        let mut lines = vec![
+            test_line("    rect = 1;"),
+            test_line("    var_40 = 0;"),
+            test_line("    GetClientRect(hwnd, &var_40);"),
+        ];
+        name_known_struct_fields(&mut lines);
+        name_structure_instances(&mut lines);
+        assert_eq!(lines[1].text, "    rect2 = 0;");
+        assert_eq!(lines[2].text, "    GetClientRect(hwnd, &rect2);");
+        assert_eq!(lines[0].text, "    rect = 1;");
     }
     #[test]
     fn noop_statements_are_dropped() {

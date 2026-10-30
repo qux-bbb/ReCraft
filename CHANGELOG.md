@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A structure that an API fills gets a real name: `GetClientRect(hwnd, &var_30)` turns the
+  slot into `rect`, so the code reads
+  `rect = 0; GetClientRect(hwnd, &rect); edx = rect.bottom; edx -= rect.top;` instead of
+  `var_30`/`var_34`/`var_38`/`var_3c`. `MSG` slots become `msg` and `POINT` slots `pt`; a name
+  already used by the function gets a numeric suffix (`rect2`). Notepad: 8 functions,
+  54 named accesses. A small step toward variable naming, driven by the same known-structure
+  table.
 - Statements that do nothing are dropped: `rax = rax;` (and a slot self assignment), an `if`
   whose body is empty, and a label that nothing jumps to when it only introduces the closing
   brace. Notepad: 3 sites, L2 lines 30 212 → **30 208**.
