@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The L2 header shows the stack frame the prologue reserves:
+  `// L2 structure recovery (11 blocks, frame 0x48)` — 101 of Notepad's 502 functions have a
+  constant-size, push-free prologue and now report it, so a reader sees how much local state a
+  function keeps without walking its prologue. Two stack parameters are pointer-typed as well
+  (`int64* arg5`, `void* arg7`).
 - An x64 stack parameter is typed by the access the pseudo-C makes through its value: when the
   slot is copied to a register and that register is used as a memory base, the parameter
   becomes `char*`/`wchar_t*`/`int32*`/`int64*` (`void*` when the widths disagree) instead of

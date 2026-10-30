@@ -492,6 +492,14 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     if info.is_some()
         && let Some(frame) = entry_frame_size(session, &cfg)
     {
+        // Show the size of the stack frame in the header: it tells a reader how much local
+        // state the function keeps without walking the prologue.
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.text.starts_with("// L2 structure recovery ("))
+        {
+            line.text = format!("{}, frame {frame:#x}", line.text.trim_end_matches(')')) + ")";
+        }
         name_stack_arguments(&mut lines, frame);
     }
     name_handle_slots(&mut lines);
