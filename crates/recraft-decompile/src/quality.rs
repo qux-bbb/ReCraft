@@ -31,6 +31,10 @@ pub struct FunctionQuality {
     pub intrinsic_instructions: u64,
     /// `goto loc_...` lines emitted by the structurer.
     pub fallbacks: usize,
+    /// `loc_...` labels emitted by the structurer.
+    pub labels: usize,
+    /// `__asm("...")` statements left in the pseudo-C.
+    pub inline_asm: usize,
     pub structured: bool,
     pub lines: usize,
 }
@@ -56,6 +60,14 @@ impl QualityReport {
 
     pub fn instructions(&self) -> u64 {
         self.functions.iter().map(|f| f.instructions).sum()
+    }
+
+    pub fn labels(&self) -> usize {
+        self.functions.iter().map(|f| f.labels).sum()
+    }
+
+    pub fn inline_asm(&self) -> usize {
+        self.functions.iter().map(|f| f.inline_asm).sum()
     }
 
     pub fn intrinsic_instructions(&self) -> u64 {
@@ -148,12 +160,24 @@ pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
             .iter()
             .filter(|line| line.text.contains("goto loc_"))
             .count();
+        let labels = code
+            .lines
+            .iter()
+            .filter(|line| line.text.trim_start().starts_with("loc_"))
+            .count();
+        let inline_asm = code
+            .lines
+            .iter()
+            .filter(|line| line.text.contains("__asm("))
+            .count();
         measured.push(FunctionQuality {
             start: function.start,
             name,
             instructions,
             intrinsic_instructions: intrinsics,
             fallbacks,
+            labels,
+            inline_asm,
             structured: fallbacks == 0,
             lines: code.lines.len(),
         });

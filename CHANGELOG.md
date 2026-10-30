@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft metrics` reports two more counters from the same L1 pass: `labels` (the `loc_`
+  definitions the structurer had to emit) and `inline asm statements` (the `__asm("…")`
+  lines left in the pseudo-C). Notepad: 267 labels and 138 inline asm across 502 functions;
+  the corpus reports 0 and 9. Both were previously counted by hand in these notes, so the
+  numbers in `docs/QUALITY.md` can now be reproduced with one command.
 - A constant loaded into a register for one comparison moves into it: `eax = 0x111; …
   if (arg2 > eax)` reads `if (arg2 > 0x111)`, and the assignment is dropped when the register
   is written again before any other read (so the value cannot be live). Notepad: 35 functions,

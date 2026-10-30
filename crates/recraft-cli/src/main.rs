@@ -1167,6 +1167,8 @@ fn cmd_metrics(
         "goto fallback functions: {}",
         report.total().saturating_sub(report.structured())
     );
+    println!("labels:                 {}", report.labels());
+    println!("inline asm statements:  {}", report.inline_asm());
     if report.skipped > 0 {
         println!("skipped (limit):        {}", report.skipped);
     }

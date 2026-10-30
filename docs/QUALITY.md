@@ -49,6 +49,8 @@ structured:             31 (100%)
 instructions:           391
 intrinsic instructions: 10 (coverage 97.4%)
 goto fallback functions: 0
+labels:                 0
+inline asm statements:  9
 ```
 
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
