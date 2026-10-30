@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Carried call arguments now survive across blocks even when they name a register. The
+  cross-block value analysis used to keep only register-free values (constants, strings,
+  stack slots), so `CloseHandle()` stayed empty when the handle came from
+  `rcx = *(u64*)(rbx)`. Each carried value now remembers the registers it reads and the
+  dataflow drops it only when one of them is overwritten between the definition and the
+  call, which is exactly when the printed text would be stale. Notepad: empty Win32 API
+  calls 337 → **305** (e.g. `CloseHandle(*(u64*)(arg1))`,
+  `ReleaseSemaphore(arg1, 1, &var_48)`, `SetThreadpoolTimer(*(u64*)(rsi), &var_30, 0, 0x124f8)`),
+  empty `sub_` calls 437 → 426, L2 lines unchanged at 30 254.
 - Tail calls keep their arguments. A function ending in `rcx = 0x140027590; return sub_140001c64();`
   used to drop the value because the structured tail-call emitter only printed the target;
   the setup lines immediately above the jump are now consumed in ABI order (bounded by the

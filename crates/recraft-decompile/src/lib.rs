@@ -58,10 +58,10 @@ pub(crate) struct BlockLift {
     /// Registers written from a stack address in this block, with their displacement from
     /// the function entry (the frame pointer established by the prologue).
     pub stack_pointers: Vec<(Reg, i64)>,
-    /// Writes to the x64 argument registers in order: the rendered value, or None when the
-    /// register was clobbered (a call). Lets a call in a later block print arguments set up
-    /// on the way there.
-    pub arg_writes: Vec<(usize, Option<String>)>,
+    /// Writes to the x64 argument registers in order: the rendered value (with the registers
+    /// it reads), or None when the register was clobbered (a call). Lets a call in a later
+    /// block print arguments set up on the way there.
+    pub arg_writes: Vec<(usize, Option<String>, BTreeSet<Reg>)>,
     /// Effect of the block on argument aliases: each written register maps to the register
     /// it copies (`Some`) or to `None` when it no longer holds a parameter copy. Applied in
     /// order, it carries `rsi = arg1` across block boundaries.
@@ -330,7 +330,7 @@ pub(crate) fn lift_block(
     let mut written = BTreeSet::new();
     let mut stack_pointers: Vec<(Reg, i64)> = Vec::new();
     let mut alias_effect: BTreeMap<Reg, Option<Reg>> = BTreeMap::new();
-    let mut arg_writes: Vec<(usize, Option<String>)> = Vec::new();
+    let mut arg_writes: Vec<(usize, Option<String>, BTreeSet<Reg>)> = Vec::new();
     // Argument-register writes consumed by a call are redundant: the call already renders
     // its captured argument expressions.
     let mut flat: Vec<(usize, usize)> = Vec::new();
@@ -501,14 +501,14 @@ pub(crate) fn lift_block(
                     reg.name().to_owned()
                 };
                 printer.arg_values[slot] = Some(rendered.clone());
-                // Only a value that names no live register can be re-printed in a later
-                // block: a string like `*(u64*)((rcx + 8))` would read the register's new
-                // value there. Stack slots (`var_XX`, `&var_XX`) are frame-relative and stay
-                // valid, so `Rsp`/`Rbp` are allowed.
+                // The rendered value may be re-printed in a later block only while the
+                // registers it reads still hold the same values, so its dependencies travel
+                // with it and the dataflow drops it when one of them is overwritten.
                 let mut live = BTreeSet::new();
                 expr_live_regs(&exprs, *value, &mut live);
-                let stable = live.iter().all(|reg| matches!(reg, Reg::Rsp | Reg::Rbp));
-                arg_writes.push((slot, stable.then_some(rendered)));
+                live.remove(&Reg::Rsp);
+                live.remove(&Reg::Rbp);
+                arg_writes.push((slot, Some(rendered), live));
             }
             if matches!(
                 stmt,
@@ -517,7 +517,7 @@ pub(crate) fn lift_block(
                 printer.arg_values = [None, None, None, None];
                 printer.stack_args.clear();
                 for slot in 0..4 {
-                    arg_writes.push((slot, None));
+                    arg_writes.push((slot, None, BTreeSet::new()));
                 }
             }
         }

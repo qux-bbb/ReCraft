@@ -512,12 +512,15 @@ fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 
             }
         }
     }
-    let mut entering: Vec<[Option<String>; 4]> = vec![Default::default(); count];
-    let mut leaving: Vec<[Option<String>; 4]> = vec![Default::default(); count];
+    // A carried value remembers the registers it reads; overwriting one of them anywhere
+    // between the definition and the call invalidates it.
+    type Carried = (String, BTreeSet<Reg>);
+    let mut entering: Vec<[Option<Carried>; 4]> = vec![Default::default(); count];
+    let mut leaving: Vec<[Option<Carried>; 4]> = vec![Default::default(); count];
     for _ in 0..(count + 4) {
         let mut changed = false;
         for block in 0..count {
-            let mut set: [Option<String>; 4] = Default::default();
+            let mut set: [Option<Carried>; 4] = Default::default();
             if block != cfg.entry
                 && let Some(&first) = predecessors[block].first()
             {
@@ -535,8 +538,23 @@ fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 
                 changed = true;
             }
             let mut out = set;
-            for (slot, value) in &bodies[block].arg_writes {
-                out[*slot] = value.clone();
+            let written = &bodies[block].written;
+            for value in out.iter_mut() {
+                if let Some((_, reads)) = value
+                    && reads.iter().any(|reg| written.contains(reg))
+                {
+                    *value = None;
+                }
+            }
+            for (slot, value, reads) in &bodies[block].arg_writes {
+                out[*slot] = value.clone().map(|text| (text, reads.clone()));
+            }
+            for value in out.iter_mut() {
+                if let Some((_, reads)) = value
+                    && reads.iter().any(|reg| written.contains(reg))
+                {
+                    *value = None;
+                }
             }
             if out != leaving[block] {
                 leaving[block] = out;
@@ -548,6 +566,9 @@ fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 
         }
     }
     entering
+        .into_iter()
+        .map(|slots| slots.map(|value| value.map(|(text, _)| text)))
+        .collect()
 }
 
 /// Which argument copies hold on entry to each block.
@@ -6280,6 +6301,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn carried_argument_value_is_dropped_when_its_register_is_written() {
+        let address = |value: u64| Address::new(value);
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: address(start),
+            end: address(start + 0x10),
+            insns: Vec::new(),
+            edges,
+        };
+        let cfg = Cfg {
+            function: address(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(0, 0x1000, vec![(1, EdgeKind::Unconditional)]),
+                block(1, 0x1010, vec![(2, EdgeKind::Unconditional)]),
+                block(2, 0x1020, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: BTreeMap::new(),
+        };
+        let mut lift =
+            |arg_writes: Vec<(usize, Option<String>, BTreeSet<Reg>)>, written: Reg| BlockLift {
+                statements: Vec::new(),
+                condition: None,
+                flow: Flow::Fallthrough,
+                written: BTreeSet::from([written]),
+                calls: BTreeSet::new(),
+                pushes: Vec::new(),
+                pops: Vec::new(),
+                stack_net: None,
+                stack_min: None,
+                stack_pointers: Vec::new(),
+                alias_writes: Vec::new(),
+                arg_writes,
+                literals: Vec::new(),
+            };
+        // Block 0 loads rcx from rbx; block 1 overwrites rbx, so block 2 cannot trust it.
+        let bodies = vec![
+            lift(
+                vec![(
+                    0,
+                    Some("*(u64*)(rbx)".to_owned()),
+                    BTreeSet::from([Reg::Rbx]),
+                )],
+                Reg::Rcx,
+            ),
+            lift(Vec::new(), Reg::Rbx),
+            lift(Vec::new(), Reg::Rax),
+        ];
+        let values = entry_arg_value_map(&cfg, &bodies);
+        assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
+        assert!(values[2][0].is_none());
+    }
     #[test]
     fn tail_call_takes_adjacent_argument_setups() {
         let mut lines = vec![test_line("    rdx = rsi;"), test_line("    rcx = var_10;")];
