@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Well-known imports now print the right number of arguments. The decompiler had no parameter
+  count for IAT calls, so a call whose registers were set up in an earlier block printed
+  `CoTaskMemFree()`, while a zero-argument API with a leftover register printed a phantom
+  argument (`GetCurrentThreadId((ecx + 1))`). A table of parameter counts for 66 common Win32
+  APIs bounds the list: the call prints exactly that many slots, filling the unresolved ones
+  with the ABI register name, and a zero-argument API prints no arguments at all. Notepad:
+  `CoTaskMemFree(rcx)`, `WaitForSingleObject(rcx, 0)`, `CloseHandle(*(u64*)((rcx + 8)))`,
+  `GetCurrentThreadId()` (false argument gone); empty-argument API calls 305 → **~256**,
+  lines and gotos unchanged (30 256 / 452). An unknown import keeps the old
+  register-setup rule.
 - `MSG` joins `RECT` in the known-structure table. `GetMessageW`/`PeekMessageW`/
   `TranslateMessage`/`DispatchMessageW` take a `MSG*`, so later member accesses print
   `var_40.hwnd`, `var_40.message`, `var_40.wParam`, `var_40.lParam`, `var_40.time`,

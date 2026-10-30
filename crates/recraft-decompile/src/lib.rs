@@ -819,6 +819,87 @@ fn same_value(exprs: &[Expr], left: ExprId, right: ExprId) -> bool {
 
 /// True when an indirect call target is a load of an import slot, which the printer renders
 /// as a named call with an argument list.
+/// Parameter counts for common Win32 APIs whose signatures are stable. Only the *count* is
+/// used: it lets a call print the right number of arguments (with a register placeholder for
+/// the ones the analysis could not resolve) instead of an empty argument list, and it stops a
+/// zero-argument API from showing leftover registers as arguments.
+const IMPORT_ARITY: &[(&str, usize)] = &[
+    ("CloseClipboard", 0),
+    ("CloseHandle", 1),
+    ("CoCreateGuid", 1),
+    ("CoInitializeEx", 2),
+    ("CoTaskMemFree", 1),
+    ("CoUninitialize", 0),
+    ("CommDlgExtendedError", 0),
+    ("CreateFileW", 7),
+    ("DefWindowProcW", 4),
+    ("DeleteCriticalSection", 1),
+    ("DragQueryFileW", 4),
+    ("EnableWindow", 2),
+    ("EnterCriticalSection", 1),
+    ("ExitProcess", 1),
+    ("FreeLibrary", 1),
+    ("GetACP", 0),
+    ("GetActiveWindow", 0),
+    ("GetCommandLineW", 0),
+    ("GetCurrentProcess", 0),
+    ("GetCurrentProcessId", 0),
+    ("GetCurrentThreadId", 0),
+    ("GetDesktopWindow", 0),
+    ("GetFocus", 0),
+    ("GetForegroundWindow", 0),
+    ("GetLastError", 0),
+    ("GetLocaleInfoW", 4),
+    ("GetModuleFileNameA", 3),
+    ("GetModuleFileNameW", 3),
+    ("GetModuleHandleW", 1),
+    ("GetProcAddress", 2),
+    ("GetProcessHeap", 0),
+    ("GetStdHandle", 1),
+    ("GetTickCount", 0),
+    ("GetTickCount64", 0),
+    ("GetUserDefaultUILanguage", 0),
+    ("HeapAlloc", 3),
+    ("HeapFree", 3),
+    ("ImageList_Create", 6),
+    ("ImageList_Destroy", 1),
+    ("ImageList_Draw", 6),
+    ("InitializeCriticalSection", 1),
+    ("InvalidateRect", 3),
+    ("IsDebuggerPresent", 0),
+    ("LeaveCriticalSection", 1),
+    ("LoadLibraryW", 1),
+    ("MulDiv", 3),
+    ("PathFindExtensionW", 1),
+    ("PostMessageW", 4),
+    ("PostQuitMessage", 1),
+    ("RaiseException", 4),
+    ("RegCloseKey", 1),
+    ("RegOpenKeyExW", 5),
+    ("RegQueryInfoKeyW", 12),
+    ("RegQueryValueExW", 6),
+    ("RtlCaptureContext", 1),
+    ("SendDlgItemMessageW", 5),
+    ("SendMessageW", 4),
+    ("SetFocus", 1),
+    ("SetLastError", 1),
+    ("Sleep", 1),
+    ("VirtualAlloc", 4),
+    ("VirtualFree", 3),
+    ("WaitForSingleObject", 2),
+    ("WindowsCreateString", 3),
+    ("WindowsCreateStringReference", 4),
+    ("WindowsDeleteString", 1),
+];
+
+/// Parameter count of a well-known import, if it is in the table.
+fn import_arity(name: &str) -> Option<usize> {
+    IMPORT_ARITY
+        .iter()
+        .find(|(api, _)| *api == name)
+        .map(|(_, arity)| *arity)
+}
+
 fn is_import_call(exprs: &[Expr], target: ExprId, imports: &HashMap<u64, String>) -> bool {
     let Expr::Load { addr, .. } = exprs[target as usize] else {
         return false;
@@ -2020,16 +2101,18 @@ impl Printer<'_> {
             }
             Stmt::CallIndirect { target } => match self.import_target(*target) {
                 Some(name) => {
-                    let mut args = self.indirect_args();
+                    let arity = import_arity(name);
+                    let mut args = self.indirect_args(arity);
+                    // Arguments past the fourth ABI register travel on the stack.
                     let stack = self.stack_arguments();
-                    if self
-                        .arg_values
-                        .iter()
-                        .filter(|value| value.is_some())
-                        .count()
-                        >= 4
-                        && !stack.is_empty()
-                    {
+                    let stack_arguments_expected = arity.is_some_and(|arity| arity > 4)
+                        || self
+                            .arg_values
+                            .iter()
+                            .filter(|value| value.is_some())
+                            .count()
+                            >= 4;
+                    if stack_arguments_expected && !stack.is_empty() {
                         let extra = stack.join(", ");
                         if args.is_empty() {
                             args = extra;
@@ -2082,24 +2165,49 @@ impl Printer<'_> {
     /// Render the argument list of an IAT call from the values last written to the ABI
     /// argument registers. Slots that were not written keep their register name so the
     /// position stays truthful; trailing untouched slots are dropped.
-    fn indirect_args(&self) -> String {
-        // Without the first argument the list would start with a register placeholder;
-        // keep the bare `Api()` form in that case.
-        if self.arg_values[0].is_none() {
-            return String::new();
+    /// Argument list of an IAT call. With a known parameter count the call prints exactly
+    /// that many slots, using a register placeholder for the ones the analysis could not
+    /// resolve; without one, only a setup that starts at the first argument is printed and
+    /// trailing untouched slots are dropped.
+    fn indirect_args(&self, arity: Option<usize>) -> String {
+        let known = self.arg_values.iter().rposition(Option::is_some);
+        match arity {
+            Some(arity) => {
+                if arity == 0 {
+                    return String::new();
+                }
+                (0..arity.min(4))
+                    .map(
+                        |slot| match self.arg_values.get(slot).and_then(Option::as_ref) {
+                            Some(value) => value.clone(),
+                            None => RegView::full(crate::l2::X64_ARG_REGS[slot])
+                                .name()
+                                .to_owned(),
+                        },
+                    )
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+            None => {
+                // Without the first argument the list would start with a register
+                // placeholder; keep the bare `Api()` form in that case.
+                if self.arg_values[0].is_none() {
+                    return String::new();
+                }
+                let Some(last) = known else {
+                    return String::new();
+                };
+                (0..=last)
+                    .map(|slot| match &self.arg_values[slot] {
+                        Some(value) => value.clone(),
+                        None => RegView::full(crate::l2::X64_ARG_REGS[slot])
+                            .name()
+                            .to_owned(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
         }
-        let Some(last) = self.arg_values.iter().rposition(Option::is_some) else {
-            return String::new();
-        };
-        (0..=last)
-            .map(|slot| match &self.arg_values[slot] {
-                Some(value) => value.clone(),
-                None => RegView::full(crate::l2::X64_ARG_REGS[slot])
-                    .name()
-                    .to_owned(),
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 
     fn expr(&self, id: ExprId) -> String {

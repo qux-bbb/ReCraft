@@ -6471,6 +6471,20 @@ mod tests {
         assert!(values[2][0].is_none());
     }
     #[test]
+    fn known_import_arities_are_sorted_and_stable() {
+        assert_eq!(crate::import_arity("CloseHandle"), Some(1));
+        assert_eq!(crate::import_arity("GetProcessHeap"), Some(0));
+        assert_eq!(crate::import_arity("RegQueryInfoKeyW"), Some(12));
+        // An API the table does not know falls back to the register-setup rule.
+        assert_eq!(crate::import_arity("PeekMessageW"), None);
+        assert!(
+            crate::IMPORT_ARITY
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0),
+            "the table must stay sorted by API name"
+        );
+    }
+    #[test]
     fn msg_arguments_name_their_fields() {
         let mut lines = vec![
             test_line("    var_40 = xmm0;"),
