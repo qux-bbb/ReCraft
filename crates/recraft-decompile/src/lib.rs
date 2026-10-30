@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::{Session, StructDef};
+use recraft_decode::iced_x86;
 use recraft_ir::{
     BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, RegView, Stmt, UnOp, cond_name,
 };
@@ -68,6 +69,45 @@ pub(crate) struct BlockLift {
     /// Quoted C string literals rendered for this block, with the address of the data
     /// each one names. Lets a view link `"text"` back to the string it quotes.
     pub literals: Vec<(String, Address)>,
+}
+
+/// `__chkstk` saves `r10`/`r11` just below the stack pointer after subtracting the probe
+/// size, which no ordinary prologue does.
+pub(crate) fn is_stack_probe(session: &mut Session, start: Address) -> Result<bool> {
+    let Some(first) = session.insn_at(start)? else {
+        return Ok(false);
+    };
+    if first.mnemonic() != iced_x86::Mnemonic::Sub {
+        return Ok(false);
+    }
+    let instruction = first.instruction();
+    if instruction.op0_kind() != iced_x86::OpKind::Register
+        || instruction.op0_register() != iced_x86::Register::RSP
+    {
+        return Ok(false);
+    }
+    let mut addr = first.next_addr();
+    for _ in 0..6 {
+        let Some(next) = session.insn_at(addr)? else {
+            return Ok(false);
+        };
+        if next.is_invalid() {
+            return Ok(false);
+        }
+        let instruction = next.instruction();
+        if next.mnemonic() == iced_x86::Mnemonic::Mov
+            && instruction.op0_kind() == iced_x86::OpKind::Memory
+            && instruction.memory_base() == iced_x86::Register::RSP
+            && matches!(
+                instruction.op1_register(),
+                iced_x86::Register::R10 | iced_x86::Register::R11
+            )
+        {
+            return Ok(true);
+        }
+        addr = next.next_addr();
+    }
+    Ok(false)
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
@@ -163,8 +203,67 @@ pub(crate) fn lift_block(
         });
     }
 
-    let exprs = lifter.into_exprs();
+    let mut exprs = lifter.into_exprs();
     let literals = collect_literals(session, &exprs)?;
+    // `sub rsp, rax` allocates the frame after `call __chkstk`: the size was loaded into rax
+    // and the probe preserves it, so the frame step is that constant. Without it the whole
+    // function's stack displacement stays unknown and every `rsp` slot loses its frame base
+    // (local names become `var_nXXXX` instead of `var_XXXX`).
+    let mut frame_size: Option<u64> = None;
+    let mut probes: BTreeMap<u64, bool> = BTreeMap::new();
+    for item in &mut lifted {
+        for stmt in &mut item.stmts {
+            match stmt {
+                Stmt::WriteReg { reg, value } if reg.base == Reg::Rax => {
+                    frame_size = match &exprs[*value as usize] {
+                        Expr::Const(size) => Some(*size),
+                        _ => None,
+                    };
+                }
+                Stmt::WriteReg { reg, value } if reg.base == Reg::Rsp => {
+                    let Some(size) = frame_size else {
+                        continue;
+                    };
+                    let Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs,
+                        rhs,
+                    } = exprs[*value as usize]
+                    else {
+                        continue;
+                    };
+                    let reads_rax = matches!(
+                        &exprs[rhs as usize],
+                        Expr::Reg(view) if view.base == Reg::Rax
+                    );
+                    if reads_rax {
+                        exprs.push(Expr::Const(size));
+                        exprs[*value as usize] = Expr::Bin {
+                            op: BinOp::Sub,
+                            lhs,
+                            rhs: (exprs.len() - 1) as ExprId,
+                        };
+                    }
+                }
+                Stmt::Call { target, .. } => {
+                    let probe = match probes.get(&target.get()) {
+                        Some(known) => *known,
+                        None => {
+                            let known = is_stack_probe(session, *target)?;
+                            probes.insert(target.get(), known);
+                            known
+                        }
+                    };
+                    if !probe {
+                        frame_size = None;
+                    }
+                }
+                Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => frame_size = None,
+                _ => {}
+            }
+        }
+    }
+
     let mut names: HashMap<u64, String> = HashMap::new();
     for item in &lifted {
         for stmt in &item.stmts {
@@ -874,8 +973,67 @@ pub fn pseudocode_l0(
         )));
     }
 
-    let exprs = lifter.into_exprs();
+    let mut exprs = lifter.into_exprs();
     let literals = collect_literals(session, &exprs)?;
+    // `sub rsp, rax` allocates the frame after `call __chkstk`: the size was loaded into rax
+    // and the probe preserves it, so the frame step is that constant. Without it the whole
+    // function's stack displacement stays unknown and every `rsp` slot loses its frame base
+    // (local names become `var_nXXXX` instead of `var_XXXX`).
+    let mut frame_size: Option<u64> = None;
+    let mut probes: BTreeMap<u64, bool> = BTreeMap::new();
+    for item in &mut lifted {
+        for stmt in &mut item.stmts {
+            match stmt {
+                Stmt::WriteReg { reg, value } if reg.base == Reg::Rax => {
+                    frame_size = match &exprs[*value as usize] {
+                        Expr::Const(size) => Some(*size),
+                        _ => None,
+                    };
+                }
+                Stmt::WriteReg { reg, value } if reg.base == Reg::Rsp => {
+                    let Some(size) = frame_size else {
+                        continue;
+                    };
+                    let Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs,
+                        rhs,
+                    } = exprs[*value as usize]
+                    else {
+                        continue;
+                    };
+                    let reads_rax = matches!(
+                        &exprs[rhs as usize],
+                        Expr::Reg(view) if view.base == Reg::Rax
+                    );
+                    if reads_rax {
+                        exprs.push(Expr::Const(size));
+                        exprs[*value as usize] = Expr::Bin {
+                            op: BinOp::Sub,
+                            lhs,
+                            rhs: (exprs.len() - 1) as ExprId,
+                        };
+                    }
+                }
+                Stmt::Call { target, .. } => {
+                    let probe = match probes.get(&target.get()) {
+                        Some(known) => *known,
+                        None => {
+                            let known = is_stack_probe(session, *target)?;
+                            probes.insert(target.get(), known);
+                            known
+                        }
+                    };
+                    if !probe {
+                        frame_size = None;
+                    }
+                }
+                Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => frame_size = None,
+                _ => {}
+            }
+        }
+    }
+
     let imports = import_names(session);
     let mut names: HashMap<u64, String> = HashMap::new();
     for target in targets.iter().chain(calls.iter()) {

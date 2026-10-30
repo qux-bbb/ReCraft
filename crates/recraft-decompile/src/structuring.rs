@@ -2466,7 +2466,7 @@ fn hide_stack_probes(session: &mut Session, lines: &mut Vec<PseudoLine>) -> Resu
         let probe = match probes.get(&target) {
             Some(known) => *known,
             None => {
-                let known = is_stack_probe(session, Address::new(target))?;
+                let known = crate::is_stack_probe(session, Address::new(target))?;
                 probes.insert(target, known);
                 known
             }
@@ -2496,45 +2496,6 @@ fn hide_stack_probes(session: &mut Session, lines: &mut Vec<PseudoLine>) -> Resu
         *lines = kept;
     }
     Ok(())
-}
-
-/// `__chkstk` saves `r10`/`r11` just below the stack pointer after subtracting the probe
-/// size, which no ordinary prologue does.
-fn is_stack_probe(session: &mut Session, start: Address) -> Result<bool> {
-    let Some(first) = session.insn_at(start)? else {
-        return Ok(false);
-    };
-    if first.mnemonic() != iced_x86::Mnemonic::Sub {
-        return Ok(false);
-    }
-    let instruction = first.instruction();
-    if instruction.op0_kind() != iced_x86::OpKind::Register
-        || instruction.op0_register() != iced_x86::Register::RSP
-    {
-        return Ok(false);
-    }
-    let mut addr = first.next_addr();
-    for _ in 0..6 {
-        let Some(next) = session.insn_at(addr)? else {
-            return Ok(false);
-        };
-        if next.is_invalid() {
-            return Ok(false);
-        }
-        let instruction = next.instruction();
-        if next.mnemonic() == iced_x86::Mnemonic::Mov
-            && instruction.op0_kind() == iced_x86::OpKind::Memory
-            && instruction.memory_base() == iced_x86::Register::RSP
-            && matches!(
-                instruction.op1_register(),
-                iced_x86::Register::R10 | iced_x86::Register::R11
-            )
-        {
-            return Ok(true);
-        }
-        addr = next.next_addr();
-    }
-    Ok(false)
 }
 
 /// True when the value is a frame slot holding the cookie. The printer names it (`var_XX`)

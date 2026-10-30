@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Stack slots keep their frame base in functions that allocate the frame with `sub rsp, rax`.
+  MSVC loads the frame size into `eax`, calls `__chkstk` (which preserves `rax`) and subtracts
+  `rax`; the lifter treated `rax` as clobbered by the call, so the stack displacement of the
+  whole function became unknown and every slot name fell back to its raw offset
+  (`var_n1008` instead of `var_c0`). The constant is now carried across the probe call, so
+  `sub rsp, <size>` is a normal step: notepad `var_nXXXX` names drop **2090 → 115** (the
+  45 KB function 1891 → 1, its frame reads `rbp = &var_100`), six functions change, L2 lines
+  30 277 → 30 275, `goto loc_` unchanged at 475.
 - Calls whose argument setup was split across a block boundary now print their arguments.
   The printer's argument-register values are carried with the same must-analysis as the
   aliases (intersection over the predecessors, cleared by calls), so a call in a later block
