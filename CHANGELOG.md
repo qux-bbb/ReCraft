@@ -37,8 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 1 235 to **771** `goto loc_` lines (242 recovered `do` loops); the structured rate
   goes 486 → 487/502 (97.0%), the crackme case 450 → 452/493 (91.7%), and the Go sample
   1 767 → 1 779/2 000 (88.9%).
-- MSVC `/GS` stack-cookie bookkeeping is no longer printed. The prologue stores
-  `__security_cookie ^ rsp` in a frame slot and every return path folds it back and calls
+- The frame pointer established by the prologue (`rbp = rsp - N`) now names `[rbp + disp]`
+  in every block. A block that never reloads rbp used to name the same slot from the raw
+  rbp offset while the prologue named it from `rsp`, so one location appeared as two names
+  (`var_18` in the prologue, `var_n10` in a branch — and `*(u64*)((rbp + 0x200))` raw in
+  L1). `lift_block` now reports the stack-address registers it sees, the entry block
+  supplies the frame pointer, and every block starts from that base: 58 notepad functions
+  get one consistent name per slot (`var_48`/`var_40` instead of `var_18`/`var_n10`), and
+  no raw frame expression remains in L1 either. Corpus golden is unchanged.
+- MSVC `/GS` stack-cookie bookkeeping is no longer printed. The prologue stores  `__security_cookie ^ rsp` in a frame slot and every return path folds it back and calls
   `__security_check_cookie`; both are compiler-generated, and printing the call as the
   function's result (`return sub_1400019f0(rcx);`) hid the value actually returned. The
   check sites now read `return 0;` (and the real value is folded from `eax`), and the

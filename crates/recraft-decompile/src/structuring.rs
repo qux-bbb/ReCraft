@@ -105,8 +105,36 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             None,
             None,
             &imports,
+            None,
         )?);
     }
+    // The prologue's frame pointer is the base for `[rbp + disp]` in every block. Blocks
+    // that do not reload rbp otherwise name the same slot differently (or leave it raw).
+    // The first pass has no stack displacement yet, so probe the entry block with the
+    // displacement it always starts at.
+    let frame_pointer = match cfg.blocks.first() {
+        Some(block) => {
+            let probe = lift_block(
+                session,
+                block.start,
+                block.end,
+                args,
+                &arg_structs,
+                None,
+                &no_counts,
+                Some((0, 0)),
+                None,
+                &imports,
+                None,
+            )?;
+            probe
+                .stack_pointers
+                .iter()
+                .find(|(reg, _)| *reg == Reg::Rbp)
+                .copied()
+        }
+        None => None,
+    };
     // Infer argument counts for direct call targets from the callee's prologue. This
     // lets unknown calls render `sub(a, b)` with the right arity instead of dropping
     // arguments or printing all four ABI registers.
@@ -212,6 +240,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             entry_stack[index].map(|entry| (entry, frame_base)),
             flag_sources[index],
             &imports,
+            frame_pointer,
         )?);
     }
     bodies = seeded;
@@ -5660,6 +5689,7 @@ mod tests {
                 pops,
                 stack_net: None,
                 stack_min: None,
+                stack_pointers: Vec::new(),
                 literals: Vec::new(),
             }
         }

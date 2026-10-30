@@ -54,6 +54,9 @@ pub(crate) struct BlockLift {
     pub stack_net: Option<i64>,
     /// Deepest `rsp` displacement reached inside the block (relative to its entry).
     pub stack_min: Option<i64>,
+    /// Registers written from a stack address in this block, with their displacement from
+    /// the function entry (the frame pointer established by the prologue).
+    pub stack_pointers: Vec<(Reg, i64)>,
     /// Quoted C string literals rendered for this block, with the address of the data
     /// each one names. Lets a view link `"text"` back to the string it quotes.
     pub literals: Vec<(String, Address)>,
@@ -81,6 +84,9 @@ pub(crate) fn lift_block(
     flag_source: Option<Address>,
     // IAT slot -> API name, built once per function instead of once per block.
     imports: &HashMap<u64, String>,
+    // Frame pointer established by the function prologue, so blocks that do not re-load it
+    // still name `[rbp + disp]` against the same frame base as the prologue.
+    frame_pointer: Option<(Reg, i64)>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -93,6 +99,7 @@ pub(crate) fn lift_block(
             pops: Vec::new(),
             stack_net: None,
             stack_min: None,
+            stack_pointers: Vec::new(),
             literals: Vec::new(),
         });
     }
@@ -135,6 +142,7 @@ pub(crate) fn lift_block(
             pops: Vec::new(),
             stack_net: None,
             stack_min: None,
+            stack_pointers: Vec::new(),
             literals: Vec::new(),
         });
     }
@@ -195,13 +203,14 @@ pub(crate) fn lift_block(
         arg_aliases: BTreeMap::new(),
         stack_delta: stack.map(|(entry, _)| entry),
         frame_base: stack.map_or(0, |(_, base)| base),
-        pointer_offsets: BTreeMap::new(),
+        pointer_offsets: frame_pointer.into_iter().collect(),
         stack_args: BTreeMap::new(),
         last_values: BTreeMap::new(),
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
     let mut written = BTreeSet::new();
+    let mut stack_pointers: Vec<(Reg, i64)> = Vec::new();
     // Argument-register writes consumed by a call are redundant: the call already renders
     // its captured argument expressions.
     let mut flat: Vec<(usize, usize)> = Vec::new();
@@ -305,6 +314,14 @@ pub(crate) fn lift_block(
             // The stack displacement must follow `rsp` bookkeeping even though those
             // statements are not printed.
             printer.note_stack(stmt);
+            // A register loaded from a stack address (the prologue's `rbp = rsp - N`) is the
+            // frame base for `[rbp + disp]` accesses in every block, so report it upward.
+            if let Stmt::WriteReg { reg, .. } = stmt
+                && let Some(offset) = printer.pointer_offsets.get(&reg.base).copied()
+                && !stack_pointers.iter().any(|(seen, _)| *seen == reg.base)
+            {
+                stack_pointers.push((reg.base, offset));
+            }
             if printer.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                 continue;
             }
@@ -375,6 +392,7 @@ pub(crate) fn lift_block(
         pops,
         stack_net,
         stack_min,
+        stack_pointers,
         literals: literal_references(&literals),
     })
 }
