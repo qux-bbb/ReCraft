@@ -437,6 +437,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
 
+    fold_constant_registers(&mut lines);
     drop_noop_statements(&mut lines);
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
@@ -604,6 +605,122 @@ const KNOWN_STRUCTS: [KnownStruct; 3] = [
 /// A direct call whose arguments were set up in another block records none, so it prints
 /// `sub_X()`. The widest sibling call to the same target shows how many arguments it takes;
 /// printing that many register placeholders keeps the arity of the site visible.
+/// A constant moved into a register for a single comparison reads better inline:
+/// `eax = 0x111; … if (arg2 > eax) {` becomes `if (arg2 > 0x111) {`. The assignment is only
+/// dropped when the register is written again before any other read, so the value cannot be
+/// live afterwards.
+fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let text = lines[index].text.trim().to_owned();
+        let Some(statement) = text.strip_suffix(';') else {
+            index += 1;
+            continue;
+        };
+        let Some((register, value)) = statement.split_once(" = ") else {
+            index += 1;
+            continue;
+        };
+        let register = register.trim().to_owned();
+        let value = value.trim().to_owned();
+        if !is_identifier(&register) || register.starts_with("var_") || register.starts_with("arg")
+        {
+            index += 1;
+            continue;
+        }
+        if is_frame_register(&register) || !is_constant(&value) {
+            index += 1;
+            continue;
+        }
+        let Some(use_index) = first_mention(lines, index + 1, 9, &register) else {
+            index += 1;
+            continue;
+        };
+        let candidate = lines[use_index].text.clone();
+        let trimmed = candidate.trim();
+        let Some(condition) = trimmed
+            .strip_prefix("if (")
+            .and_then(|rest| rest.strip_suffix(") {"))
+        else {
+            index += 1;
+            continue;
+        };
+        // A bare truth test has no comparison to fold into.
+        if condition.trim() == register {
+            index += 1;
+            continue;
+        }
+        if !contains_token(condition, &register) {
+            index += 1;
+            continue;
+        }
+        // Comparing two known constants would print a constant condition; the register form
+        // at least keeps the code readable.
+        if !has_identifier(&replace_token(condition, &register, "")) {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&candidate));
+        lines[use_index].text = format!(
+            "{indent}if ({}) {{",
+            replace_token(condition, &register, &value)
+        );
+        // The register's next mention decides whether the assignment is dead.
+        let dead = match first_mention(lines, use_index + 1, lines.len() - use_index - 1, &register)
+        {
+            Some(next) => assigns_to(lines[next].text.trim().trim_end_matches(';'), &register),
+            None => true,
+        };
+        if dead {
+            lines.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// The first line at or after `from` that mentions `name` as a token, within `limit` lines.
+fn first_mention(lines: &[PseudoLine], from: usize, limit: usize, name: &str) -> Option<usize> {
+    let end = (from + limit).min(lines.len());
+    for (index, line) in lines.iter().enumerate().take(end).skip(from) {
+        if contains_token(&line.text, name) {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// Whether `text` holds an identifier (a number such as `0x12a` does not).
+fn has_identifier(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_digit() {
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            return true;
+        }
+    }
+    false
+}
+
+/// A literal number: `0x111`, `7`, `-1`.
+fn is_constant(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if let Some(hex) = digits.strip_prefix("0x") {
+        !hex.is_empty() && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+    } else {
+        !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
+    }
+}
+
 /// Statements that do nothing and only add noise: a self assignment (`rax = rax;`), an `if`
 /// whose body is empty, and a label that is not referenced and only introduces the closing
 /// brace of its block.
@@ -7375,6 +7492,33 @@ mod tests {
         assert_eq!(lines[0].text, "    rect = 1;");
     }
     #[test]
+    fn constants_move_into_their_comparison() {
+        let mut lines = vec![
+            test_line("    eax = 0x111;"),
+            test_line("    var_40 = arg4;"),
+            test_line("    if (arg2 > eax) {"),
+            test_line("        eax = 0x233;"),
+            test_line("        if (ebp > eax) {"),
+        ];
+        fold_constant_registers(&mut lines);
+        // The constant lands in the comparison and both dead assignments go away.
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "    var_40 = arg4;");
+        assert_eq!(lines[1].text, "    if (arg2 > 0x111) {");
+        assert_eq!(lines[2].text, "        if (ebp > 0x233) {");
+
+        // A live temporary keeps its assignment.
+        let mut lines = vec![
+            test_line("    rbx = 0x2b992ddfa232;"),
+            test_line("    if (rax == rbx) {"),
+            test_line("    }"),
+            test_line("    rcx = rbx;"),
+        ];
+        fold_constant_registers(&mut lines);
+        assert_eq!(lines[0].text, "    rbx = 0x2b992ddfa232;");
+        assert_eq!(lines[1].text, "    if (rax == 0x2b992ddfa232) {");
+    }
+    #[test]
     fn noop_statements_are_dropped() {
         let mut lines = vec![
             test_line("    rax = rax;"),
@@ -7383,6 +7527,7 @@ mod tests {
             test_line("    }"),
             test_line("    var_20 = 1;"),
         ];
+        fold_constant_registers(&mut lines);
         drop_noop_statements(&mut lines);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "    var_20 = 1;");

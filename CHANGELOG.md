@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A constant loaded into a register for one comparison moves into it: `eax = 0x111; …
+  if (arg2 > eax)` reads `if (arg2 > 0x111)`, and the assignment is dropped when the register
+  is written again before any other read (so the value cannot be live). Notepad: 35 functions,
+  L2 lines 30 208 → 30 174; the message dispatch of the window procedure now reads
+  `if (arg2 > 0x111) { if (ebp > 0x233) {`, and the security-cookie check reads
+  `if (rax == 0x2b992ddfa232)`. A comparison between two known constants keeps its register
+  form — evaluating it would print a constant condition.
 - The handle table covers more APIs: the registry functions name their key slot `hKey`
   (`RegOpenKeyExW`/`RegQueryValueExW`/`RegSetValueExW`/`RegEnumKeyExW` now match
   `RegCloseKey`), `DestroyIcon`/`DestroyCursor` give `hIcon`/`hCursor`,
