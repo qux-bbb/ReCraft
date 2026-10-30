@@ -11,7 +11,7 @@
 //! Known approximation: statements executed by a loop header before its condition are
 //! emitted once before the `while` (compilers normally put only a compare there).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_analysis::{Cfg, EdgeKind, build_cfg};
 use recraft_common::{Address, Error, Result};
@@ -91,6 +91,8 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
     let no_counts: HashMap<u64, usize> = HashMap::new();
+    // The IAT slot map is the same for every block; build it once per function.
+    let imports = crate::import_names(session);
     for block in &cfg.blocks {
         bodies.push(lift_block(
             session,
@@ -102,6 +104,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             &no_counts,
             None,
             None,
+            &imports,
         )?);
     }
     // Infer argument counts for direct call targets from the callee's prologue. This
@@ -208,6 +211,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             &call_arg_counts,
             entry_stack[index].map(|entry| (entry, frame_base)),
             flag_sources[index],
+            &imports,
         )?);
     }
     bodies = seeded;
@@ -3908,7 +3912,20 @@ fn fold_store_copies(lines: &mut Vec<PseudoLine>) {
 /// only names the value, so folding it into the single reader removes a register round-trip
 /// and makes the condition read like source. Conditions with `&&`/`||` are skipped because
 /// inlining could change when the right-hand side is evaluated.
+///
+/// Token frequencies are counted once instead of per candidate; a fold removes the write and
+/// the read it replaces, so only that name's count changes.
 fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| !token.is_empty())
+        {
+            *counts.entry(token.to_owned()).or_insert(0) += 1;
+        }
+    }
     let mut index = 0;
     while index + 1 < lines.len() {
         let statement = lines[index].text.trim();
@@ -3920,22 +3937,13 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         };
-        let lhs = lhs.trim();
-        let rhs = rhs.trim();
-        if !is_identifier(lhs) || rhs.is_empty() {
+        let lhs = lhs.trim().to_owned();
+        let rhs = rhs.trim().to_owned();
+        if !is_identifier(&lhs) || rhs.is_empty() {
             index += 1;
             continue;
         }
-        let occurrences: usize = lines
-            .iter()
-            .map(|line| {
-                line.text
-                    .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                    .filter(|token| *token == lhs)
-                    .count()
-            })
-            .sum();
-        if occurrences != 2 {
+        if counts.get(lhs.as_str()).copied().unwrap_or(0) != 2 {
             index += 1;
             continue;
         }
@@ -3953,15 +3961,18 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
             }
             if condition
                 .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                .filter(|token| *token == lhs)
+                .filter(|token| **token == lhs)
                 .count()
                 != 1
             {
                 index += 1;
                 continue;
             }
-            let condition = replace_token(condition, lhs, rhs);
+            let condition = replace_token(condition, &lhs, &rhs);
             lines[index + 1].text = format!("{indent}if ({condition}) {{");
+            if let Some(count) = counts.get_mut(&lhs) {
+                *count = count.saturating_sub(2);
+            }
             lines.remove(index);
             continue;
         }
@@ -3977,7 +3988,7 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
             }
             if expression
                 .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                .filter(|token| *token == lhs)
+                .filter(|token| **token == lhs)
                 .count()
                 != 1
             {
@@ -3985,7 +3996,10 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
                 continue;
             }
             lines[index + 1].text =
-                format!("{indent}return {};", replace_token(expression, lhs, rhs));
+                format!("{indent}return {};", replace_token(expression, &lhs, &rhs));
+            if let Some(count) = counts.get_mut(&lhs) {
+                *count = count.saturating_sub(2);
+            }
             lines.remove(index);
             continue;
         }
@@ -4634,39 +4648,40 @@ fn tidy_labels(lines: &mut Vec<PseudoLine>) {
     if lines.len() < 2 {
         return;
     }
-    let mut index = 0;
-    while index + 1 < lines.len() {
-        let target = goto_target(&lines[index].text);
-        if let Some(target) = target
-            && lines[index + 1].text.trim() == format!("loc_{target:x}:")
-        {
-            lines.remove(index);
-            continue;
+    // Drop `goto L;` when `L:` follows: both paths reach the same line.
+    let capacity = lines.len();
+    let mut output = Vec::with_capacity(capacity);
+    let mut iter = lines.drain(..).peekable();
+    while let Some(line) = iter.next() {
+        let redundant = goto_target(&line.text).is_some_and(|target| {
+            iter.peek()
+                .is_some_and(|next| next.text.trim() == format!("loc_{target:x}:"))
+        });
+        if !redundant {
+            output.push(line);
         }
-        index += 1;
     }
+    drop(iter);
+    *lines = output;
 
-    let labels: Vec<String> = lines
-        .iter()
-        .filter_map(|line| {
-            line.text
-                .trim()
-                .strip_suffix(':')
-                .filter(|label| label.starts_with("loc_"))
-                .map(str::to_owned)
-        })
-        .collect();
-    let mut removable = Vec::new();
-    for label in labels {
-        let references = lines
-            .iter()
-            .filter(|line| line.text.matches(label.as_str()).count() > 0)
-            .count();
-        if references <= 1 {
-            removable.push(format!("{label}:"));
+    // Collect every jump target in one pass; a label no jump names is dead.
+    let mut referenced: HashSet<u64> = HashSet::new();
+    for line in lines.iter() {
+        if let Some(target) = goto_target(&line.text) {
+            referenced.insert(target);
         }
     }
-    lines.retain(|line| !removable.contains(&line.text.trim().to_owned()));
+    lines.retain(|line| match label_address(line.text.trim()) {
+        Some(address) => referenced.contains(&address),
+        None => true,
+    });
+}
+
+/// Address of a `loc_<hex>:` definition, if the line is one.
+fn label_address(text: &str) -> Option<u64> {
+    text.strip_suffix(':')
+        .and_then(|label| label.strip_prefix("loc_"))
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
 }
 
 fn goto_target(text: &str) -> Option<u64> {

@@ -79,6 +79,8 @@ pub(crate) fn lift_block(
     // A pure flag-setting instruction (`cmp`/`test`/`bt`) just before the preceding
     // block's branch: its flags are still live when this block starts with another branch.
     flag_source: Option<Address>,
+    // IAT slot -> API name, built once per function instead of once per block.
+    imports: &HashMap<u64, String>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -139,7 +141,6 @@ pub(crate) fn lift_block(
 
     let exprs = lifter.into_exprs();
     let literals = collect_literals(session, &exprs)?;
-    let imports = import_names(session);
     let mut names: HashMap<u64, String> = HashMap::new();
     for item in &lifted {
         for stmt in &item.stmts {
@@ -185,7 +186,7 @@ pub(crate) fn lift_block(
         arg_structs,
         call_protos: &call_protos,
         call_arg_counts,
-        imports: &imports,
+        imports,
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
@@ -268,7 +269,7 @@ pub(crate) fn lift_block(
             let Stmt::CallIndirect { target } = &lifted[call_item].stmts[call_stmt] else {
                 continue;
             };
-            if !is_import_call(&exprs, *target, &imports) {
+            if !is_import_call(&exprs, *target, imports) {
                 continue;
             }
             for reg in crate::l2::X64_ARG_REGS {
