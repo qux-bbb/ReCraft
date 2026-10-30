@@ -405,6 +405,34 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     fill_cross_block_arguments(&mut lines);
+    // A function whose every exit is a bare `return;` returns nothing, so the signature says
+    // `void` instead of keeping the register-width type the ABI would suggest. A body that
+    // ends with a call is left alone: `f(); ret` may be `return f();` in the source.
+    if let Some(signature) = lines.iter().position(|line| line.text.ends_with(") {")) {
+        let returns_value = lines.iter().skip(signature + 1).any(|line| {
+            let text = line.text.trim();
+            text.starts_with("return ") && text != "return;"
+        });
+        let ends_with_call = lines
+            .iter()
+            .rev()
+            .map(|line| line.text.trim())
+            .find(|text| !text.is_empty() && *text != "}")
+            .is_some_and(|text| {
+                text.ends_with(");") && !text.starts_with("return") && !text.contains('=')
+            });
+        if !returns_value
+            && !ends_with_call
+            && let Some((ret, rest)) = lines[signature].text.split_once(' ')
+            && matches!(
+                ret,
+                "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
+            )
+        {
+            lines[signature].text = format!("void {rest}");
+        }
+    }
+
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
     tidy_labels(&mut lines);
@@ -550,6 +578,10 @@ fn fill_cross_block_arguments(lines: &mut [PseudoLine]) {
         let Some(&arity) = arities.get(target) else {
             continue;
         };
+        // A signature-table entry is authoritative about the target's arity.
+        if crate::import_arity(target).is_some() {
+            continue;
+        }
         // Arguments past the fourth travel on the stack, whose position the register names
         // alone cannot place; leave those calls alone.
         if arity == 0 || arity > 4 {
@@ -568,7 +600,7 @@ fn fill_cross_block_arguments(lines: &mut [PseudoLine]) {
     }
 }
 
-/// The target and raw argument list of a direct `sub_X(…)` call line.
+/// The target and raw argument list of a `sub_X(…)` or `ApiName(…)` call line.
 fn direct_call(text: &str) -> Option<(&str, &str)> {
     let trimmed = text.trim();
     let trimmed = trimmed.strip_prefix("return ").unwrap_or(trimmed);
@@ -578,7 +610,12 @@ fn direct_call(text: &str) -> Option<(&str, &str)> {
     }
     let open = trimmed.find('(')?;
     let target = &trimmed[..open];
-    if !target.starts_with("sub_") {
+    let known = target.starts_with("sub_")
+        || target
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_uppercase());
+    if !known || target.contains(' ') {
         return None;
     }
     Some((target, &trimmed[open + 1..trimmed.len() - 1]))
@@ -6715,6 +6752,17 @@ mod tests {
         assert_eq!(lines[1].text, "    sub_140002088(rcx, rdx, r8);");
         // Five arguments place one on the stack, which the register names cannot locate.
         assert_eq!(lines[3].text, "    sub_140003000();");
+
+        // The same evidence works for an import, unless the signature table already knows.
+        let mut lines = vec![
+            test_line("    SomeApi(a, b);"),
+            test_line("    SomeApi();"),
+            test_line("    CloseHandle(a);"),
+            test_line("    CloseHandle();"),
+        ];
+        fill_cross_block_arguments(&mut lines);
+        assert_eq!(lines[1].text, "    SomeApi(rcx, rdx);");
+        assert_eq!(lines[3].text, "    CloseHandle();");
     }
     #[test]
     fn adjacent_temporaries_are_inlined_into_their_reader() {

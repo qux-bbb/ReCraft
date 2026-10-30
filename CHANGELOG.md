@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A function that never returns a value now says so: `int64 sub_140001440(void) { … return; }`
+  became `void sub_140001440(void)`, because every exit is a bare `return;`. A body that
+  ends with a call keeps its integer type — `f(); ret` may be `return f();` in the source, and
+  the register-width signature is the honest reading there. Notepad: 29 signatures corrected,
+  L2 text otherwise unchanged; the sibling-arity fill (below) also learned to read `ApiName(…)`
+  call sites, though notepad's remaining empty calls are all zero-argument APIs from the
+  signature table.
 - A direct call whose arguments were set up in another block prints its arity. Such a call
   records no arguments, so it printed `sub_X()` even when a sibling call to the same target
   in the same function shows three (`sub_X(a, b, c)`); the widest sibling now supplies the
