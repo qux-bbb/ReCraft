@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An x64 stack parameter is typed by the access the pseudo-C makes through its value: when the
+  slot is copied to a register and that register is used as a memory base, the parameter
+  becomes `char*`/`wchar_t*`/`int32*`/`int64*` (`void*` when the widths disagree) instead of
+  `int64`. Notepad's stack arguments are all plain values, so the output is unchanged there;
+  a unit test covers a slot that is written through as a 64-bit pointer.
 - 32-bit stack arguments are typed by how they are used: when the loaded value becomes the base
   of another memory access the parameter is a pointer, and the access widths pick
   `char*`/`wchar_t*`/`int32*` (`void*` when they disagree). The x86 corpus now reads

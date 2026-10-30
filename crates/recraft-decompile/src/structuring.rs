@@ -1022,6 +1022,21 @@ fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
     if stack_arguments.is_empty() {
         return;
     }
+    // Types are decided from the body before the signature line is rewritten.
+    let mut stack_types: BTreeMap<usize, String> = BTreeMap::new();
+    for (offset, index) in &stack_arguments {
+        let slot = format!("var_{offset:x}");
+        let ty = pointer_width_of_slot(lines, &slot)
+            .map(|widths| match widths.as_slice() {
+                [1] => "char*",
+                [2] => "wchar_t*",
+                [4] => "int32*",
+                [8] => "int64*",
+                _ => "void*",
+            })
+            .unwrap_or("int64");
+        stack_types.insert(*index, ty.to_owned());
+    }
     for line in lines.iter_mut() {
         for (offset, index) in &stack_arguments {
             let slot = format!("var_{offset:x}");
@@ -1064,12 +1079,72 @@ fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
         }
         let mut parameters: Vec<String> = Vec::new();
         for index in declared + 1..=highest {
-            parameters.push(format!("int64 arg{index}"));
+            // The slot behind that parameter may be a pointer: type it by the access the
+            // pseudo-C makes through the value.
+            let ty = stack_types
+                .get(&index)
+                .map(String::as_str)
+                .unwrap_or("int64");
+            parameters.push(format!("{ty} arg{index}"));
         }
         let head = &text[..close];
         let tail = &text[close..];
         line.text = format!("{head}, {}{tail}", parameters.join(", "));
         break;
+    }
+}
+
+/// The width of the memory access made through a value copied out of a stack slot, if the
+/// pseudo-C shows one: the slot holds a pointer in that case.
+fn pointer_width_of_slot(lines: &[PseudoLine], slot: &str) -> Option<Vec<u8>> {
+    let mut widths: BTreeSet<u8> = BTreeSet::new();
+    for (index, line) in lines.iter().enumerate() {
+        let text = line.text.trim();
+        let Some((lhs, rhs)) = text.trim_end_matches(';').split_once(" = ") else {
+            continue;
+        };
+        if rhs.trim() != slot || !is_register_name(lhs.trim()) {
+            continue;
+        }
+        let register = lhs.trim();
+        // Walk forward while the register still holds that pointer.
+        let mut depth = 0i32;
+        for next in lines.iter().skip(index + 1).take(24) {
+            let text = next.text.as_str();
+            if assigns_register(text, register) {
+                break;
+            }
+            for width in [1u8, 2, 4, 8, 16] {
+                let cast = match width {
+                    1 => "u8",
+                    2 => "u16",
+                    4 => "u32",
+                    8 => "u64",
+                    _ => "__m128",
+                };
+                let head = format!("*({cast}*)(({register}");
+                if let Some(position) = text.find(&head) {
+                    // Only a plain displacement keeps the register as the base.
+                    let after = &text[position + head.len()..];
+                    if after.starts_with(')') || after.starts_with(" + ") {
+                        widths.insert(width);
+                    }
+                }
+                let bare = format!("*({cast}*)({register})");
+                if text.contains(&bare) {
+                    widths.insert(width);
+                }
+            }
+            depth += 1;
+            if depth > 24 {
+                break;
+            }
+        }
+    }
+    if widths.is_empty() {
+        None
+    } else {
+        Some(widths.into_iter().collect())
     }
 }
 
@@ -7654,6 +7729,21 @@ mod tests {
         assert_eq!(lines[1].text, "    rect2 = 0;");
         assert_eq!(lines[2].text, "    GetClientRect(hwnd, &rect2);");
         assert_eq!(lines[0].text, "    rect = 1;");
+    }
+    #[test]
+    fn stack_arguments_are_typed_by_the_access_through_them() {
+        let mut lines = vec![
+            test_line("// L2 params: arg1=rcx"),
+            test_line("int64 sub_40(int64 arg1) {"),
+            test_line("    r8 = var_78;"),
+            test_line("    *(u64*)(r8) = arg1;"),
+            test_line("    return 0;"),
+            test_line("}"),
+        ];
+        name_stack_arguments(&mut lines, 0x48);
+        // var_78 is entry+0x30 (arg6) and is written through as a 64-bit pointer.
+        assert!(lines[1].text.contains("int64* arg6"), "{}", lines[1].text);
+        assert_eq!(lines[2].text, "    r8 = arg6;");
     }
     #[test]
     fn stack_arguments_name_the_callers_parameters() {
