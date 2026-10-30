@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Frames built through the saved-`rsp` alias keep their slot names. A prologue such as
+  `mov rax, rsp; push ...; lea rbp, [rax-0x148]` was not resolved: naming a register from a
+  stack address only understood `rsp` itself, so `[rbp-0x30]` printed as `var_n30` instead of
+  `var_d0` while other accesses to the same slot used the normalised name. The printer now
+  resolves an address from any register already known to hold one (`rsp - 8`,
+  `rax - 0x148`), so the frame base propagates through aliases. Notepad: `var_nXXXX` names
+  115 → **47**, 10 functions change, L2 lines 30 275 → 30 272, `goto loc_` unchanged at 475.
 - Stack slots keep their frame base in functions that allocate the frame with `sub rsp, rax`.
   MSVC loads the frame size into `eax`, calls `__chkstk` (which preserves `rax`) and subtracts
   `rax`; the lifter treated `rax` as clobbered by the call, so the stack displacement of the

@@ -598,33 +598,6 @@ fn popped_register(item: &LiftedInsn, exprs: &[Expr]) -> Option<Reg> {
     }
 }
 
-/// Displacement from the function entry of a stack address held in an expression
-/// (`rsp`, `rsp - 8`, `rsp + 0x30`), given the current `rsp` displacement.
-fn pointer_offset(exprs: &[Expr], value: ExprId, delta: Option<i64>) -> Option<i64> {
-    let delta = delta?;
-    match &exprs[value as usize] {
-        Expr::Reg(view) if view.base == Reg::Rsp => Some(delta),
-        Expr::Bin { op, lhs, rhs } => {
-            let Expr::Reg(view) = &exprs[*lhs as usize] else {
-                return None;
-            };
-            if view.base != Reg::Rsp {
-                return None;
-            }
-            let Expr::Const(amount) = &exprs[*rhs as usize] else {
-                return None;
-            };
-            let amount = *amount as i64;
-            match op {
-                recraft_ir::BinOp::Add => Some(delta + amount),
-                recraft_ir::BinOp::Sub => Some(delta - amount),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
 /// Net and minimum `rsp` displacement of a lifted instruction list: `(net, min)`. Both are
 /// `None` once a stack-pointer update is not a constant step (`and rsp, -16`, `mov rsp,
 /// rbp`), because later slot names would be guesses.
@@ -1399,9 +1372,9 @@ impl Printer<'_> {
             }
             return;
         }
-        // A register loaded with a stack address (`rbp = rsp - 8`, the saved-rsp alias)
-        // names slots on the same frame base.
-        match pointer_offset(self.exprs, *value, self.stack_delta) {
+        // A register loaded with a stack address (`rbp = rsp - 8`, `rbp = rax - 0x148`
+        // through the saved-rsp alias) names slots on the same frame base.
+        match self.pointer_value(*value) {
             Some(offset) => {
                 self.pointer_offsets.insert(reg.base, offset);
             }
@@ -1622,6 +1595,36 @@ impl Printer<'_> {
         }
     }
 
+    /// Displacement from the function entry of a stack address held in an expression:
+    /// `rsp`, `rsp - 8`, or a register already known to hold such an address (`rbp` after
+    /// `lea rbp, [rax-0x148]`, where `rax` is the saved-`rsp` alias).
+    fn pointer_value(&self, value: ExprId) -> Option<i64> {
+        match &self.exprs[value as usize] {
+            Expr::Reg(view) if view.base == Reg::Rsp => self.stack_delta,
+            Expr::Reg(view) => self.pointer_offsets.get(&view.base).copied(),
+            Expr::Bin { op, lhs, rhs } => {
+                let base = match &self.exprs[*lhs as usize] {
+                    Expr::Reg(view) => view.base,
+                    _ => return None,
+                };
+                let amount = match &self.exprs[*rhs as usize] {
+                    Expr::Const(amount) => *amount as i64,
+                    _ => return None,
+                };
+                let from_entry = if base == Reg::Rsp {
+                    self.stack_delta?
+                } else {
+                    *self.pointer_offsets.get(&base)?
+                };
+                match op {
+                    BinOp::Add => Some(from_entry + amount),
+                    BinOp::Sub => Some(from_entry - amount),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
     /// `[rsp + const]`, `[rbp - const]`, `[ebp + const]` -> (base register, offset).
     fn stack_slot(&self, expr: ExprId) -> Option<(Reg, i64)> {
         let (op, lhs, rhs) = match &self.exprs[expr as usize] {
