@@ -2288,6 +2288,16 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
     });
 }
 
+/// True when the value is a frame slot holding the cookie. The printer names it (`var_XX`)
+/// when the block knows the frame alias; without that (L1, where no register seeds are
+/// used) the check keeps the raw stack expression (`*(u64*)((rbp + 0x200))`), so both forms
+/// identify the check.
+fn is_cookie_slot(value: &str) -> bool {
+    is_stack_slot_name(value)
+        || (value.starts_with("*(u64*)(")
+            && (reads_register(value, "rbp") || reads_register(value, "rsp")))
+}
+
 /// MSVC's `/GS` stack cookie is compiler bookkeeping, not program logic: the prologue stores
 /// `__security_cookie ^ rsp` in a frame slot and every return path folds it back and calls
 /// `__security_check_cookie`. Source code has neither, and printing the check as the result
@@ -2337,7 +2347,7 @@ fn hide_security_cookies(lines: &mut Vec<PseudoLine>) {
         // The slot names of the store and the check can disagree when the frame base is
         // recovered differently on the two paths, so the `^ rsp` fold and the call shape
         // identify the check, not the slot name.
-        if !is_stack_slot_name(slot) || !folds_stack_pointer(register, &lines[index + 1].text) {
+        if !is_cookie_slot(slot) || !folds_stack_pointer(register, &lines[index + 1].text) {
             index += 1;
             continue;
         }
@@ -6704,6 +6714,32 @@ mod tests {
         assert!(!text.contains("sub_1400019f0"), "{text}");
         assert!(!text.contains("var_200"), "{text}");
         assert!(text.contains("    esi = 0;"), "{text}");
+        assert!(text.contains("    r11 = &var_310;"), "{text}");
+    }
+
+    #[test]
+    fn security_cookie_check_with_a_raw_frame_load_is_hidden() {
+        // L1 does not seed the register-rebuild set, so the load keeps its raw stack
+        // expression instead of the `var_XX` name; the setup must not be dropped alone.
+        let mut lines = vec![
+            test_line("    rax = *(u64*)(0x140034400);"),
+            test_line("    rax = (rax ^ rsp);"),
+            test_line("    var_300 = rax;"),
+            test_line("    rcx = *(u64*)((rbp + 0x200));"),
+            test_line("    rcx = (rcx ^ rsp);"),
+            test_line("    sub_1400019f0(rcx);"),
+            test_line("    r11 = &var_310;"),
+            test_line("    return;"),
+        ];
+        hide_security_cookies(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("0x140034400"), "{text}");
+        assert!(!text.contains("0x200"), "{text}");
+        assert!(!text.contains("sub_1400019f0"), "{text}");
         assert!(text.contains("    r11 = &var_310;"), "{text}");
     }
 

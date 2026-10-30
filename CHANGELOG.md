@@ -46,7 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `rsp`, stored in a slot — so the API name is not assumed, and a function without
   such a setup keeps its calls. Notepad: 126 check sites in 44 functions, 155 → 2
   occurrences (the remaining two are the checker itself and one unresolved call), and the
-  frame-cookie loads/folds 74 → 7.
+  frame-cookie loads/folds 74 → 7. L1 output (which does not seed the register-rebuild set)
+  keeps the check's load as a raw stack expression (`*(u64*)((rbp + 0x200))`) instead of a
+  `var_XX` name; the matcher accepts both forms. Before this, L1 dropped the setup but kept
+  the checks, leaving a comparison against a slot nothing wrote — L1 hides the same checks
+  as L2 now (2 occurrences left).
 - A call split from its argument setup by a block boundary now prints its arguments.
   Blocks end at a jump target, so `mov rcx, [global]` and the `call` it feeds can land in
   different blocks (and the call block is emitted with fresh value tracking); the arguments
