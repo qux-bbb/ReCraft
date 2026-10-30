@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Address constants now name what they point at: `rdx = 0x14002b210;` reads
+  `rdx = off_14002b210;` for an address inside a data segment, a constant equal to a function
+  start becomes that function (`return sub_140001c64(sub_140027590);`), and a constant that
+  matches a string literal becomes the string. Numbers that match none of these stay as they
+  are (`rbx = 0x2b992ddfa232;`). Notepad: 358 `off_` names and 5 function pointers across 168
+  functions, bare address assignments 511 → 337 (the rest are image-base/code addresses and
+  plain constants). The golden normaliser masks the `off_` digits too, and `dispatch.c` was
+  regenerated.
 - Global data reads as a named word instead of a cast expression: `*(u64*)(0x140036648)`
   becomes `qword_140036648`, `*(u32*)(0x140034460)` `dword_140034460`, and `u8`/`u16`/`f32`/
   `f64`/`__m128` give `byte_`/`word_`/`flt_`/`dbl_`/`xmmword_` (the width stays visible, and a

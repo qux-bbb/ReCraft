@@ -272,6 +272,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         .collect();
     literals.sort();
     literals.dedup();
+    let literal_texts = literals.clone();
     let mut structurer = Structurer::new(
         &cfg,
         bodies,
@@ -441,7 +442,32 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     name_known_struct_fields(&mut lines);
     name_structure_instances(&mut lines);
     name_void_pointer_fields(&mut lines);
+
     name_global_data(&mut lines);
+    {
+        let mut functions: HashMap<u64, String> = HashMap::new();
+        for name in constants(&lines) {
+            if ranges.contains_key(&name) {
+                functions.insert(name, crate::resolve_name(session, Address::new(name))?);
+            }
+        }
+        let data: Vec<(u64, u64)> = session
+            .segments()
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment.kind,
+                    recraft_core::SegmentKind::Data | recraft_core::SegmentKind::Bss
+                )
+            })
+            .map(|segment| (segment.range.start.get(), segment.range.end.get()))
+            .collect();
+        let literals: HashMap<u64, String> = literal_texts
+            .iter()
+            .map(|(text, address)| (address.get(), text.clone()))
+            .collect();
+        name_address_constants(&mut lines, &functions, &literals, &data);
+    }
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
@@ -707,6 +733,71 @@ fn count_arguments(arguments: &str) -> usize {
         }
     }
     count
+}
+
+/// Address constants that name something read better than a bare number: a constant equal to
+/// a function start is that function (a callback pointer), and one inside a data segment is
+/// `off_<hex>` (the address of data). Numbers that match neither stay as they are.
+fn name_address_constants(
+    lines: &mut [PseudoLine],
+    functions: &HashMap<u64, String>,
+    literals: &HashMap<u64, String>,
+    data: &[(u64, u64)],
+) {
+    let mut replacements: Vec<(String, String)> = Vec::new();
+    for name in constants(lines) {
+        if let Some(function) = functions.get(&name) {
+            replacements.push((format!("0x{name:x}"), function.clone()));
+        } else if let Some(literal) = literals.get(&name) {
+            replacements.push((format!("0x{name:x}"), literal.clone()));
+        } else if data
+            .iter()
+            .any(|(start, end)| name >= *start && name < *end)
+        {
+            replacements.push((format!("0x{name:x}"), format!("off_{name:x}")));
+        }
+    }
+    if replacements.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        for (from, to) in &replacements {
+            line.text = replace_token(&line.text, from, to);
+        }
+    }
+}
+
+/// The image addresses mentioned as `0x<hex>` constants with at least eight digits.
+fn constants(lines: &[PseudoLine]) -> BTreeSet<u64> {
+    let mut found = BTreeSet::new();
+    let mut quoted = false;
+    for line in lines {
+        let text = line.text.as_str();
+        let bytes = text.as_bytes();
+        let mut index = 0;
+        while index + 2 < bytes.len() {
+            if bytes[index] == b'"' {
+                quoted = !quoted;
+                index += 1;
+                continue;
+            }
+            if quoted || bytes[index] != b'0' || bytes[index + 1] != b'x' {
+                index += 1;
+                continue;
+            }
+            let mut end = index + 2;
+            while end < bytes.len() && (bytes[end] as char).is_ascii_hexdigit() {
+                end += 1;
+            }
+            if end >= index + 10
+                && let Ok(value) = u64::from_str_radix(&text[index + 2..end], 16)
+            {
+                found.insert(value);
+            }
+            index = end.max(index + 1);
+        }
+    }
+    found
 }
 
 /// Global data addressed by an absolute image address reads as a named word, like a symbol:
@@ -7162,6 +7253,26 @@ mod tests {
         assert!(values[2][0].is_none());
     }
     #[test]
+    fn address_constants_name_what_they_point_at() {
+        let mut functions = HashMap::new();
+        functions.insert(0x140001260, "sub_140001260".to_owned());
+        let mut literals = HashMap::new();
+        literals.insert(0x14002b950, "\"Software\"".to_owned());
+        let data = [(0x1400341f8, 0x140034800)];
+        let mut lines = vec![
+            test_line("    rax = 0x140001260;"),
+            test_line("    rcx = 0x14002b950;"),
+            test_line("    rdx = 0x1400341f8;"),
+            // Neither a function nor data: the constant stays.
+            test_line("    rbx = 0x2b992ddfa232;"),
+        ];
+        name_address_constants(&mut lines, &functions, &literals, &data);
+        assert_eq!(lines[0].text, "    rax = sub_140001260;");
+        assert_eq!(lines[1].text, "    rcx = \"Software\";");
+        assert_eq!(lines[2].text, "    rdx = off_1400341f8;");
+        assert_eq!(lines[3].text, "    rbx = 0x2b992ddfa232;");
+    }
+    #[test]
     fn global_data_reads_as_a_named_word() {
         let mut lines = vec![
             test_line("    eax = *(u32*)(0x140034460);"),
@@ -7176,6 +7287,7 @@ mod tests {
         assert_eq!(lines[2].text, "    rcx = byte_140035390;");
         assert_eq!(lines[3].text, "    rdx = *(u32*)(0x140034460 + 4);");
     }
+
     #[test]
     fn void_pointer_arguments_get_field_names() {
         let mut lines = vec![
@@ -7186,7 +7298,6 @@ mod tests {
             test_line("    edi = *(u8*)((arg2 + 0x18));"),
         ];
         name_void_pointer_fields(&mut lines);
-        name_global_data(&mut lines);
         assert_eq!(lines[0].text, "    eax = arg1->field_10;");
         assert_eq!(lines[1].text, "    ecx = arg1->field_10;");
         assert_eq!(lines[2].text, "    edx = arg1->field_0;");
