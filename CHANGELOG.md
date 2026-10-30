@@ -18,6 +18,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- MSVC `/GS` stack-cookie bookkeeping is no longer printed. The prologue stores
+  `__security_cookie ^ rsp` in a frame slot and every return path folds it back and calls
+  `__security_check_cookie`; both are compiler-generated, and printing the call as the
+  function's result (`return sub_1400019f0(rcx);`) hid the value actually returned. The
+  check sites now read `return 0;` (and the real value is folded from `eax`), and the
+  setup is dropped once no check reads its slot. Recognition is by shape — a global mixed
+  with `rsp`, stored in a slot — so the API name is not assumed, and a function without
+  such a setup keeps its calls. Notepad: 126 check sites in 44 functions, 155 → 2
+  occurrences (the remaining two are the checker itself and one unresolved call), and the
+  frame-cookie loads/folds 74 → 7.
+- A call split from its argument setup by a block boundary now prints its arguments.
+  Blocks end at a jump target, so `mov rcx, [global]` and the `call` it feeds can land in
+  different blocks (and the call block is emitted with fresh value tracking); the arguments
+  are recovered from the straight-line run above the call, stopping at labels, braces and
+  calls that clobber the argument registers. Only a callee with a known non-empty arity is
+  filled from the whole run; any other direct `sub_...` call is filled only when its first
+  argument was written on the line directly above, so a stray register value cannot become
+  an argument of an argument-less call. Corpus `recursive` reads `recursive(ecx)` instead
+  of `recursive()`; notepad gains 99 calls (`sub_14000b320(eax)` from the `ecx = eax;`
+  line above, …). This also fills calls duplicated as a shared tail, since each copy is
+  rewritten from its own preceding lines.
+- A `goto` to a label whose block is just the return path folds into `return <value>;`:
+  `if (eax == 0) goto loc_140013a2d;` reads `if (eax == 0) return 0;` once the target's
+  `eax = 0; return;` is the whole block (including labels shared by several exits). The
+  label disappears when no jump references it; 29 jumps fold in notepad.
 - Cross references are IDA's `xrefs to …` **dialog** instead of a docked tab: `X` (only —
   `F7` is retired) opens a window titled after the selected item, with `Direction`
   (`Up`/`Down`), `Type` (`c` call, `j` jump, `o` offset, `r` read, `w` write), `Address`

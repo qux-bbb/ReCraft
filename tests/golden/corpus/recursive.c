@@ -3,7 +3,7 @@ void recursive_l1(void) {
     ebx = ecx;
     if (ecx > 1 /* signed */) {
         ecx -= 1;
-        recursive();
+        recursive(ecx);
         eax *= ebx;
         return;
     }

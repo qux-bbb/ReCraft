@@ -34,6 +34,8 @@ desktop.ini
 # Local artifacts
 /artifacts/
 /dist/
+# Scratch projects used for local manual decompiler sweeps
+/.tmp/
 # MSVC scratch output (corpus builds live under corpus/build/)
 *.obj
 *.exp

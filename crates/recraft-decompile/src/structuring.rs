@@ -160,6 +160,28 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             }
         }
     }
+    // Names of callees whose arity is known to be non-empty; only those can receive recovered
+    // cross-block arguments (see `fill_split_call_arguments`). A self-recursive call is not in
+    // `call_arg_counts`, so the function's own signature (or a scan of its prologue in L1)
+    // supplies it.
+    let mut callers_with_arguments: BTreeSet<String> = BTreeSet::new();
+    for target in call_arg_counts.keys() {
+        callers_with_arguments.insert(crate::resolve_name(session, Address::new(*target))?);
+    }
+    let self_has_arguments = match info.as_ref() {
+        Some(info) => info.args.count() > 0,
+        None => crate::l2::recover_arg_count(
+            session,
+            function.start,
+            function.end,
+            &mut arity_memo,
+            &ranges,
+        )
+        .is_ok_and(|count| count > 0),
+    };
+    if self_has_arguments {
+        callers_with_arguments.insert(crate::resolve_name(session, start)?);
+    }
     // SSA-lite: which registers are already overwritten on every path reaching a block.
     // Re-lifting with that seed keeps `argN` off clobbered values at join points.
     let seeds = if args.is_some() {
@@ -244,7 +266,15 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     structurer.emit_all(&mut lines);
+    // `/GS` canaries and block splits are pure compiler artifacts; removing them before the
+    // structural fold passes exposes the real return paths and call arguments. The cookie
+    // setup has to be identified before `hide_callee_saves` treats its store as a spill.
+    hide_security_cookies(&mut lines);
     hide_callee_saves(&mut lines);
+    // x86 passes arguments on the stack, so the register-based recovery is x64-only.
+    if session.image().is_64 {
+        fill_split_call_arguments(&mut lines, &callers_with_arguments);
+    }
     tidy_labels(&mut lines);
     for _ in 0..4 {
         drop_unreachable_tails(&mut lines);
@@ -296,6 +326,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         fold_constant_byte_returns(&mut lines);
         fold_assigned_returns(&mut lines);
     }
+    // Shared exit paths are now `return <value>;`; a jump to one is an early return.
+    fold_trivial_return_labels(&mut lines);
+    tidy_labels(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -2242,6 +2275,257 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
     });
 }
 
+/// MSVC's `/GS` stack cookie is compiler bookkeeping, not program logic: the prologue stores
+/// `__security_cookie ^ rsp` in a frame slot and every return path folds it back and calls
+/// `__security_check_cookie`. Source code has neither, and printing the check as the result
+/// (`return sub_1400019f0(rcx);`) hides the value the function really returns. The prologue
+/// stores a global mixed with the stack pointer, and only a function with such a setup has
+/// its `frame-slot ^ rsp` calls removed, so an unrelated tail call cannot match. The setup
+/// goes too when nothing reads its slot any more.
+fn hide_security_cookies(lines: &mut Vec<PseudoLine>) {
+    if lines.len() < 4 {
+        return;
+    }
+    // Setup: `rax = *(u64*)(0x...); rax = (rax ^ rsp); var_XX = rax;`
+    let mut cookies: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    for index in 0..lines.len().saturating_sub(2) {
+        let Some((register, load)) = plain_assignment(&lines[index].text) else {
+            continue;
+        };
+        if !is_identifier(register) || !load.starts_with("*(u64*)(0x") || !load.ends_with(')') {
+            continue;
+        }
+        if !folds_stack_pointer(register, &lines[index + 1].text) {
+            continue;
+        }
+        let Some((slot, source)) = plain_assignment(&lines[index + 2].text) else {
+            continue;
+        };
+        if source != register || !is_stack_slot_name(slot) {
+            continue;
+        }
+        cookies
+            .entry(slot.to_owned())
+            .or_insert((index, register.to_owned()));
+    }
+    if cookies.is_empty() {
+        return;
+    }
+
+    // Check: `rcx = var_XX; rcx = (rcx ^ rsp); sub_...(rcx); return;` before the return call
+    // is folded, or the folded `return sub_...(rcx);` afterwards.
+    let mut drop = vec![false; lines.len()];
+    let mut index = 0;
+    while index + 2 < lines.len() {
+        let Some((register, slot)) = plain_assignment(&lines[index].text) else {
+            index += 1;
+            continue;
+        };
+        // The slot names of the store and the check can disagree when the frame base is
+        // recovered differently on the two paths, so the `^ rsp` fold and the call shape
+        // identify the check, not the slot name.
+        if !is_stack_slot_name(slot) || !folds_stack_pointer(register, &lines[index + 1].text) {
+            index += 1;
+            continue;
+        }
+        let third = lines[index + 2].text.trim().to_owned();
+        let spaces = leading_spaces(&lines[index + 2].text);
+        if let Some(call) = third
+            .strip_prefix("return ")
+            .and_then(|t| t.strip_suffix(';'))
+        {
+            if calls_cookie_check(call, register) {
+                drop[index] = true;
+                drop[index + 1] = true;
+                lines[index + 2].text = format!("{}return;", " ".repeat(spaces));
+                index += 3;
+                continue;
+            }
+        }
+        if let Some(call) = third.strip_suffix(';')
+            && calls_cookie_check(call, register)
+        {
+            // The check is a statement call with no result of its own; frame restores or a
+            // bare `return;` may follow it.
+            drop[index] = true;
+            drop[index + 1] = true;
+            drop[index + 2] = true;
+            index += 3;
+            continue;
+        }
+        index += 1;
+    }
+
+    // A cookie slot that no check reads any more only carried frame canaries (or the check
+    // path is not expressible in pseudo-C). Its setup is dead once the register it used is
+    // rewritten before being read.
+    for (slot, (setup, register)) in &cookies {
+        let read_elsewhere = lines.iter().enumerate().any(|(index, line)| {
+            !drop[index]
+                && index != *setup
+                && index != setup + 1
+                && index != setup + 2
+                && mentions_slot(&line.text, slot)
+        });
+        if read_elsewhere {
+            continue;
+        }
+        // Walk forward: a write of the same register first makes the cookie value dead, a
+        // read keeps it alive, and for `rax` a call (which clobbers it) ends the value too.
+        let mut dead = true;
+        for (index, line) in lines.iter().enumerate().skip(setup + 3) {
+            if drop[index] {
+                continue;
+            }
+            let text = line.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if reads_register(text, register) {
+                dead = plain_assignment(text)
+                    .is_some_and(|(lhs, _)| register_base_any(lhs) == register_base_any(register));
+                break;
+            }
+            if register_base_any(register) == Some(0) && is_call_line(text) {
+                dead = true;
+                break;
+            }
+        }
+        if dead {
+            drop[*setup] = true;
+            drop[*setup + 1] = true;
+            drop[*setup + 2] = true;
+        }
+    }
+    if drop.iter().any(|gone| *gone) {
+        let mut index = 0;
+        lines.retain(|_| {
+            let keep = !drop[index];
+            index += 1;
+            keep
+        });
+    }
+}
+
+/// True when the statement mixes `register` with the stack pointer, in either the raw
+/// (`rax = (rax ^ rsp);`) or the folded (`rax ^= rsp;`) spelling.
+fn folds_stack_pointer(register: &str, text: &str) -> bool {
+    let mixes = |base: &str| base == "rsp" || base == "esp";
+    if let Some((folded, op, base)) = parse_compound(text) {
+        return folded == register && op == "^" && mixes(base);
+    }
+    plain_assignment(text).is_some_and(|(target, value)| {
+        target == register
+            && ["rsp", "esp"]
+                .iter()
+                .any(|base| value == format!("({register} ^ {base})"))
+    })
+}
+
+/// True for `sub_...(rcx)` / `Api(rcx)` where the callee receives only the cookie value.
+fn calls_cookie_check(call: &str, register: &str) -> bool {
+    let Some(open) = call.find('(') else {
+        return false;
+    };
+    call.ends_with(')')
+        && is_identifier(&call[..open])
+        && &call[open + 1..call.len() - 1] == register
+}
+
+/// x64 argument slot of a register spelling (`rcx`/`ecx`/`cl` -> 0, `r8`/`r8d` -> 2).
+fn abi_argument_slot(name: &str) -> Option<usize> {
+    const ARGUMENTS: [&str; 4] = ["rcx", "rdx", "r8", "r9"];
+    let base = register_base_any(name)?;
+    ARGUMENTS
+        .iter()
+        .position(|argument| register_base_any(argument) == Some(base))
+}
+
+/// Blocks are split at jump targets, so a call can sit in its own block while its arguments
+/// were set up in the block that falls through into it; the printer then renders the call
+/// without arguments. Recover them from the straight-line run above the call, stopping at
+/// anything that ends the run (a label, branch, brace or another call, whose clobbering of
+/// the argument registers would make the value unknown).
+///
+/// A callee with a known positive argument count is filled from the whole run. Otherwise only
+/// a direct `sub_...` call whose first argument was written on the immediately preceding line
+/// is filled: a stray register value further up belongs to whatever produced it, not to an
+/// argument-less call (`GetProcessHeap()`), and an import's arity is unknown without a
+/// prototype.
+fn fill_split_call_arguments(lines: &mut [PseudoLine], callers_with_arguments: &BTreeSet<String>) {
+    let mut values: [Option<String>; 4] = [None, None, None, None];
+    // The previous line defines the first argument register (the setup/call block split).
+    let mut first_argument_written_just_now = false;
+    for line in lines.iter_mut() {
+        let spaces = leading_spaces(&line.text);
+        let text = line.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let control = text.starts_with('{')
+            || text.starts_with('}')
+            || (text.starts_with("loc_") && text.ends_with(':'))
+            || text.starts_with("goto ")
+            || text.starts_with("return")
+            || text.starts_with("if ")
+            || text.starts_with("else")
+            || text.starts_with("while ")
+            || text.starts_with("do ")
+            || text.starts_with("switch ")
+            || text.starts_with("for ")
+            || text.starts_with("break")
+            || text.starts_with("continue")
+            || text.starts_with("__asm");
+        if control || is_call_line(text) {
+            if is_call_line(text) {
+                let head = text[..text.len() - 3].trim_end();
+                let known = callers_with_arguments.contains(head);
+                let adjacent = head.starts_with("sub_") && first_argument_written_just_now;
+                if text.ends_with("();") && values[0].is_some() && (known || adjacent) {
+                    let Some(last) = values.iter().rposition(Option::is_some) else {
+                        unreachable!("the first slot is known")
+                    };
+                    let arguments = (0..=last)
+                        .map(|slot| match &values[slot] {
+                            Some(value) => value.clone(),
+                            None => ["rcx", "rdx", "r8", "r9"][slot].to_owned(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    line.text = format!("{}{head}({arguments});", " ".repeat(spaces));
+                }
+            }
+            values = [None, None, None, None];
+            first_argument_written_just_now = false;
+            continue;
+        }
+        let mut wrote_argument = false;
+        if let Some((lhs, rhs)) = plain_assignment(text)
+            && let Some(slot) = abi_argument_slot(lhs)
+        {
+            // A sub-register write does not define the whole argument; keep the register
+            // name so the width stays visible. A value that reads its own register was
+            // computed from the previous value, so the register already holds the result.
+            let full = matches!(
+                lhs,
+                "rcx" | "rdx" | "r8" | "r9" | "ecx" | "edx" | "r8d" | "r9d"
+            );
+            values[slot] = Some(if full && !reads_register(rhs, lhs) {
+                rhs.to_owned()
+            } else {
+                lhs.to_owned()
+            });
+            wrote_argument = slot == 0;
+        } else if let Some((lhs, _, _)) = parse_compound(text)
+            && let Some(slot) = abi_argument_slot(lhs)
+        {
+            values[slot] = Some(lhs.to_owned());
+            wrote_argument = slot == 0;
+        }
+        first_argument_written_just_now = wrote_argument;
+    }
+}
+
 /// A call statement (`Api(...);`, `sub_x(...);`, `(*rax)(...);`), as opposed to a
 /// declaration or a branch.
 fn is_call_line(text: &str) -> bool {
@@ -3089,6 +3373,85 @@ fn fold_assigned_returns(lines: &mut Vec<PseudoLine>) {
         lines[index].text = format!("{}return {value};", " ".repeat(indent));
         lines.remove(index + 1);
         index += 1;
+    }
+}
+
+/// A label whose whole block computes the return value and returns is the function's own
+/// exit path, so a `goto` to it is an early return. Folding the jump into
+/// `return <value>;` removes the label chase and, once nothing references the label any
+/// more, the label itself.
+fn fold_trivial_return_labels(lines: &mut [PseudoLine]) {
+    let mut tails: BTreeMap<String, String> = BTreeMap::new();
+    for index in 0..lines.len() {
+        let text = lines[index].text.trim();
+        let Some(label) = text.strip_suffix(':') else {
+            continue;
+        };
+        if !label.starts_with("loc_") {
+            continue;
+        }
+        let mut result = None;
+        let mut assignment: Option<String> = None;
+        for candidate in &lines[index + 1..] {
+            let text = candidate.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if text.starts_with('{') || text.starts_with('}') {
+                break;
+            }
+            // Another entry into the same tail; the copied return still ends at the same
+            // statement, so keep scanning.
+            if text.starts_with("loc_") && text.ends_with(':') {
+                continue;
+            }
+            if text == "return;" {
+                result = Some(match assignment {
+                    Some(rhs) => format!("return {rhs};"),
+                    None => "return;".to_owned(),
+                });
+                break;
+            }
+            if let Some(value) = text
+                .strip_prefix("return ")
+                .and_then(|t| t.strip_suffix(';'))
+            {
+                result = Some(format!("return {value};"));
+                break;
+            }
+            if assignment.is_some() {
+                break;
+            }
+            match plain_assignment(text) {
+                Some((lhs, rhs)) if lhs == "eax" || lhs == "rax" => {
+                    assignment = Some(rhs.to_owned());
+                }
+                _ => break,
+            }
+        }
+        if let Some(result) = result {
+            tails.insert(label.to_owned(), result);
+        }
+    }
+    if tails.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        let text = line.text.trim();
+        let Some(target) = goto_target(&line.text) else {
+            continue;
+        };
+        let Some(result) = tails.get(&format!("loc_{target:x}")) else {
+            continue;
+        };
+        let indent = " ".repeat(leading_spaces(&line.text));
+        line.text = match text.split_once(") goto loc_") {
+            Some((condition, _)) => {
+                let condition = condition.strip_prefix("if (").unwrap_or(condition);
+                format!("{indent}if ({condition}) {result}")
+            }
+            None => format!("{indent}{result}"),
+        };
     }
 }
 
@@ -6073,5 +6436,147 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn security_cookie_setup_and_checks_are_hidden() {
+        let mut lines = vec![
+            test_line("    rax = *(u64*)(0x140034400);"),
+            test_line("    rax ^= rsp;"),
+            test_line("    var_250 = rax;"),
+            test_line("    eax = 0;"),
+            test_line("    rcx = var_250;"),
+            test_line("    rcx ^= rsp;"),
+            test_line("    return sub_1400019f0(rcx);"),
+            test_line("    if (flag) {"),
+            test_line("        eax = 1;"),
+            test_line("        rcx = var_250;"),
+            test_line("        rcx ^= rsp;"),
+            test_line("        return sub_1400019f0(rcx);"),
+            test_line("    }"),
+        ];
+        hide_security_cookies(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("0x140034400"), "{text}");
+        assert!(!text.contains("rsp"), "{text}");
+        assert!(!text.contains("sub_1400019f0"), "{text}");
+        assert!(text.contains("    eax = 0;\n    return;\n"), "{text}");
+        assert!(text.contains("        eax = 1;\n        return;"), "{text}");
+    }
+
+    #[test]
+    fn security_cookie_check_before_a_return_is_hidden_even_with_a_frame_restore() {
+        let mut lines = vec![
+            test_line("    rax = *(u64*)(0x140034400);"),
+            test_line("    rax = (rax ^ rsp);"),
+            test_line("    var_300 = rax;"),
+            test_line("    esi = 0;"),
+            test_line("    rcx = var_200;"),
+            test_line("    rcx = (rcx ^ rsp);"),
+            test_line("    sub_1400019f0(rcx);"),
+            test_line("    r11 = &var_310;"),
+            test_line("    return;"),
+        ];
+        hide_security_cookies(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("var_300"), "{text}");
+        assert!(!text.contains("sub_1400019f0"), "{text}");
+        assert!(!text.contains("var_200"), "{text}");
+        assert!(text.contains("    esi = 0;"), "{text}");
+        assert!(text.contains("    r11 = &var_310;"), "{text}");
+    }
+
+    #[test]
+    fn security_cookie_setup_stays_when_the_slot_is_read_elsewhere() {
+        let mut lines = vec![
+            test_line("    rax = *(u64*)(0x140034400);"),
+            test_line("    rax ^= rsp;"),
+            test_line("    var_18 = rax;"),
+            test_line("    rcx = var_18;"),
+            test_line("    rcx ^= rsp;"),
+            test_line("    return sub_1400019f0(rcx);"),
+            test_line("    *(u64*)(rdi) = var_18;"),
+        ];
+        hide_security_cookies(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("var_18 = rax;"), "{text}");
+        assert!(!text.contains("return sub_1400019f0(rcx);"), "{text}");
+    }
+
+    #[test]
+    fn split_block_call_arguments_are_recovered_from_the_run_above() {
+        let mut lines = vec![
+            test_line("    rcx = *(u64*)(0x140036648);"),
+            test_line("    edx = 0x464;"),
+            test_line("    r9 = r14;"),
+            test_line("    sub_140012340();"),
+            test_line("    rcx = 0;"),
+            test_line("    sub_140045678();"),
+            test_line("    rcx = 7;"),
+            test_line("    GetProcessHeap();"),
+        ];
+        let known = BTreeSet::from(["sub_140012340".to_owned(), "sub_140045678".to_owned()]);
+        fill_split_call_arguments(&mut lines, &known);
+        assert_eq!(
+            lines[3].text, "    sub_140012340(*(u64*)(0x140036648), 0x464, r8, r14);",
+            "{:?}",
+            lines[3].text
+        );
+        assert_eq!(lines[5].text, "    sub_140045678(0);");
+        // An import has no known arity, so a stray register value must not become an argument.
+        assert_eq!(lines[7].text, "    GetProcessHeap();");
+    }
+
+    #[test]
+    fn split_block_call_arguments_stop_at_control_flow() {
+        let mut lines = vec![
+            test_line("    rcx = 1;"),
+            test_line("    if (flag) {"),
+            test_line("        rcx = 2;"),
+            test_line("    }"),
+            test_line("    sub_1400aaaa();"),
+            test_line("    rcx = 3;"),
+            test_line("    sub_1400bbbb();"),
+        ];
+        let known = BTreeSet::from(["sub_1400aaaa".to_owned(), "sub_1400bbbb".to_owned()]);
+        fill_split_call_arguments(&mut lines, &known);
+        // The tracked `rcx` was reset by the branch, so the call keeps its empty list.
+        assert_eq!(lines[4].text, "    sub_1400aaaa();");
+        // `sub_1400bbbb` follows its own setup line and is filled.
+        assert_eq!(lines[6].text, "    sub_1400bbbb(3);");
+    }
+
+    #[test]
+    fn goto_to_a_trivial_return_label_becomes_a_return() {
+        let mut lines = vec![
+            test_line("    if (eax == 0) goto loc_140013a2d;"),
+            test_line("    value = 1;"),
+            test_line("    loc_140013a2d:"),
+            test_line("    eax = 0;"),
+            test_line("    loc_140013a2f:"),
+            test_line("    return;"),
+        ];
+        fold_trivial_return_labels(&mut lines);
+        tidy_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("if (eax == 0) return 0;"), "{text}");
+        assert!(!text.contains("goto loc_"), "{text}");
+        assert!(!text.contains("loc_140013a2d:"), "{text}");
     }
 }
