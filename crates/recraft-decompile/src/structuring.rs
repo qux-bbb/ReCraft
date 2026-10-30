@@ -17,7 +17,7 @@ use recraft_analysis::{Cfg, EdgeKind, build_cfg};
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_decode::iced_x86;
-use recraft_ir::{Flow, Reg};
+use recraft_ir::{Flow, Reg, RegView};
 
 use crate::l2::{ReturnKind, X64_ARG_REGS, parse_prototype};
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
@@ -404,6 +404,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             break;
         }
     }
+    fill_cross_block_arguments(&mut lines);
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
     tidy_labels(&mut lines);
@@ -494,13 +495,17 @@ struct KnownStruct {
     fields: &'static [(&'static str, &'static str)],
 }
 
-/// `RECT` is filled by the rectangle getters; `MSG` by the message-loop calls. Field names
+/// `RECT` is filled by the rectangle getters, `POINT` by the cursor/screen mappers and `MSG`\n/// by the message-loop calls. Field names
 /// are applied to later member accesses only, so the address passed to the API and the wide
 /// clear before it keep the plain slot name.
-const KNOWN_STRUCTS: [KnownStruct; 2] = [
+const KNOWN_STRUCTS: [KnownStruct; 3] = [
     KnownStruct {
         apis: &["GetClientRect", "GetWindowRect"],
         fields: &[("0", "left"), ("4", "top"), ("8", "right"), ("c", "bottom")],
+    },
+    KnownStruct {
+        apis: &["GetCursorPos", "ClientToScreen", "ScreenToClient"],
+        fields: &[("0", "x"), ("4", "y")],
     },
     KnownStruct {
         apis: &[
@@ -523,6 +528,80 @@ const KNOWN_STRUCTS: [KnownStruct; 2] = [
 
 /// `GetClientRect(hwnd, &var_30)` makes the four 32-bit slots starting at `var_30` a `RECT`;
 /// naming the later slots after their fields reads like the structure the API fills.
+/// A direct call whose arguments were set up in another block records none, so it prints
+/// `sub_X()`. The widest sibling call to the same target shows how many arguments it takes;
+/// printing that many register placeholders keeps the arity of the site visible.
+fn fill_cross_block_arguments(lines: &mut [PseudoLine]) {
+    let mut arities: HashMap<String, usize> = HashMap::new();
+    for line in lines.iter() {
+        let Some((target, arguments)) = direct_call(&line.text) else {
+            continue;
+        };
+        let entry = arities.entry(target.to_owned()).or_insert(0);
+        *entry = (*entry).max(count_arguments(arguments));
+    }
+    for line in lines.iter_mut() {
+        let Some((target, arguments)) = direct_call(&line.text) else {
+            continue;
+        };
+        if !arguments.trim().is_empty() {
+            continue;
+        }
+        let Some(&arity) = arities.get(target) else {
+            continue;
+        };
+        // Arguments past the fourth travel on the stack, whose position the register names
+        // alone cannot place; leave those calls alone.
+        if arity == 0 || arity > 4 {
+            continue;
+        }
+        let placeholders: Vec<String> = crate::l2::X64_ARG_REGS
+            .iter()
+            .take(arity)
+            .map(|reg| RegView::full(*reg).name().to_owned())
+            .collect();
+        line.text = line.text.replacen(
+            &format!("{target}()"),
+            &format!("{target}({})", placeholders.join(", ")),
+            1,
+        );
+    }
+}
+
+/// The target and raw argument list of a direct `sub_X(…)` call line.
+fn direct_call(text: &str) -> Option<(&str, &str)> {
+    let trimmed = text.trim();
+    let trimmed = trimmed.strip_prefix("return ").unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix(';')?;
+    if !trimmed.ends_with(')') {
+        return None;
+    }
+    let open = trimmed.find('(')?;
+    let target = &trimmed[..open];
+    if !target.starts_with("sub_") {
+        return None;
+    }
+    Some((target, &trimmed[open + 1..trimmed.len() - 1]))
+}
+
+/// Number of top-level arguments in `arguments`.
+fn count_arguments(arguments: &str) -> usize {
+    if arguments.trim().is_empty() {
+        return 0;
+    }
+    let mut depth = 0usize;
+    let mut count = 1;
+    for ch in arguments.chars() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => count += 1,
+            _ => {}
+        }
+    }
+    count
+}
+
 fn name_known_struct_fields(lines: &mut [PseudoLine]) {
     for index in 0..lines.len() {
         let text = lines[index].text.clone();
@@ -6623,6 +6702,19 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn cross_block_calls_take_the_sibling_arity() {
+        let mut lines = vec![
+            test_line("    sub_140002088(a, b, c);"),
+            test_line("    sub_140002088();"),
+            test_line("    sub_140003000(1, 2, 3, 4, 5);"),
+            test_line("    sub_140003000();"),
+        ];
+        fill_cross_block_arguments(&mut lines);
+        assert_eq!(lines[1].text, "    sub_140002088(rcx, rdx, r8);");
+        // Five arguments place one on the stack, which the register names cannot locate.
+        assert_eq!(lines[3].text, "    sub_140003000();");
     }
     #[test]
     fn adjacent_temporaries_are_inlined_into_their_reader() {

@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A direct call whose arguments were set up in another block prints its arity. Such a call
+  records no arguments, so it printed `sub_X()` even when a sibling call to the same target
+  in the same function shows three (`sub_X(a, b, c)`); the widest sibling now supplies the
+  count and the site prints that many register placeholders. Calls with more than four
+  arguments are left alone (a stack argument's position cannot be placed from register
+  names). Notepad: empty direct calls 426 → **291**, 49 functions affected, lines unchanged.
+  `POINT` also joins the known-structure table (`GetCursorPos`/`ClientToScreen`/
+  `ScreenToClient` → `var_XX.x`/`.y`); notepad has no such call, so that part has no
+  notepad delta but covers GUI binaries that do.
 - A register temporary that is written once and read once by the very next statement is
   inlined into it, the way a source-level local would be:
   `eax = *(u64*)(rbx); sub_140001000(eax);` becomes
