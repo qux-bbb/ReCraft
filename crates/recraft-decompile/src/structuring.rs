@@ -466,6 +466,9 @@ struct Structurer {
     /// Loop headers currently emitted as an unstructured `while (1)` body (avoids
     /// recursing back into `emit_loop` for the same header).
     fallback_headers: BTreeSet<usize>,
+    /// Top-level loops whose inner exit leaves the loop: their whole body is emitted as
+    /// labels so one jump cannot place the enclosing continuation on the wrong path.
+    flat_headers: BTreeSet<usize>,
     emitted: Vec<bool>,
     labeled: Vec<bool>,
     bodies: Vec<BlockLift>,
@@ -568,6 +571,7 @@ impl Structurer {
             loop_blocks: BTreeMap::new(),
             loop_stack: Vec::new(),
             fallback_headers: BTreeSet::new(),
+            flat_headers: BTreeSet::new(),
             emitted,
             labeled: vec![false; bodies.len()],
             hidden: hidden_push_pop_pairs(
@@ -770,13 +774,12 @@ impl Structurer {
     // -------------------------------------------------------------- emission --
 
     fn emit_all(&mut self, lines: &mut Vec<PseudoLine>) {
-        if self.needs_flat_fallback() {
+        self.flat_headers = self.flat_loop_headers();
+        if !self.flat_headers.is_empty() {
             lines.push(PseudoLine {
                 addr: self.blocks[self.entry].entry,
-                text: "// nested loop exits outside its parent loop; using labels".to_owned(),
+                text: "// some loops keep labels (an inner loop exits its parent)".to_owned(),
             });
-            self.emit_flat(lines);
-            return;
         }
         self.emit_linear(lines, self.entry, 1, &BTreeSet::new());
         for index in 0..self.blocks.len() {
@@ -794,106 +797,60 @@ impl Structurer {
         }
     }
 
-    /// Flat labelled output is the safe fallback when an inner loop leaves its parent
-    /// loop into a different region: separate `while` bodies would put the parent's
-    /// continuation on the wrong path (seen on the crackme's validation loop).
-    fn needs_flat_fallback(&self) -> bool {
-        nested_loop_leaves_parent(&self.loop_blocks, &self.successors)
+    /// Top-level loops that contain a nested loop whose body jumps out of the top loop into
+    /// a different region. `while` bodies cannot express that jump (the parent's
+    /// continuation would move), so such a loop is emitted as labelled blocks instead —
+    /// locally, so the rest of the function still gets structured.
+    fn flat_loop_headers(&self) -> BTreeSet<usize> {
+        flat_loop_headers_of(&self.loop_blocks, &self.successors)
     }
 
-    fn emit_flat(&mut self, lines: &mut Vec<PseudoLine>) {
-        for index in 0..self.blocks.len() {
-            if self.blocks[index].entry.get() >= self.end.get() {
+    /// Emit a loop body as labelled blocks, in address order, with raw gotos for every edge.
+    /// Control enters at the header and leaves through the same gotos the machine code uses,
+    /// so the enclosing structure never assumes a single continuation. `None` means the
+    /// region cannot be emitted inside this `stop` scope (the caller falls back to the
+    /// unstructured loop); `Some(None)` means every path returns.
+    fn emit_flat_region(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        header: usize,
+        level: usize,
+        stop: &BTreeSet<usize>,
+    ) -> Option<Option<usize>> {
+        let body = self.loop_blocks.get(&header)?.clone();
+        let exit = self.ipdom[header].filter(|exit| !body.contains(exit));
+        // Inside a surrounding region the continuation has to be one of that region's stop
+        // blocks, otherwise the text after the loop would belong to the wrong scope.
+        if !stop.is_empty() && !exit.is_some_and(|exit| stop.contains(&exit)) {
+            return None;
+        }
+        if header != self.entry && !self.labeled[header] {
+            lines.push(PseudoLine {
+                addr: self.blocks[header].entry,
+                text: format!(
+                    "{}loc_{:x}:",
+                    indent(level),
+                    self.blocks[header].entry.get()
+                ),
+            });
+            self.labeled[header] = true;
+        }
+        for block in body.iter().copied() {
+            if self.emitted[block] {
                 continue;
             }
-            if index != self.entry {
+            self.emitted[block] = true;
+            if block != header && self.predecessors[block].len() > 1 && !self.labeled[block] {
                 lines.push(PseudoLine {
-                    addr: self.blocks[index].entry,
-                    text: format!("{}loc_{:x}:", indent(1), self.blocks[index].entry.get()),
+                    addr: self.blocks[block].entry,
+                    text: format!("{}loc_{:x}:", indent(level), self.blocks[block].entry.get()),
                 });
-                self.labeled[index] = true;
+                self.labeled[block] = true;
             }
-            self.emitted[index] = true;
-            self.emit_simple(lines, index, 1);
-            let entry = self.blocks[index].entry;
-            match &self.blocks[index].flow {
-                Flow::Return => lines.push(PseudoLine {
-                    addr: entry,
-                    text: format!("{}return;", indent(1)),
-                }),
-                Flow::Goto(target) => {
-                    if target.get() >= self.end.get() {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!("{}return sub_{:x}();", indent(1), target.get()),
-                        });
-                    } else if self.blocks[index].goto_target.is_some() {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!("{}goto loc_{:x};", indent(1), target.get()),
-                        });
-                    } else {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!("{}return sub_{:x}();", indent(1), target.get()),
-                        });
-                    }
-                }
-                Flow::CondGoto { target, .. } => {
-                    let condition = self.blocks[index]
-                        .condition
-                        .clone()
-                        .unwrap_or_else(|| "/* cond */".to_owned());
-                    if target.get() >= self.end.get() {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!(
-                                "{}if ({condition}) return sub_{:x}();",
-                                indent(1),
-                                target.get()
-                            ),
-                        });
-                    } else {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!(
-                                "{}if ({condition}) goto loc_{:x};",
-                                indent(1),
-                                target.get()
-                            ),
-                        });
-                    }
-                    if let Some(not_taken) = self.blocks[index].not_taken
-                        && not_taken != index + 1
-                        && self.blocks[not_taken].entry.get() < self.end.get()
-                    {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!(
-                                "{}goto loc_{:x};",
-                                indent(1),
-                                self.blocks[not_taken].entry.get()
-                            ),
-                        });
-                    }
-                }
-                Flow::Fallthrough => {
-                    if let Some(next) = self.blocks[index].not_taken
-                        && next != index + 1
-                        && self.blocks[next].entry.get() < self.end.get()
-                    {
-                        lines.push(PseudoLine {
-                            addr: entry,
-                            text: format!(
-                                "{}goto loc_{:x};",
-                                indent(1),
-                                self.blocks[next].entry.get()
-                            ),
-                        });
-                    }
-                }
-            }
+            self.emit_simple(lines, block, level);
+            self.emit_raw_flow(lines, block, level);
         }
+        Some(exit)
     }
 
     fn emit_linear(
@@ -921,6 +878,19 @@ impl Structurer {
                 return;
             }
             if self.loop_headers.contains(&current) && !self.fallback_headers.contains(&current) {
+                let flat = if self.flat_headers.contains(&current) {
+                    self.emit_flat_region(lines, current, level, stop)
+                } else {
+                    None
+                };
+                match flat {
+                    Some(Some(exit)) => {
+                        current = exit;
+                        continue;
+                    }
+                    Some(None) => return,
+                    None => {}
+                }
                 match self.emit_loop(lines, current, level) {
                     Some(exit) => {
                         current = exit;
@@ -1859,31 +1829,36 @@ impl Structurer {
     }
 }
 
-/// True when a nested loop has an edge leaving the outermost loop that contains it.
-fn nested_loop_leaves_parent(
+/// Top-level loops that contain a nested loop whose body jumps out of the top loop. Such a
+/// loop cannot be expressed with `while`/`break` alone, so its body is emitted as labelled
+/// blocks (the rest of the function still structures normally).
+fn flat_loop_headers_of(
     loops: &BTreeMap<usize, BTreeSet<usize>>,
     successors: &[Vec<usize>],
-) -> bool {
+) -> BTreeSet<usize> {
+    let mut headers = BTreeSet::new();
     for (header, body) in loops {
-        let mut top = body;
-        for other in loops.values() {
-            if other.len() > top.len() && other.contains(header) {
-                top = other;
-            }
-        }
-        if top.len() == body.len() {
+        let top_level = !loops.iter().any(|(other, outer)| {
+            other != header && outer.len() > body.len() && outer.contains(header)
+        });
+        if !top_level {
             continue;
         }
-        for &block in body {
-            if successors
-                .get(block)
-                .is_some_and(|nexts| nexts.iter().any(|next| !top.contains(next)))
-            {
-                return true;
-            }
+        let leaves = loops.iter().any(|(inner, inner_body)| {
+            inner != header
+                && body.contains(inner)
+                && inner_body.len() < body.len()
+                && inner_body.iter().any(|block| {
+                    successors
+                        .get(*block)
+                        .is_some_and(|nexts| nexts.iter().any(|next| !body.contains(next)))
+                })
+        });
+        if leaves {
+            headers.insert(*header);
         }
     }
-    false
+    headers
 }
 
 /// For a block that starts with a conditional branch, the pure flag-setting instruction of
@@ -5763,7 +5738,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_loop_leaving_parent_uses_flat_fallback() {
+    fn nested_loop_leaving_parent_flattens_only_that_loop() {
         let mut loops = BTreeMap::new();
         loops.insert(0, BTreeSet::from([0, 1, 2, 3, 4]));
         loops.insert(2, BTreeSet::from([2, 3]));
@@ -5772,13 +5747,27 @@ mod tests {
         successors[2] = vec![3];
         successors[3] = vec![2, 5]; // inner latch leaves the outer loop to block 5
         successors[4] = vec![0];
-        assert!(nested_loop_leaves_parent(&loops, &successors));
+        assert_eq!(
+            flat_loop_headers_of(&loops, &successors),
+            BTreeSet::from([0])
+        );
 
-        // A single loop exiting normally needs no fallback.
+        // A single loop exiting normally needs no labelled body.
         let mut single = BTreeMap::new();
         single.insert(0, BTreeSet::from([0, 1]));
         let successors = vec![vec![1], vec![0, 2], vec![]];
-        assert!(!nested_loop_leaves_parent(&single, &successors));
+        assert!(flat_loop_headers_of(&single, &successors).is_empty());
+
+        // A nested loop whose exits stay inside the parent keeps the parent structured.
+        let mut inner_ok = BTreeMap::new();
+        inner_ok.insert(0, BTreeSet::from([0, 1, 2, 3]));
+        inner_ok.insert(1, BTreeSet::from([1, 2]));
+        let mut successors = vec![Vec::new(); 5];
+        successors[0] = vec![1];
+        successors[1] = vec![2, 3];
+        successors[2] = vec![1, 3];
+        successors[3] = vec![0, 4];
+        assert!(flat_loop_headers_of(&inner_ok, &successors).is_empty());
     }
 
     #[test]

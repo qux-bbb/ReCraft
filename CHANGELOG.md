@@ -18,12 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Decompiling the largest notepad function got **12× faster**: the post-processing passes
+- A function is no longer emitted as flat labels as soon as one inner loop leaves its parent
+  loop. Only the offending top-level loop is emitted as labelled blocks (raw `loc_`/`goto`
+  for its body, every edge preserved) and the rest of the function keeps its `while`/`if`
+  structure. The validator functions still get the labels they need, but the surrounding
+  code no longer loses its shape: the 45 KB notepad function drops from 687 `goto loc_`
+  lines to **402** (10070 → 10080 lines), and notepad's total falls from 771 to **475**.
+  The Go sample gains one structured function (1779 → 1780/2000); corpus golden and the
+  structured rates are unchanged (487/502, 452/493).
+- Decompiling the largest notepad function got **8.5× faster**: the post-processing passes
   used to rescan the whole function for every candidate (token counts for the single-use
   temporary fold, label-reference counts for the label tidy pass). Token frequencies are
   now collected once and maintained as folds happen, jump targets are collected in a
   single pass, and the IAT name map is built once per function instead of once per block.
-  The 45 KB / 1 620-block function drops from 12.2 s to **1.0 s** (debug build) while every
+  The 45 KB / 1 620-block function drops from 12.2 s to **1.4 s** (debug build) while every
   one of the 502 notepad functions renders byte-identical L2 output — the change is a pure
   refactor.
 - Labelled fallback text now recovers structure from its own jumps. A label whose region
