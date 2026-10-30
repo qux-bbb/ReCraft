@@ -41,7 +41,7 @@ runtime/编译器产物）在三条路径上均为 **0 报错**；字符串字�
 `goto` 全部有标签。Go 样本同时是覆盖率观察点：结构化 88.9%（1779/2000 可达函数）、
 指令覆盖率 98.7%。
 
-## 当前基线（2026-10-24，MSVC VS2022，corpus x64）
+## 当前基线（2026-10-31，三个样本）
 
 ```
 functions:              31
@@ -53,6 +53,14 @@ labels:                 0
 inline asm statements:  9
 ```
 
+| 样本 | 函数 | 结构化 | 覆盖率 | `loc_` 标签 | `__asm` |
+|---|---|---|---|---|---|
+| notepad.exe（502） | 502 | 487（97.0%） | 99.5% | 267 | 138 |
+| crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 155 | 275 |
+| corpus x64（31） | 31 | 31（100%） | 97.4% | 0 | 9 |
+| corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
+
+`recraft metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
 `xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是
