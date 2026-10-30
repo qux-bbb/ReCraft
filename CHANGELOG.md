@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 32-bit stack parameters are typed by their slot width: an x86 argument whose own type is
+  unknown is `int32`, not `int64`, so `int32 __cdecl add_leaf(int32 arg1, int32 arg2)` replaces
+  `(int64 arg1, int64 arg2)` across the x86 corpus (32 signatures). A user prototype still
+  overrides it. The 32-bit corpus also gets committed snapshots (`tests/golden/corpus86/`,
+  32 files) so the x86 path has the same regression coverage as the x64 one;
+  `recraft golden <project> --dir tests/golden/corpus86 --check` passes.
 - An x64 function that reads its caller's stack arguments shows them as parameters: when the
   prologue is `sub rsp, const` (no pushes), a read at `frame + 0x28` and beyond is `arg5`,
   `arg6`, … instead of a `var_` slot, the signature is widened to cover them and the parameter

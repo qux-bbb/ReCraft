@@ -33,17 +33,21 @@ pub struct ArgNames {
     stack: BTreeMap<(Reg, i64), String>,
     /// Inferred parameter types for register arguments (defaults to `int64`).
     types: BTreeMap<Reg, ArgType>,
-    /// Parameter types for x86 stack arguments (from a user prototype, else `int64`).
+    /// Parameter types for x86 stack arguments (from a user prototype).
     stack_types: BTreeMap<(Reg, i64), ArgType>,
+    /// Type of a stack argument whose own type is unknown: the slot is 4 bytes wide on
+    /// 32-bit targets and 8 on 64-bit ones.
+    stack_slot_type: ArgType,
     /// Parameter order from a user prototype: register types alone cannot tell a mixed
     /// integer/float list apart, so the declared order is kept verbatim.
     declared: Option<Vec<(ArgType, String)>>,
 }
 
 /// Parameter type inferred from how the argument is used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ArgType {
     Int32,
+    #[default]
     Int64,
     /// Byte-sized memory access through the argument.
     CharPtr,
@@ -174,6 +178,7 @@ impl ArgNames {
             stack: BTreeMap::new(),
             types,
             stack_types: BTreeMap::new(),
+            stack_slot_type: ArgType::Int64,
             declared: Some(declared),
         }
     }
@@ -250,7 +255,7 @@ impl ArgNames {
                 .stack_types
                 .get(&(*base, *offset))
                 .copied()
-                .unwrap_or(ArgType::Int64);
+                .unwrap_or(self.stack_slot_type);
             params.push(format!("{} {name}", ty.c_name()));
         }
         // A function whose parameters all arrive in registers: name the floating-point ones
@@ -539,6 +544,7 @@ fn recover_x64(
         stack: BTreeMap::new(),
         types,
         stack_types: BTreeMap::new(),
+        stack_slot_type: ArgType::Int32,
         declared: None,
     })
 }
@@ -1101,6 +1107,7 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
         stack,
         types: BTreeMap::new(),
         stack_types: BTreeMap::new(),
+        stack_slot_type: ArgType::Int32,
         declared: None,
     })
 }
@@ -1526,7 +1533,12 @@ mod tests {
         assert_eq!(stack.len(), 2, "{stack:?}");
         assert_eq!(stack[0].1, "arg1");
         assert_eq!(stack[1].1, "arg2");
-        assert!(args.signature().contains("int64 arg1"));
+        // A 32-bit slot is four bytes wide, so the unknown type is `int32`, not `int64`.
+        assert!(
+            args.signature().contains("int32 arg1"),
+            "{}",
+            args.signature()
+        );
     }
 
     #[test]
