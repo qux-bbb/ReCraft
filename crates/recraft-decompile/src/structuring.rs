@@ -4410,6 +4410,14 @@ fn fold_backward_gotos_into_loops(lines: &mut Vec<PseudoLine>) -> usize {
 /// tail of the other arm. Both the jump and the normal `}` fallthrough leave the parent
 /// at the same point, so the tail can be copied and the jump removed.
 fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
+    // Label positions once: looking the target up by scanning made this quadratic.
+    let mut labels: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let text = line.text.trim();
+        if text.ends_with(':') && text.starts_with("loc_") {
+            labels.insert(text.to_owned(), index);
+        }
+    }
     let mut index = 0;
     while index < lines.len() {
         let text = lines[index].text.trim();
@@ -4438,7 +4446,7 @@ fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
         }
         let close_indent = leading_spaces(&lines[after].text);
         let label = format!("loc_{target:x}:");
-        let Some(label_index) = lines.iter().position(|line| line.text.trim() == label) else {
+        let Some(&label_index) = labels.get(&label) else {
             index += 1;
             continue;
         };
@@ -4505,6 +4513,15 @@ fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
         }
         let count = replacement.len();
         lines.splice(index..=index, replacement);
+        // Splices are rare, so shifting the index is cheaper than rescanning.
+        let delta = count as isize - 1;
+        if delta != 0 {
+            for value in labels.values_mut() {
+                if *value > index {
+                    *value = (*value as isize + delta) as usize;
+                }
+            }
+        }
         index += count;
     }
 }

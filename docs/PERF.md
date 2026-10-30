@@ -41,7 +41,7 @@ CI 在 `windows-latest` 上跑同一脚本（1 GiB overlay），作为性能回�
 
 2026-10-31 又做了一轮：`hide_callee_saves` 对每个被保存的槽重扫全函数（平方级）改为
 一次建立「槽 → 行号」索引，`propagate_argument_copies` 不再对每个实参拷贝重写全部行。
-文本 pass 合计从约 800 ms 降到约 310 ms，整函数约 1.3 s；`RECRAFT_PROFILE=1 recraft
+文本 pass 合计从约 800 ms 降到约 310 ms，整函数约 1.3 s；`merge_identical_if_arms` 的配对大括号改为一次预计算、`fold_sibling_tail_gotos` 的标签查找改为一次索引（约 265 ms）；`RECRAFT_PROFILE=1 recraft
 decompile ...` 会打印各阶段耗时（lift / 分析 / 发射 / 文本 pass）。两次优化都保证 502 个
 notepad 函数的输出逐字节未变。
 

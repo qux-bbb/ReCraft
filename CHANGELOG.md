@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `fold_sibling_tail_gotos` looked its target label up with a full scan of the function for every
+  candidate jump; it now builds a label index once and shifts it when a splice moves the tail
+  (splices are rare). The 45 KB function's text passes went from ~313 ms to ~265 ms with
+  byte-identical output across all 502 functions.
 - A stack slot that only ever receives one argument is that argument, not a local: a slot that
   is written exactly once by `var_40 = arg4;` and never has its address taken has its reads
   renamed to `arg4` and the spill removed (`qword_140034e40 = arg4;` instead of
