@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An x64 function that reads its caller's stack arguments shows them as parameters: when the
+  prologue is `sub rsp, const` (no pushes), a read at `frame + 0x28` and beyond is `arg5`,
+  `arg6`, … instead of a `var_` slot, the signature is widened to cover them and the parameter
+  comment says `arg5+=stack`. Notepad: 9 functions, e.g. a tail call that used to forward
+  `var_80, var_88, var_90` now forwards `arg5, arg6, arg7`. Slots the function writes stay
+  slots (they are its own outgoing arguments), and functions whose prologue pushes registers
+  are left alone because their frame offsets are not relative to the value the scan finds.
 - The text passes are no faster than they need to be on the largest function: `hide_callee_saves`
   scanned every line once per saved slot (quadratic) and `propagate_argument_copies` rewrote
   every line for each argument copy. The first now builds a slot → line index in one pass, the

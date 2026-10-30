@@ -489,6 +489,11 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             .collect();
         name_address_constants(&mut lines, &functions, &literals, &data);
     }
+    if info.is_some()
+        && let Some(frame) = entry_frame_size(session, &cfg)
+    {
+        name_stack_arguments(&mut lines, frame);
+    }
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
@@ -976,6 +981,138 @@ fn name_global_data(lines: &mut [PseudoLine]) {
             }
         }
     }
+}
+
+/// Incoming stack arguments of an x64 function: a read of `[rsp + disp]` beyond the frame the
+/// prologue allocates is the caller's argument, not a local. The slot is renamed to the
+/// parameter it is (`var_78` at frame 0x48 reads the second stack slot, `arg6`) and added to
+/// the signature. Slots the function writes are outgoing arguments of its own calls and stay
+/// as slots.
+fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
+    // Frame-relative displacements of every slot the function writes.
+    let mut written: BTreeSet<u64> = BTreeSet::new();
+    for line in lines.iter() {
+        let text = line.text.trim();
+        let Some((lhs, _)) = text.split_once(" = ") else {
+            continue;
+        };
+        if let Some(offset) = slot_offset(lhs.trim()) {
+            written.insert(offset);
+        } else if let Some(offset) = slot_offset(lhs.trim().trim_start_matches('&')) {
+            written.insert(offset);
+        }
+    }
+    let mut stack_arguments: BTreeMap<u64, usize> = BTreeMap::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        {
+            let Some(offset) = slot_offset(token) else {
+                continue;
+            };
+            // The first stack argument sits at frame + shadow space + return address.
+            if offset < frame.saturating_add(0x28) || written.contains(&offset) {
+                continue;
+            }
+            let index = (offset - frame - 0x28) / 8 + 5;
+            stack_arguments.insert(offset, index as usize);
+        }
+    }
+    if stack_arguments.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        for (offset, index) in &stack_arguments {
+            let slot = format!("var_{offset:x}");
+            line.text = replace_token(&line.text, &slot, &format!("arg{index}"));
+        }
+    }
+    // Mention the stack arguments in the parameter comment.
+    if let (Some(first), Some(highest)) = (
+        stack_arguments.values().copied().min(),
+        stack_arguments.values().copied().max(),
+    ) && let Some(line) = lines
+        .iter_mut()
+        .find(|line| line.text.trim_start().starts_with("// L2 params:"))
+    {
+        line.text = format!("{}, arg{first}+=stack (through arg{highest})", line.text);
+    }
+
+    // Widen the signature to the highest stack argument it now uses. Parameters are positional,
+    // so every index between the last declared one and `highest` has to be declared too.
+    let highest = stack_arguments.values().copied().max().unwrap_or(0);
+    for line in lines.iter_mut() {
+        let text = line.text.trim_end().to_owned();
+        if !text.ends_with('{') || !text.contains("sub_") || !text.contains("arg1") {
+            continue;
+        }
+        let Some(close) = text.rfind(')') else {
+            continue;
+        };
+        let open = text.find('(').unwrap_or(0);
+        let declared = text[open + 1..close]
+            .split(',')
+            .filter_map(|parameter| {
+                let name = parameter.trim().rsplit(' ').next()?;
+                name.strip_prefix("arg")?.parse::<usize>().ok()
+            })
+            .max()
+            .unwrap_or(0);
+        if declared >= highest {
+            continue;
+        }
+        let mut parameters: Vec<String> = Vec::new();
+        for index in declared + 1..=highest {
+            parameters.push(format!("int64 arg{index}"));
+        }
+        let head = &text[..close];
+        let tail = &text[close..];
+        line.text = format!("{head}, {}{tail}", parameters.join(", "));
+        break;
+    }
+}
+
+/// The stack the prologue reserves (`sub rsp, imm`) in the entry block, if it is a constant.
+fn entry_frame_size(session: &mut recraft_core::Session, cfg: &Cfg) -> Option<u64> {
+    let block = cfg.blocks.first()?;
+    for cfg_insn in &block.insns {
+        let insn = session.insn_at(cfg_insn.addr).ok()??;
+        if insn.is_invalid() {
+            return None;
+        }
+        match insn.mnemonic() {
+            iced_x86::Mnemonic::Sub
+                if insn.op_count() >= 2
+                    && insn.op_register(0) == iced_x86::Register::RSP
+                    && matches!(
+                        insn.op_kind(1),
+                        iced_x86::OpKind::Immediate8
+                            | iced_x86::OpKind::Immediate8to16
+                            | iced_x86::OpKind::Immediate8to32
+                            | iced_x86::OpKind::Immediate8to64
+                            | iced_x86::OpKind::Immediate16
+                            | iced_x86::OpKind::Immediate32
+                            | iced_x86::OpKind::Immediate32to64
+                            | iced_x86::OpKind::Immediate64
+                    ) =>
+            {
+                return u64::try_from(insn.immediate32to64()).ok();
+            }
+            // A push moves rsp by 8, so the frame offsets in the body would no longer be
+            // relative to the value this scan returns.
+            iced_x86::Mnemonic::Push => return None,
+            iced_x86::Mnemonic::Nop | iced_x86::Mnemonic::Mov => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The displacement of a `var_<hex>` slot name.
+fn slot_offset(token: &str) -> Option<u64> {
+    let hex = token.strip_prefix("var_")?;
+    u64::from_str_radix(hex, 16).ok()
 }
 
 /// Name the fields of a pointer argument the type inference left as `void*`: when every
@@ -7517,6 +7654,32 @@ mod tests {
         assert_eq!(lines[1].text, "    rect2 = 0;");
         assert_eq!(lines[2].text, "    GetClientRect(hwnd, &rect2);");
         assert_eq!(lines[0].text, "    rect = 1;");
+    }
+    #[test]
+    fn stack_arguments_name_the_callers_parameters() {
+        let mut lines = vec![
+            test_line("// L2 params: arg1=rcx"),
+            test_line("int64 sub_40(int64 arg1) {"),
+            test_line("    rcx = var_70;"),
+            test_line("    rax = var_78;"),
+            test_line("    var_30 = rax;"),
+            test_line("    return rax;"),
+            test_line("}"),
+        ];
+        // Frame 0x48: var_70 sits at entry+0x28 (arg5), var_78 at entry+0x30 (arg6).
+        name_stack_arguments(&mut lines, 0x48);
+        assert_eq!(
+            lines[1].text,
+            "int64 sub_40(int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5, int64 arg6) {"
+        );
+        assert_eq!(
+            lines[0].text,
+            "// L2 params: arg1=rcx, arg5+=stack (through arg6)"
+        );
+        assert_eq!(lines[2].text, "    rcx = arg5;");
+        assert_eq!(lines[3].text, "    rax = arg6;");
+        // A slot inside the frame is a local and keeps its name.
+        assert_eq!(lines[4].text, "    var_30 = rax;");
     }
     #[test]
     fn constants_move_into_their_comparison() {
