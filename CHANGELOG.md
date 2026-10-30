@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Labelled fallback text now recovers structure from its own jumps. A label whose region
+  ends by jumping back to it becomes `do { ... } while (cond);` (an unconditional
+  back-edge becomes `while (1)`), and a forward `if (cond) goto L;` whose skipped region
+  is short (≤ 24 lines) and brace-balanced becomes `if (!cond) { ... }`. Both rewrites move
+  no statement: labels stay valid (C labels are function scoped), jumps into the region
+  still work, and a loop region that uses `break`/`continue` keeps its jumps so the
+  binding to the enclosing loop cannot change. Longer skips keep the jump — wrapping
+  hundreds of lines would indent the rest of the function past the screen. Notepad drops
+  from 1 235 to **771** `goto loc_` lines (242 recovered `do` loops); the structured rate
+  goes 486 → 487/502 (97.0%), the crackme case 450 → 452/493 (91.7%), and the Go sample
+  1 767 → 1 779/2 000 (88.9%).
 - MSVC `/GS` stack-cookie bookkeeping is no longer printed. The prologue stores
   `__security_cookie ^ rsp` in a frame slot and every return path folds it back and calls
   `__security_check_cookie`; both are compiler-generated, and printing the call as the
