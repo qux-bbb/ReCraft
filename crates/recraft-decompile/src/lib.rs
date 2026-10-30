@@ -57,6 +57,10 @@ pub(crate) struct BlockLift {
     /// Registers written from a stack address in this block, with their displacement from
     /// the function entry (the frame pointer established by the prologue).
     pub stack_pointers: Vec<(Reg, i64)>,
+    /// Effect of the block on argument aliases: each written register maps to the register
+    /// it copies (`Some`) or to `None` when it no longer holds a parameter copy. Applied in
+    /// order, it carries `rsi = arg1` across block boundaries.
+    pub alias_writes: Vec<(Reg, Option<Reg>)>,
     /// Quoted C string literals rendered for this block, with the address of the data
     /// each one names. Lets a view link `"text"` back to the string it quotes.
     pub literals: Vec<(String, Address)>,
@@ -87,6 +91,8 @@ pub(crate) fn lift_block(
     // Frame pointer established by the function prologue, so blocks that do not re-load it
     // still name `[rbp + disp]` against the same frame base as the prologue.
     frame_pointer: Option<(Reg, i64)>,
+    // `register -> argument register` aliases that hold on entry to the block.
+    entry_aliases: Option<&BTreeMap<Reg, Reg>>,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -100,6 +106,7 @@ pub(crate) fn lift_block(
             stack_net: None,
             stack_min: None,
             stack_pointers: Vec::new(),
+            alias_writes: Vec::new(),
             literals: Vec::new(),
         });
     }
@@ -143,6 +150,7 @@ pub(crate) fn lift_block(
             stack_net: None,
             stack_min: None,
             stack_pointers: Vec::new(),
+            alias_writes: Vec::new(),
             literals: Vec::new(),
         });
     }
@@ -204,6 +212,7 @@ pub(crate) fn lift_block(
         stack_delta: stack.map(|(entry, _)| entry),
         frame_base: stack.map_or(0, |(_, base)| base),
         pointer_offsets: frame_pointer.into_iter().collect(),
+        entry_aliases: entry_aliases.cloned().unwrap_or_default(),
         stack_args: BTreeMap::new(),
         last_values: BTreeMap::new(),
     };
@@ -211,6 +220,7 @@ pub(crate) fn lift_block(
     let mut statements: Vec<PseudoLine> = Vec::new();
     let mut written = BTreeSet::new();
     let mut stack_pointers: Vec<(Reg, i64)> = Vec::new();
+    let mut alias_effect: BTreeMap<Reg, Option<Reg>> = BTreeMap::new();
     // Argument-register writes consumed by a call are redundant: the call already renders
     // its captured argument expressions.
     let mut flat: Vec<(usize, usize)> = Vec::new();
@@ -314,6 +324,31 @@ pub(crate) fn lift_block(
             // The stack displacement must follow `rsp` bookkeeping even though those
             // statements are not printed.
             printer.note_stack(stmt);
+            // Argument aliases have to survive a block split, so report the block's effect
+            // upward (`Some(register)` for a full-width copy, `None` for any other write).
+            match stmt {
+                Stmt::WriteReg { reg, value } => {
+                    let source = match &exprs[*value as usize] {
+                        Expr::Reg(view) if view.width == 8 => Some(view.base),
+                        _ => None,
+                    };
+                    alias_effect.insert(reg.base, source);
+                }
+                Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {
+                    for reg in [
+                        Reg::Rcx,
+                        Reg::Rdx,
+                        Reg::R8,
+                        Reg::R9,
+                        Reg::Rax,
+                        Reg::R10,
+                        Reg::R11,
+                    ] {
+                        alias_effect.insert(reg, None);
+                    }
+                }
+                _ => {}
+            }
             // A register loaded from a stack address (the prologue's `rbp = rsp - N`) is the
             // frame base for `[rbp + disp]` accesses in every block, so report it upward.
             if let Stmt::WriteReg { reg, .. } = stmt
@@ -393,6 +428,7 @@ pub(crate) fn lift_block(
         stack_net,
         stack_min,
         stack_pointers,
+        alias_writes: alias_effect.into_iter().collect(),
         literals: literal_references(&literals),
     })
 }
@@ -844,6 +880,7 @@ pub fn pseudocode_l0(
         frame_reg: None,
         arg_values: [None, None, None, None],
         arg_aliases: BTreeMap::new(),
+        entry_aliases: BTreeMap::new(),
         stack_delta: layout.1.map(|_| 0),
         frame_base: layout.1.unwrap_or(0),
         pointer_offsets: BTreeMap::new(),
@@ -1011,7 +1048,10 @@ struct Printer<'a> {
     arg_values: [Option<String>; 4],
     /// Registers that still hold an incoming argument copied from its ABI register
     /// (`rsi = arg1`), so later reads print the parameter name instead of the register.
-    arg_aliases: BTreeMap<Reg, String>,
+    arg_aliases: BTreeMap<Reg, (Reg, String)>,
+    /// Aliases that hold on entry to the block (`register -> argument register`), from the
+    /// must-alias dataflow; a block-local write invalidates them.
+    entry_aliases: BTreeMap<Reg, Reg>,
     /// Current `rsp` displacement relative to the function entry, when every stack-pointer
     /// update so far is a constant step. Slot names are normalised with it so that
     /// `[rsp]`-relative accesses mean the same memory at any stack depth.
@@ -1347,7 +1387,7 @@ impl Printer<'_> {
             return "frame".to_owned();
         }
         if view.width == 8
-            && let Some(name) = self.arg_aliases.get(&view.base)
+            && let Some((_, name)) = self.arg_aliases.get(&view.base)
         {
             return name.clone();
         }
@@ -1378,6 +1418,7 @@ impl Printer<'_> {
                 Reg::R11,
             ] {
                 self.arg_aliases.remove(&reg);
+                self.entry_aliases.remove(&reg);
             }
         }
         if let Stmt::WriteReg { reg, value } = stmt {
@@ -1387,12 +1428,13 @@ impl Printer<'_> {
                         self.args
                             .and_then(|args| args.name_for(view.base))
                             .filter(|_| !self.written.contains(&view.base))
-                            .map(str::to_owned)
+                            .map(|name| (view.base, name.to_owned()))
                     })
                 }
                 _ => None,
             };
             self.arg_aliases.remove(&reg.base);
+            self.entry_aliases.remove(&reg.base);
             if let Some(alias) = alias {
                 self.arg_aliases.insert(reg.base, alias);
             }
@@ -1489,29 +1531,51 @@ impl Printer<'_> {
         None
     }
 
-    /// `argN->field_XX` for an offset access through a pointer-typed argument.
-    fn field_access(&self, expr: ExprId) -> Option<String> {
-        let Expr::Bin { op, lhs, rhs } = &self.exprs[expr as usize] else {
-            return None;
-        };
-        if *op != BinOp::Add {
-            return None;
-        }
-        let (lhs, rhs) = (*lhs, *rhs);
-        let view = match &self.exprs[lhs as usize] {
-            Expr::Reg(view) => *view,
-            _ => return None,
-        };
-        let offset = match &self.exprs[rhs as usize] {
-            Expr::Const(value) => *value as i64,
+    /// `argN->field_XX` for an offset access through a pointer-typed argument. Only an
+    /// access as wide as the pointer's element keeps the field spelling; a narrower or wider
+    /// load keeps its explicit cast so the width stays visible.
+    fn field_access(&self, expr: ExprId, size: u8) -> Option<String> {
+        // A bare register is the offset-0 access; otherwise `base + offset` may be built
+        // with the constant on either side.
+        let (view, offset) = match &self.exprs[expr as usize] {
+            Expr::Reg(view) => (*view, 0),
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } => match (&self.exprs[*lhs as usize], &self.exprs[*rhs as usize]) {
+                (Expr::Reg(view), Expr::Const(value)) => (*view, *value as i64),
+                (Expr::Const(value), Expr::Reg(view)) => (*view, *value as i64),
+                _ => return None,
+            },
             _ => return None,
         };
         let args = self.args?;
-        if !args.is_pointer_arg(view.base) || self.written.contains(&view.base) {
+        // A copied argument register (`r14 = arg4`) keeps the parameter's type, so the
+        // access can still spell `arg4->field_XX` instead of a raw cast. The alias may be
+        // established in this block or hold on entry to it.
+        let (name, source) = match self.arg_aliases.get(&view.base) {
+            Some((source, name)) => (name.clone(), *source),
+            None => {
+                let inherited = self.entry_aliases.get(&view.base).and_then(|source| {
+                    args.name_for(*source)
+                        .map(|name| (name.to_owned(), *source))
+                });
+                match inherited {
+                    Some(alias) => alias,
+                    None => {
+                        if !args.is_pointer_arg(view.base) || self.written.contains(&view.base) {
+                            return None;
+                        }
+                        (args.name_for(view.base)?.to_owned(), view.base)
+                    }
+                }
+            }
+        };
+        if !args.is_pointer_arg(source) || u64::from(size) != args.pointer_elem_size(source)? {
             return None;
         }
-        let name = args.name_for(view.base)?;
-        if let Some(def) = self.arg_structs.get(&view.base)
+        if let Some(def) = self.arg_structs.get(&source)
             && offset >= 0
             && let Some(field) = def.field_at(offset as u64)
         {
@@ -1526,7 +1590,7 @@ impl Printer<'_> {
     }
 
     /// `argN[index]` for `base + index*scale` addressing through a typed pointer.
-    fn array_access(&self, expr: ExprId) -> Option<String> {
+    fn array_access(&self, expr: ExprId, size: u8) -> Option<String> {
         let Expr::Bin { op, lhs, rhs } = &self.exprs[expr as usize] else {
             return None;
         };
@@ -1538,13 +1602,30 @@ impl Printer<'_> {
             Expr::Reg(view) => *view,
             _ => return None,
         };
-        if self.written.contains(&view.base) {
+        let args = self.args?;
+        let (name, source) = match self.arg_aliases.get(&view.base) {
+            Some((source, name)) => (name.clone(), *source),
+            None => {
+                let inherited = self.entry_aliases.get(&view.base).and_then(|source| {
+                    args.name_for(*source)
+                        .map(|name| (name.to_owned(), *source))
+                });
+                match inherited {
+                    Some(alias) => alias,
+                    None => {
+                        if self.written.contains(&view.base) {
+                            return None;
+                        }
+                        (args.name_for(view.base)?.to_owned(), view.base)
+                    }
+                }
+            }
+        };
+        let element = args.pointer_elem_size(source)?;
+        if u64::from(size) != element {
             return None;
         }
-        let args = self.args?;
-        let size = args.pointer_elem_size(view.base)?;
-        let index = self.index_expr(rhs, size)?;
-        let name = args.name_for(view.base)?;
+        let index = self.index_expr(rhs, element)?;
         Some(format!("{name}[{index}]"))
     }
 
@@ -1613,9 +1694,9 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     format!("{name} = {}", self.value_expr(*value))
-                } else if let Some(index) = self.array_access(*addr) {
+                } else if let Some(index) = self.array_access(*addr, *size) {
                     format!("{index} = {}", self.value_expr(*value))
-                } else if let Some(field) = self.field_access(*addr) {
+                } else if let Some(field) = self.field_access(*addr, *size) {
                     format!("{field} = {}", self.value_expr(*value))
                 } else {
                     format!(
@@ -1631,9 +1712,9 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     format!("{name} = {}", self.value_expr(*value))
-                } else if let Some(index) = self.array_access(*addr) {
+                } else if let Some(index) = self.array_access(*addr, *size) {
                     format!("{index} = {}", self.value_expr(*value))
-                } else if let Some(field) = self.field_access(*addr) {
+                } else if let Some(field) = self.field_access(*addr, *size) {
                     format!("{field} = {}", self.value_expr(*value))
                 } else {
                     format!(
@@ -1811,9 +1892,9 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     name
-                } else if let Some(index) = self.array_access(*addr) {
+                } else if let Some(index) = self.array_access(*addr, *size) {
                     index
-                } else if let Some(field) = self.field_access(*addr) {
+                } else if let Some(field) = self.field_access(*addr, *size) {
                     field
                 } else {
                     format!("*({}*)({})", Self::scalar_type(*size), self.expr(*addr))
@@ -1824,9 +1905,9 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     name
-                } else if let Some(index) = self.array_access(*addr) {
+                } else if let Some(index) = self.array_access(*addr, *size) {
                     index
-                } else if let Some(field) = self.field_access(*addr) {
+                } else if let Some(field) = self.field_access(*addr, *size) {
                     field
                 } else {
                     format!("*({}*)({})", Self::float_type(*size), self.expr(*addr))

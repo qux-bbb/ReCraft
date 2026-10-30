@@ -106,6 +106,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             None,
             &imports,
             None,
+            None,
         )?);
     }
     // The prologue's frame pointer is the base for `[rbp + disp]` in every block. Blocks
@@ -126,6 +127,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
                 None,
                 &imports,
                 None,
+                None,
             )?;
             probe
                 .stack_pointers
@@ -135,6 +137,14 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
         None => None,
     };
+    // Argument copies survive a block split only where every path agrees, so the alias map
+    // is a must-analysis over the CFG: a block starts with the intersection of its
+    // predecessors' outgoing aliases and applies its own copies on top.
+    let alias_effects: Vec<Vec<(Reg, Option<Reg>)>> = bodies
+        .iter()
+        .map(|body| body.alias_writes.clone())
+        .collect();
+    let entry_aliases = entry_alias_map(&cfg, &alias_effects, args);
     // Infer argument counts for direct call targets from the callee's prologue. This
     // lets unknown calls render `sub(a, b)` with the right arity instead of dropping
     // arguments or printing all four ABI registers.
@@ -241,6 +251,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             flag_sources[index],
             &imports,
             frame_pointer,
+            Some(&entry_aliases[index]),
         )?);
     }
     bodies = seeded;
@@ -392,6 +403,88 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         lines,
         literals,
     })
+}
+
+/// Which argument copies hold on entry to each block.
+///
+/// Must-alias dataflow: `in[b]` is the intersection of the predecessors' outgoing maps (an
+/// alias is only trusted when every path agrees), and `out[b]` applies the block's own
+/// writes — a full-width copy of a register keeps its alias, any other write drops it.
+fn entry_alias_map(
+    cfg: &Cfg,
+    effects: &[Vec<(Reg, Option<Reg>)>],
+    args: Option<&ArgNames>,
+) -> Vec<BTreeMap<Reg, Reg>> {
+    let count = effects.len();
+    let mut predecessors = vec![Vec::new(); count];
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        for (target, _) in &block.edges {
+            if *target < count {
+                predecessors[*target].push(index);
+            }
+        }
+    }
+    let mut entering: Vec<BTreeMap<Reg, Reg>> = vec![BTreeMap::new(); count];
+    let mut leaving = entering.clone();
+    for _ in 0..(count + 4) {
+        let mut changed = false;
+        for block in 0..count {
+            let set: BTreeMap<Reg, Reg> = if block == cfg.entry {
+                // Argument registers hold their own value on entry.
+                [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9]
+                    .into_iter()
+                    .filter(|reg| args.is_some_and(|args| args.name_for(*reg).is_some()))
+                    .map(|reg| (reg, reg))
+                    .collect()
+            } else {
+                let mut set: Option<BTreeMap<Reg, Reg>> = None;
+                for &pred in &predecessors[block] {
+                    let out = &leaving[pred];
+                    set = Some(match set {
+                        None => out.clone(),
+                        Some(current) => current
+                            .into_iter()
+                            .filter(|(reg, source)| out.get(reg) == Some(source))
+                            .collect(),
+                    });
+                }
+                set.unwrap_or_default()
+            };
+            if set != entering[block] {
+                entering[block] = set.clone();
+                changed = true;
+            }
+            let mut out = set;
+            let mut written_here: BTreeSet<Reg> = BTreeSet::new();
+            for (reg, source) in &effects[block] {
+                written_here.insert(*reg);
+                let target = source.and_then(|source| {
+                    if written_here.contains(&source) {
+                        return None;
+                    }
+                    out.get(&source)
+                        .copied()
+                        .or_else(|| args.and_then(|args| args.name_for(source).map(|_| source)))
+                });
+                match target {
+                    Some(target) => {
+                        out.insert(*reg, target);
+                    }
+                    None => {
+                        out.remove(reg);
+                    }
+                }
+            }
+            if out != leaving[block] {
+                leaving[block] = out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    entering
 }
 
 /// Which registers may already have been overwritten whenever a block is entered.
@@ -5758,6 +5851,7 @@ mod tests {
                 stack_net: None,
                 stack_min: None,
                 stack_pointers: Vec::new(),
+                alias_writes: Vec::new(),
                 literals: Vec::new(),
             }
         }

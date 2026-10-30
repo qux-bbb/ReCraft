@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pointer-typed arguments now spell field accesses in every block, not just in the block
+  that copies them. `r14 = arg4` followed by `mov ecx, [r14+0xC]` used to print
+  `*(u32*)((r14 + 0xc))` because the alias was only tracked inside one basic block; the
+  printer now gets a must-alias map computed over the CFG (`entry_alias_map`: a register
+  carries a parameter to a block only when every path agrees — intersections of the
+  predecessors' maps, with the block's own copies applied). Field spelling is only used when
+  the access width equals the pointer's element size, so a `u8` load through a `void*`
+  keeps its explicit cast. Notepad: `argN->field_XX` accesses 137 → **266** across 121
+  functions (`sub_14000e950` now reads `arg4->field_c` / `field_4` / `field_8` instead of
+  raw casts), L2 lines 30 272 → 30 276, `goto loc_` unchanged at 475, corpus golden 31/31.
 - MSVC's `__chkstk` stack probe is no longer printed. A frame larger than one page is
   allocated by loading the size into `eax` and calling the probe helper, which touches the
   guard pages before the real prologue; it has no source-level effect, so the call and its
