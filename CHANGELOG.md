@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The structurer's no-condition loop is printed as `while (1) { ... }` instead of
+  `do { ... } while (1);`. Both are infinite loops, but the `while` form is what a compiler
+  emits and what source code reads; the rewrite also visits nested loops (a `do` inside a
+  converted one used to be skipped). Notepad: 12 `do { } while (1);` → 0, `while (1)`
+  loops 48 → 60, lines and `goto` count unchanged (30 265 / 475). `matching_brace` now
+  ignores braces inside string literals, so a format string containing `{`/`}` no longer
+  hides a loop body from the text passes.
 - A frame-pointer setup that nothing reads is no longer printed. `rbp = &var_100;` exists
   only so slot names can be resolved to the entry frame; when the register is never named
   again the line is noise, so the final pass drops it (any later read keeps it). Notepad:

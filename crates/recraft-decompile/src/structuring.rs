@@ -394,6 +394,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             break;
         }
     }
+    normalize_infinite_loops(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
     lines.push(PseudoLine {
@@ -452,6 +453,31 @@ fn hide_frame_pointer_setups(lines: &mut Vec<PseudoLine>) {
         let slot = rhs.starts_with("&var_");
         !(frame_register && slot && counts.get(lhs).copied().unwrap_or(0) == 1)
     });
+}
+
+/// `do { ... } while (1);` is the structurer's no-condition loop; `while (1) { ... }` reads
+/// the same and is idiomatic C, so the `do` form is rewritten.
+fn normalize_infinite_loops(lines: &mut [PseudoLine]) {
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].text.trim() != "do {" {
+            index += 1;
+            continue;
+        }
+        let Some(close) = matching_brace(lines, index) else {
+            index += 1;
+            continue;
+        };
+        if lines[close].text.trim() != "} while (1);" {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&lines[index].text));
+        lines[index].text = format!("{indent}while (1) {{");
+        lines[close].text = format!("{indent}}}");
+        // Nested loops inside the body are still candidates.
+        index += 1;
+    }
 }
 
 fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 4]> {
@@ -5163,13 +5189,42 @@ fn fold_constant_loops(lines: &mut Vec<PseudoLine>) {
 fn matching_brace(lines: &[PseudoLine], start: usize) -> Option<usize> {
     let mut depth = 0usize;
     for (offset, line) in lines[start..].iter().enumerate() {
-        depth += line.text.matches('{').count();
-        depth = depth.saturating_sub(line.text.matches('}').count());
+        let (open, close) = brace_counts(&line.text);
+        depth += open;
+        depth = depth.saturating_sub(close);
         if depth == 0 {
             return Some(start + offset);
         }
     }
     None
+}
+
+/// Braces in `text` outside string literals: a format string may contain `{` or `}` and
+/// must not affect block matching.
+fn brace_counts(text: &str) -> (usize, usize) {
+    let mut open = 0;
+    let mut close = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for ch in text.chars() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            '{' => open += 1,
+            '}' => close += 1,
+            _ => {}
+        }
+    }
+    (open, close)
 }
 
 /// Condition of a one-line `if (cond) break;` statement.
@@ -6174,6 +6229,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn infinite_do_while_is_written_as_a_while_loop() {
+        let mut lines = vec![
+            test_line("    do {"),
+            test_line("        var_10 = 1;"),
+            test_line("    } while (1);"),
+        ];
+        normalize_infinite_loops(&mut lines);
+        assert_eq!(lines[0].text, "    while (1) {");
+        assert_eq!(lines[2].text, "    }");
+
+        // A loop with a real condition keeps its `do` form.
+        let mut lines = vec![
+            test_line("    do {"),
+            test_line("        var_10 = 1;"),
+            test_line("    } while (var_10 != 0);"),
+        ];
+        normalize_infinite_loops(&mut lines);
+        assert_eq!(lines[0].text, "    do {");
+    }
     #[test]
     fn single_use_frame_pointer_setup_is_hidden() {
         let mut lines = vec![
