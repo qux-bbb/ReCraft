@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A register temporary that is written once and read once by the very next statement is
+  inlined into it, the way a source-level local would be:
+  `eax = *(u64*)(rbx); sub_140001000(eax);` becomes
+  `sub_140001000(*(u64*)(rbx));`, and `ecx = var_a0; var_50 = ecx;` becomes
+  `var_50 = var_a0;`. Only register temporaries are folded — a stack slot is a variable, so
+  its address (`&var_30`) is never replaced by the value that was stored into it, and an
+  expression with a top-level operator is parenthesised on the way in. Notepad: L2 lines
+  30 256 → **30 212**, 41 functions affected, `goto` count and coverage unchanged; one
+  corpus golden (`array_probe`) updated for the new text.
 - Well-known imports now print the right number of arguments. The decompiler had no parameter
   count for IAT calls, so a call whose registers were set up in an earlier block printed
   `CoTaskMemFree()`, while a zero-argument API with a leftover register printed a phantom

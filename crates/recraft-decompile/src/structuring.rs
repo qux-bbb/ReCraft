@@ -388,6 +388,15 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     fold_trivial_return_labels(&mut lines);
     // Recover loops and guards from the labelled fallback text. Each fold can expose
     // another one (a loop body with its own skips), so repeat until settled.
+    // A temporary read by the very next statement is a local variable in the source; folding
+    // it must run before the loop folds so the statement text is final there too.
+    for _ in 0..4 {
+        let before = lines.len();
+        inline_adjacent_temporaries(&mut lines);
+        if lines.len() == before {
+            break;
+        }
+    }
     for _ in 0..3 {
         let mut changed = fold_backward_gotos_into_loops(&mut lines);
         changed += fold_short_forward_gotos(&mut lines);
@@ -4386,6 +4395,151 @@ fn fold_store_copies(lines: &mut Vec<PseudoLine>) {
 ///
 /// Token frequencies are counted once instead of per candidate; a fold removes the write and
 /// the read it replaces, so only that name's count changes.
+/// Inline a temporary into the statement that reads it, when the temporary is written once
+/// and read once in the whole function and the read is the immediately following line.
+///
+/// The rewrite keeps the evaluation order (the value is still computed where it was) and only
+/// moves the expression text, which is what a decompiler's local-variable folding does:
+/// `eax = *(u64*)(rbx); f(eax);` becomes `f(*(u64*)(rbx));`.
+fn inline_adjacent_temporaries(lines: &mut Vec<PseudoLine>) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| !token.is_empty())
+        {
+            *counts.entry(token.to_owned()).or_insert(0) += 1;
+        }
+    }
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let statement = lines[index].text.trim();
+        let Some(statement) = statement.strip_suffix(';') else {
+            index += 1;
+            continue;
+        };
+        let Some((lhs, rhs)) = statement.split_once(" = ") else {
+            index += 1;
+            continue;
+        };
+        let lhs = lhs.trim().to_owned();
+        let rhs = rhs.trim().to_owned();
+        // Only a register temporary can move into the next statement: a stack slot is a
+        // variable of the function (`&var_30` is its address), not an expression to inline.
+        let register = is_identifier(&lhs) && !lhs.starts_with("var_") && !lhs.starts_with("arg");
+        if !register || rhs.is_empty() || is_frame_register(&lhs) {
+            index += 1;
+            continue;
+        }
+        if counts.get(lhs.as_str()).copied().unwrap_or(0) != 2 {
+            index += 1;
+            continue;
+        }
+        if contains_token(&rhs, &lhs) {
+            index += 1;
+            continue;
+        }
+        let next = lines[index + 1].text.clone();
+        let trimmed = next.trim();
+        if trimmed.starts_with("if (")
+            || trimmed.starts_with("while")
+            || trimmed.starts_with("return ")
+            || trimmed.starts_with("goto ")
+            || trimmed.starts_with("do {")
+            || trimmed.starts_with("else")
+            || trimmed.starts_with('}')
+            || trimmed.starts_with('{')
+            || trimmed.starts_with("loc_")
+            || trimmed.contains("__asm(")
+        {
+            index += 1;
+            continue;
+        }
+        let Some(statement) = trimmed.strip_suffix(';') else {
+            index += 1;
+            continue;
+        };
+        if statement.is_empty()
+            || assigns_to(statement, &lhs)
+            || statement.contains(&format!("&{lhs}"))
+        {
+            index += 1;
+            continue;
+        }
+        if statement
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| *token == lhs)
+            .count()
+            != 1
+        {
+            index += 1;
+            continue;
+        }
+        let replacement = if needs_parentheses(&rhs) {
+            format!("({rhs})")
+        } else {
+            rhs.clone()
+        };
+        let indent = " ".repeat(leading_spaces(&next));
+        lines[index + 1].text =
+            format!("{indent}{};", replace_token(statement, &lhs, &replacement));
+        if let Some(count) = counts.get_mut(&lhs) {
+            *count = count.saturating_sub(2);
+        }
+        lines.remove(index);
+        continue;
+    }
+}
+
+/// The frame registers carry the stack bookkeeping and are never a user temporary.
+fn is_frame_register(name: &str) -> bool {
+    matches!(
+        name,
+        "rsp" | "esp" | "sp" | "spl" | "rbp" | "ebp" | "bp" | "bpl"
+    )
+}
+
+/// Whether `text` mentions `name` as a whole token.
+fn contains_token(text: &str, name: &str) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| token == name)
+}
+
+/// Whether the statement writes `name` (`eax = …`, `eax += …`); a store through it is a read.
+fn assigns_to(statement: &str, name: &str) -> bool {
+    let trimmed = statement.trim_start();
+    let Some(rest) = trimmed.strip_prefix(name) else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    matches!(
+        rest.chars().next(),
+        Some('=' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '!' | '?')
+    ) && !rest.starts_with("->")
+}
+
+/// A substituted expression needs parentheses when it has an operator outside parentheses:
+/// `a + b` must land as `(a + b) * 2`, while a cast chain like `(u32)(x)` does not.
+fn needs_parentheses(expression: &str) -> bool {
+    let mut depth = 0usize;
+    for (position, ch) in expression.char_indices() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            // A leading operator is a prefix (`*(u64*)(p)`, `-1`) and binds tighter than
+            // anything the surrounding statement can add.
+            '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '?' | ':' | ','
+                if depth == 0 && position > 0 =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for line in lines.iter() {
@@ -6469,6 +6623,35 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn adjacent_temporaries_are_inlined_into_their_reader() {
+        let mut lines = vec![
+            test_line("    eax = *(u64*)(rbx);"),
+            test_line("    sub_140001000(eax);"),
+        ];
+        inline_adjacent_temporaries(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "    sub_140001000(*(u64*)(rbx));");
+
+        // A stack slot is a variable, not an expression: its address must stay intact.
+        let mut lines = vec![
+            test_line("    rax = 1;"),
+            test_line("    var_30 = rax;"),
+            test_line("    SetThreadpoolTimer(h, &var_30, 0, 0);"),
+        ];
+        inline_adjacent_temporaries(&mut lines);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "    var_30 = 1;");
+        assert_eq!(lines[1].text, "    SetThreadpoolTimer(h, &var_30, 0, 0);");
+
+        // A temporary read twice cannot be folded.
+        let mut lines = vec![
+            test_line("    eax = var_10;"),
+            test_line("    f(eax, eax);"),
+        ];
+        inline_adjacent_temporaries(&mut lines);
+        assert_eq!(lines.len(), 2);
     }
     #[test]
     fn known_import_arities_are_sorted_and_stable() {

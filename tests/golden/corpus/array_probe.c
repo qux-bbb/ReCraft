@@ -4,7 +4,6 @@ void array_probe_l1(void) {
         eax = 0xADDR;
         return;
     }
-    rax = (int64)(edx);
-    eax = *(u32*)((rcx + (rax * 4)));
+    eax = *(u32*)((rcx + ((int64)(edx) * 4)));
     return;
 }
