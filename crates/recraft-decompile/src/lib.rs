@@ -139,6 +139,9 @@ pub(crate) fn lift_block(
     entry_aliases: Option<&BTreeMap<Reg, Reg>>,
     // Rendered values known to be in the x64 argument registers on entry to the block.
     entry_arg_values: Option<&[Option<String>; 4]>,
+    // Render the statements and the branch condition. The analysis pass only needs the
+    // block's effects (writes, calls, stack use), so it skips the formatting.
+    render: bool,
 ) -> Result<BlockLift> {
     if end <= start {
         return Ok(BlockLift {
@@ -470,14 +473,20 @@ pub(crate) fn lift_block(
             if printer.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                 continue;
             }
-            let text = printer.stmt(stmt);
+            // The analysis pass skips formatting: only the effects are used.
+            let text = if render {
+                printer.stmt(stmt)
+            } else {
+                String::new()
+            };
             // Consecutive identical pure writes are idempotent and common after
             // compiler-generated copy chains. Calls/intrinsics must never be folded.
             let pure = !matches!(
                 stmt,
                 Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. }
             );
-            if !skipped
+            if render
+                && !skipped
                 && !printer.is_frame_alias(stmt)
                 && !(pure && statements.last().is_some_and(|line| line.text == text))
             {
@@ -524,7 +533,7 @@ pub(crate) fn lift_block(
     }
     let last = lifted.last().unwrap();
     let condition = match last.flow {
-        Flow::CondGoto { cond, .. } => Some(printer.expr(cond)),
+        Flow::CondGoto { cond, .. } if render => Some(printer.expr(cond)),
         _ => None,
     };
     let mut pushes = Vec::new();

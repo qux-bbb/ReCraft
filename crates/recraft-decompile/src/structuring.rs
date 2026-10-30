@@ -108,6 +108,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             None,
             None,
             None,
+            false,
         )?);
     }
     // The prologue's frame pointer is the base for `[rbp + disp]` in every block. Blocks
@@ -130,6 +131,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
                 None,
                 None,
                 None,
+                false,
             )?;
             probe
                 .stack_pointers
@@ -260,6 +262,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             frame_pointer,
             Some(&entry_aliases[index]),
             Some(&entry_arg_values[index]),
+            true,
         )?);
     }
     bodies = seeded;
@@ -433,6 +436,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
 
+    drop_noop_statements(&mut lines);
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
     tidy_labels(&mut lines);
@@ -570,6 +574,57 @@ const KNOWN_STRUCTS: [KnownStruct; 3] = [
 /// A direct call whose arguments were set up in another block records none, so it prints
 /// `sub_X()`. The widest sibling call to the same target shows how many arguments it takes;
 /// printing that many register placeholders keeps the arity of the site visible.
+/// Statements that do nothing and only add noise: a self assignment (`rax = rax;`), an `if`
+/// whose body is empty, and a label that is not referenced and only introduces the closing
+/// brace of its block.
+fn drop_noop_statements(lines: &mut Vec<PseudoLine>) {
+    lines.retain(|line| {
+        let text = line.text.trim();
+        let Some(statement) = text.strip_suffix(';') else {
+            return true;
+        };
+        let Some((lhs, rhs)) = statement.split_once(" = ") else {
+            return true;
+        };
+        !(lhs.trim() == rhs.trim() && is_identifier(lhs.trim()))
+    });
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let text = lines[index].text.trim();
+        if text.starts_with("if (") && text.ends_with(") {") && lines[index + 1].text.trim() == "}"
+        {
+            lines.remove(index + 1);
+            lines.remove(index);
+            index = index.saturating_sub(1);
+            continue;
+        }
+        index += 1;
+    }
+    let mut references: HashMap<String, usize> = HashMap::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| token.starts_with("loc_"))
+        {
+            *references.entry(token.to_owned()).or_insert(0) += 1;
+        }
+    }
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let text = lines[index].text.trim();
+        if let Some(label) = text.strip_suffix(':')
+            && label.starts_with("loc_")
+            && references.get(label).copied().unwrap_or(0) == 1
+            && (lines[index + 1].text.trim() == "}" || lines[index + 1].text.trim() == "return;")
+        {
+            lines.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
 fn fill_cross_block_arguments(lines: &mut [PseudoLine]) {
     let mut arities: HashMap<String, usize> = HashMap::new();
     for line in lines.iter() {
@@ -6751,6 +6806,19 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn noop_statements_are_dropped() {
+        let mut lines = vec![
+            test_line("    rax = rax;"),
+            test_line("    var_10 = var_10;"),
+            test_line("    if (eax == 0) {"),
+            test_line("    }"),
+            test_line("    var_20 = 1;"),
+        ];
+        drop_noop_statements(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "    var_20 = 1;");
     }
     #[test]
     fn plain_argument_values_can_be_repeated() {

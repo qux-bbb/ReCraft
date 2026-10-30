@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Statements that do nothing are dropped: `rax = rax;` (and a slot self assignment), an `if`
+  whose body is empty, and a label that nothing jumps to when it only introduces the closing
+  brace. Notepad: 3 sites, L2 lines 30 212 → **30 208**.
+- The analysis pass no longer formats the statements it discards. `lift_block` gained a
+  `render` flag: the first pass only needs the block's effects (writes, calls, stack use,
+  argument copies), so it skips ~37 000 statement renderings for Notepad's biggest function.
+  The emitted text is byte-identical; wall-clock change is within run-to-run noise on this
+  machine (1.6 s either way for the 45 KB function), so treat it as work removed rather than
+  a measured speedup.
 - A direct call that passes an argument register by name now shows the value that was put
   there. `edx = 0; sub_1400029dc(&var_20, rdx, …)` printed the register even though the value
   was known; it now reads `sub_1400029dc(&var_20, 0, …)`. Only plain values (constants, stack
@@ -523,6 +532,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The analysis pass no longer formats the statements it discards. `lift_block` gained a
+  `render` flag: the first pass only needs the block's effects (writes, calls, stack use,
+  argument copies), so it skips ~37 000 statement renderings for Notepad's biggest function.
+  The emitted text is byte-identical; wall-clock change is within run-to-run noise on this
+  machine (1.6 s either way for the 45 KB function), so treat it as work removed rather than
+  a measured speedup.
 - Decompiled pseudocode now reads closer to source: `x = (x + n);` becomes `x += n;`,
   `r = *(T*)(a); r -= k; *(T*)(a) = r;` collapses to `*(T*)(a) -= k;`,
   `if (!(x == 0))` becomes `if (x != 0)`, the redundant wrapper around a whole condition
