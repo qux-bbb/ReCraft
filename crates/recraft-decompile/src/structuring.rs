@@ -395,6 +395,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     tidy_labels(&mut lines);
+    hide_frame_pointer_setups(&mut lines);
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
@@ -422,6 +423,37 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
 /// Must-analysis over the four x64 argument slots: a value is inherited only when every
 /// predecessor leaves the same text in that register. Calls clear the slots, so a call site
 /// never inherits a value that an intervening call would have destroyed.
+/// `rbp = &var_100;` only establishes the frame base used for slot naming; the variable is
+/// an artifact of the machine frame, not of the program. When the register is never named
+/// again the line tells the reader nothing, so it is dropped.
+fn hide_frame_pointer_setups(lines: &mut Vec<PseudoLine>) {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| !token.is_empty())
+        {
+            *counts.entry(token.to_owned()).or_insert(0) += 1;
+        }
+    }
+    lines.retain(|line| {
+        let text = line.text.trim();
+        let Some((lhs, rhs)) = text
+            .strip_suffix(';')
+            .and_then(|statement| statement.split_once(" = "))
+        else {
+            return true;
+        };
+        let frame_register = matches!(
+            lhs,
+            "rbx" | "rbp" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15"
+        );
+        let slot = rhs.starts_with("&var_");
+        !(frame_register && slot && counts.get(lhs).copied().unwrap_or(0) == 1)
+    });
+}
+
 fn entry_arg_value_map(cfg: &Cfg, bodies: &[BlockLift]) -> Vec<[Option<String>; 4]> {
     let count = bodies.len();
     let mut predecessors = vec![Vec::new(); count];
@@ -6142,6 +6174,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn single_use_frame_pointer_setup_is_hidden() {
+        let mut lines = vec![
+            test_line("int32 f(void) {"),
+            test_line("    rbp = &var_100;"),
+            test_line("    var_10 = 0;"),
+            test_line("    return 0;"),
+            test_line("}"),
+        ];
+        hide_frame_pointer_setups(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("rbp"), "{text}");
+
+        // A register that is named again keeps its definition.
+        let mut lines = vec![
+            test_line("int32 f(void) {"),
+            test_line("    rbp = &var_100;"),
+            test_line("    sub_140001000(rbp);"),
+            test_line("    return 0;"),
+            test_line("}"),
+        ];
+        hide_frame_pointer_setups(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("rbp = &var_100;"), "{text}");
+    }
     #[test]
     fn alias_dataflow_requires_every_path_to_agree() {
         let address = |value: u64| Address::new(value);

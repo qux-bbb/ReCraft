@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A frame-pointer setup that nothing reads is no longer printed. `rbp = &var_100;` exists
+  only so slot names can be resolved to the entry frame; when the register is never named
+  again the line is noise, so the final pass drops it (any later read keeps it). Notepad:
+  7 such lines across 7 functions (`sub_14000e950` and the other WndProc helpers start
+  directly with their first real statement), L2 lines 30 272 → **30 265**; unit test covers
+  both the dropped and the kept case.
 - The pseudo-C header names the level that produced it: the decompile view used to claim
   "L1 structure recovery" even for the L2 signature view. The first comment is now
   `// L1 …` or `// L2 …` depending on the entry point; L1 text and every golden snapshot are
