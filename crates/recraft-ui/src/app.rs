@@ -367,6 +367,23 @@ fn decode_string(bytes: &[u8], enc: i64) -> String {
     }
 }
 
+/// Index of the stored string covering `addr`, plus the byte offset into its text.
+///
+/// A literal does not have to start a stored string: compiler string pooling makes
+/// `"===="` a suffix of an `"O====…"` run, so an address inside a run still names a
+/// string. Exact starts win over containing runs because extracted ranges can overlap,
+/// and the nearest preceding start wins when several runs cover the address.
+fn string_row_at(strings: &[StringRow], addr: Address) -> Option<(usize, u32)> {
+    if let Some(index) = strings.iter().position(|row| row.addr == addr) {
+        return Some((index, 0));
+    }
+    strings.iter().enumerate().rev().find_map(|(index, row)| {
+        let end = row.addr.get().checked_add(u64::from(row.len))?;
+        (addr.get() > row.addr.get() && addr.get() < end)
+            .then(|| (index, (addr.get() - row.addr.get()) as u32))
+    })
+}
+
 /// Header/section-name strings that IDA's default list does not surface.
 fn is_string_noise(segment: &str, text: &str) -> bool {
     const SECTION_NAMES: [&str; 14] = [
@@ -586,6 +603,81 @@ fn pseudo_symbol_at(text: &str, char_index: usize) -> Option<&str> {
     })
 }
 
+/// Inner text of the C string literal containing `char_index`, without its quotes.
+///
+/// Escaped quotes (`\"`) stay part of the literal, so the returned slice still matches the
+/// quoted text the decompiler recorded for that string. `None` means the caret is outside
+/// any literal's quotes.
+fn pseudo_string_literal_at(text: &str, char_index: usize) -> Option<&str> {
+    fn literal_at(text: &str, char_index: usize) -> Option<&str> {
+        let mut open: Option<(usize, usize)> = None;
+        let mut escaped = false;
+        for (index, (byte, ch)) in text.char_indices().enumerate() {
+            let Some((opening, start)) = open else {
+                if ch == '"' {
+                    open = Some((index, byte));
+                }
+                continue;
+            };
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                if char_index > opening && char_index < index {
+                    return Some(&text[start + 1..byte]);
+                }
+                open = None;
+            }
+        }
+        None
+    }
+    // As in `pseudo_symbol_at`, the caret reports the closest boundary: clicking the right
+    // half of the last character lands on the closing quote. Trying the previous character
+    // keeps the whole literal clickable.
+    literal_at(text, char_index).or_else(|| {
+        char_index
+            .checked_sub(1)
+            .and_then(|previous| literal_at(text, previous))
+    })
+}
+
+/// Bytes named by the inner text of a C string literal rendered by the decompiler.
+///
+/// `quote_c_string` escapes quotes, backslashes, control characters and `\xNN`; reversing
+/// those escapes gives the bytes a short literal points at, even when the string table does
+/// not cover the address.
+fn c_literal_bytes(text: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            let mut buffer = [0u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            continue;
+        }
+        match chars.next()? {
+            'n' => bytes.push(b'\n'),
+            'r' => bytes.push(b'\r'),
+            't' => bytes.push(b'\t'),
+            '\\' => bytes.push(b'\\'),
+            '"' => bytes.push(b'"'),
+            'x' => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                bytes.push((high * 16 + low) as u8);
+            }
+            other => {
+                // The decompiler emits no other escapes; keep an unknown one verbatim.
+                bytes.push(b'\\');
+                let mut buffer = [0u8; 4];
+                bytes.extend_from_slice(other.encode_utf8(&mut buffer).as_bytes());
+            }
+        }
+    }
+    Some(bytes)
+}
+
 /// Address encoded in an IDA-style `sub_<hex>` auto name.
 fn sub_symbol_address(symbol: &str) -> Option<Address> {
     let hex = symbol.strip_prefix("sub_")?;
@@ -753,6 +845,13 @@ pub struct ReCraftApp {
     key_pass: Option<u64>,
     pseudo_start: Address,
     pseudo: Option<Vec<PseudoLine>>,
+    /// Quoted string literals of the current listing, with the data address each names.
+    /// A double-click on one follows the literal instead of its instruction.
+    pseudo_literals: Vec<(String, Address)>,
+    /// Literals reached from the decompile view, keyed by data address. Kept separately
+    /// because a later refresh re-anchors the listing and drops `pseudo_literals`, while
+    /// short literals (`"\r\n"`, `")"`) still need a data row.
+    literal_data: Vec<(Address, String)>,
     /// Row clicked in the pseudo-C view (0-based line identity). `None` means follow the
     /// disassembly address.
     pseudo_selected_line: Option<usize>,
@@ -852,6 +951,8 @@ impl Default for ReCraftApp {
             key_pass: None,
             pseudo_start: Address::ZERO,
             pseudo: None,
+            pseudo_literals: Vec::new(),
+            literal_data: Vec::new(),
             pseudo_selected_line: None,
             pseudo_dirty: false,
             functions: Vec::new(),
@@ -1131,8 +1232,36 @@ impl ReCraftApp {
         self.functions.get(index).map(|function| function.start)
     }
 
+    /// Data address named by a rendered string literal. Identical literals at several
+    /// addresses are disambiguated by the xref from the instruction under the click.
+    fn pseudo_literal_address(&self, literal: &str, from: Address) -> Option<Address> {
+        let quoted = format!("\"{literal}\"");
+        let mut fallback = None;
+        for (text, address) in &self.pseudo_literals {
+            if *text != quoted {
+                continue;
+            }
+            let referenced = self.session.as_ref().is_some_and(|session| {
+                session
+                    .xrefs_to(*address)
+                    .is_ok_and(|xrefs| xrefs.iter().any(|xref| xref.from == from))
+            });
+            if referenced {
+                return Some(*address);
+            }
+            fallback.get_or_insert(*address);
+        }
+        fallback
+    }
+
     /// Action produced by double-clicking at `char_index` of a pseudo-C row.
     fn pseudo_double_click(&self, text: &str, char_index: usize, addr: Address) -> Action {
+        // A quoted literal stands for data, not for the instruction that loads it.
+        if let Some(literal) = pseudo_string_literal_at(text, char_index)
+            && let Some(target) = self.pseudo_literal_address(literal, addr)
+        {
+            return Action::NavigateToDisasm(target);
+        }
         match pseudo_symbol_at(text, char_index)
             .and_then(|symbol| self.pseudo_function_named(symbol))
         {
@@ -1176,6 +1305,8 @@ impl ReCraftApp {
         self.disasm_scroll_to = Some(0.0);
         self.pseudo_start = entry;
         self.pseudo_dirty = true;
+        self.pseudo_literals.clear();
+        self.literal_data.clear();
         self.functions_dirty = true;
         self.strings_dirty = true;
         self.imports_dirty = true;
@@ -1193,6 +1324,7 @@ impl ReCraftApp {
         if self.session.is_none() {
             return;
         }
+        self.remember_literal_data(addr);
         self.disasm_start = addr;
         self.selected = 0;
         self.disasm_dirty = true;
@@ -1203,6 +1335,22 @@ impl ReCraftApp {
         self.history.truncate(self.history_pos + 1);
         self.history_pos = self.history.len();
         self.history.push(addr);
+    }
+
+    /// Keep the quoted literal behind `addr`, so the disassembly can keep showing it as
+    /// data after the listing re-anchors (short literals have no stored string row).
+    fn remember_literal_data(&mut self, addr: Address) {
+        if self.literal_data.iter().any(|(known, _)| *known == addr) {
+            return;
+        }
+        let Some((literal, _)) = self
+            .pseudo_literals
+            .iter()
+            .find(|(_, address)| *address == addr)
+        else {
+            return;
+        };
+        self.literal_data.push((addr, literal.clone()));
     }
 
     fn run_data_op(&mut self, op: DataOp, addr: Address, len: usize) {
@@ -1637,23 +1785,46 @@ impl ReCraftApp {
         }
     }
 
-    /// When the cursor sits exactly on a known string, render the surrounding strings
-    /// as data lines (`db '…',0`) like IDA's data view instead of decoding bytes as code.
+    /// When the cursor sits on a known string (or inside one), render the surrounding
+    /// strings as data lines (`db '…',0`) like IDA's data view instead of decoding bytes as
+    /// code.
     fn string_data_rows(&mut self, count: usize) -> Option<Vec<DisasmLine>> {
         let start = self.disasm_start;
-        let index = self.strings.iter().position(|row| row.addr == start)?;
-        let rows: Vec<StringRow> = self.strings[index..]
-            .iter()
-            .filter(|row| row.addr >= start)
-            .take(count)
-            .cloned()
-            .collect();
+        let (index, offset) = string_row_at(&self.strings, start)?;
+        let mut rows: Vec<StringRow> = Vec::with_capacity(count.min(self.strings.len()));
+        rows.push(self.strings.get(index)?.clone());
+        rows.extend(
+            self.strings
+                .iter()
+                .skip(index + 1)
+                .take(count.saturating_sub(1))
+                .cloned(),
+        );
         let session = self.session.as_mut()?;
         let mut lines = Vec::with_capacity(rows.len());
-        for row in rows {
+        for (position, mut row) in rows.into_iter().enumerate() {
             let mut raw = [0u8; 15];
-            let copied = row.raw.len().min(15);
-            raw[..copied].copy_from_slice(&row.raw[..copied]);
+            if position == 0 && offset > 0 {
+                // The literal points inside a longer run: show the tail that starts at
+                // the requested address, not the run's own (earlier) start.
+                let text = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+                    if offset % 2 != 0 {
+                        return None;
+                    }
+                    let skip = usize::try_from(offset / 2).ok()?;
+                    row.text.chars().skip(skip).collect()
+                } else {
+                    row.text.get(usize::try_from(offset).ok()?..)?.to_owned()
+                };
+                row.addr = start;
+                row.len = row.len.saturating_sub(offset);
+                row.text = text;
+                row.name = session.name_at(row.addr).ok().flatten();
+                session.read_at(row.addr, &mut raw).unwrap_or(0);
+            } else {
+                let copied = row.raw.len().min(15);
+                raw[..copied].copy_from_slice(&row.raw[..copied]);
+            }
             let comment = match session.xrefs_to(row.addr) {
                 Ok(xrefs) if !xrefs.is_empty() => {
                     let mut from = Vec::new();
@@ -1689,6 +1860,52 @@ impl ReCraftApp {
         Some(lines)
     }
 
+    /// Data row for a literal reached from the decompile view that no stored string
+    /// covers. Short strings (`"\r\n"`, `")"`) fall below the extraction minimum but
+    /// still name data, so their quoted text is enough to show the row.
+    fn literal_data_rows(&self) -> Option<Vec<DisasmLine>> {
+        let start = self.disasm_start;
+        let (_, literal) = self
+            .literal_data
+            .iter()
+            .rev()
+            .find(|(address, _)| *address == start)?;
+        let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
+        let bytes = c_literal_bytes(inner)?;
+        if bytes.is_empty() {
+            return None;
+        }
+        let session = self.session.as_ref()?;
+        let mut raw = [0u8; 15];
+        let copied = bytes.len().min(15);
+        raw[..copied].copy_from_slice(&bytes[..copied]);
+        let comment = match session.xrefs_to(start) {
+            Ok(xrefs) if !xrefs.is_empty() => {
+                let mut from = Vec::new();
+                for xref in xrefs.iter().take(3) {
+                    let name = session
+                        .name_at(xref.from)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| format!("{:#x}", xref.from.get()));
+                    from.push(name);
+                }
+                Some(format!("; DATA XREF: {}", from.join(", ")))
+            }
+            _ => None,
+        };
+        Some(vec![DisasmLine {
+            addr: start,
+            len: (bytes.len() + 1).min(254) as u8,
+            raw,
+            mnemonic: "db".to_owned(),
+            operands: format!("{literal},0"),
+            name: session.name_at(start).ok().flatten(),
+            comment,
+            flags: Flags::data(),
+        }])
+    }
+
     fn refresh_disasm(&mut self) {
         if self.strings_dirty {
             self.refresh_strings();
@@ -1699,6 +1916,12 @@ impl ReCraftApp {
             if self.selected >= self.disasm_rows.len() {
                 self.selected = self.disasm_rows.len().saturating_sub(1);
             }
+            return;
+        }
+        if let Some(rows) = self.literal_data_rows() {
+            self.disasm_rows = rows;
+            self.disasm_dirty = false;
+            self.selected = self.selected.min(self.disasm_rows.len().saturating_sub(1));
             return;
         }
         let Some(session) = self.session.as_mut() else {
@@ -1727,6 +1950,7 @@ impl ReCraftApp {
         self.pseudo_selected_line = None;
         let Some(session) = self.session.as_mut() else {
             self.pseudo = None;
+            self.pseudo_literals.clear();
             self.pseudo_dirty = false;
             return;
         };
@@ -1751,10 +1975,12 @@ impl ReCraftApp {
         match code {
             Ok(code) => {
                 self.pseudo = Some(code.lines);
+                self.pseudo_literals = code.literals;
                 self.pseudo_dirty = false;
             }
             Err(error) => {
                 self.pseudo = None;
+                self.pseudo_literals.clear();
                 self.pseudo_dirty = false;
                 self.set_status(
                     self.t_args("ui_decompile_error", &[("error", &error.to_string())]),
@@ -4668,15 +4894,22 @@ impl ReCraftApp {
                         pal.text,
                     );
                     // Symbol under the pointer, so callee names can advertise the
-                    // double-click that opens their body.
+                    // double-click that opens their body. A word inside a string literal
+                    // is data, not a call, so it keeps the plain address tooltip.
                     let pointer = response
                         .interact_pointer_pos()
                         .or_else(|| response.hover_pos());
                     let char_index = pointer.and_then(|pointer| {
                         Self::pseudo_char_index_at(pointer, text_pos, text_clip, &galley)
                     });
-                    let symbol =
-                        char_index.and_then(|char_index| pseudo_symbol_at(&line.text, char_index));
+                    let in_literal = char_index.is_some_and(|char_index| {
+                        pseudo_string_literal_at(&line.text, char_index).is_some()
+                    });
+                    let symbol = if in_literal {
+                        None
+                    } else {
+                        char_index.and_then(|char_index| pseudo_symbol_at(&line.text, char_index))
+                    };
                     let callee = symbol.and_then(|symbol| self.pseudo_function_named(symbol));
                     let response = match (callee, symbol) {
                         (Some(start), Some(name)) if Some(start) != current_function => {
@@ -6223,6 +6456,98 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_string_literal_in_pseudo_c_opens_its_data() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("literal.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let index = app
+            .function_labels
+            .iter()
+            .position(|label| label == "corpus_banner")
+            .expect("corpus_banner is an export");
+        let start = app.functions[index].start;
+        app.navigate(start);
+        app.tick();
+        let line = app
+            .pseudo
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|line| line.text.contains("return \"ReCraft analysis corpus\";"))
+            .cloned()
+            .expect("the banner function returns its string");
+        let caret = line.text.find("analysis").unwrap();
+        let action = app.pseudo_double_click(&line.text, caret, line.addr);
+        app.apply_action(&egui::Context::default(), action);
+        app.tick();
+        assert!(matches!(app.tab, Tab::Disasm));
+        let row = app.disasm_rows.first().expect("string data rows");
+        assert_eq!(row.mnemonic, "db", "the string must render as data");
+        assert!(row.operands.contains("ReCraft analysis corpus"), "{row:?}");
+        assert!(row.flags.is_data(), "string rows are data, not code");
+    }
+
+    #[test]
+    fn jumping_inside_a_stored_string_shows_the_tail_as_data() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("interior.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let row = app
+            .strings
+            .iter()
+            .find(|row| row.text == "ReCraft analysis corpus")
+            .cloned()
+            .expect("the corpus banner is a stored string");
+        app.disasm_start = Address::new(row.addr.get() + 1);
+        app.disasm_dirty = true;
+        app.tick();
+        let line = app
+            .disasm_rows
+            .first()
+            .expect("a string tail must render as a data row");
+        assert_eq!(
+            line.addr,
+            Address::new(row.addr.get() + 1),
+            "the row starts at the address the literal named"
+        );
+        assert_eq!(line.mnemonic, "db");
+        assert!(
+            line.operands.contains("eCraft analysis corpus"),
+            "the tail from the interior address is shown, got {:?}",
+            line.operands
+        );
+        assert!(line.flags.is_data());
+    }
+
+    #[test]
     fn hex_view_aligns_and_follows_selection() {
         assert_eq!(hex_row_start(Address::new(0x1234)).get(), 0x1230);
         let Some(bytes) = sample_pe() else {
@@ -6584,6 +6909,65 @@ mod tests {
         assert_eq!(pseudo_symbol_at("", 0), None);
         // Character (not byte) indexing must hold for non-ASCII user renames.
         assert_eq!(pseudo_symbol_at("  fn名(x);", 2), Some("fn名"));
+    }
+
+    #[test]
+    fn pseudo_string_literal_at_finds_the_quoted_text() {
+        let text = "  return \"ReCraft analysis corpus\";";
+        let start = text.find("ReCraft").unwrap();
+        assert_eq!(
+            pseudo_string_literal_at(text, start),
+            Some("ReCraft analysis corpus")
+        );
+        assert_eq!(
+            pseudo_string_literal_at(text, start + 10),
+            Some("ReCraft analysis corpus")
+        );
+        // The opening quote and the code around the literal stay outside it.
+        assert_eq!(pseudo_string_literal_at(text, 0), None);
+        assert_eq!(
+            pseudo_string_literal_at(text, text.find('"').unwrap()),
+            None
+        );
+        assert_eq!(pseudo_string_literal_at(text, text.len() - 1), None);
+        // Clicking the right half of the last character reports the closing quote; the
+        // previous-character fallback still resolves the whole literal.
+        assert_eq!(
+            pseudo_string_literal_at(text, text.rfind('"').unwrap()),
+            Some("ReCraft analysis corpus")
+        );
+        // Escaped quotes are part of the literal, not its end.
+        let escaped = "  puts(\"a\\\"b\");";
+        assert_eq!(
+            pseudo_string_literal_at(escaped, escaped.find('a').unwrap()),
+            Some("a\\\"b")
+        );
+    }
+
+    #[test]
+    fn pseudo_double_click_follows_the_string_a_literal_names() {
+        let caller = Address::new(0x140001000);
+        let data = Address::new(0x140002000);
+        let app = ReCraftApp {
+            pseudo_start: caller,
+            pseudo_literals: vec![("\"ReCraft analysis corpus\"".to_owned(), data)],
+            ..ReCraftApp::default()
+        };
+        let text = "  return \"ReCraft analysis corpus\";";
+        let index = text.find("analysis").unwrap();
+        assert_eq!(
+            app.pseudo_double_click(text, index, caller),
+            Action::NavigateToDisasm(data),
+            "a string literal must follow its data, not the loading instruction"
+        );
+
+        // Without a recorded literal (an `__asm("…")` operand, for instance) the old
+        // fallback to this row's disassembly stays.
+        let plain = ReCraftApp::default();
+        assert_eq!(
+            plain.pseudo_double_click(text, index, caller),
+            Action::NavigateToDisasm(caller)
+        );
     }
 
     #[test]
@@ -7373,6 +7757,113 @@ mod tests {
         ));
         assert!(is_string_noise(".rdata", ".rdata"));
         assert!(!is_string_noise(".rdata", "flag{strings_are_not_enough}"));
+    }
+
+    #[test]
+    fn string_row_at_finds_interior_addresses() {
+        fn row(addr: u64, len: u32, text: &str) -> StringRow {
+            StringRow {
+                addr: Address::new(addr),
+                len,
+                enc: recraft_analysis::STRING_ENC_ASCII,
+                kind: 0,
+                segment: ".rdata".to_owned(),
+                text: text.to_owned(),
+                raw: text.as_bytes().to_vec(),
+                name: None,
+            }
+        }
+        let strings = vec![row(0x1000, 10, "O=========")];
+        assert_eq!(
+            string_row_at(&strings, Address::new(0x1000)),
+            Some((0, 0)),
+            "an exact start wins"
+        );
+        assert_eq!(
+            string_row_at(&strings, Address::new(0x1005)),
+            Some((0, 5)),
+            "a literal can point inside a longer run"
+        );
+        assert_eq!(string_row_at(&strings, Address::new(0x100a)), None);
+        assert_eq!(string_row_at(&strings, Address::new(0x0fff)), None);
+
+        // Overlapping extracted ranges: the row that starts there is the right one.
+        let strings = vec![row(0x1000, 12, "=====abcdefg"), row(0x1005, 3, "abc")];
+        assert_eq!(string_row_at(&strings, Address::new(0x1005)), Some((1, 0)));
+        assert_eq!(
+            string_row_at(&strings, Address::new(0x1006)),
+            Some((1, 1)),
+            "the nearest preceding start describes an interior address best"
+        );
+    }
+
+    #[test]
+    fn c_literal_bytes_reverse_the_decompiler_escapes() {
+        assert_eq!(
+            c_literal_bytes(r#"a\"b\\c\n\t"#).unwrap(),
+            b"a\"b\\c\n\t".to_vec()
+        );
+        assert_eq!(c_literal_bytes(r"\x01\x7f").unwrap(), vec![1, 0x7f]);
+        assert_eq!(c_literal_bytes("plain").unwrap(), b"plain".to_vec());
+    }
+
+    #[test]
+    fn short_literals_without_a_string_row_still_open_as_data() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("short-literal.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let banner = app
+            .strings
+            .iter()
+            .find(|row| row.text == "ReCraft analysis corpus")
+            .cloned()
+            .expect("the corpus banner is a stored string");
+        // An address no stored string covers, like a short literal below the extraction
+        // minimum (the corpus has no such literal, so pick the first free address).
+        let free = (1..0x2000u64)
+            .map(|offset| Address::new(banner.addr.get() + offset))
+            .find(|addr| string_row_at(&app.strings, *addr).is_none())
+            .unwrap();
+        let text = "  sub_1(\"\\r\\n\");";
+        let caret = text.find('\\').unwrap();
+        app.pseudo_literals = vec![("\"\\r\\n\"".to_owned(), free)];
+        let ctx = egui::Context::default();
+        let action = app.pseudo_double_click(text, caret, app.disasm_start);
+        assert_eq!(action, Action::NavigateToDisasm(free));
+        app.apply_action(&ctx, action);
+        app.tick();
+        let line = app.disasm_rows.first().expect("the short literal is data");
+        assert_eq!(line.addr, free);
+        assert_eq!(line.mnemonic, "db");
+        assert!(
+            line.operands.contains("\\r\\n"),
+            "the quoted escapes stay visible, got {:?}",
+            line.operands
+        );
+        assert!(line.flags.is_data());
+
+        // The literal is cached, so a later disassembly refresh keeps the data row even
+        // though `refresh_pseudo` has already dropped the listing's literal table.
+        app.disasm_dirty = true;
+        app.tick();
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.mnemonic.as_str()),
+            Some("db")
+        );
     }
 
     #[test]

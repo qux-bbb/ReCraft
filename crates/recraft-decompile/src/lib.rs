@@ -54,6 +54,9 @@ pub(crate) struct BlockLift {
     pub stack_net: Option<i64>,
     /// Deepest `rsp` displacement reached inside the block (relative to its entry).
     pub stack_min: Option<i64>,
+    /// Quoted C string literals rendered for this block, with the address of the data
+    /// each one names. Lets a view link `"text"` back to the string it quotes.
+    pub literals: Vec<(String, Address)>,
 }
 
 /// Lift one basic block (`[start, end)`) into statements + terminating flow.
@@ -88,6 +91,7 @@ pub(crate) fn lift_block(
             pops: Vec::new(),
             stack_net: None,
             stack_min: None,
+            literals: Vec::new(),
         });
     }
     let mut lifter = Lifter::new();
@@ -129,6 +133,7 @@ pub(crate) fn lift_block(
             pops: Vec::new(),
             stack_net: None,
             stack_min: None,
+            literals: Vec::new(),
         });
     }
 
@@ -369,6 +374,7 @@ pub(crate) fn lift_block(
         pops,
         stack_net,
         stack_min,
+        literals: literal_references(&literals),
     })
 }
 
@@ -728,6 +734,9 @@ pub struct PseudoLine {
 pub struct Pseudocode {
     pub func_start: Address,
     pub lines: Vec<PseudoLine>,
+    /// Quoted C string literals used by `lines`, with the data address each one names.
+    /// Views use this to follow a rendered `"text"` back to the string it quotes.
+    pub literals: Vec<(String, Address)>,
 }
 
 impl Pseudocode {
@@ -826,6 +835,7 @@ pub fn pseudocode_l0(
     Ok(Pseudocode {
         func_start: start,
         lines,
+        literals: literal_references(&literals),
     })
 }
 
@@ -927,6 +937,17 @@ fn collect_literals(session: &mut Session, exprs: &[Expr]) -> Result<HashMap<u64
         }
     }
     Ok(literals)
+}
+
+/// Sorted `(quoted literal, data address)` pairs for a rendered block or function.
+fn literal_references(literals: &HashMap<u64, String>) -> Vec<(String, Address)> {
+    let mut references: Vec<(String, Address)> = literals
+        .iter()
+        .map(|(value, text)| (text.clone(), Address::new(*value)))
+        .collect();
+    references.sort();
+    references.dedup();
+    references
 }
 
 /// Read a NUL-terminated printable ASCII literal for short data not in the string table.

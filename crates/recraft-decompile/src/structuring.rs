@@ -189,6 +189,12 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         )?);
     }
     bodies = seeded;
+    let mut literals: Vec<(String, Address)> = bodies
+        .iter()
+        .flat_map(|body| body.literals.iter().cloned())
+        .collect();
+    literals.sort();
+    literals.dedup();
     let mut structurer = Structurer::new(
         &cfg,
         bodies,
@@ -308,6 +314,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     Ok(Pseudocode {
         func_start: start,
         lines,
+        literals,
     })
 }
 
@@ -5067,6 +5074,7 @@ mod tests {
                 pops,
                 stack_net: None,
                 stack_min: None,
+                literals: Vec::new(),
             }
         }
         let entry = body(vec![(0x10, Reg::Rbx), (0x11, Reg::Rdi)], Vec::new());
@@ -5155,6 +5163,34 @@ mod tests {
         single.insert(0, BTreeSet::from([0, 1]));
         let successors = vec![vec![1], vec![0, 2], vec![]];
         assert!(!nested_loop_leaves_parent(&single, &successors));
+    }
+
+    #[test]
+    fn string_literals_keep_their_data_address() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let start = function_start(&session, "corpus_banner").unwrap();
+        let code = pseudocode_l2(&mut session, start).unwrap();
+        assert!(
+            code.lines
+                .iter()
+                .any(|line| line.text.contains("return \"ReCraft analysis corpus\";")),
+            "banner literal missing:\n{}",
+            code.text()
+        );
+        let (_, addr) = code
+            .literals
+            .iter()
+            .find(|(text, _)| text == "\"ReCraft analysis corpus\"")
+            .unwrap_or_else(|| panic!("no banner literal in {:?}", code.literals));
+        let mut bytes = [0u8; 32];
+        let read = session.read_at(*addr, &mut bytes).unwrap();
+        assert!(
+            bytes[..read].starts_with(b"ReCraft analysis corpus\0"),
+            "the recorded address must be the string's start: {addr:?} in {:?}",
+            code.literals
+        );
     }
 
     #[test]

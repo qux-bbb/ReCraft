@@ -198,6 +198,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Double-clicking a string literal in the Decompile view now opens the string data it names
+  (`db '…',0` in the disassembly) instead of the instruction that loads it. The pseudo-C
+  renderer records every quoted literal with the address it quotes, so the view can follow
+  the literal itself; identical texts at several addresses are disambiguated by the xref
+  from the clicked instruction. The data view also handles literals that point inside a
+  longer stored run (compiler string pooling: `"===="` inside an `"O====…"` run) and short
+  literals below the string-extraction minimum (`"\r\n"`, `")"`), which fall back to the
+  quoted literal recorded by the decompiler.
 - Redundant parentheses around a condition are stripped in single-line branches too:
   `if ((al == 0)) return;` now reads `if (al == 0) return;`. The pass matches the closing
   parenthesis structurally instead of assuming a `{` terminator, and a genuinely needed pair
