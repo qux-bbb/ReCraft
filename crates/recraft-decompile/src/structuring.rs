@@ -3088,7 +3088,7 @@ fn fold_jumps_over_braces(lines: &mut Vec<PseudoLine>) {
 
 /// Longest skipped region folded into a guarded block. Longer skips read better as a jump:
 /// wrapping hundreds of lines would indent the rest of the function past the screen.
-const MAX_FORWARD_SKIP: usize = 24;
+const MAX_FORWARD_SKIP: usize = 64;
 
 /// Parse `if (cond) goto loc_X;` into the condition and the target address.
 fn conditional_goto(text: &str) -> Option<(&str, u64)> {

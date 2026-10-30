@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Longer forward skip regions are folded into `if` blocks. `fold_short_forward_gotos` only
+  handled guards up to 24 lines, so large dispatch/cleanup diamonds stayed as
+  `if (c) goto L; … goto M; loc_L:`; the limit is now 64 (the pass still rejects regions
+  with unbalanced braces or bound `break`/`continue`). Notepad: `goto loc_` 475 → **452**
+  (the 45 KB function 391 → 369, e.g. a `GetProcAddress` loop body now sits inside
+  `if (r15d != 0) { … }` instead of after a jump), L2 lines 30 254 → 30 256 (+2 braces),
+  structured functions and coverage unchanged.
 - Carried call arguments now survive across blocks even when they name a register. The
   cross-block value analysis used to keep only register-free values (constants, strings,
   stack slots), so `CloseHandle()` stayed empty when the handle came from
