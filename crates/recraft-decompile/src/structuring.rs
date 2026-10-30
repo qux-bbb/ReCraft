@@ -396,6 +396,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     normalize_infinite_loops(&mut lines);
+    name_known_struct_fields(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
     lines.push(PseudoLine {
@@ -477,6 +478,97 @@ fn take_adjacent_arguments(lines: &mut Vec<PseudoLine>, limit: usize) -> Vec<Str
     }
     arguments
 }
+/// Win32 APIs that fill a `RECT` through a pointer argument.
+const RECT_APIS: [&str; 2] = ["GetClientRect", "GetWindowRect"];
+
+/// `RECT` fields (32-bit `LONG` layout) as (byte offset from the structure start, name).
+/// The structure's first field is not named: `&var_XX` and the 16-byte clears stay as they
+/// are, and `var_XX` itself is the structure, not its first member.
+const RECT_FIELDS: [(&str, &str); 3] = [("4", "top"), ("8", "right"), ("c", "bottom")];
+
+/// `GetClientRect(hwnd, &var_30)` makes the four 32-bit slots starting at `var_30` a `RECT`;
+/// naming the later slots after their fields reads like the structure the API fills.
+fn name_known_struct_fields(lines: &mut [PseudoLine]) {
+    for index in 0..lines.len() {
+        let text = lines[index].text.clone();
+        if !RECT_APIS
+            .iter()
+            .any(|api| text.contains(&format!("{api}(")))
+        {
+            continue;
+        }
+        let Some(base) = slot_address_after(&text, "&var_") else {
+            continue;
+        };
+        // The first field is named only where the slot is read: `&var_30` and the wide clear
+        // before the call stay as they are.
+        let from = format!("var_{base:x}");
+        let to = format!("var_{base:x}.left");
+        for line in lines.iter_mut().skip(index + 1) {
+            let rename = line.text.trim_start().starts_with(&format!("{from} ="));
+            if !rename {
+                line.text = rename_struct_slot(&line.text, &from, &to, true);
+            }
+        }
+        for (delta, field) in RECT_FIELDS {
+            let Ok(offset) = u64::from_str_radix(delta, 16) else {
+                continue;
+            };
+            let from = format!("var_{:x}", base + offset);
+            let to = format!("var_{base:x}.{field}");
+            for line in lines.iter_mut().skip(index + 1) {
+                line.text = rename_struct_slot(&line.text, &from, &to, false);
+            }
+        }
+    }
+}
+
+/// Hexadecimal displacement of the first `&var_…` argument in `text`.
+fn slot_address_after(text: &str, marker: &str) -> Option<u64> {
+    let start = text.find(marker)? + marker.len();
+    let digits: String = text[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit())
+        .collect();
+    u64::from_str_radix(&digits, 16).ok()
+}
+
+/// Rename `from` to `to` where it names a slot value. The address (`&var_40`) and a pointer
+/// base (`(var_40 + 8)`) keep the plain name: both mean "the pointer stored in this slot".
+/// `skip_target` also keeps an assignment target plain, because a store to the first slot can
+/// be a wide clear of the whole structure (`var_40 = xmm0;`).
+fn rename_struct_slot(text: &str, from: &str, to: &str, skip_target: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(position) = rest.find(from) {
+        let before = &rest[..position];
+        let after = &rest[position + from.len()..];
+        let boundary = before
+            .chars()
+            .last()
+            .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            && after
+                .chars()
+                .next()
+                .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_'));
+        let address_taken = before.trim_end().ends_with('&');
+        let trimmed = after.trim_start();
+        let pointer_base = trimmed.starts_with('+') || trimmed.starts_with('-');
+        let target = skip_target
+            && before.trim().is_empty()
+            && (trimmed.starts_with('=') || trimmed.starts_with('+') || trimmed.starts_with('-'));
+        out.push_str(before);
+        if boundary && !address_taken && !pointer_base && !target {
+            out.push_str(to);
+        } else {
+            out.push_str(from);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `do { ... } while (1);` is the structurer's no-condition loop; `while (1) { ... }` reads
 /// the same and is idiomatic C, so the `do` form is rewritten.
 fn normalize_infinite_loops(lines: &mut [PseudoLine]) {
@@ -6354,6 +6446,27 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn rect_arguments_name_their_fields() {
+        let mut lines = vec![
+            test_line("    var_30 = xmm0;"),
+            test_line("    GetClientRect(hwnd, &var_30);"),
+            test_line("    edi = var_3c;"),
+            test_line("    edi -= var_34;"),
+            test_line("    var_38 = 0;"),
+            test_line("    rax = *(u64*)((var_3c + 8));"),
+        ];
+        name_known_struct_fields(&mut lines);
+        assert_eq!(lines[1].text, "    GetClientRect(hwnd, &var_30);");
+        assert_eq!(lines[2].text, "    edi = var_30.bottom;");
+        assert_eq!(lines[3].text, "    edi -= var_30.top;");
+        assert_eq!(lines[4].text, "    var_30.right = 0;");
+        // A pointer base keeps the plain slot name: there the slot holds a pointer, not a
+        // field.
+        assert_eq!(lines[5].text, "    rax = *(u64*)((var_3c + 8));");
+        // The wide clear before the call is not turned into a first-field store.
+        assert_eq!(lines[0].text, "    var_30 = xmm0;");
     }
     #[test]
     fn tail_call_takes_adjacent_argument_setups() {

@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A `RECT` filled by `GetClientRect`/`GetWindowRect` now has field names. Those two APIs
+  take a `RECT*`, so the four 32-bit slots at the passed `&var_XX` are the structure's
+  fields; later reads and stores print `var_30.left`, `var_30.top`, `var_30.right`,
+  `var_30.bottom` instead of `var_30`, `var_34`, `var_38`, `var_3c`. The address (`&var_30`)
+  and any pointer base (`(var_3c + 8)`) keep the plain name, as does a wide clear before the
+  call (`var_30 = xmm0;`), so only real member accesses are renamed. Notepad: 27 field
+  accesses across 6 functions (`edi = var_30.bottom; edi -= var_30.top;`), lines unchanged.
+  This is the first step of structure-aware naming; `POINT`, `MSG` and friends can follow
+  the same table.
 - Longer forward skip regions are folded into `if` blocks. `fold_short_forward_gotos` only
   handled guards up to 24 lines, so large dispatch/cleanup diamonds stayed as
   `if (c) goto L; … goto M; loc_L:`; the limit is now 64 (the pass still rejects regions
