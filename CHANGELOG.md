@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Global data reads as a named word instead of a cast expression: `*(u64*)(0x140036648)`
+  becomes `qword_140036648`, `*(u32*)(0x140034460)` `dword_140034460`, and `u8`/`u16`/`f32`/
+  `f64`/`__m128` give `byte_`/`word_`/`flt_`/`dbl_`/`xmmword_` (the width stays visible, and a
+  computed address such as `*(u32*)(0x140034460 + 4)` keeps its cast). Notepad: **1725**
+  global reads across 189 functions, no absolute-address cast left; `qword_140036648 = rax;`
+  reads like the global store it is. The golden normaliser masks the digits
+  (`qword_ADDR`) so snapshots stay address-independent; three corpus snapshots regenerated
+  (`dword_ADDR`, `flt_ADDR`).
 - A pointer argument that type inference left as `void*` now shows field accesses when the
   offset is unambiguous: `*(u32*)((arg1 + 0x10))` reads `arg1->field_10`, and a bare
   `*(u8*)(arg1)` reads `arg1->field_0`. The pass only rewrites an offset whose accesses all

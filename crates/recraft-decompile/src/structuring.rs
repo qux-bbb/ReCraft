@@ -441,6 +441,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     name_known_struct_fields(&mut lines);
     name_structure_instances(&mut lines);
     name_void_pointer_fields(&mut lines);
+    name_global_data(&mut lines);
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
@@ -706,6 +707,47 @@ fn count_arguments(arguments: &str) -> usize {
         }
     }
     count
+}
+
+/// Global data addressed by an absolute image address reads as a named word, like a symbol:
+/// `*(u64*)(0x140036648)` becomes `qword_140036648`, `*(u32*)(0x140034460)` `dword_140034460`,
+/// `*(u8*)(…)` `byte_…`, `*(u16*)(…)` `word_…`, `*(__m128*)(…)` `xmmword_…`. The width stays
+/// visible in the name.
+fn name_global_data(lines: &mut [PseudoLine]) {
+    const KINDS: [(&str, &str); 7] = [
+        ("u8", "byte_"),
+        ("u16", "word_"),
+        ("u32", "dword_"),
+        ("u64", "qword_"),
+        ("f32", "flt_"),
+        ("f64", "dbl_"),
+        ("__m128", "xmmword_"),
+    ];
+    for line in lines.iter_mut() {
+        for (width, prefix) in KINDS {
+            let head = format!("*({width}*)(0x");
+            let mut search = 0;
+            while let Some(position) = line.text[search..].find(&head) {
+                let start = search + position;
+                let after = &line.text[start + head.len()..];
+                let digits = after
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_hexdigit())
+                    .count();
+                // An image address has eight or more hex digits and the cast closes right
+                // after it; anything else is a computed address and keeps its form.
+                if digits < 8 || !after[digits..].starts_with(')') {
+                    search = start + head.len();
+                    continue;
+                }
+                let address = &after[..digits];
+                let replacement = format!("{prefix}{address}");
+                line.text
+                    .replace_range(start..start + head.len() + digits + 1, &replacement);
+                search = start + replacement.len();
+            }
+        }
+    }
 }
 
 /// Name the fields of a pointer argument the type inference left as `void*`: when every
@@ -7120,6 +7162,21 @@ mod tests {
         assert!(values[2][0].is_none());
     }
     #[test]
+    fn global_data_reads_as_a_named_word() {
+        let mut lines = vec![
+            test_line("    eax = *(u32*)(0x140034460);"),
+            test_line("    *(u64*)(0x140036648) = rax;"),
+            test_line("    rcx = *(u8*)(0x140035390);"),
+            // A computed address is not a global and keeps its cast.
+            test_line("    rdx = *(u32*)(0x140034460 + 4);"),
+        ];
+        name_global_data(&mut lines);
+        assert_eq!(lines[0].text, "    eax = dword_140034460;");
+        assert_eq!(lines[1].text, "    qword_140036648 = rax;");
+        assert_eq!(lines[2].text, "    rcx = byte_140035390;");
+        assert_eq!(lines[3].text, "    rdx = *(u32*)(0x140034460 + 4);");
+    }
+    #[test]
     fn void_pointer_arguments_get_field_names() {
         let mut lines = vec![
             test_line("    eax = *(u32*)((arg1 + 0x10));"),
@@ -7129,6 +7186,7 @@ mod tests {
             test_line("    edi = *(u8*)((arg2 + 0x18));"),
         ];
         name_void_pointer_fields(&mut lines);
+        name_global_data(&mut lines);
         assert_eq!(lines[0].text, "    eax = arg1->field_10;");
         assert_eq!(lines[1].text, "    ecx = arg1->field_10;");
         assert_eq!(lines[2].text, "    edx = arg1->field_0;");
@@ -7528,7 +7586,7 @@ mod tests {
         let start = function_start(&session, "corpus_counter_bump").unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
         // The increment stays visible *and* the loaded value is not lost to the caller.
-        assert!(text.contains("eax = *(u32*)("), "{text}");
+        assert!(text.contains("eax = dword_"), "{text}");
         assert!(text.contains("return eax;"), "{text}");
     }
 

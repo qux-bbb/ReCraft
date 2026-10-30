@@ -307,6 +307,23 @@ fn normalise_line(line: &str) -> String {
                 continue;
             }
         }
+        // A named global (`qword_140036648`) embeds the address in the identifier, so the
+        // width has to stay while the digits are masked.
+        if let Some(prefix) = DATA_PREFIXES
+            .iter()
+            .find(|prefix| chars[index..].starts_with(&prefix.chars().collect::<Vec<_>>()))
+        {
+            let mut end = index + prefix.len();
+            while end < chars.len() && chars[end].is_ascii_hexdigit() {
+                end += 1;
+            }
+            if end > index + prefix.len() {
+                out.push_str(prefix);
+                out.push_str("ADDR");
+                index = end;
+                continue;
+            }
+        }
         if chars[index..].starts_with(&['l', 'o', 'c', '_']) {
             let mut end = index + 4;
             while end < chars.len() && chars[end].is_ascii_hexdigit() {
@@ -324,6 +341,10 @@ fn normalise_line(line: &str) -> String {
     out.trim_end().to_owned()
 }
 
+/// Identifier prefixes of named global data, in masking order (longest first).
+const DATA_PREFIXES: [&str; 7] = [
+    "xmmword_", "dword_", "qword_", "byte_", "word_", "flt_", "dbl_",
+];
 /// Default directory for committed corpus snapshots.
 pub fn default_golden_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/corpus")

@@ -7,10 +7,10 @@ void nested_loops_l1(void) {
         eax = esi;
         return;
     }
-    xmm3 = *(__m128*)(0xADDR);
+    xmm3 = xmmword_ADDR;
     xmm4 = 0;
     xmm2 = 0;
-    ebp = *(u32*)(0xADDR);
+    ebp = dword_ADDR;
     edi = 0;
     do {
         edx = 0;
