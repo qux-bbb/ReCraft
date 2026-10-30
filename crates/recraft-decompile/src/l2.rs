@@ -269,8 +269,12 @@ impl ArgNames {
 
     /// Stack arguments as `([ebp+0x8], arg1)` in offset order.
     pub fn stack_ordered(&self) -> Vec<(String, &str)> {
+        // One entry per argument name; the extra slot an argument may be re-read through is
+        // the same parameter.
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
         self.stack
             .iter()
+            .filter(|(_, name)| seen.insert(name.as_str()))
             .map(|((base, offset), name)| {
                 let prefix = if *base == Reg::Rbp { "ebp" } else { "esp" };
                 (format!("[{prefix}+{offset:#x}]"), name.as_str())
