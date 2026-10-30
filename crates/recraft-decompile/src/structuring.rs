@@ -528,7 +528,18 @@ struct KnownStruct {
 /// clear before it keep the plain slot name.
 const KNOWN_STRUCTS: [KnownStruct; 3] = [
     KnownStruct {
-        apis: &["GetClientRect", "GetWindowRect"],
+        apis: &[
+            "AdjustWindowRectEx",
+            "CopyRect",
+            "GetClientRect",
+            "GetUpdateRect",
+            "GetWindowRect",
+            "InflateRect",
+            "InvalidateRect",
+            "OffsetRect",
+            "PtInRect",
+            "SetRect",
+        ],
         fields: &[("0", "left"), ("4", "top"), ("8", "right"), ("c", "bottom")],
     },
     KnownStruct {
@@ -4552,7 +4563,8 @@ fn inline_adjacent_temporaries(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         }
-        if contains_token(&rhs, &lhs) {
+        // A conditional expression reads worse inline than as a named temporary.
+        if contains_token(&rhs, &lhs) || rhs.contains('?') {
             index += 1;
             continue;
         }
@@ -6739,6 +6751,18 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn plain_argument_values_can_be_repeated() {
+        assert!(crate::plain_argument_value("0"));
+        assert!(crate::plain_argument_value("var_30"));
+        assert!(crate::plain_argument_value("&var_40"));
+        // A member read is a memory load too.
+        assert!(!crate::plain_argument_value("arg1->field_0"));
+        // A load or an arithmetic expression would be evaluated twice.
+        assert!(!crate::plain_argument_value("*(u64*)((rcx + 8))"));
+        assert!(!crate::plain_argument_value("(rax + 0x10)"));
+        assert!(!crate::plain_argument_value(""));
     }
     #[test]
     fn cross_block_calls_take_the_sibling_arity() {

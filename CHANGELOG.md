@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A direct call that passes an argument register by name now shows the value that was put
+  there. `edx = 0; sub_1400029dc(&var_20, rdx, …)` printed the register even though the value
+  was known; it now reads `sub_1400029dc(&var_20, 0, …)`. Only plain values (constants, stack
+  slots, `&var_XX` addresses) are substituted — a load or an arithmetic expression would be
+  evaluated twice in the argument list, so those keep the register name. Notepad: 175 call
+  arguments improved across 77 functions, lines unchanged. Conditional expressions stay
+  named temporaries in the adjacent-temporary fold (`r9 = ((al != 0) ? rax : 0);` reads
+  better than inlining it), and the `RECT` API list grew to the other rectangle
+  producers/consumers (`SetRect`, `InflateRect`, `OffsetRect`, `CopyRect`, `InvalidateRect`,
+  `PtInRect`, `GetUpdateRect`, `AdjustWindowRectEx`).
 - A function that never returns a value now says so: `int64 sub_140001440(void) { … return; }`
   became `void sub_140001440(void)`, because every exit is a bare `return;`. A body that
   ends with a call keeps its integer type — `f(); ret` may be `return f();` in the source, and

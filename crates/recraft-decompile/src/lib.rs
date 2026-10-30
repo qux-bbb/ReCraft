@@ -900,6 +900,15 @@ fn import_arity(name: &str) -> Option<usize> {
         .map(|(_, arity)| *arity)
 }
 
+/// Whether a rendered value can be repeated in an argument list: a constant, a stack slot or
+/// an argument name. A memory load or arithmetic expression would be evaluated twice.
+fn plain_argument_value(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '&' | '-'))
+}
+
 fn is_import_call(exprs: &[Expr], target: ExprId, imports: &HashMap<u64, String>) -> bool {
     let Expr::Load { addr, .. } = exprs[target as usize] else {
         return false;
@@ -2086,7 +2095,8 @@ impl Printer<'_> {
                             let mut rendered: Vec<String> = args
                                 .iter()
                                 .take(count)
-                                .map(|arg| self.arg_expr(*arg))
+                                .enumerate()
+                                .map(|(slot, arg)| self.call_argument(slot, *arg))
                                 .collect();
                             // Only extend a call that already shows all four register
                             // arguments: with fewer, the first stack slot's position among
@@ -2160,6 +2170,22 @@ impl Printer<'_> {
             return format!("&{name}");
         }
         self.expr(id)
+    }
+
+    /// One argument of a direct call. When the call passes the argument register itself
+    /// (`edx = 0; sub_x(a, rdx)`), the value last written to that register reads better than
+    /// the register name, and it is exactly what the callee receives.
+    fn call_argument(&self, slot: usize, arg: ExprId) -> String {
+        if let Expr::Reg(view) = &self.exprs[arg as usize]
+            && crate::l2::X64_ARG_REGS.get(slot) == Some(&view.base)
+            && let Some(value) = &self.arg_values[slot]
+            // Only a plain value: repeating a memory load in the argument list would read
+            // the location twice and read worse than the register name.
+            && plain_argument_value(value)
+        {
+            return value.clone();
+        }
+        self.arg_expr(arg)
     }
 
     /// Render the argument list of an IAT call from the values last written to the ABI
