@@ -3579,6 +3579,16 @@ fn fold_return_values(lines: &mut Vec<PseudoLine>, ret: ReturnKind) {
 /// instruction address, so the jump lands at the right place even when the structurer
 /// forgot to label a single-predecessor block (seen on Go and kernel32 samples).
 fn materialize_missing_labels(lines: &mut Vec<PseudoLine>) {
+    // A jump back to the entry address must label the first statement, not the header comment
+    // above the function (the header shares the entry address).
+    let body_start = lines
+        .iter()
+        .position(|line| {
+            let text = line.text.trim_end();
+            text.ends_with('{') && !text.trim_start().starts_with("//")
+        })
+        .map(|index| index + 1)
+        .unwrap_or(0);
     for _ in 0..64 {
         let labels: BTreeSet<u64> = lines
             .iter()
@@ -3604,15 +3614,27 @@ fn materialize_missing_labels(lines: &mut Vec<PseudoLine>) {
                 line.addr.get() == target
                     && !text.is_empty()
                     && text != "}"
+                    && !text.starts_with("//")
                     && !(text.starts_with("loc_") && text.ends_with(':'))
             };
-            let index = lines.iter().position(statement_at).or_else(|| {
-                lines.iter().position(|line| {
-                    line.addr.get() > target
-                        && !line.text.trim().is_empty()
-                        && line.text.trim() != "}"
-                })
-            });
+            let index = lines
+                .iter()
+                .enumerate()
+                .skip(body_start)
+                .find(|(_, line)| statement_at(line))
+                .map(|(index, _)| index)
+                .or_else(|| {
+                    lines
+                        .iter()
+                        .enumerate()
+                        .skip(body_start)
+                        .find(|(_, line)| {
+                            line.addr.get() > target
+                                && !line.text.trim().is_empty()
+                                && line.text.trim() != "}"
+                        })
+                        .map(|(index, _)| index)
+                });
             if let Some(index) = index {
                 let indent = " ".repeat(leading_spaces(&lines[index].text));
                 lines.insert(
@@ -7827,6 +7849,28 @@ mod tests {
         assert_eq!(lines[1].text, "    rect2 = 0;");
         assert_eq!(lines[2].text, "    GetClientRect(hwnd, &rect2);");
         assert_eq!(lines[0].text, "    rect = 1;");
+    }
+    #[test]
+    fn a_jump_to_the_entry_labels_the_body_not_the_header() {
+        let at = |text: &str, address: u64| PseudoLine {
+            addr: Address::new(address),
+            text: text.to_owned(),
+        };
+        let mut lines = vec![
+            at("// L2 structure recovery (2 blocks)", 0x1000),
+            at("int32 sub_40(int64 arg1) {", 0x1000),
+            at("    // entry comment", 0x1000),
+            at("    eax = arg1;", 0x1000),
+            at("    goto loc_1000;", 0x1010),
+            at("}", 0x1010),
+        ];
+        materialize_missing_labels(&mut lines);
+        // The label belongs to the first statement, below the header and its comment.
+        assert_eq!(lines[0].text, "// L2 structure recovery (2 blocks)");
+        assert_eq!(lines[1].text, "int32 sub_40(int64 arg1) {");
+        assert_eq!(lines[2].text, "    // entry comment");
+        assert_eq!(lines[3].text, "    loc_1000:");
+        assert_eq!(lines[4].text, "    eax = arg1;");
     }
     #[test]
     fn an_argument_spilled_once_is_that_argument() {

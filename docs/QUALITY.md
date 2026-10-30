@@ -59,6 +59,7 @@ inline asm statements:  9
 | crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 155 | 275 |
 | corpus x64（31） | 31 | 31（100%） | 97.4% | 0 | 9 |
 | corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
+| go.exe（1481，受限取样） | 220 | 196 结构化（89.1%） | 98.7% | 1059 | 1343 |
 
 `recraft metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集

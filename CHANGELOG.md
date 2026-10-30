@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A jump back to a function's first address used to label the header comment above the function
+  (`loc_140001ba0:` printed before `// L2 structure recovery`), which also hid the loop the
+  jump belonged to. Labels are now placed on the first statement of the body, after the header
+  and any comment attached to that address, and comment lines never take a label. On the Go
+  sample this recovered 24 functions: goto fallback functions 220 → **196**, labels
+  1165 → **1059** (coverage 98.7% unchanged). Notepad, crackme and both corpora are unchanged.
 - `fold_sibling_tail_gotos` looked its target label up with a full scan of the function for every
   candidate jump; it now builds a label index once and shifts it when a splice moves the tail
   (splices are rare). The 45 KB function's text passes went from ~313 ms to ~265 ms with
