@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- MSVC's `__chkstk` stack probe is no longer printed. A frame larger than one page is
+  allocated by loading the size into `eax` and calling the probe helper, which touches the
+  guard pages before the real prologue; it has no source-level effect, so the call and its
+  size load are dropped. The helper is identified by shape (`sub rsp, imm` followed within
+  six instructions by `mov [rsp], r10`/`mov [rsp+8], r11`), not by address, and the call
+  site must be a bare no-argument call. Notepad: the six functions with a 4 KB+ frame
+  (`sub_140013154`, `sub_140007570`, …) lose their `eax = 0x10c8; sub_140027440();` opening
+  (notepad L2 30 291 → 30 272 lines).
 - A function is no longer emitted as flat labels as soon as one inner loop leaves its parent
   loop. Only the offending top-level loop is emitted as labelled blocks (raw `loc_`/`goto`
   for its body, every edge preserved) and the rest of the function keeps its `while`/`if`

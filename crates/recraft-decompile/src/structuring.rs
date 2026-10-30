@@ -299,6 +299,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
     }
     structurer.emit_all(&mut lines);
+    hide_stack_probes(session, &mut lines)?;
     // `/GS` canaries and block splits are pure compiler artifacts; removing them before the
     // structural fold passes exposes the real return paths and call arguments. The cookie
     // setup has to be identified before `hide_callee_saves` treats its store as a spill.
@@ -2290,6 +2291,98 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
         index += 1;
         keep
     });
+}
+
+/// MSVC's `__chkstk` probe touches the guard pages of a frame larger than one page: the
+/// frame size goes into `eax` and the helper is called before the frame is set up. It has no
+/// source-level effect, so the call and its size load are compiler bookkeeping.
+fn hide_stack_probes(session: &mut Session, lines: &mut Vec<PseudoLine>) -> Result<()> {
+    if lines.len() < 2 {
+        return Ok(());
+    }
+    let mut probes: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut drop = vec![false; lines.len()];
+    for index in 0..lines.len() {
+        let text = lines[index].text.trim();
+        let Some(target) = text
+            .strip_suffix("();")
+            .and_then(|call| call.strip_prefix("sub_"))
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        else {
+            continue;
+        };
+        let probe = match probes.get(&target) {
+            Some(known) => *known,
+            None => {
+                let known = is_stack_probe(session, Address::new(target))?;
+                probes.insert(target, known);
+                known
+            }
+        };
+        if !probe {
+            continue;
+        }
+        drop[index] = true;
+        if index > 0 {
+            let previous = lines[index - 1].text.trim();
+            let size_load = previous
+                .strip_suffix(';')
+                .and_then(|statement| statement.split_once(" = "))
+                .is_some_and(|(lhs, rhs)| (lhs == "eax" || lhs == "rax") && rhs.starts_with("0x"));
+            if size_load {
+                drop[index - 1] = true;
+            }
+        }
+    }
+    if drop.iter().any(|dropped| *dropped) {
+        let mut kept = Vec::with_capacity(lines.len());
+        for (index, line) in lines.drain(..).enumerate() {
+            if !drop[index] {
+                kept.push(line);
+            }
+        }
+        *lines = kept;
+    }
+    Ok(())
+}
+
+/// `__chkstk` saves `r10`/`r11` just below the stack pointer after subtracting the probe
+/// size, which no ordinary prologue does.
+fn is_stack_probe(session: &mut Session, start: Address) -> Result<bool> {
+    let Some(first) = session.insn_at(start)? else {
+        return Ok(false);
+    };
+    if first.mnemonic() != iced_x86::Mnemonic::Sub {
+        return Ok(false);
+    }
+    let instruction = first.instruction();
+    if instruction.op0_kind() != iced_x86::OpKind::Register
+        || instruction.op0_register() != iced_x86::Register::RSP
+    {
+        return Ok(false);
+    }
+    let mut addr = first.next_addr();
+    for _ in 0..6 {
+        let Some(next) = session.insn_at(addr)? else {
+            return Ok(false);
+        };
+        if next.is_invalid() {
+            return Ok(false);
+        }
+        let instruction = next.instruction();
+        if next.mnemonic() == iced_x86::Mnemonic::Mov
+            && instruction.op0_kind() == iced_x86::OpKind::Memory
+            && instruction.memory_base() == iced_x86::Register::RSP
+            && matches!(
+                instruction.op1_register(),
+                iced_x86::Register::R10 | iced_x86::Register::R11
+            )
+        {
+            return Ok(true);
+        }
+        addr = next.next_addr();
+    }
+    Ok(false)
 }
 
 /// True when the value is a frame slot holding the cookie. The printer names it (`var_XX`)
