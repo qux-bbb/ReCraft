@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A pointer argument that type inference left as `void*` now shows field accesses when the
+  offset is unambiguous: `*(u32*)((arg1 + 0x10))` reads `arg1->field_10`, and a bare
+  `*(u8*)(arg1)` reads `arg1->field_0`. The pass only rewrites an offset whose accesses all
+  use the same width — a field name cannot say which width it means, so `arg2 + 0x18` read as
+  both `u32` and `u8` keeps its casts. Notepad: `argN->field_XX` accesses 266 → **777**
+  (+511, 97 functions), raw `*(…*)((argN + …))` casts 1418 → **18**, lines unchanged at
+  30 208.
 - A slot that a handle API receives gets a handle name: `CloseHandle(var_88)` reads
   `CloseHandle(hObject)`, `RegCloseKey(var_38)` `RegCloseKey(hKey)`, `ReleaseMutex`
   `hMutex`, `SetEvent`/`ResetEvent` `hEvent`, `DestroyWindow` `hwnd`, `WindowsDeleteString`

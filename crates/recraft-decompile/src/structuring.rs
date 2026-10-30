@@ -440,6 +440,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
     name_structure_instances(&mut lines);
+    name_void_pointer_fields(&mut lines);
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
@@ -705,6 +706,122 @@ fn count_arguments(arguments: &str) -> usize {
         }
     }
     count
+}
+
+/// Name the fields of a pointer argument the type inference left as `void*`: when every
+/// access to `arg1 + 0x10` uses the same width, `*(u32*)((arg1 + 0x10))` reads
+/// `arg1->field_10`. An offset that is read at two widths keeps its casts, because a field
+/// name cannot say which one it means.
+fn name_void_pointer_fields(lines: &mut [PseudoLine]) {
+    let mut widths: HashMap<(String, u64), BTreeSet<String>> = HashMap::new();
+    for line in lines.iter() {
+        for (width, base, offset) in raw_field_uses(&line.text) {
+            widths.entry((base, offset)).or_default().insert(width);
+        }
+    }
+    if widths.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        for (width, base, offset) in raw_field_uses(&line.text) {
+            let Some(seen) = widths.get(&(base.clone(), offset)) else {
+                continue;
+            };
+            if seen.len() != 1 {
+                continue;
+            }
+            let from = raw_field_text(&width, &base, offset);
+            let to = format!("{base}->field_{offset:x}");
+            line.text = line.text.replace(&from, &to);
+        }
+    }
+}
+
+/// The exact text [`raw_field_uses`] recognises for one access.
+fn raw_field_text(width: &str, base: &str, offset: u64) -> String {
+    if offset == 0 {
+        format!("*({width}*)({base})")
+    } else {
+        let offset = if offset < 10 {
+            format!("{offset}")
+        } else {
+            format!("0x{offset:x}")
+        };
+        format!("*({width}*)(({base} + {offset}))")
+    }
+}
+
+/// The `*(u32*)((arg1 + 0x10))` and `*(u8*)(arg1)` occurrences of a line: width, base and
+/// offset.
+fn raw_field_uses(text: &str) -> Vec<(String, String, u64)> {
+    const WIDTHS: [&str; 7] = ["u8", "u16", "u32", "u64", "f32", "f64", "__m128"];
+    let mut uses = Vec::new();
+    for width in WIDTHS {
+        let head = format!("*({width}*)(");
+        let mut rest = text;
+        while let Some(position) = rest.find(&head) {
+            let after = &rest[position + head.len()..];
+            // `((arg1 + 0x10))` keeps the address in parentheses, `(arg1)` does not.
+            let (inner, consumed) = if let Some(body) = after.strip_prefix('(') {
+                let mut depth = 1usize;
+                let mut end = None;
+                for (offset, ch) in body.char_indices() {
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = Some(offset);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                match end {
+                    Some(end) => (&body[..end], end + 2),
+                    None => break,
+                }
+            } else {
+                let length = after
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_alphanumeric())
+                    .count();
+                (&after[..length], length + 1)
+            };
+            if let Some((base, offset)) = parse_address(inner) {
+                uses.push((width.to_owned(), base, offset));
+            }
+            rest = &after[consumed.min(after.len())..];
+        }
+    }
+    uses
+}
+
+/// Split `arg1 + 0x10` (or a bare `arg1`) into the base name and the displacement.
+fn parse_address(inner: &str) -> Option<(String, u64)> {
+    let inner = inner.trim();
+    let (base, offset) = match inner.split_once(" + ") {
+        Some((base, offset)) => (base.trim(), Some(offset.trim())),
+        None => (inner, None),
+    };
+    if !base.starts_with("arg") || !base[3..].chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let offset = match offset {
+        Some(text) => parse_offset(text)?,
+        None => 0,
+    };
+    Some((base.to_owned(), offset))
+}
+
+/// A rendered displacement: `0x10` is hexadecimal, `8` decimal.
+fn parse_offset(text: &str) -> Option<u64> {
+    if let Some(hex) = text.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        text.parse().ok()
+    }
 }
 
 /// Handle-typed arguments of well-known APIs: (API, argument index, name). Specific kinds come
@@ -7001,6 +7118,23 @@ mod tests {
         let values = entry_arg_value_map(&cfg, &bodies);
         assert_eq!(values[1][0].as_deref(), Some("*(u64*)(rbx)"));
         assert!(values[2][0].is_none());
+    }
+    #[test]
+    fn void_pointer_arguments_get_field_names() {
+        let mut lines = vec![
+            test_line("    eax = *(u32*)((arg1 + 0x10));"),
+            test_line("    ecx = *(u32*)((arg1 + 0x10));"),
+            test_line("    edx = *(u8*)(arg1);"),
+            test_line("    esi = *(u32*)((arg2 + 0x18));"),
+            test_line("    edi = *(u8*)((arg2 + 0x18));"),
+        ];
+        name_void_pointer_fields(&mut lines);
+        assert_eq!(lines[0].text, "    eax = arg1->field_10;");
+        assert_eq!(lines[1].text, "    ecx = arg1->field_10;");
+        assert_eq!(lines[2].text, "    edx = arg1->field_0;");
+        // Two widths at one offset keep their casts: a field name cannot say which.
+        assert_eq!(lines[3].text, "    esi = *(u32*)((arg2 + 0x18));");
+        assert_eq!(lines[4].text, "    edi = *(u8*)((arg2 + 0x18));");
     }
     #[test]
     fn handle_arguments_get_a_name() {
