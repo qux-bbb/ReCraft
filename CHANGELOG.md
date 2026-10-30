@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The handle table covers more APIs: the registry functions name their key slot `hKey`
+  (`RegOpenKeyExW`/`RegQueryValueExW`/`RegSetValueExW`/`RegEnumKeyExW` now match
+  `RegCloseKey`), `DestroyIcon`/`DestroyCursor` give `hIcon`/`hCursor`,
+  `UnhookWindowsHookEx` gives `hHook`, and the window APIs (`ShowWindow`, `SendMessageW`,
+  `PostMessageW`, `SetWindowPos`, `InvalidateRect`, `RedrawWindow`, `SetWindowTextW`,
+  `GetWindowLongPtrW`) name their first argument `hwnd`. Notepad: 137 named handle uses
+  (from 120), e.g. `RegCreateKeyExW(…, &hKey, …)` and `SendMessageW(hwnd, …)`.
 - Address constants now name what they point at: `rdx = 0x14002b210;` reads
   `rdx = off_14002b210;` for an address inside a data segment, a constant equal to a function
   start becomes that function (`return sub_140001c64(sub_140027590);`), and a constant that
