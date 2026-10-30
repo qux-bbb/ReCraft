@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 32-bit stack arguments are typed by how they are used: when the loaded value becomes the base
+  of another memory access the parameter is a pointer, and the access widths pick
+  `char*`/`wchar_t*`/`int32*` (`void*` when they disagree). The x86 corpus now reads
+  `str_probe(char* arg1)`, `wide_probe(wchar_t* arg1)`, `array_probe(int32* arg1, int32 arg2)`
+  and `field_probe(int32* arg1)`, matching what the x64 path infers from register width.
+- An x86 function that re-reads an argument after the prologue moved `esp` used to get two
+  parameters with the same name (`nested_loops(int32 arg1, int32 arg1)`); parameters are now
+  deduplicated by name, giving `nested_loops(int32 arg1)` as on x64.
 - 32-bit stack parameters are typed by their slot width: an x86 argument whose own type is
   unknown is `int32`, not `int64`, so `int32 __cdecl add_leaf(int32 arg1, int32 arg2)` replaces
   `(int64 arg1, int64 arg2)` across the x86 corpus (32 signatures). A user prototype still
@@ -609,6 +617,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An x86 function that re-reads an argument after the prologue moved `esp` used to get two
+  parameters with the same name (`nested_loops(int32 arg1, int32 arg1)`); parameters are now
+  deduplicated by name, giving `nested_loops(int32 arg1)` as on x64.
 - The analysis pass no longer formats the statements it discards. `lift_block` gained a
   `render` flag: the first pass only needs the block's effects (writes, calls, stack use,
   argument copies), so it skips ~37 000 statement renderings for Notepad's biggest function.

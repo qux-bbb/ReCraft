@@ -100,6 +100,65 @@ impl ArgNames {
 
     /// True when the argument was inferred as a pointer (`char*`, `wchar_t*`, `int32*`,
     /// `int64*` or `void*`), i.e. field-style rendering through it is meaningful.
+    /// Fill in x86 stack-argument types from how the loaded value is used: an argument whose
+    /// value becomes the base of another memory access is a pointer, and the widths used
+    /// through it pick `char*`/`wchar_t*`/`int32*`, or `void*` when they disagree.
+    pub fn infer_stack_types(
+        &mut self,
+        lifted: &[recraft_ir::LiftedInsn],
+        exprs: &[Expr],
+        stack: &BTreeMap<(Reg, i64), String>,
+    ) {
+        if stack.is_empty() {
+            return;
+        }
+        // Argument slot -> register that received its value.
+        let mut registers: BTreeMap<Reg, (Reg, i64)> = BTreeMap::new();
+        for item in lifted {
+            for stmt in &item.stmts {
+                let Stmt::WriteReg { reg, value } = stmt else {
+                    continue;
+                };
+                let Some((base, offset)) = load_stack_slot(exprs, *value) else {
+                    continue;
+                };
+                if stack.contains_key(&(base, offset)) {
+                    registers.insert(reg.base, (base, offset));
+                }
+            }
+        }
+        if registers.is_empty() {
+            return;
+        }
+        // Widths accessed through each argument register.
+        let mut widths: BTreeMap<(Reg, i64), BTreeSet<u8>> = BTreeMap::new();
+        for item in lifted {
+            for stmt in &item.stmts {
+                match stmt {
+                    Stmt::Store { addr, .. } | Stmt::StoreFloat { addr, .. } => {
+                        record_through(exprs, *addr, &registers, &mut widths);
+                    }
+                    Stmt::WriteReg { value, .. } => {
+                        record_through(exprs, *value, &registers, &mut widths);
+                    }
+                    Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
+                }
+            }
+        }
+        for slot in registers.values() {
+            let Some(seen) = widths.get(slot) else {
+                continue;
+            };
+            let ty = match (seen.len(), seen.iter().next()) {
+                (1, Some(1)) => ArgType::CharPtr,
+                (1, Some(2)) => ArgType::WCharPtr,
+                (1, Some(4)) => ArgType::Int32Ptr,
+                (1, Some(8)) => ArgType::Int64Ptr,
+                _ => ArgType::VoidPtr,
+            };
+            self.stack_types.insert(*slot, ty);
+        }
+    }
     pub fn is_pointer_arg(&self, reg: Reg) -> bool {
         self.types.get(&reg).is_some_and(|ty| ty.is_pointer())
     }
@@ -250,7 +309,14 @@ impl ArgNames {
                 params.push(format!("{} {name}", ty.c_name()));
             }
         }
+        // One parameter per argument name: a function may read the same argument through
+        // several stack slots (after a push or a sub esp), and those must not become separate
+        // parameters.
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
         for ((base, offset), name) in &self.stack {
+            if !seen.insert(name.as_str()) {
+                continue;
+            }
             let ty = self
                 .stack_types
                 .get(&(*base, *offset))
@@ -1102,17 +1168,79 @@ fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<Ar
             }
         }
     }
-    Ok(ArgNames {
+    let mut args = ArgNames {
         names: BTreeMap::new(),
-        stack,
+        stack: stack.clone(),
         types: BTreeMap::new(),
         stack_types: BTreeMap::new(),
         stack_slot_type: ArgType::Int32,
         declared: None,
-    })
+    };
+    args.infer_stack_types(&lifted, &exprs, &stack);
+    Ok(args)
 }
 
 /// Stack-pointer adjustment encoded in `rsp = rsp 卤 const` (push/pop/sub/add esp).
+// `[base + offset]` when the expression is a constant displacement off a stack register.
+fn load_stack_slot(exprs: &[Expr], id: ExprId) -> Option<(Reg, i64)> {
+    let Expr::Load { addr, .. } = &exprs[id as usize] else {
+        return None;
+    };
+    stack_add(exprs, *addr)
+}
+
+/// Record the access widths reachable through the argument registers named in `registers`.
+fn record_through(
+    exprs: &[Expr],
+    id: ExprId,
+    registers: &BTreeMap<Reg, (Reg, i64)>,
+    widths: &mut BTreeMap<(Reg, i64), BTreeSet<u8>>,
+) {
+    match &exprs[id as usize] {
+        Expr::Load { addr, size } | Expr::LoadFloat { addr, size } => {
+            if let Some(base) = address_base(exprs, *addr)
+                && let Some(slot) = registers.get(&base)
+            {
+                widths.entry(*slot).or_default().insert(*size);
+            }
+            record_through(exprs, *addr, registers, widths);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            record_through(exprs, *lhs, registers, widths);
+            record_through(exprs, *rhs, registers, widths);
+        }
+        Expr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            record_through(exprs, *cond, registers, widths);
+            record_through(exprs, *then, registers, widths);
+            record_through(exprs, *otherwise, registers, widths);
+        }
+        Expr::Un { arg, .. } | Expr::Cast { arg, .. } => {
+            record_through(exprs, *arg, registers, widths);
+        }
+        Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
+    }
+}
+
+/// The base register of a `[reg + const]` (or bare `[reg]`) address.
+fn address_base(exprs: &[Expr], id: ExprId) -> Option<Reg> {
+    match &exprs[id as usize] {
+        Expr::Reg(view) => Some(view.base),
+        Expr::Bin { lhs, rhs, .. } => {
+            if let Expr::Reg(view) = &exprs[*lhs as usize] {
+                Some(view.base)
+            } else if let Expr::Reg(view) = &exprs[*rhs as usize] {
+                Some(view.base)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
 fn rsp_adjustment(exprs: &[Expr], value: ExprId) -> Option<i64> {
     let Expr::Bin { op, lhs, rhs } = &exprs[value as usize] else {
         return None;
@@ -1541,6 +1669,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn x86_stack_arguments_get_pointer_types() {
+        let Some((mut session, _dir)) = corpus_session("x86") else {
+            return;
+        };
+        let (start, end) = bounds(&session, "str_probe");
+        let args = recover_args(&mut session, start, end).unwrap();
+        assert!(
+            args.signature().contains("char* arg1"),
+            "{}",
+            args.signature()
+        );
+        let (start, end) = bounds(&session, "array_probe");
+        let args = recover_args(&mut session, start, end).unwrap();
+        assert!(
+            args.signature().contains("int32* arg1, int32 arg2"),
+            "{}",
+            args.signature()
+        );
+    }
+
+    #[test]
+    fn an_argument_read_through_two_slots_is_one_parameter() {
+        let Some((mut session, _dir)) = corpus_session("x86") else {
+            return;
+        };
+        // nested_loops re-reads its argument after the prologue moves esp; that is still one
+        // parameter, not two with the same name.
+        let (start, end) = bounds(&session, "nested_loops");
+        let args = recover_args(&mut session, start, end).unwrap();
+        let signature = args.signature();
+        assert_eq!(signature.matches("arg1").count(), 1, "{signature}");
+    }
     #[test]
     fn return_types_and_x64_abi() {
         let Some((mut session, _dir)) = corpus_session("x64") else {
