@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A stack slot that only ever receives one argument is that argument, not a local: a slot that
+  is written exactly once by `var_40 = arg4;` and never has its address taken has its reads
+  renamed to `arg4` and the spill removed (`qword_140034e40 = arg4;` instead of
+  `var_40 = arg1; … = var_40;`). Notepad: 72 of 88 such spills folded across 53 functions, L2
+  lines 30 174 → 30 102. Slots written more than once, or whose address is passed to a call,
+  keep their names.
 - The L2 header shows the stack frame the prologue reserves:
   `// L2 structure recovery (11 blocks, frame 0x48)` — 101 of Notepad's 502 functions have a
   constant-size, push-free prologue and now report it, so a reader sees how much local state a

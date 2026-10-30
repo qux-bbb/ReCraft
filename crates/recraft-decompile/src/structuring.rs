@@ -395,6 +395,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // Duplicate spills to one slot were just collapsed, so more save/restore pairs are
     // recognizable now.
     hide_callee_saves(&mut lines);
+    propagate_argument_spills(&mut lines);
     propagate_argument_copies(&mut lines);
     materialize_missing_labels(&mut lines);
     // Runs last: the return value is folded only once every rewrite that can move or drop
@@ -5887,6 +5888,78 @@ fn parse_dereference(text: &str) -> Option<(&str, &str)> {
 /// dropped. Sound only when the copy runs unconditionally (no branch/label before it) and
 /// the register is never assigned again anywhere in the function; the register must be
 /// callee-saved, because a call could otherwise clobber it between copy and read.
+/// A slot that only ever receives one argument is that argument, not a local: `var_40 = arg4;`
+/// plus later reads of `var_40` become reads of `arg4`, and the spill disappears. The rewrite
+/// needs the slot to be written exactly once and never have its address taken (a call could
+/// write through `&var_40`).
+fn propagate_argument_spills(lines: &mut Vec<PseudoLine>) {
+    let mut writes: HashMap<String, usize> = HashMap::new();
+    let mut address_taken: BTreeSet<String> = BTreeSet::new();
+    for line in lines.iter() {
+        let text = line.text.trim();
+        if let Some((lhs, _)) = text.split_once(" = ")
+            && lhs.trim().starts_with("var_")
+        {
+            *writes.entry(lhs.trim().to_owned()).or_default() += 1;
+        }
+        for slot in slots_with_address(&line.text) {
+            address_taken.insert(slot);
+        }
+    }
+    let mut spills: Vec<(String, String)> = Vec::new();
+    for line in lines.iter() {
+        let text = line.text.trim().trim_end_matches(';');
+        let Some((lhs, rhs)) = text.split_once(" = ") else {
+            continue;
+        };
+        let slot = lhs.trim();
+        let argument = rhs.trim();
+        if !slot.starts_with("var_") || !argument.starts_with("arg") {
+            continue;
+        }
+        if argument[3..].chars().all(|ch| ch.is_ascii_digit())
+            && writes.get(slot) == Some(&1)
+            && !address_taken.contains(slot)
+        {
+            spills.push((slot.to_owned(), argument.to_owned()));
+        }
+    }
+    if spills.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        for (slot, argument) in &spills {
+            line.text = replace_token(&line.text, slot, argument);
+        }
+    }
+    // The spill line is now `argN = argN;`.
+    lines.retain(|line| {
+        let text = line.text.trim().trim_end_matches(';');
+        let Some((lhs, rhs)) = text.split_once(" = ") else {
+            return true;
+        };
+        lhs.trim() != rhs.trim()
+    });
+}
+
+/// The `var_…` slots whose address is taken (`&var_20`) in `text`.
+fn slots_with_address(text: &str) -> Vec<String> {
+    let mut slots = Vec::new();
+    let mut rest = text;
+    while let Some(position) = rest.find("&var_") {
+        let after = &rest[position + 1..];
+        let length = after
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .count();
+        if length > 4 {
+            slots.push(after[..length].to_owned());
+        }
+        rest = &rest[position + 5..];
+    }
+    slots
+}
+
 fn propagate_argument_copies(lines: &mut Vec<PseudoLine>) {
     let mut copies: Vec<(usize, String, String)> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
@@ -7556,10 +7629,10 @@ mod tests {
             "argument reads were not renamed:\n{text}"
         );
 
-        // `noinline_helper` keeps real stack locals (`volatile int x = a; volatile int
-        // y = b;`); the argument/loop-only test cases have their spills hidden as
-        // callee-save bookkeeping.
-        let nested = function_start(&session, "noinline_helper").unwrap();
+        // `uses_helper` keeps a real stack local (its slot is written from a register, not
+        // from an argument, so it cannot be folded away); the argument/loop-only test cases
+        // have their spills hidden as callee-save bookkeeping.
+        let nested = function_start(&session, "uses_helper").unwrap();
         let text = pseudocode_l2(&mut session, nested).unwrap().text();
         assert!(text.contains("var_"), "stack slots were not named:\n{text}");
     }
@@ -7737,6 +7810,30 @@ mod tests {
         assert_eq!(lines[1].text, "    rect2 = 0;");
         assert_eq!(lines[2].text, "    GetClientRect(hwnd, &rect2);");
         assert_eq!(lines[0].text, "    rect = 1;");
+    }
+    #[test]
+    fn an_argument_spilled_once_is_that_argument() {
+        let mut lines = vec![
+            test_line("    var_40 = arg4;"),
+            test_line("    if (var_40 == 0) {"),
+            test_line("        call(var_40);"),
+            test_line("    }"),
+        ];
+        propagate_argument_spills(&mut lines);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "    if (arg4 == 0) {");
+        assert_eq!(lines[1].text, "        call(arg4);");
+
+        // A slot written twice, or one whose address is taken, stays a local.
+        let mut lines = vec![
+            test_line("    var_20 = arg1;"),
+            test_line("    var_20 = 0;"),
+            test_line("    var_30 = arg2;"),
+            test_line("    read(&var_30);"),
+        ];
+        propagate_argument_spills(&mut lines);
+        assert_eq!(lines[0].text, "    var_20 = arg1;");
+        assert_eq!(lines[2].text, "    var_30 = arg2;");
     }
     #[test]
     fn stack_arguments_are_typed_by_the_access_through_them() {
@@ -8758,6 +8855,7 @@ mod tests {
             test_line("    return;"),
         ];
         hide_epilogue_restores(&mut lines);
+        propagate_argument_spills(&mut lines);
         propagate_argument_copies(&mut lines);
         let text = lines
             .iter()
