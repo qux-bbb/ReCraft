@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The text passes are no faster than they need to be on the largest function: `hide_callee_saves`
+  scanned every line once per saved slot (quadratic) and `propagate_argument_copies` rewrote
+  every line for each argument copy. The first now builds a slot → line index in one pass, the
+  second skips lines that do not mention the register. The 45 KB window procedure went from
+  **~1.6 s to ~1.3 s** per decompile, of which the text passes dropped from ~800 ms to
+  ~310 ms; the emitted text is byte-identical. `RECRAFT_PROFILE=1 recraft decompile …` prints
+  the phase timings (lift, analysis, emit, text passes) for future work.
 - `recraft metrics` reports two more counters from the same L1 pass: `labels` (the `loc_`
   definitions the structurer had to emit) and `inline asm statements` (the `__asm("…")`
   lines left in the pseudo-C). Notepad: 267 labels and 138 inline asm across 502 functions;

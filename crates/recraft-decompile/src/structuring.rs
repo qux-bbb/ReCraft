@@ -91,6 +91,19 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
     let mut bodies = Vec::with_capacity(cfg.blocks.len());
     let no_counts: HashMap<u64, usize> = HashMap::new();
+    // A phase timer for performance work: `RECRAFT_PROFILE=1 recraft decompile …` prints how
+    // long each stage of the pipeline took.
+    let profile = std::env::var_os("RECRAFT_PROFILE").is_some();
+    let mut phase = std::time::Instant::now();
+    let mut mark = |name: &str| {
+        if profile {
+            eprintln!(
+                "[{:>8.1} ms] {name}",
+                phase.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        phase = std::time::Instant::now();
+    };
     // The IAT slot map is the same for every block; build it once per function.
     let imports = crate::import_names(session);
     for block in &cfg.blocks {
@@ -111,6 +124,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             false,
         )?);
     }
+    mark("first lift");
     // The prologue's frame pointer is the base for `[rbp + disp]` in every block. Blocks
     // that do not reload rbp otherwise name the same slot differently (or leave it raw).
     // The first pass has no stack displacement yet, so probe the entry block with the
@@ -141,6 +155,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
         None => None,
     };
+    mark("frame probe");
     // Argument copies survive a block split only where every path agrees, so the alias map
     // is a must-analysis over the CFG: a block starts with the intersection of its
     // predecessors' outgoing aliases and applies its own copies on top.
@@ -247,6 +262,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     let (entry_stack, frame_base) = entry_stack_deltas(&cfg, &bodies);
     let flag_sources = block_flag_sources(session, &cfg)?;
     let mut seeded = Vec::with_capacity(cfg.blocks.len());
+    mark("alias/arg analysis");
     for (index, block) in cfg.blocks.iter().enumerate() {
         seeded.push(lift_block(
             session,
@@ -266,6 +282,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         )?);
     }
     bodies = seeded;
+    mark("seeded lift");
     let mut literals: Vec<(String, Address)> = bodies
         .iter()
         .flat_map(|body| body.literals.iter().cloned())
@@ -326,7 +343,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             });
         }
     }
+    mark("pre-emit");
     structurer.emit_all(&mut lines);
+    mark("emit");
     hide_stack_probes(session, &mut lines)?;
     // `/GS` canaries and block splits are pure compiler artifacts; removing them before the
     // structural fold passes exposes the real return paths and call arguments. The cookie
@@ -439,6 +458,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
 
     fold_constant_registers(&mut lines);
     drop_noop_statements(&mut lines);
+    mark("text passes");
     normalize_infinite_loops(&mut lines);
     name_known_struct_fields(&mut lines);
     name_structure_instances(&mut lines);
@@ -3416,13 +3436,20 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
         let text = line.text.trim();
         is_control_line(text) || is_call_line(text)
     });
+    // One reverse index instead of a full scan per saved slot: this pass runs over every
+    // function and the quadratic form dominated the pipeline on large functions.
+    let mut mentions: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter(|token| is_stack_slot_name(token))
+        {
+            mentions.entry(token).or_default().push(index);
+        }
+    }
     for (slot, (reg, save_index)) in &saves {
-        let references: Vec<usize> = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| mentions_slot(&line.text, slot))
-            .map(|(index, _)| index)
-            .collect();
+        let references: Vec<usize> = mentions.get(slot.as_str()).cloned().unwrap_or_default();
         if references.len() > 8 {
             continue;
         }
@@ -5678,7 +5705,7 @@ fn propagate_argument_copies(lines: &mut Vec<PseudoLine>) {
     }
     for (index, register, argument) in &copies {
         for (line_index, line) in lines.iter_mut().enumerate() {
-            if line_index <= *index {
+            if line_index <= *index || !line.text.contains(register.as_str()) {
                 continue;
             }
             line.text = replace_token(&line.text, register, argument);
