@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code no longer loses its shape: the 45 KB notepad function drops from 687 `goto loc_`
   lines to **402** (10070 → 10080 lines), and notepad's total falls from 771 to **475**.
   The Go sample gains one structured function (1779 → 1780/2000); corpus golden and the
-  structured rates are unchanged (487/502, 452/493).
+  structured rates rise to 487/502 (97.0%) and 453/493 (91.9%).
 - Decompiling the largest notepad function got **8.5× faster**: the post-processing passes
   used to rescan the whole function for every candidate (token counts for the single-use
   temporary fold, label-reference counts for the label tidy pass). Token frequencies are
