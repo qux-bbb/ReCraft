@@ -251,6 +251,9 @@ enum Commands {
         /// Check at most this many functions (default: all).
         #[arg(long)]
         limit: Option<usize>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
@@ -519,9 +522,13 @@ fn run(cli: Cli) -> Result<()> {
             let materialized = materialize_project(&project)?;
             cmd_golden(&materialized.path, dir.as_deref(), check, limit)
         }
-        Commands::Lint { project, limit } => {
+        Commands::Lint {
+            project,
+            limit,
+            json,
+        } => {
             let materialized = materialize_project(&project)?;
-            cmd_lint(&materialized.path, limit)
+            cmd_lint(&materialized.path, limit, json)
         }
         Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
@@ -1212,9 +1219,43 @@ fn cmd_metrics(
     }
 }
 
-fn cmd_lint(project: &Path, limit: Option<usize>) -> Result<()> {
+fn cmd_lint(project: &Path, limit: Option<usize>, json: bool) -> Result<()> {
     let mut session = Session::open(project)?;
     let report = recraft_decompile::lint(&mut session, limit.unwrap_or(usize::MAX))?;
+    if json {
+        let items: Vec<String> = report
+            .findings
+            .iter()
+            .map(|finding| {
+                let name = finding
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("sub_{:x}", finding.start.get()));
+                format!(
+                    "{{\"name\":{:?},\"kind\":{:?},\"detail\":{:?},\"address\":\"{:#x}\"}}",
+                    name,
+                    finding.kind.as_str(),
+                    finding.detail,
+                    finding.start.get()
+                )
+            })
+            .collect();
+        println!(
+            "{{\"functions\":{},\"checked\":{},\"findings\":{},\"items\":[{}]}}",
+            report.functions,
+            report.checked,
+            report.findings.len(),
+            items.join(",")
+        );
+        return if report.ok() {
+            Ok(())
+        } else {
+            Err(Error::internal(format!(
+                "{} output invariant violations",
+                report.findings.len()
+            )))
+        };
+    }
     println!("functions:  {}", report.functions);
     println!("checked:    {} texts (L1 + L2)", report.checked);
     println!("findings:   {}", report.findings.len());

@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint --json` prints the report as one JSON object
+  (`{"functions":…,"checked":…,"findings":…,"items":[…]}`) for CI and UI use; the exit code is
+  the same as the text mode.
 - `recraft lint <project> [--limit N]` checks the output invariants over every function and both
   levels, with a non-zero exit on a violation: every `goto` has its label, labels are defined
   once, braces balance outside string literals, no `if ()`/`while ()`, the signature declares
