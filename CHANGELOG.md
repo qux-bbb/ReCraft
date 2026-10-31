@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Third and decisive negative result: no backward `goto` in Notepad has its source and target in
+  the same block, i.e. every remaining jump leaves at least one `{}` pair. The text layer is
+  therefore exhausted for this shape and only CFG work can remove the rest; `docs/NEXT.md` says so,
+  so no further text pass is attempted for it.
 - Second negative result recorded: none of Notepad's 452 `goto`s targets the head of its enclosing
   loop (a `continue` in disguise) and only 4 target the statement after the loop (`break`), so
   rewriting gotos as `continue`/`break` would gain almost nothing - the remaining jumps are the
