@@ -127,6 +127,7 @@ cargo run -p recraft-cli -- callgraph notepad.rcraft --json
 cargo run -p recraft-cli -- batch notepad.rcraft --script batch.json --dry-run
 cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
 cargo run -p recraft-cli -- metrics notepad.rcraft
+cargo run -p recraft-cli -- lint notepad.rcraft --level l1
 cargo run -p recraft-cli -- golden notepad.rcraft --dir golden-out --check
 ```
 
