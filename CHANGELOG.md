@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The corpus is asserted to be lint-clean in `cargo test` (`the_corpus_passes_every_output_invariant`):
+  no findings, zero affected functions and exactly `2 × functions` texts checked, so CI catches an
+  invariant regression without running the CLI.
 - The JSON lint report carries `"affected"` (functions with at least one finding), matching the
   text mode.
 - `recraft lint` reports the blast radius of a failure (`findings: 180 in 7 functions`), so a

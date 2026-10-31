@@ -681,6 +681,16 @@ mod tests {
     }
 
     #[test]
+    fn the_corpus_passes_every_output_invariant() {
+        let Some((mut session, _dir)) = corpus() else {
+            return;
+        };
+        let report = lint(&mut session, usize::MAX, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.affected(), 0);
+        assert_eq!(report.checked, report.functions * 2);
+    }
+    #[test]
     fn lint_catches_each_invariant_violation() {
         let kinds = |text: &str| -> Vec<LintKind> {
             lint_text(text).into_iter().map(|(kind, _)| kind).collect()
