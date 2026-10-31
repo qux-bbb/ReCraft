@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Verified that `recraft-ui` still builds against the current decompiler and CLI APIs
+  (`cargo build -p recraft-ui --target-dir target/ui-check`, a separate target directory because
+  a running instance locks the default one).
 - The JSON lint report names the level it checked (`"level":"L1 + L2"`), matching the text summary.
 - `recraft lint` prints its findings in a stable order (by address), so a truncated report always
   shows the same first offenders. The `--limit 0` guard and this sort live in the lint function
