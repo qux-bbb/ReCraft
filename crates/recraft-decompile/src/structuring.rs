@@ -6448,9 +6448,13 @@ fn label_address(text: &str) -> Option<u64> {
 
 fn goto_target(text: &str) -> Option<u64> {
     let text = text.trim();
+    // A jump may follow a `case` label (`case 0: goto loc_…;`) or a condition, so look for the
+    // keyword anywhere instead of only at the start of the line.
     let rest = if let Some(rest) = text.strip_prefix("goto loc_") {
         rest
     } else if let Some((_, rest)) = text.split_once(") goto loc_") {
+        rest
+    } else if let Some((_, rest)) = text.split_once("goto loc_") {
         rest
     } else {
         return None;

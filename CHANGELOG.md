@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed**: a jump table arm printed as `case 0: goto loc_140007014;` kept its `goto` but the
+  target label was never emitted, so the output referenced an undefined label — 180 such jumps in
+  crackme.exe (notepad was unaffected because its switches take a different shape). The jump
+  target parser only recognised `goto loc_…` at the start of a line or after a condition, not
+  after a `case` label; it now finds the keyword anywhere in the statement. `recraft lint`
+  reports crackme clean again (493 functions, 986 texts, 0 findings) and Notepad is unchanged.
 - `recraft lint --json` prints the report as one JSON object
   (`{"functions":…,"checked":…,"findings":…,"items":[…]}`) for CI and UI use; the exit code is
   the same as the text mode.
