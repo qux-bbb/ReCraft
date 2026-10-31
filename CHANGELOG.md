@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Golden snapshots handle the Go sample: `recraft golden` failed on it (`os error 123`) because
+  Go names such as `internal/abi.(*RegArgs).IntRegArgAddr` and very long ones do not fit a file
+  name. Names are sanitised and truncated to 80 characters (the dedupe pass still appends the
+  address on collisions), and `recraft golden --limit N` writes/checks only the first N
+  functions so a 3 261-function project gets a manageable sample. `tests/golden/go/` holds the
+  first 40 Go snapshots and passes `--check`; the corpus and 32-bit snapshots are unchanged.
 - A jump back to a function's first address used to label the header comment above the function
   (`loc_140001ba0:` printed before `// L2 structure recovery`), which also hid the loop the
   jump belonged to. Labels are now placed on the first statement of the body, after the header

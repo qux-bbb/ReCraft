@@ -240,6 +240,9 @@ enum Commands {
         /// Compare instead of writing.
         #[arg(long)]
         check: bool,
+        /// Write/check at most this many functions (a sample of a large project).
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
@@ -503,9 +506,10 @@ fn run(cli: Cli) -> Result<()> {
             project,
             dir,
             check,
+            limit,
         } => {
             let materialized = materialize_project(&project)?;
-            cmd_golden(&materialized.path, dir.as_deref(), check)
+            cmd_golden(&materialized.path, dir.as_deref(), check, limit)
         }
         Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
@@ -1196,13 +1200,17 @@ fn cmd_metrics(
     }
 }
 
-fn cmd_golden(project: &Path, dir: Option<&Path>, check: bool) -> Result<()> {
+fn cmd_golden(project: &Path, dir: Option<&Path>, check: bool, limit: Option<usize>) -> Result<()> {
     let dir = dir
         .map(Path::to_path_buf)
         .unwrap_or_else(recraft_decompile::default_golden_dir);
     let mut session = Session::open(project)?;
     if check {
-        let report = recraft_decompile::check_golden(&mut session, &dir)?;
+        let report = recraft_decompile::check_golden_limited(
+            &mut session,
+            &dir,
+            limit.unwrap_or(usize::MAX),
+        )?;
         println!("checked:    {}", report.checked);
         println!("missing:    {}", report.missing.len());
         println!("mismatched: {}", report.mismatched.len());
@@ -1223,7 +1231,11 @@ fn cmd_golden(project: &Path, dir: Option<&Path>, check: bool) -> Result<()> {
             )))
         }
     } else {
-        let written = recraft_decompile::write_golden(&mut session, &dir)?;
+        let written = recraft_decompile::write_golden_limited(
+            &mut session,
+            &dir,
+            limit.unwrap_or(usize::MAX),
+        )?;
         println!("wrote {written} snapshots to {}", dir.display());
         Ok(())
     }

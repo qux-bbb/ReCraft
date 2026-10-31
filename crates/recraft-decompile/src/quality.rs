@@ -207,8 +207,14 @@ impl GoldenReport {
 
 /// Write one normalised L1 snapshot per function into `dir`.
 pub fn write_golden(session: &mut Session, dir: &Path) -> Result<usize> {
+    write_golden_limited(session, dir, usize::MAX)
+}
+
+/// Write snapshots for at most `limit` functions (a sample of a very large project).
+pub fn write_golden_limited(session: &mut Session, dir: &Path, limit: usize) -> Result<usize> {
     std::fs::create_dir_all(dir)?;
-    let functions = sorted_functions(session)?;
+    let mut functions = sorted_functions(session)?;
+    functions.truncate(limit);
     let names = golden_file_names(session, &functions)?;
     let mut written = 0usize;
     for (index, function) in functions.iter().enumerate() {
@@ -222,7 +228,17 @@ pub fn write_golden(session: &mut Session, dir: &Path) -> Result<usize> {
 
 /// Compare the project against snapshots in `dir`.
 pub fn check_golden(session: &mut Session, dir: &Path) -> Result<GoldenReport> {
-    let functions = sorted_functions(session)?;
+    check_golden_limited(session, dir, usize::MAX)
+}
+
+/// Check snapshots for at most `limit` functions.
+pub fn check_golden_limited(
+    session: &mut Session,
+    dir: &Path,
+    limit: usize,
+) -> Result<GoldenReport> {
+    let mut functions = sorted_functions(session)?;
+    functions.truncate(limit);
     let mut report = GoldenReport::default();
     if functions.is_empty() {
         return Err(Error::internal(
@@ -280,6 +296,9 @@ fn golden_file_names(
         .collect())
 }
 
+/// Longest snapshot file stem kept before the dedupe suffix is added.
+const MAX_STEM: usize = 80;
+
 fn sanitise_stem(name: Option<&str>, start: Address) -> String {
     let stem: String = name
         .unwrap_or("")
@@ -292,6 +311,9 @@ fn sanitise_stem(name: Option<&str>, start: Address) -> String {
             }
         })
         .collect();
+    // Go (and C++) names can exceed the 255-byte file-name limit after sanitising, so long
+    // stems are shortened; the dedupe pass appends the address when two stems collide.
+    let stem: String = stem.chars().take(MAX_STEM).collect();
     if stem.is_empty() {
         format!("sub_{:x}", start.get())
     } else {
@@ -408,6 +430,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn long_names_are_shortened_for_snapshots() {
+        let stem = sanitise_stem(
+            Some(
+                "internal/abi.(*RegArgs).SomeVeryLongMethodNameThatKeepsGoingAndGoingAndGoingAndGoingPastTheLimit",
+            ),
+            Address::new(0x140001000),
+        );
+        assert!(stem.len() <= MAX_STEM, "{stem}");
+        assert!(!stem.contains('/'), "{stem}");
+        assert!(!stem.contains('('), "{stem}");
+    }
     #[test]
     fn normalisation_replaces_addresses() {
         assert_eq!(
