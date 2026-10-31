@@ -1236,6 +1236,11 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
     };
     let mut session = Session::open(project)?;
     let report = recraft_decompile::lint(&mut session, limit.unwrap_or(usize::MAX), level)?;
+    let levels = match level {
+        recraft_decompile::LintLevel::Both => "L1 + L2",
+        recraft_decompile::LintLevel::L1 => "L1",
+        recraft_decompile::LintLevel::L2 => "L2",
+    };
     if json {
         let items: Vec<String> = report
             .findings
@@ -1266,9 +1271,10 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
         .map(|kind| format!("{:?}:{}", kind.as_str(), report.count(kind)))
         .collect();
         println!(
-            "{{\"functions\":{},\"checked\":{},\"findings\":{},\"affected\":{},\"rules\":{{{}}},\"items\":[{}]}}",
+            "{{\"functions\":{},\"checked\":{},\"level\":{:?},\"findings\":{},\"affected\":{},\"rules\":{{{}}},\"items\":[{}]}}",
             report.functions,
             report.checked,
+            levels,
             report.findings.len(),
             report.affected(),
             counts.join(","),

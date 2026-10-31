@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The JSON lint report names the level it checked (`"level":"L1 + L2"`), matching the text summary.
 - `recraft lint` prints its findings in a stable order (by address), so a truncated report always
   shows the same first offenders. The `--limit 0` guard and this sort live in the lint function
   (both had been inserted next to the golden check by a text replacement gone wide; the guard was
