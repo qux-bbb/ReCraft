@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The JSON lint report carries `"affected"` (functions with at least one finding), matching the
+  text mode.
 - `recraft lint` reports the blast radius of a failure (`findings: 180 in 7 functions`), so a
   regression that touches many functions is distinguishable from a single odd case.
 - `recraft lint --limit 0` errors (`no texts checked: raise --limit above 0`) instead of reporting a

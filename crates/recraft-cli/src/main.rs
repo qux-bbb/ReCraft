@@ -1266,10 +1266,11 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
         .map(|kind| format!("{:?}:{}", kind.as_str(), report.count(kind)))
         .collect();
         println!(
-            "{{\"functions\":{},\"checked\":{},\"findings\":{},\"rules\":{{{}}},\"items\":[{}]}}",
+            "{{\"functions\":{},\"checked\":{},\"findings\":{},\"affected\":{},\"rules\":{{{}}},\"items\":[{}]}}",
             report.functions,
             report.checked,
             report.findings.len(),
+            report.affected(),
             counts.join(","),
             items.join(",")
         );
