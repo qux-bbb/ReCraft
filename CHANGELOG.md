@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Go snapshot set covers 60 functions instead of 40, which includes
+  `internal/abi.Name.ReadVarint` — the reference case for the round-41 label-placement fix — so
+  that shape is now protected by a snapshot as well as by lint. Goldens: notepad 40, crackme 60,
+  corpus 31, corpus86 32, go 60 (**223** functions).
 - `docs/REPORT-2026-10-31.md` gains a maintainer quick reference: the exact command sequence to run
   after touching the decompiler (fmt, clippy, tests, lint, the five golden checks, metrics), the
   order to read the results in (lint → golden diff → metrics) and where the remaining work lives
