@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tests/golden/notepad` covers 170 functions instead of 40, which brings in `sub_140004264` — the
+  Notepad reference for the multi-entry loop shape — so both reference functions are now guarded
+  by a snapshot and by lint. Goldens total **453** functions (notepad 170, crackme 160,
+  corpus 31, corpus86 32, go 60).
 - `tests/golden/crackme` covers 160 functions instead of 60, which brings in
   `sub_140006fd0` — the function whose jump-table arms referenced 180 undefined labels before
   round 47 — so that fix now has a snapshot as well as the lint rule. Goldens total **323**

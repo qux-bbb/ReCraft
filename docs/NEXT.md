@@ -16,7 +16,7 @@
 
 | 样本 | 位置 | 保护方式 |
 |---|---|---|
-| notepad `sub_140004264` | 第 168 个函数 | `recraft lint`（全量 502 函数） |
+| notepad `sub_140004264` | 第 168 个函数 | `tests/golden/notepad`（170 个快照）+ lint |
 | Go `internal/abi.Name.ReadVarint` | 第 51 个函数 | `tests/golden/go`（60 个快照）+ lint |
 
 *量化（notepad 14/15 个回退函数，199 处向后跳转）**：其中 **161 处**的目标标签位于某个

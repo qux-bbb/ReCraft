@@ -180,8 +180,8 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 ## golden 快照
 
-- 目录（合计 **323** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
-  （32 位语料，32）、`tests/golden/notepad/`（notepad 前 40 个函数，`--limit 40`）、
+- 目录（合计 **453** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
+  （32 位语料，32）、`tests/golden/notepad/`（notepad 前 170 个函数，`--limit 170`，含多入口循环的参考函数）、
   `tests/golden/crackme/`（前 60，`--limit 60`）、`tests/golden/go/`（Go 前 60，`--limit 60`，含 `internal/abi.Name.ReadVarint` 这一参考例；
   Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数
   一个 `.c` 文件，**按符号名命名**（插入新函数不会重排已有文件；重名函数追加地址后缀）。
@@ -192,7 +192,7 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
 - 更新流程：改动反编译器后运行 `recraft golden <corpus-project> --dir tests/golden/corpus`，
   **人工 review `git diff tests/golden/corpus`**，确认变化符合预期后提交。
- 已提交快照合计 **323** 个函数（notepad 40、crackme 60、corpus 31、corpus86 32、go 40），
+ 已提交快照合计 **453** 个函数（notepad 170、crackme 160、corpus 31、corpus86 32、go 40），
   全部通过 `--check`；配合 `recraft lint` 与 `recraft metrics` 构成三层回归- CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
   CI 先写入临时目录再 `--check` 做**确定性/归一化回环**校验。仓库快照用于本地与
   review 时的真实回归。M3 引入固定 toolchain 容器后改为直接对比提交的快照。

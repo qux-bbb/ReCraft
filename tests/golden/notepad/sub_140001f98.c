@@ -1,0 +1,31 @@
+// L1 structure recovery (3 blocks)
+void sub_140001f98_l1(void) {
+    rax = qword_ADDR;
+    rbx = 0xADDR;
+    if (rax == 0xADDR) {
+        var_48 = 0;
+        var_40 = 0;
+        GetSystemTimeAsFileTime(&var_48);
+        rax = var_48;
+        var_20 = rax;
+        GetCurrentThreadId();
+        var_20 ^= rax;
+        GetCurrentProcessId();
+        var_20 ^= rax;
+        QueryPerformanceCounter(&var_40);
+        eax = var_40;
+        rcx = &var_20;
+        rax <<= 0xADDR;
+        rax ^= var_40;
+        rax ^= var_20;
+        rax ^= rcx;
+        rcx = 0xADDR;
+        rax &= rcx;
+        rcx = 0xADDR;
+        rax = ((rax == rbx) ? rcx : rax);
+        qword_ADDR = rax;
+    }
+    rax = ~(rax);
+    qword_ADDR = rax;
+    return;
+}
