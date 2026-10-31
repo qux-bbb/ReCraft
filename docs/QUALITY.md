@@ -61,9 +61,9 @@ inline asm statements:  9
 | crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 155 | 275 |
 | corpus x64（31） | 31 | 31（100%） | 97.4% | 0 | 9 |
 | corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
-| go.exe（1481，受限取样） | 220 | 196 结构化（89.1%） | 98.7% | 1059 | 1343 |
+| go.exe（3261 个已定义函数） | 220 | 196 结构化（89.1%） | 98.7% | 1059 | 1343 |
 
-`recraft metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。
+`recraft metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
 `xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是

@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The whole Go sample now passes the output invariants: `recraft lint .tmp/go.rcraft --level l1`
+  checks all **3261** functions and reports **0** findings (every `goto` labelled, labels defined
+  once, braces balanced outside strings, no empty condition, signatures declaring what they use,
+  no label above a signature). Together with Notepad (502 functions, L1+L2), crackme (493) and
+  both corpora (63) that covers every sample in the workspace.
 - `recraft lint --level l1|l2` checks one level instead of both, which halves the work on a
   large project (the 3261-function Go sample does not finish with both levels in a reasonable
   time; `--level l1` over its first 300 functions takes ~14 s). The summary line names the level
