@@ -51,6 +51,22 @@ if (rax < r12) {
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
   合计 223 个函数）。
 
+# 1.1 实现地图（代码位置）
+
+- `crates/recraft-decompile/src/structuring.rs`
+  - `emit_loop`（约 2670 行）：识别到循环头后决定 `emit_do_while` / 前置条件 `while`，
+    并在头部之前补一个 `loc_` 标签（`labeled[header]`），供外部跳转使用。
+  - `emit_do_while`（约 2840 行）：条件在闩锁块时的 do-while 发射。
+  - 约 2800–2830 行的 `while (1)` 回退路径：`loop_stack.push` + `fallback_headers.insert`
+    后调用 `emit_linear`，并为未发射的循环体块补标签。
+  - `compute_loops`：`loop_blocks`（循环头 → 体块集合）在这里算出；多入口形状下循环头
+    不支配其回边，因此体块集合不完整，`emit_loop` 拿不到条件，最终落到标签 + `goto`。
+- 因此**守卫提升的落点是 `compute_loops` 之后、发射之前**：把"第二入口的前驱块"重定向到
+  循环头（必要时把前驱里的前置语句下沉进循环体），让 `loop_blocks` 完整、循环头重新支配回边；
+  之后再走现有 `emit_loop`，输出自然成为 `while`/`do-while`。
+- 该改动只影响 CFG 的边/块归属，不涉及文本 pass；预期影响面由 `recraft lint`（不变量）与
+  五套 goldens 的 diff 逐条核对，结构化率由 `recraft metrics` 判定。
+
 ## 2. 次要候选（收益小、风险低）
 
 - `__asm` 剩余 138 行：原子指令（`lock xadd`/`lock cmpxchg`/`xchg`）、单操作数
