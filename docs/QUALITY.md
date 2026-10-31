@@ -23,7 +23,7 @@
 ## 命令
 
 ```powershell
-recraft lint <project> [--limit N]                              # 输出不变量自检
+recraft lint <project> [--limit N] [--level l1|l2] [--json]     # 输出不变量自检
 recraft metrics <project> [--json]
 recraft metrics <project> --min-structured 0.6 --min-coverage 0.75   # 门禁
 recraft golden <project> --dir tests/golden/corpus                    # 写入快照

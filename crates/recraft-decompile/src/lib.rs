@@ -31,7 +31,7 @@ pub use l2::{
     recover_args, recover_l2,
 };
 pub use quality::{
-    FunctionQuality, GoldenReport, LintKind, LintReport, QualityReport, check_golden,
+    FunctionQuality, GoldenReport, LintKind, LintLevel, LintReport, QualityReport, check_golden,
     check_golden_limited, default_golden_dir, golden_text, lint, measure, write_golden,
     write_golden_limited,
 };

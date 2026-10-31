@@ -249,13 +249,23 @@ impl LintReport {
     }
 }
 
+/// Which pseudo-code levels [`lint`] checks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LintLevel {
+    /// Both levels (the default).
+    #[default]
+    Both,
+    L1,
+    L2,
+}
+
 /// Check the structural invariants every emitted function must hold, on both L1 and L2 text.
 ///
 /// These are the properties the text passes promise: a label for every `goto`, one definition per
 /// label, balanced braces outside string literals, no conditionless branch, a signature that
 /// declares every argument the body uses, and no label above the signature. A violation is a
 /// decompiler bug, not a style question, so `recraft lint` exits non-zero when one is found.
-pub fn lint(session: &mut Session, limit: usize) -> Result<LintReport> {
+pub fn lint(session: &mut Session, limit: usize, level: LintLevel) -> Result<LintReport> {
     let mut functions = session.functions()?;
     functions.sort_by_key(|function| function.start);
     let total = functions.len();
@@ -267,10 +277,13 @@ pub fn lint(session: &mut Session, limit: usize) -> Result<LintReport> {
     };
     for function in functions {
         let name = session.name_at(function.start)?;
-        let texts = [
-            pseudocode_l1(session, function.start)?.text(),
-            pseudocode_l2(session, function.start)?.text(),
-        ];
+        let mut texts = Vec::with_capacity(2);
+        if level != LintLevel::L2 {
+            texts.push(pseudocode_l1(session, function.start)?.text());
+        }
+        if level != LintLevel::L1 {
+            texts.push(pseudocode_l2(session, function.start)?.text());
+        }
         for text in texts {
             report.checked += 1;
             for (kind, detail) in lint_text(&text) {

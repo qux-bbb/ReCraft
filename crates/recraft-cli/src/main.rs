@@ -254,6 +254,9 @@ enum Commands {
         /// Print the report as JSON.
         #[arg(long)]
         json: bool,
+        /// Level to check: both (default), l1 or l2.
+        #[arg(long)]
+        level: Option<String>,
     },
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
@@ -526,9 +529,10 @@ fn run(cli: Cli) -> Result<()> {
             project,
             limit,
             json,
+            level,
         } => {
             let materialized = materialize_project(&project)?;
-            cmd_lint(&materialized.path, limit, json)
+            cmd_lint(&materialized.path, limit, json, level.as_deref())
         }
         Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
@@ -1219,9 +1223,19 @@ fn cmd_metrics(
     }
 }
 
-fn cmd_lint(project: &Path, limit: Option<usize>, json: bool) -> Result<()> {
+fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str>) -> Result<()> {
+    let level = match level.unwrap_or("both") {
+        "l1" => recraft_decompile::LintLevel::L1,
+        "l2" => recraft_decompile::LintLevel::L2,
+        "both" => recraft_decompile::LintLevel::Both,
+        other => {
+            return Err(Error::internal(format!(
+                "unknown --level {other} (use both, l1 or l2)"
+            )));
+        }
+    };
     let mut session = Session::open(project)?;
-    let report = recraft_decompile::lint(&mut session, limit.unwrap_or(usize::MAX))?;
+    let report = recraft_decompile::lint(&mut session, limit.unwrap_or(usize::MAX), level)?;
     if json {
         let items: Vec<String> = report
             .findings
@@ -1257,7 +1271,12 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool) -> Result<()> {
         };
     }
     println!("functions:  {}", report.functions);
-    println!("checked:    {} texts (L1 + L2)", report.checked);
+    let levels = match level {
+        recraft_decompile::LintLevel::Both => "L1 + L2",
+        recraft_decompile::LintLevel::L1 => "L1",
+        recraft_decompile::LintLevel::L2 => "L2",
+    };
+    println!("checked:    {} texts ({levels})", report.checked);
     println!("findings:   {}", report.findings.len());
     for kind in [
         recraft_decompile::LintKind::GotoWithoutLabel,

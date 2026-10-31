@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint --level l1|l2` checks one level instead of both, which halves the work on a
+  large project (the 3261-function Go sample does not finish with both levels in a reasonable
+  time; `--level l1` over its first 300 functions takes ~14 s). The summary line names the level
+  that was checked.
 - `recraft lint` takes the signature's parameter list from the **last** `(...)` of the header
   line, so a Go or C++ symbol carrying parentheses in its own name
   (`int64 internal/abi.(*RegArgs).IntRegArgAddr(int64 arg1, …)`) is parsed correctly instead of
