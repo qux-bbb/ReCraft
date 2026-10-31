@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint` takes the signature's parameter list from the **last** `(...)` of the header
+  line, so a Go or C++ symbol carrying parentheses in its own name
+  (`int64 internal/abi.(*RegArgs).IntRegArgAddr(int64 arg1, …)`) is parsed correctly instead of
+  reporting `arg4 > 0`. The first 300 Go functions (600 texts) lint clean; the 33 "undeclared
+  argument" findings it reported before were that parse artefact.
 - **Fixed**: a jump table arm printed as `case 0: goto loc_140007014;` kept its `goto` but the
   target label was never emitted, so the output referenced an undefined label — 180 such jumps in
   crackme.exe (notepad was unaffected because its switches take a different shape). The jump

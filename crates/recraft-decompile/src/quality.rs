@@ -350,13 +350,17 @@ fn lint_text(text: &str) -> Vec<(LintKind, String)> {
                 findings.push((LintKind::LabelAboveSignature, (*line).trim().to_owned()));
             }
         }
-        let declared = lines[signature]
-            .split('(')
-            .nth(1)
-            .unwrap_or_default()
-            .split(')')
-            .next()
-            .unwrap_or_default()
+        // The parameter list is the last `(...)` of the line: a Go or C++ symbol may carry
+        // parentheses in its own name (`internal/abi.(*RegArgs).IntRegArgAddr`).
+        let header = lines[signature];
+        let open = header.rfind('(').unwrap_or(0);
+        let close = header.rfind(')').unwrap_or(header.len());
+        let parameters = if close > open {
+            &header[open + 1..close]
+        } else {
+            ""
+        };
+        let declared = parameters
             .split(',')
             .filter_map(|parameter| {
                 let name = parameter.trim().rsplit(' ').next()?;
