@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` records the regression coverage of the round-47 fix: `sub_140006fd0` (the
+  `case N: goto loc_X` shape with 180 undefined labels) is crackme's 152nd function, so it is
+  lint-covered but outside the 60-snapshot sample; raising `--limit` to 160 would snapshot it.
 - `docs/NEXT.md` gains an implementation map for the multi-entry work: where loops are decided
   (`compute_loops` → `loop_blocks`), emitted (`emit_loop`, `emit_do_while`, the `while (1)`
   fallback around line 2800), and why an extra entry leaves `loop_blocks` incomplete; the note
