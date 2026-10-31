@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` states the expected size of the multi-entry fix: of Notepad's 452 `goto loc_`
+  lines, 161 are the backward jumps into an `if` arm that the work targets, so folding them and
+  letting `tidy_labels` drop the labels would bring the count to about **291** (−36%) and the
+  label count from 267 to roughly 106.
 - The report's verification section names this stage's closing commit (`c009fb4`): 453 snapshot
   functions across the five sets with zero mismatches, and lint clean on Notepad, crackme and both
   corpora.
