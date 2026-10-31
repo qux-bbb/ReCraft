@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The L2 header reports a function's remaining jumps: `// L2 structure recovery (40 blocks, 2 goto)`
+  instead of just the block count, so a reader sees at a glance which bodies could not be reduced
+  to structured control flow. The appended count is computed after the text passes, and functions
+  with no jumps keep the plain header.
 - Documentation consistency pass: `NEXT.md` still said 223 snapshots, `QUALITY.md` still described
   crackme's set as 60 functions, and the sample commands in `QUALITY.md`/`REPORT` still used the
   old `--limit` values. All now match the committed sets (notepad 170, crackme 160, corpus 31,

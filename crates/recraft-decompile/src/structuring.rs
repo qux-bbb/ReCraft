@@ -510,6 +510,19 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         addr: start,
         text: "}".to_owned(),
     });
+    // A function that still has jumps says so in the header: a reader can tell at a glance that
+    // this body could not be reduced to structured control flow.
+    let fallbacks = lines
+        .iter()
+        .filter(|line| line.text.contains("goto loc_"))
+        .count();
+    if fallbacks > 0
+        && let Some(header) = lines
+            .iter_mut()
+            .find(|line| line.text.starts_with("// L2 structure recovery ("))
+    {
+        header.text = format!("{}, {fallbacks} goto)", header.text.trim_end_matches(')'));
+    }
     // A user-set prototype is authoritative for naming/definitions; show it verbatim
     // above the generated signature (which already reflects its parsed types/names).
     if let Some(prototype) = session.prototype_at(start)? {
