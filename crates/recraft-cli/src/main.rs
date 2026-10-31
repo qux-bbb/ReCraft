@@ -1283,7 +1283,7 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
         };
     }
     match limit {
-        Some(limit) if (limit as usize) < report.functions => {
+        Some(limit) if limit < report.functions => {
             println!("functions:  {} (checked first {limit})", report.functions);
         }
         _ => println!("functions:  {}", report.functions),
