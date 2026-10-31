@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tests/golden/notepad/` adds the first 40 notepad.exe snapshots (`--limit 40`): the main sample
+  used for every measurement now has committed text snapshots of its own. Goldens total: notepad
+  40, crackme 60, corpus x64 31, corpus86 32, go 40 (**203**).
 - Handle naming also sees out-parameters passed by address: `RegOpenKeyExW(…, &hKey)` and
   `WindowsCreateStringReference(…, &hstringHeader, &hstring)` used to keep `var_…` because the
   matcher required the bare slot name. The WinRT pair is new in the table
