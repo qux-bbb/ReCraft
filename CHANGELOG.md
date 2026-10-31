@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` records the handoff: the one structural gap left (multi-entry loops), its two
+  reference functions with the protection each has, three implementation paths ordered from
+  smallest to largest (guard hoisting → node splitting → leave the `goto`), the acceptance
+  criteria in terms of `metrics`/`lint`/golden, the secondary candidates and two things not to do.
 - The Go snapshot set covers 60 functions instead of 40, which includes
   `internal/abi.Name.ReadVarint` — the reference case for the round-41 label-placement fix — so
   that shape is now protected by a snapshot as well as by lint. Goldens: notepad 40, crackme 60,
