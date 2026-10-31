@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Both READMEs list `recraft lint <project> --level l1` next to `metrics` and `golden`, so the
+  three verification commands (invariants, snapshots, metrics) are discoverable from the quick
+  start.
 - `tests/golden/crackme/` adds the first 60 crackme.exe snapshots (`--limit 60`) to the
   committed corpus, so the sample that exposed the missing switch-arm label is covered by a
   snapshot now as well. Goldens total: corpus x64 31, corpus86 32, crackme 60, go 40.
