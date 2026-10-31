@@ -6070,9 +6070,11 @@ fn assigns_register(text: &str, register: &str) -> bool {
 /// of conditional jumps to the same block; without this pass the structurer duplicates the
 /// body once per condition, which hides the original `||` expression.
 fn merge_identical_if_arms(lines: &mut Vec<PseudoLine>) {
+    let mut braces = line_braces(lines);
     let mut index = 0;
     while index < lines.len() {
-        let Some((first_condition, first_close)) = standalone_if_block(lines, index) else {
+        let Some((first_condition, first_close)) = standalone_if_block(lines, index, &braces)
+        else {
             index += 1;
             continue;
         };
@@ -6092,7 +6094,7 @@ fn merge_identical_if_arms(lines: &mut Vec<PseudoLine>) {
             while next < lines.len() && lines[next].text.trim().is_empty() {
                 next += 1;
             }
-            let Some((condition, close)) = standalone_if_block(lines, next) else {
+            let Some((condition, close)) = standalone_if_block(lines, next, &braces) else {
                 break;
             };
             if leading_spaces(&lines[next].text) != leading_spaces(&lines[index].text) {
@@ -6112,22 +6114,27 @@ fn merge_identical_if_arms(lines: &mut Vec<PseudoLine>) {
         let indent = " ".repeat(leading_spaces(&lines[index].text));
         lines[index].text = format!("{indent}if ({}) {{", conditions.join(" || "));
         lines.drain(first_close + 1..=last_close);
+        // The merge rewrote lines, so the precomputed brace counts are stale.
+        braces = line_braces(lines);
         index = first_close + 1;
     }
 }
 
 /// Recognise a standalone `if (cond) {` block at `index` and return its condition plus the
 /// line index of its closing brace. An `else` arm disqualifies the block.
-fn standalone_if_block(lines: &[PseudoLine], index: usize) -> Option<(String, usize)> {
+fn standalone_if_block(
+    lines: &[PseudoLine],
+    index: usize,
+    braces: &[isize],
+) -> Option<(String, usize)> {
     let line = lines.get(index)?;
     let text = line.text.trim();
     let condition = text.strip_prefix("if (")?.strip_suffix(") {")?.to_owned();
     let mut depth = 0isize;
-    for (offset, candidate) in lines[index..].iter().enumerate() {
-        let text = candidate.text.trim();
-        depth += text.matches('{').count() as isize;
-        depth -= text.matches('}').count() as isize;
+    for offset in 0..lines.len().saturating_sub(index) {
+        depth += braces[index + offset];
         if depth == 0 {
+            let text = lines[index + offset].text.trim();
             if text.starts_with("} else") || text.starts_with("else") {
                 return None;
             }
@@ -6135,6 +6142,17 @@ fn standalone_if_block(lines: &[PseudoLine], index: usize) -> Option<(String, us
         }
     }
     None
+}
+
+/// Net braces opened by each line, so a block scan does not recount them per candidate.
+fn line_braces(lines: &[PseudoLine]) -> Vec<isize> {
+    lines
+        .iter()
+        .map(|line| {
+            let text = line.text.trim();
+            text.matches('{').count() as isize - text.matches('}').count() as isize
+        })
+        .collect()
 }
 
 /// Structural fingerprint of an arm body. Label definitions are ignored so a body that
