@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tests/golden/crackme` covers 160 functions instead of 60, which brings in
+  `sub_140006fd0` — the function whose jump-table arms referenced 180 undefined labels before
+  round 47 — so that fix now has a snapshot as well as the lint rule. Goldens total **323**
+  functions (notepad 40, crackme 160, corpus 31, corpus86 32, go 60).
 - `docs/NEXT.md` records the regression coverage of the round-47 fix: `sub_140006fd0` (the
   `case N: goto loc_X` shape with 180 undefined labels) is crackme's 152nd function, so it is
   lint-covered but outside the 60-snapshot sample; raising `--limit` to 160 would snapshot it.

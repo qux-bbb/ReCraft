@@ -1,0 +1,43 @@
+// L1 structure recovery (1 blocks)
+void sub_140005b58_l1(void) {
+    rax = *(u64*)(rcx);
+    rbx = rcx;
+    r14 = *(u64*)((rcx + 8));
+    r15 = *(u64*)(rax);
+    sub_14000af74(r15);
+    rcx = *(u64*)((rbx + 0xADDR));
+    xmm0 = 0;
+    r9 = *(u64*)(rbx);
+    sil = al;
+    rdi = *(u64*)(rcx);
+    r9 = *(u64*)(r9);
+    rcx = *(u64*)((rbx + 0xADDR));
+    r11 = *(u64*)(rcx);
+    rcx = *(u64*)((rbx + 0xADDR));
+    r10 = *(u64*)(rcx);
+    rcx = *(u64*)((rbx + 8));
+    var_40 = 0;
+    var_48 = 0;
+    var_4c = 0;
+    var_50 = 0;
+    var_58 = 0;
+    var_68 = 0;
+    var_488 = 0;
+    var_28 = rcx;
+    var_44 = 0;
+    var_6c = 0;
+    var_470 = xmm0;
+    var_480 = r9;
+    var_20 = r10;
+    var_30 = r11;
+    var_38 = rdi;
+    sub_140005d70(&var_20);
+    ebx = eax;
+    sub_140008ee0(var_478);
+    var_478 = 0;
+    r8 = r14;
+    sub_14000b03c(sil, r15);
+    eax = ebx;
+    r11 = &var_4a0;
+    return;
+}
