@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Second negative result recorded: none of Notepad's 452 `goto`s targets the head of its enclosing
+  loop (a `continue` in disguise) and only 4 target the statement after the loop (`break`), so
+  rewriting gotos as `continue`/`break` would gain almost nothing - the remaining jumps are the
+  cross-level ones that need the structural work.
 - Measurements recorded in `docs/NEXT.md` so a later session does not implement a pass that earns
   nothing: there are **no** fall-through `goto`s (a jump whose target is the next line) in any
   sample, and the degenerate jumps that do exist are already handled by `fold_jumps_over_braces`.

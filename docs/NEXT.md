@@ -83,7 +83,9 @@ if (rax < r12) {
 
 - **跳到下一行的 `goto`**（`goto loc_X;` 紧跟 `loc_X:`）：全样本实测 **0 处**，发射器不会产生
   这种形状，写 `drop_fallthrough_gotos` 是白做。
-- 同理，"`goto` 指向紧跟外层 `}` 之后的第一条语句"这类退化跳转已由 `fold_jumps_over_braces`
+ **把 `goto` 改写成 `continue`/`break`**：notepad 452 处 `goto` 中，目标是"所包围循环的第一条
+  语句"（等价 `continue`）的有 **0 处**，目标是"循环结束后的第一条语句"（等价 `break`）的只有
+  **4 处**。发射器本来就用 `break`/`continue` 表达这类流，剩下的都是跨层跳转，改写没有收益。- 同理，"`goto` 指向紧跟外层 `}` 之后的第一条语句"这类退化跳转已由 `fold_jumps_over_braces`
   覆盖，无需另加 pass。## 3. 不要做的事
 
 - 不要为了"看起来像 C"而删除或合并语义不明的分支（尤其 `if (0x80004005 >= 0)` 这类
