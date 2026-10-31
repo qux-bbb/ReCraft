@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint --json` also carries the per-rule counts (`"rules":{"goto without label":0,…}`), so
+  a dashboard can chart each invariant separately instead of only the total.
 - The committed snapshot set is recorded in `docs/QUALITY.md`: **203** functions across the five
   samples (notepad 40, crackme 60, corpus 31, corpus86 32, go 40), all passing `--check`, next to
   `recraft lint` and `recraft metrics` as the three regression layers.

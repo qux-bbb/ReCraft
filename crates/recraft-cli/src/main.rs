@@ -1254,11 +1254,23 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
                 )
             })
             .collect();
+        let counts: Vec<String> = [
+            recraft_decompile::LintKind::GotoWithoutLabel,
+            recraft_decompile::LintKind::DuplicateLabel,
+            recraft_decompile::LintKind::UnbalancedBraces,
+            recraft_decompile::LintKind::EmptyCondition,
+            recraft_decompile::LintKind::UndeclaredArgument,
+            recraft_decompile::LintKind::LabelAboveSignature,
+        ]
+        .into_iter()
+        .map(|kind| format!("{:?}:{}", kind.as_str(), report.count(kind)))
+        .collect();
         println!(
-            "{{\"functions\":{},\"checked\":{},\"findings\":{},\"items\":[{}]}}",
+            "{{\"functions\":{},\"checked\":{},\"findings\":{},\"rules\":{{{}}},\"items\":[{}]}}",
             report.functions,
             report.checked,
             report.findings.len(),
+            counts.join(","),
             items.join(",")
         );
         return if report.ok() {
