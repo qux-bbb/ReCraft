@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Measurements recorded in `docs/NEXT.md` so a later session does not implement a pass that earns
+  nothing: there are **no** fall-through `goto`s (a jump whose target is the next line) in any
+  sample, and the degenerate jumps that do exist are already handled by `fold_jumps_over_braces`.
 - The L2 header count was cross-checked against `metrics`: Notepad shows 15 functions with a
   `N goto` header and metrics reports 15 fallback functions; crackme is 40 and 40. The header can
   therefore be used directly as the list of unstructured bodies.
