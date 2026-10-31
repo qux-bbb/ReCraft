@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint` reports the blast radius of a failure (`findings: 180 in 7 functions`), so a
+  regression that touches many functions is distinguishable from a single odd case.
 - `recraft lint --limit 0` errors (`no texts checked: raise --limit above 0`) instead of reporting a
   clean run that inspected nothing; the same guard as the un-analysed-project case.
 - The linter itself is covered: a unit test feeds it one text per invariant and asserts each rule

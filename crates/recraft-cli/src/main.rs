@@ -1294,7 +1294,11 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
         recraft_decompile::LintLevel::L2 => "L2",
     };
     println!("checked:    {} texts ({levels})", report.checked);
-    println!("findings:   {}", report.findings.len());
+    println!(
+        "findings:   {} in {} functions",
+        report.findings.len(),
+        report.affected()
+    );
     for kind in [
         recraft_decompile::LintKind::GotoWithoutLabel,
         recraft_decompile::LintKind::DuplicateLabel,

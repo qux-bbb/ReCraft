@@ -247,6 +247,14 @@ impl LintReport {
     pub fn count(&self, kind: LintKind) -> usize {
         self.findings.iter().filter(|f| f.kind == kind).count()
     }
+
+    /// How many distinct functions have at least one finding.
+    pub fn affected(&self) -> usize {
+        let mut starts: Vec<u64> = self.findings.iter().map(|f| f.start.get()).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        starts.len()
+    }
 }
 
 /// Which pseudo-code levels [`lint`] checks.
