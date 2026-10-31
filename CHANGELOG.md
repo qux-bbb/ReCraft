@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The L2 header count was cross-checked against `metrics`: Notepad shows 15 functions with a
+  `N goto` header and metrics reports 15 fallback functions; crackme is 40 and 40. The header can
+  therefore be used directly as the list of unstructured bodies.
 - The L2 header reports a function's remaining jumps: `// L2 structure recovery (40 blocks, 2 goto)`
   instead of just the block count, so a reader sees at a glance which bodies could not be reduced
   to structured control flow. The appended count is computed after the text passes, and functions
