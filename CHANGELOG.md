@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` narrows the target further: in `sub_140013154` the three hottest backward labels
+  (`loc_14001de8b` 16 jumps, `loc_140017355` 15, `loc_140015c81` 8) account for 39 of its 147
+  backward jumps and each is referenced only by backward jumps, so folding just those three would
+  cut the function's `goto` count by about 40%.
 - `docs/NEXT.md` quantifies the multi-entry shape: of the 199 backward jumps in Notepad's fallback
   functions, **161** target a label inside an `if`/`else` arm (117 of them in one 45 KB function),
   so the guard-hoisting work has a concentrated place to prove itself first.
