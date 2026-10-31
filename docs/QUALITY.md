@@ -27,7 +27,7 @@ recraft lint <project> [--limit N] [--level l1|l2] [--json]     # 输出不变�
 recraft metrics <project> [--json]
 recraft metrics <project> --min-structured 0.6 --min-coverage 0.75   # 门禁
 recraft golden <project> --dir tests/golden/corpus                    # 写入快照
-recraft golden <project> --dir tests/golden/go --limit 40             # 大项目只取前 40 个函数
+recraft golden <project> --dir tests/golden/go --limit 60             # 大项目只取前 N 个函数
 recraft golden <project> --dir tests/golden/corpus --check           # 对比快照
 ```
 
@@ -182,7 +182,7 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 - 目录（合计 **453** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
   （32 位语料，32）、`tests/golden/notepad/`（notepad 前 170 个函数，`--limit 170`，含多入口循环的参考函数）、
-  `tests/golden/crackme/`（前 60，`--limit 60`）、`tests/golden/go/`（Go 前 60，`--limit 60`，含 `internal/abi.Name.ReadVarint` 这一参考例；
+  `tests/golden/crackme/`（前 160，`--limit 160`）、`tests/golden/go/`（Go 前 60，`--limit 60`，含 `internal/abi.Name.ReadVarint` 这一参考例；
   Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数
   一个 `.c` 文件，**按符号名命名**（插入新函数不会重排已有文件；重名函数追加地址后缀）。
   32 位快照的 L1 文本按设计保留原始形态（`eax = var_4;`，对应 x64 的

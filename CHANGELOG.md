@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documentation consistency pass: `NEXT.md` still said 223 snapshots, `QUALITY.md` still described
+  crackme's set as 60 functions, and the sample commands in `QUALITY.md`/`REPORT` still used the
+  old `--limit` values. All now match the committed sets (notepad 170, crackme 160, corpus 31,
+  corpus86 32, go 60 = 453).
 - `docs/NEXT.md` states the expected size of the multi-entry fix: of Notepad's 452 `goto loc_`
   lines, 161 are the backward jumps into an `if` arm that the work targets, so folding them and
   letting `tidy_labels` drop the labels would bring the count to about **291** (−36%) and the

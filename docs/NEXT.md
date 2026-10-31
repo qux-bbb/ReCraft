@@ -51,7 +51,7 @@ if (rax < r12) {
 - `recraft metrics` 的 `goto fallback functions` 下降（notepad 15 → 更少，Go 196 → 更少）；
 - `recraft lint` 全样本仍为 0 findings；
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
-  合计 223 个函数）。
+  合计 453 个函数）。
 
 # 1.1 实现地图（代码位置）
 
