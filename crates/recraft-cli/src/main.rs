@@ -1282,7 +1282,12 @@ fn cmd_lint(project: &Path, limit: Option<usize>, json: bool, level: Option<&str
             )))
         };
     }
-    println!("functions:  {}", report.functions);
+    match limit {
+        Some(limit) if (limit as usize) < report.functions => {
+            println!("functions:  {} (checked first {limit})", report.functions);
+        }
+        _ => println!("functions:  {}", report.functions),
+    }
     let levels = match level {
         recraft_decompile::LintLevel::Both => "L1 + L2",
         recraft_decompile::LintLevel::L1 => "L1",

@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint --limit N` says so in its summary (`functions: 3261 (checked first 300)`), which used
+  to read like a contradiction next to the checked-text count.
 - `recraft lint --json` also carries the per-rule counts (`"rules":{"goto without label":0,…}`), so
   a dashboard can chart each invariant separately instead of only the total.
 - The committed snapshot set is recorded in `docs/QUALITY.md`: **203** functions across the five
