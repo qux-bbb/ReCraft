@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint` refuses a project that has no analysed functions (`no functions: run `analyze`
+  before linting the output`) instead of reporting zero findings, which looked like a pass.
 - The golden-snapshot section of `docs/QUALITY.md` lists the five sets with their function counts
   and the **203**-function total in one place, so the regression surface is stated where the
   update workflow is described.

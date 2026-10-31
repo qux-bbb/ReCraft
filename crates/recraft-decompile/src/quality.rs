@@ -270,6 +270,11 @@ pub fn lint(session: &mut Session, limit: usize, level: LintLevel) -> Result<Lin
     functions.sort_by_key(|function| function.start);
     let total = functions.len();
     functions.truncate(limit);
+    if total == 0 {
+        return Err(Error::internal(
+            "no functions: run `analyze` before linting the output",
+        ));
+    }
     let mut report = LintReport {
         functions: total,
         checked: 0,
