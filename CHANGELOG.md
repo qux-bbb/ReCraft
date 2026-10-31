@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint` prints its findings in a stable order (by address), so a truncated report always
+  shows the same first offenders. The `--limit 0` guard and this sort live in the lint function
+  (both had been inserted next to the golden check by a text replacement gone wide; the guard was
+  duplicated there rather than removed).
 - The report's verification note states **141** decompiler tests (three of them assert the output
   invariants for the x64 and x86 corpora), not the 138 it was written with.
 - The 32-bit corpus is lint-clean under `cargo test` too
