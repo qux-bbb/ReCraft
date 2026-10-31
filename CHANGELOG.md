@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` quantifies the multi-entry shape: of the 199 backward jumps in Notepad's fallback
+  functions, **161** target a label inside an `if`/`else` arm (117 of them in one 45 KB function),
+  so the guard-hoisting work has a concentrated place to prove itself first.
 - `docs/NEXT.md` records the handoff: the one structural gap left (multi-entry loops), its two
   reference functions with the protection each has, three implementation paths ordered from
   smallest to largest (guard hoisting → node splitting → leave the `goto`), the acceptance
