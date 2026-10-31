@@ -665,6 +665,44 @@ mod tests {
     }
 
     #[test]
+    fn lint_catches_each_invariant_violation() {
+        let kinds = |text: &str| -> Vec<LintKind> {
+            lint_text(text).into_iter().map(|(kind, _)| kind).collect()
+        };
+        // A clean function reports nothing.
+        assert!(kinds("int32 sub_1(int64 arg1) {\n    return arg1;\n}\n").is_empty());
+        // A jump without a label.
+        assert!(
+            kinds("int32 sub_1(int64 arg1) {\n    goto loc_10;\n}\n")
+                .contains(&LintKind::GotoWithoutLabel)
+        );
+        // The same label twice.
+        assert!(
+            kinds("int32 sub_1(int64 arg1) {\n    loc_10:\n    loc_10:\n}\n")
+                .contains(&LintKind::DuplicateLabel)
+        );
+        // Unbalanced braces.
+        assert!(
+            kinds("int32 sub_1(int64 arg1) {\n    if (arg1) {\n}\n")
+                .contains(&LintKind::UnbalancedBraces)
+        );
+        // A conditionless branch.
+        assert!(
+            kinds("int32 sub_1(int64 arg1) {\n    if () {\n    }\n}\n")
+                .contains(&LintKind::EmptyCondition)
+        );
+        // An argument the signature does not declare.
+        assert!(
+            kinds("int32 sub_1(int64 arg1) {\n    return arg2;\n}\n")
+                .contains(&LintKind::UndeclaredArgument)
+        );
+        // A label above the signature.
+        assert!(
+            kinds("loc_10:\nint32 sub_1(int64 arg1) {\n}\n")
+                .contains(&LintKind::LabelAboveSignature)
+        );
+    }
+    #[test]
     fn long_names_are_shortened_for_snapshots() {
         let stem = sanitise_stem(
             Some(

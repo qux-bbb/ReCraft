@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The linter itself is covered: a unit test feeds it one text per invariant and asserts each rule
+  fires (jump without label, duplicate label, unbalanced braces, empty condition, undeclared
+  argument, label above the signature), plus one clean function that must report nothing.
 - `recraft lint` refuses a project that has no analysed functions (`no functions: run `analyze`
   before linting the output`) instead of reporting zero findings, which looked like a pass.
 - The golden-snapshot section of `docs/QUALITY.md` lists the five sets with their function counts
