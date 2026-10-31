@@ -1330,6 +1330,8 @@ const HANDLE_SLOTS: &[(&str, usize, &str)] = &[
     ("DestroyIcon", 0, "hIcon"),
     ("DestroyCursor", 0, "hCursor"),
     ("UnhookWindowsHookEx", 0, "hHook"),
+    ("WindowsCreateStringReference", 2, "hstringHeader"),
+    ("WindowsCreateStringReference", 3, "hstring"),
     ("FindClose", 0, "hFind"),
     ("FreeLibrary", 0, "hModule"),
     ("DestroyWindow", 0, "hwnd"),
@@ -1451,6 +1453,8 @@ fn top_level_argument(arguments: &str, index: usize) -> Option<&str> {
 
 /// The frame displacement of a bare `var_XX` argument.
 fn slot_name_address(argument: &str) -> Option<u64> {
+    // An out-parameter is written through its address (`&var_58`), so both forms name the slot.
+    let argument = argument.strip_prefix('&').unwrap_or(argument);
     let digits = argument.strip_prefix("var_")?;
     u64::from_str_radix(digits, 16).ok()
 }

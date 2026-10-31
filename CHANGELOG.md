@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Handle naming also sees out-parameters passed by address: `RegOpenKeyExW(…, &hKey)` and
+  `WindowsCreateStringReference(…, &hstringHeader, &hstring)` used to keep `var_…` because the
+  matcher required the bare slot name. The WinRT pair is new in the table
+  (`HSTRING_HEADER*` is argument 3, `HSTRING*` argument 4). Notepad: 92 named handle uses, 13
+  functions affected; L2 lines unchanged.
 - Both READMEs list `recraft lint <project> --level l1` next to `metrics` and `golden`, so the
   three verification commands (invariants, snapshots, metrics) are discoverable from the quick
   start.
