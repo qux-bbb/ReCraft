@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tests/golden/crackme/` adds the first 60 crackme.exe snapshots (`--limit 60`) to the
+  committed corpus, so the sample that exposed the missing switch-arm label is covered by a
+  snapshot now as well. Goldens total: corpus x64 31, corpus86 32, crackme 60, go 40.
 - `docs/REPORT-2026-10-31.md` summarises this stage of work: the before/after numbers for
   notepad (L2 lines 34 259 → 30 102, `goto` 1 264 → 452, named globals 0 → 2 069, field accesses
   137 → 777, 45 KB function 1.6 s → 1.2 s), the baselines for all five samples, what each theme
