@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Two more output invariants are now unit tests over the corpus: **every argument the body uses is
+  declared in the signature** (a gap would print `arg5` without `arg4`) and **no `loc_` label is
+  emitted above the signature line**. Both are checked for L2 (and the label rule for L1 as well),
+  so the round-35 stack-argument widening and the round-41 label placement cannot regress
+  silently.
 - Golden snapshots handle the Go sample: `recraft golden` failed on it (`os error 123`) because
   Go names such as `internal/abi.(*RegArgs).IntRegArgAddr` and very long ones do not fit a file
   name. Names are sanitised and truncated to 80 characters (the dedupe pass still appends the

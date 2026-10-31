@@ -8929,6 +8929,88 @@ mod tests {
     }
 
     #[test]
+    fn generated_signatures_declare_every_argument_they_use() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let starts: Vec<Address> = session
+            .functions()
+            .unwrap()
+            .iter()
+            .map(|function| function.start)
+            .collect();
+        for start in starts {
+            let text = pseudocode_l2(&mut session, start).unwrap().text();
+            let header = text
+                .lines()
+                .find(|line| line.trim_end().ends_with('{') && !line.trim_start().starts_with("//"))
+                .unwrap_or_default();
+            let declared = header
+                .split('(')
+                .nth(1)
+                .unwrap_or_default()
+                .split(')')
+                .next()
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|parameter| {
+                    let name = parameter.trim().rsplit(' ').next()?;
+                    name.strip_prefix("arg")?.parse::<usize>().ok()
+                })
+                .max()
+                .unwrap_or(0);
+            let used = text
+                .lines()
+                .flat_map(|line| {
+                    line.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                        .filter_map(|token| {
+                            token
+                                .strip_prefix("arg")
+                                .and_then(|digits| digits.parse::<usize>().ok())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .max()
+                .unwrap_or(0);
+            assert!(
+                used <= declared,
+                "arg{used} used but {declared} declared:\n{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_labels_stay_inside_the_function() {
+        let Some((mut session, _dir)) = analyzed_corpus() else {
+            return;
+        };
+        let starts: Vec<Address> = session
+            .functions()
+            .unwrap()
+            .iter()
+            .map(|function| function.start)
+            .collect();
+        for start in starts {
+            for text in [
+                pseudocode_l1(&mut session, start).unwrap().text(),
+                pseudocode_l2(&mut session, start).unwrap().text(),
+            ] {
+                let signature = text
+                    .lines()
+                    .position(|line| {
+                        line.trim_end().ends_with('{') && !line.trim_start().starts_with("//")
+                    })
+                    .unwrap_or(0);
+                for line in text.lines().take(signature) {
+                    assert!(
+                        !line.trim().starts_with("loc_"),
+                        "label above the signature:\n{text}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
     fn generated_output_has_balanced_braces() {
         let Some((mut session, _dir)) = analyzed_corpus() else {
             return;
