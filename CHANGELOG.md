@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The report's verification note states **141** decompiler tests (three of them assert the output
+  invariants for the x64 and x86 corpora), not the 138 it was written with.
 - The 32-bit corpus is lint-clean under `cargo test` too
   (`the_32bit_corpus_passes_every_output_invariant`); the test helper now takes the architecture
   (`corpus_for("x64" | "x86")`), so both ABIs are covered by the same assertion.
