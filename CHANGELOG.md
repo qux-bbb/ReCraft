@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft lint <project> [--limit N]` checks the output invariants over every function and both
+  levels, with a non-zero exit on a violation: every `goto` has its label, labels are defined
+  once, braces balance outside string literals, no `if ()`/`while ()`, the signature declares
+  every `argN` the body uses, and no `loc_` label sits above the signature. It reports a summary
+  plus the first offenders. Corpus: 62 texts, no findings; Notepad (all 502 functions, 1004
+  texts) reports none either.
 - `merge_identical_if_arms` recounted the braces of every line while scanning a candidate block,
   which made the pass quadratic on deeply nested code. The per-line net brace counts are now
   computed once (and recomputed after the rare merge) — the arithmetic is unchanged, so the

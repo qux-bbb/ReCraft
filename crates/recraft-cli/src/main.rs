@@ -244,6 +244,14 @@ enum Commands {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Check the decompiler output invariants over every function (non-zero exit on a
+    /// violation).
+    Lint {
+        project: PathBuf,
+        /// Check at most this many functions (default: all).
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Evaluate function discovery against exports + .pdata (ground truth).
     Eval {
         file: PathBuf,
@@ -510,6 +518,10 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let materialized = materialize_project(&project)?;
             cmd_golden(&materialized.path, dir.as_deref(), check, limit)
+        }
+        Commands::Lint { project, limit } => {
+            let materialized = materialize_project(&project)?;
+            cmd_lint(&materialized.path, limit)
         }
         Commands::Eval { file, map, json } => cmd_eval(&file, map.as_deref(), json),
         Commands::Demangle { name } => {
@@ -1196,6 +1208,47 @@ fn cmd_metrics(
         Err(Error::internal(format!(
             "quality gate failed: {}",
             failures.join("; ")
+        )))
+    }
+}
+
+fn cmd_lint(project: &Path, limit: Option<usize>) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let report = recraft_decompile::lint(&mut session, limit.unwrap_or(usize::MAX))?;
+    println!("functions:  {}", report.functions);
+    println!("checked:    {} texts (L1 + L2)", report.checked);
+    println!("findings:   {}", report.findings.len());
+    for kind in [
+        recraft_decompile::LintKind::GotoWithoutLabel,
+        recraft_decompile::LintKind::DuplicateLabel,
+        recraft_decompile::LintKind::UnbalancedBraces,
+        recraft_decompile::LintKind::EmptyCondition,
+        recraft_decompile::LintKind::UndeclaredArgument,
+        recraft_decompile::LintKind::LabelAboveSignature,
+    ] {
+        let count = report.count(kind);
+        if count > 0 {
+            println!("  {:<24} {count}", kind.as_str());
+        }
+    }
+    for finding in report.findings.iter().take(10) {
+        println!(
+            "  {} ({}) : {} — {}",
+            finding
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("sub_{:x}", finding.start.get())),
+            finding.kind.as_str(),
+            finding.detail,
+            finding.start
+        );
+    }
+    if report.ok() {
+        Ok(())
+    } else {
+        Err(Error::internal(format!(
+            "{} output invariant violations",
+            report.findings.len()
         )))
     }
 }

@@ -31,8 +31,9 @@ pub use l2::{
     recover_args, recover_l2,
 };
 pub use quality::{
-    FunctionQuality, GoldenReport, QualityReport, check_golden, check_golden_limited,
-    default_golden_dir, golden_text, measure, write_golden, write_golden_limited,
+    FunctionQuality, GoldenReport, LintKind, LintReport, QualityReport, check_golden,
+    check_golden_limited, default_golden_dir, golden_text, lint, measure, write_golden,
+    write_golden_limited,
 };
 pub use structuring::{pseudocode_l1, pseudocode_l2};
 

@@ -14,13 +14,14 @@
 //! replaced by a placeholder so snapshots survive layout shifts, while statement and
 //! control-flow shapes still diff.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
 use recraft_ir::{Lifter, Stmt};
 
-use crate::pseudocode_l1;
+use crate::{pseudocode_l1, pseudocode_l2};
 
 /// Per-function measurements.
 #[derive(Debug, Clone)]
@@ -187,6 +188,217 @@ pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
         skipped,
         intrinsics: intrinsic_histogram,
     })
+}
+
+/// One way the emitted pseudo-C can be malformed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LintKind {
+    /// A `goto loc_…` without a matching label definition.
+    GotoWithoutLabel,
+    /// The same label defined twice in one function.
+    DuplicateLabel,
+    /// Unbalanced braces outside string literals.
+    UnbalancedBraces,
+    /// `if ()` or `while ()` with no condition.
+    EmptyCondition,
+    /// The body uses an argument the signature does not declare.
+    UndeclaredArgument,
+    /// A `loc_` label printed above the signature line.
+    LabelAboveSignature,
+}
+
+impl LintKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LintKind::GotoWithoutLabel => "goto without label",
+            LintKind::DuplicateLabel => "duplicate label",
+            LintKind::UnbalancedBraces => "unbalanced braces",
+            LintKind::EmptyCondition => "empty condition",
+            LintKind::UndeclaredArgument => "undeclared argument",
+            LintKind::LabelAboveSignature => "label above signature",
+        }
+    }
+}
+
+/// A lint finding: which rule, in which function.
+#[derive(Debug, Clone)]
+pub struct LintFinding {
+    pub start: Address,
+    pub name: Option<String>,
+    pub kind: LintKind,
+    pub detail: String,
+}
+
+/// Aggregate of [`lint`].
+#[derive(Debug, Default)]
+pub struct LintReport {
+    pub functions: usize,
+    /// Functions whose L1 and L2 text were both checked.
+    pub checked: usize,
+    pub findings: Vec<LintFinding>,
+}
+
+impl LintReport {
+    pub fn ok(&self) -> bool {
+        self.findings.is_empty()
+    }
+
+    /// Findings of one rule.
+    pub fn count(&self, kind: LintKind) -> usize {
+        self.findings.iter().filter(|f| f.kind == kind).count()
+    }
+}
+
+/// Check the structural invariants every emitted function must hold, on both L1 and L2 text.
+///
+/// These are the properties the text passes promise: a label for every `goto`, one definition per
+/// label, balanced braces outside string literals, no conditionless branch, a signature that
+/// declares every argument the body uses, and no label above the signature. A violation is a
+/// decompiler bug, not a style question, so `recraft lint` exits non-zero when one is found.
+pub fn lint(session: &mut Session, limit: usize) -> Result<LintReport> {
+    let mut functions = session.functions()?;
+    functions.sort_by_key(|function| function.start);
+    let total = functions.len();
+    functions.truncate(limit);
+    let mut report = LintReport {
+        functions: total,
+        checked: 0,
+        findings: Vec::new(),
+    };
+    for function in functions {
+        let name = session.name_at(function.start)?;
+        let texts = [
+            pseudocode_l1(session, function.start)?.text(),
+            pseudocode_l2(session, function.start)?.text(),
+        ];
+        for text in texts {
+            report.checked += 1;
+            for (kind, detail) in lint_text(&text) {
+                report.findings.push(LintFinding {
+                    start: function.start,
+                    name: name.clone(),
+                    kind,
+                    detail,
+                });
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// The invariant violations in one rendered function.
+fn lint_text(text: &str) -> Vec<(LintKind, String)> {
+    let mut findings = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let labels: Vec<String> = lines
+        .iter()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let name = trimmed.strip_suffix(':')?;
+            name.starts_with("loc_").then(|| name.to_owned())
+        })
+        .collect();
+    for (index, line) in lines.iter().enumerate() {
+        for target in goto_targets(line) {
+            if !labels.iter().any(|label| label == &target) {
+                findings.push((LintKind::GotoWithoutLabel, target));
+            }
+        }
+        if line.contains("if ()") || line.contains("while ()") {
+            findings.push((LintKind::EmptyCondition, (*line).trim().to_owned()));
+        }
+        let _ = index;
+    }
+    let mut reported: BTreeSet<String> = BTreeSet::new();
+    for label in &labels {
+        if reported.contains(label) {
+            continue;
+        }
+        if labels
+            .iter()
+            .filter(|candidate| *candidate == label)
+            .count()
+            > 1
+        {
+            findings.push((LintKind::DuplicateLabel, label.clone()));
+            reported.insert(label.clone());
+        }
+    }
+    // Braces outside string literals.
+    let mut depth = 0isize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for ch in text.chars() {
+        match ch {
+            '"' if !escaped => quoted = !quoted,
+            '\\' if quoted => escaped = !escaped,
+            '{' if !quoted => depth += 1,
+            '}' if !quoted => depth -= 1,
+            _ => escaped = false,
+        }
+    }
+    if depth != 0 {
+        findings.push((LintKind::UnbalancedBraces, format!("depth {depth}")));
+    }
+    // The signature must declare every argument the body uses.
+    let signature = lines
+        .iter()
+        .position(|line| line.trim_end().ends_with('{') && !line.trim_start().starts_with("//"));
+    if let Some(signature) = signature {
+        for line in lines.iter().take(signature) {
+            if line.trim().starts_with("loc_") {
+                findings.push((LintKind::LabelAboveSignature, (*line).trim().to_owned()));
+            }
+        }
+        let declared = lines[signature]
+            .split('(')
+            .nth(1)
+            .unwrap_or_default()
+            .split(')')
+            .next()
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|parameter| {
+                let name = parameter.trim().rsplit(' ').next()?;
+                name.strip_prefix("arg")?.parse::<usize>().ok()
+            })
+            .max()
+            .unwrap_or(0);
+        let used = text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .filter_map(|token| {
+                token
+                    .strip_prefix("arg")
+                    .and_then(|digits| digits.parse::<usize>().ok())
+            })
+            .max()
+            .unwrap_or(0);
+        if used > declared {
+            findings.push((
+                LintKind::UndeclaredArgument,
+                format!("arg{used} > {declared}"),
+            ));
+        }
+    }
+    findings
+}
+
+/// Every `loc_…` target named by a `goto` on this line.
+fn goto_targets(line: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut rest = line;
+    while let Some(position) = rest.find("goto loc_") {
+        let after = &rest[position + "goto loc_".len()..];
+        let length = after
+            .chars()
+            .take_while(|ch| ch.is_ascii_hexdigit())
+            .count();
+        if length > 0 {
+            targets.push(format!("loc_{}", &after[..length]));
+        }
+        rest = &after[length..];
+    }
+    targets
 }
 
 /// Result of comparing the project with a golden directory.
