@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/REPORT-2026-10-31.md` summarises this stage of work: the before/after numbers for
+  notepad (L2 lines 34 259 → 30 102, `goto` 1 264 → 452, named globals 0 → 2 069, field accesses
+  137 → 777, 45 KB function 1.6 s → 1.2 s), the baselines for all five samples, what each theme
+  changed, the remaining limitations (multi-entry loops are the one structural gap left) and the
+  commands that reproduce every figure.
 - The whole Go sample now passes the output invariants: `recraft lint .tmp/go.rcraft --level l1`
   checks all **3261** functions and reports **0** findings (every `goto` labelled, labels defined
   once, braces balanced outside strings, no empty condition, signatures declaring what they use,
