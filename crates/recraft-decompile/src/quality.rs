@@ -301,6 +301,10 @@ pub fn lint(session: &mut Session, limit: usize, level: LintLevel) -> Result<Lin
             }
         }
     }
+    if report.checked == 0 {
+        // `--limit 0` would otherwise look like a clean run that inspected nothing.
+        return Err(Error::internal("no texts checked: raise --limit above 0"));
+    }
     Ok(report)
 }
 
@@ -493,6 +497,10 @@ pub fn check_golden_limited(
             }
             Err(_) => report.missing.push(file_name),
         }
+    }
+    if report.checked == 0 {
+        // `--limit 0` would otherwise look like a clean run that inspected nothing.
+        return Err(Error::internal("no texts checked: raise --limit above 0"));
     }
     Ok(report)
 }
