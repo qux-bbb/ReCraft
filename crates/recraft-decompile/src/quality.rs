@@ -651,9 +651,11 @@ mod tests {
     use recraft_analysis::{analyze, persist};
     use std::path::PathBuf;
 
-    fn corpus() -> Option<(Session, tempfile::TempDir)> {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/build/x64/corpus.exe");
+    fn corpus_for(bits: &str) -> Option<(Session, tempfile::TempDir)> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build")
+            .join(bits)
+            .join("corpus.exe");
         let bytes = std::fs::read(path).ok()?;
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("quality.rcraft");
@@ -661,6 +663,10 @@ mod tests {
         let result = analyze(&mut session).unwrap();
         persist(&mut session, &result).unwrap();
         Some((session, dir))
+    }
+
+    fn corpus() -> Option<(Session, tempfile::TempDir)> {
+        corpus_for("x64")
     }
 
     #[test]
@@ -680,6 +686,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_32bit_corpus_passes_every_output_invariant() {
+        let Some((mut session, _dir)) = corpus_for("x86") else {
+            return;
+        };
+        assert!(!session.image().is_64);
+        let report = lint(&mut session, usize::MAX, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.affected(), 0);
+    }
     #[test]
     fn the_corpus_passes_every_output_invariant() {
         let Some((mut session, _dir)) = corpus() else {

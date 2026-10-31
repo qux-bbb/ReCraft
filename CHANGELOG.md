@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The 32-bit corpus is lint-clean under `cargo test` too
+  (`the_32bit_corpus_passes_every_output_invariant`); the test helper now takes the architecture
+  (`corpus_for("x64" | "x86")`), so both ABIs are covered by the same assertion.
 - The corpus is asserted to be lint-clean in `cargo test` (`the_corpus_passes_every_output_invariant`):
   no findings, zero affected functions and exactly `2 × functions` texts checked, so CI catches an
   invariant regression without running the CLI.
