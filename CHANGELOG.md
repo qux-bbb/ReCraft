@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/REPORT-2026-10-31.md` gains a maintainer quick reference: the exact command sequence to run
+  after touching the decompiler (fmt, clippy, tests, lint, the five golden checks, metrics), the
+  order to read the results in (lint → golden diff → metrics) and where the remaining work lives
+  (multi-entry loops, with the two reference functions).
 - Verified that `recraft-ui` still builds against the current decompiler and CLI APIs
   (`cargo build -p recraft-ui --target-dir target/ui-check`, a separate target directory because
   a running instance locks the default one).
