@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The golden-snapshot section of `docs/QUALITY.md` lists the five sets with their function counts
+  and the **203**-function total in one place, so the regression surface is stated where the
+  update workflow is described.
 - `recraft lint --limit N` says so in its summary (`functions: 3261 (checked first 300)`), which used
   to read like a contradiction next to the checked-text count.
 - `recraft lint --json` also carries the per-rule counts (`"rules":{"goto without label":0,…}`), so

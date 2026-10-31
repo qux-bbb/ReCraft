@@ -180,11 +180,13 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 ## golden 快照
 
-- 目录：`tests/golden/corpus/`（x64 语料，31 个函数）、`tests/golden/corpus86/`（32 位
-  语料，32 个函数）与 `tests/golden/notepad/`（notepad 前 40 个函数，`--limit 40`）、`tests/golden/crackme/`（前 60 个函数，`--limit 60` 生成）、`tests/golden/go/`（Go 样本前 40 个函数，用 `--limit 40` 生成；Go 的
-  符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符），每个函数一个 `.c` 文件，**按符号名命名**（插入新函数不会
-  重排已有文件；重名函数追加地址后缀）。32 位快照的 L1 文本按设计保留原始形态
-  （`eax = var_4;`，对应 x64 的 `eax = (rcx + rdx);`），参数名与 ABI 类型属于 L2。
+- 目录（合计 **203** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
+  （32 位语料，32）、`tests/golden/notepad/`（notepad 前 40 个函数，`--limit 40`）、
+  `tests/golden/crackme/`（前 60，`--limit 60`）、`tests/golden/go/`（Go 前 40，`--limit 40`；
+  Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数
+  一个 `.c` 文件，**按符号名命名**（插入新函数不会重排已有文件；重名函数追加地址后缀）。
+  32 位快照的 L1 文本按设计保留原始形态（`eax = var_4;`，对应 x64 的
+  `eax = (rcx + rdx);`），参数名与 ABI 类型属于 L2。
 
 - 内容：**归一化后的 L1 文本**——`0x...` 地址与 `loc_...` 标签替换为 `0xADDR` /
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
