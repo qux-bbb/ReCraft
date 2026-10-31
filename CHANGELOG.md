@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` carries the minimal reproduction of the shape: `loc_140017355` is the first
+  statement of a one-line `if` arm, jumped back to from 15 places far below, so the jump lands
+  inside an arm that closed long before the jump — the region is not balanced and no text pass can
+  fold it; it is the smallest case for the guard-hoisting work.
 - `docs/NEXT.md` narrows the target further: in `sub_140013154` the three hottest backward labels
   (`loc_14001de8b` 16 jumps, `loc_140017355` 15, `loc_140015c81` 8) account for 39 of its 147
   backward jumps and each is referenced only by backward jumps, so folding just those three would
