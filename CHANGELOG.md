@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The report's verification section names this stage's closing commit (`c009fb4`): 453 snapshot
+  functions across the five sets with zero mismatches, and lint clean on Notepad, crackme and both
+  corpora.
 - `tests/golden/notepad` covers 170 functions instead of 40, which brings in `sub_140004264` — the
   Notepad reference for the multi-entry loop shape — so both reference functions are now guarded
   by a snapshot and by lint. Goldens total **453** functions (notepad 170, crackme 160,
