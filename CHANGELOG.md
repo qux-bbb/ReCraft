@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The reference case in `docs/NEXT.md` carries its current line numbers again (`loc_140017355` at
+  line 1212, the 15 backward jumps at 7778–7874 of a 9857-line body) and says they move with the
+  text passes, so a reader does not hunt for a stale position.
 - Re-ran the full Go sweep at L1 after all the stage-two text changes: **3261** functions, 0
   findings, so the invariants still hold on the largest sample with the nested-if fold, the
   accumulation merge, the narrow/compound constant folds and the block-boundary fix in place.
