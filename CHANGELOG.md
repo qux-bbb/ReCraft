@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The command cheatsheet in `docs/QUALITY.md` lists the flags this stage added: `metrics --list`,
+  `metrics --max-functions 0` and `export-pseudo --only-unstructured`, next to the existing lint,
+  gate and snapshot commands.
 - Restored the two headings that had never been real headings: `NEXT.md` §1.2 (the goto-into-`do`
   shape) was left as a single `#` and §1.4 (local-variable reconstruction) was glued to the end of
   §1.3. The document now lists all seven sections, and a scan finds no numbered heading using a

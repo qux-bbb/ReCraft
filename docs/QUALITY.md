@@ -26,6 +26,9 @@
 recraft lint <project> [--limit N] [--level l1|l2] [--json]     # 输出不变量自检
 recraft metrics <project> [--json]
 recraft metrics <project> --min-structured 0.6 --min-coverage 0.75   # 门禁
+recraft metrics <project> --list                                       # 未结构化函数清单（跳转数降序）
+recraft metrics <project> --max-functions 0                            # 全样本（默认上限 2000）
+recraft export-pseudo <project> --dir out --only-unstructured          # 把待改造的函数导出成文件
 recraft golden <project> --dir tests/golden/corpus                    # 写入快照
 recraft golden <project> --dir tests/golden/go --limit 60             # 大项目只取前 N 个函数
 recraft golden <project> --dir tests/golden/corpus --check           # 对比快照
