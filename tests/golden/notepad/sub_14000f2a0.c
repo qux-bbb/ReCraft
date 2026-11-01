@@ -1,0 +1,62 @@
+// L1 structure recovery (3 blocks)
+void sub_14000f2a0_l1(void) {
+    esi = 0;
+    rdi = rcx;
+    r14d = esi;
+    var_60 = esi;
+    var_58 = esi;
+    GetMenu(qword_ADDR);
+    rbp = rax;
+    SendMessageW(qword_ADDR, 0xADDR, &var_60, &var_58);
+    eax = var_58;
+    r15d = (rsi + 1);
+    ebx = esi;
+    bl = (uint8)((var_60 == eax));
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, (rsi + 0xADDR), ebx);
+    OpenClipboard(rdi);
+    if (eax != 0) {
+        IsClipboardFormatAvailable(r15d);
+        r14d = eax;
+        CloseClipboard();
+    }
+    ebx = esi;
+    bl = (uint8)((r14d == 0));
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    r9d = 0;
+    SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+    ebx = esi;
+    bl = (uint8)((rax == 0));
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    ebx = esi;
+    bl = (uint8)((dword_ADDR != esi));
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, ebx);
+    SendMessageW(qword_ADDR, 0xADDR, 0, 0);
+    sil = (uint8)((eax == 0));
+    GetSubMenu(rbp, r15d);
+    EnableMenuItem(rax, 0xADDR, esi);
+    eax = dword_ADDR;
+    eax = -(eax);
+    ebx = ((eax != 0) ? 8 : 0);
+    GetSubMenu(rbp, 2);
+    CheckMenuItem(rax, 0xADDR, ebx);
+    GetSubMenu(rbp, 3);
+    ecx = dword_ADDR;
+    ecx = -(ecx);
+    r8d = ((ecx != 0) ? 8 : 0);
+    CheckMenuItem(rax, 0xADDR, (r8d & 8));
+    return;
+}
