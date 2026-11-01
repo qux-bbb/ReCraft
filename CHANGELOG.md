@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The handoff note repairs two bold markers a script had clipped and adds where the fallbacks
+  actually concentrate, measured with `metrics --list`: Go's 263 are almost all runtime internals
+  (cpu.processOptions 29, maps.(*Iter).Next 22, pruneTombstones 21, five strconv helpers, five
+  mapassign variants), which are hand-written assembly or lock-retry code rather than ordinary Go;
+  crackme's are two functions (92 and 62 jumps); Notepad's are essentially one (369).
 - `recraft --help` opens with a short guide: what a `.rcraft` project is, the `import` → `analyze` →
   `decompile --l2 --addr` sequence, what `--addr` accepts and that `metrics`/`lint`/`golden` judge
   the output without the GUI.
