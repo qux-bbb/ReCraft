@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The stage report gains a commit-composition table (§5.2): 116 commits so far, 72 of them
+  documentation. The high documentation share is deliberate — the negative results and the
+  per-metric priority findings are what save the next session the most time.
 - Both stage reports lost their stale figures: the newer one said 196 Go fallbacks (now 263, with the
   runtime internals named) and 148 tests (now 150), the older one said 196 as well (now 263 with a
   note that 196 came from a 2000-function sample), and the verification heading names the current
