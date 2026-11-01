@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Walked the maintainer checklist in `REPORT-2026-10-31.md` verbatim: fmt, clippy, the workspace tests,
+  `lint`, the five snapshot checks and `metrics` all run as written, and the note that said
+  `sub_140004264` was outside the snapshot set is corrected - the set now covers all 502 functions.
 - Ran the test suites crate by crate for the record: UI 73, decompile 152, IR 24, core 17, analysis 16
   (plus the smaller crates), all green - the decompiler work has not left any crate behind.
 - Sized the local-variable prize: 2 497 `var_XX = …;` writes, but only 339 slots are written more than
