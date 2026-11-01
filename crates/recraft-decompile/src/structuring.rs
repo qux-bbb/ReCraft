@@ -6924,6 +6924,38 @@ mod tests {
     }
 
     #[test]
+    fn the_corpus_output_has_no_foldable_nested_if_left() {
+        // Regression fence for the fold: the pass must already be at its fixpoint on real
+        // output, so running it again over every snapshot changes nothing.
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/corpus");
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        let mut checked = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("c") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut lines: Vec<PseudoLine> = text
+                .lines()
+                .map(|line| PseudoLine {
+                    addr: Address::new(0x1000),
+                    text: line.to_owned(),
+                })
+                .collect();
+            let before = joined(&lines);
+            collapse_nested_if_wrappers(&mut lines);
+            assert_eq!(before, joined(&lines), "{}", path.display());
+            checked += 1;
+        }
+        assert!(checked > 20, "only {checked} snapshots read");
+    }
+    #[test]
     fn nested_single_if_wrappers_collapse_into_one_condition() {
         let mut lines = snippet(&[
             "void sub_1(int64 arg1) {",

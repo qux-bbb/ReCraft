@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The nested-`if` fold has a fixpoint fence: a test reads every `tests/golden/corpus` snapshot,
+  runs the pass over it and asserts the text does not change, so the pass is proven already
+  saturated on real output and any future edit that leaves foldable nesting behind fails the test.
 - Nested single-arm `if`s fold into one condition: `if (a) { if (b) { … } }` is emitted by the
   structurer whenever two consecutive tests share a join, but the source had one condition. The
   new pass writes `if (a && b)` and lifts the body a level, only when the inner `if` is the whole
