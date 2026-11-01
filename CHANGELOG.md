@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Implemented and reverted a register copy-propagation pass. The rule was sound - within a window
+  where `src` is neither written nor clobbered and `dst` is overwritten, rename the readers of `dst`
+  to `src` and drop the copy - but it fired **zero** times across 502 Notepad functions (29 664 lines,
+  1 508 copies, unchanged). The copies are real data movement: their destination is usually never
+  written again while the source is reused immediately, so the window closes before the readers.
+  That settles that local-variable reconstruction, not copy propagation, is what removes them.
 - Two more tests for behaviour that only the CLI exercised: `measure(session, 0)` proves a zero
   limit means "all functions" (and that `skipped` counts the rest), and `check_golden_limited` on an
   empty directory proves every function is reported missing, which is the case behind the
