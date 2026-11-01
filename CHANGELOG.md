@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The stage report's verification section names the current commit and mentions the bit-scan lift
+  next to the negative results, so the closing summary reflects what actually shipped.
 - `docs/QUALITY.md` audits the 138 inline-asm statements Notepad still has: 30 `lock` atomics,
   21 flag-dependent `if (…) goto …`, 21 one-operand `imul` (a 64-bit `edx:eax` product that would
   need more lines as C), 12 `div`/`mul`, and 44 system or implicit-register instructions. The note
