@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-measured the Go sample after the sign-extension lift: inline asm 1905 → **1899** and the
+  histogram is `0:2998 1:60 2:38 3:31 4:27 … 45:1`, so 60 of the 263 fallbacks carry a single jump -
+  the most actionable slice for that sample. Docs updated, and the histogram is now recorded next to
+  the roadmap note in `QUALITY.md`.
 - Corrected crackme's inline-asm count: `metrics` reports **265**, not 266 - the sign-extension lift
   took one more statement there than the bit scans alone, and the docs had stopped at the earlier
   number. Both tables and the two prose mentions now say 265.
