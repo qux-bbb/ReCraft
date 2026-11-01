@@ -671,11 +671,6 @@ const KNOWN_STRUCTS: [KnownStruct; 3] = [
     },
 ];
 
-/// `GetClientRect(hwnd, &var_30)` makes the four 32-bit slots starting at `var_30` a `RECT`;
-/// naming the later slots after their fields reads like the structure the API fills.
-/// A direct call whose arguments were set up in another block records none, so it prints
-/// `sub_X()`. The widest sibling call to the same target shows how many arguments it takes;
-/// printing that many register placeholders keeps the arity of the site visible.
 /// A constant moved into a register for a single comparison reads better inline:
 /// `eax = 0x111; … if (arg2 > eax) {` becomes `if (arg2 > 0x111) {`. The assignment is only
 /// dropped when the register is written again before any other read, so the value cannot be
@@ -1821,6 +1816,8 @@ fn structure_matching(text: &str, needles: &[(usize, String)]) -> Option<&'stati
         .0;
     KNOWN_STRUCTS.get(index)
 }
+/// `GetClientRect(hwnd, &var_30)` makes the four 32-bit slots starting at `var_30` a `RECT`;
+/// naming the later slots after their fields reads like the structure the API fills.
 fn name_known_struct_fields(lines: &mut [PseudoLine]) {
     let needles = structure_needles();
     for index in 0..lines.len() {

@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `fold_constant_registers` no longer carries two unrelated paragraphs in its doc comment: the
+  `GetClientRect`/`RECT` sentence moved to `name_known_struct_fields`, where the code it describes
+  lives, and the constant-fold note states that it also folds into a compound assignment.
 - Walked the snapshot workflow from scratch on a temp directory: `golden --dir <new>` wrote 31
   files, `--check` reported 0 mismatched, and appending one line to a snapshot made `--check` print
   `mismatched: 1`, `diff: add_leaf.c` and exit 1. Write, check and drift detection all behave as
