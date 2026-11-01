@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Exercised the project-free paths on the real kernel32.dll (862 KB): `info` lists 8 sections, 107
+  import modules and 1292 imported functions, and `eval` reports recall 1.000 with precision 0.942
+  against entry + code exports + `.pdata` (2419 ground truth, 2567 detected, 148 unmatched call
+  targets). Nothing in the stage's work disturbed discovery.
 - Sampled Go's single-jump fallbacks too (cmpbody, maps.(*Map).getWithoutKey, runtime.mapaccess2,
   strconv.FormatInt): each jumps backwards to a label followed by loop-body statements, so the
   single-jump slice is not an easy win on that sample either.
