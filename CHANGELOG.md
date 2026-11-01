@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Measured the snapshot suite after it grew to 502 Notepad functions: `golden --check` takes 12.7 s
+  in a debug build, dominated by the 576 KB reference function; the other 501 cost about 2 s
+  together, and the Go 60-snapshot check is 0.6 s. Recorded in `docs/PERF.md`.
 - Snapshot coverage is now complete for the main sample: `tests/golden/notepad` holds all 502
   functions (1.1 MB; the 45 KB reference function alone is 576 KB) instead of the first 170 by
   address. The earlier set stopped at `sub_140004acc`, so the most complex function in the project
