@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The handoff's work-list section now carries the real-library distribution beside the samples
+  (kernel32 111 of 2000, user32 159, advapi32 125), so the remaining difficulty is visibly a property
+  of the code shape rather than of the chosen samples.
 - ntdll.dll and shell32.dll also lint clean at L1, so five system libraries (kernel32, user32,
   advapi32, ntdll, shell32) pass the invariants. The stage report gains §6.1 recording the
   validation and the two defects it found, with the lesson that controlled samples returning zero
