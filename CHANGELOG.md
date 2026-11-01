@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/REPORT-2026-11-02.md` is the stage report for this second pass at source-like output: the
+  four text transforms and the correctness fix with the safety rule each relies on, the current
+  baseline for all five samples, the full two-level lint sweeps, the 148-test / 453-snapshot
+  regression net, the four remaining limitations and the reproduce commands.
 - Full-sweep evidence for the invariants: `recraft lint .tmp/go.rcraft --level l2` covers all
   **3261** Go functions and reports 0 findings, so the six output invariants now hold on every
   sample at both levels (Notepad, crackme and both corpora were already swept at L1 + L2, and Go
