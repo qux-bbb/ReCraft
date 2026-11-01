@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `export-pseudo` also writes `index.tsv` (`file`, `address`, `gotos`, `lines`) so a directory of
+  several hundred files can be triaged: sorting by `gotos` puts the functions furthest from
+  structured control flow first. The export test checks the row count.
 - A corpus test covers `export_pseudocode`: it exports the whole x64 sample into a temp directory,
   asserts the file count matches the return value, that every file carries the L2 header (so the
   readable rendering is what gets written) and removes the directory afterwards. 150 tests now.

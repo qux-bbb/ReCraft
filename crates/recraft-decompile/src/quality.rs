@@ -497,10 +497,26 @@ pub fn export_pseudocode(session: &mut Session, dir: &Path, limit: usize) -> Res
     };
     functions.truncate(limit);
     let names = golden_file_names(session, &functions)?;
-    for (index, function) in functions.iter().enumerate() {
-        let text = pseudocode_l2(session, function.start)?.text();
-        std::fs::write(dir.join(&names[index]), text)?;
+    // The index makes a directory of a few hundred files navigable: file, address, jump count and
+    // size, which is exactly what "which function should I read first" needs.
+    let mut index = String::from("file\taddress\tgotos\tlines\n");
+    for (position, function) in functions.iter().enumerate() {
+        let code = pseudocode_l2(session, function.start)?;
+        let gotos = code
+            .lines
+            .iter()
+            .filter(|line| line.text.contains("goto loc_"))
+            .count();
+        index.push_str(&format!(
+            "{}\t{:#x}\t{}\t{}\n",
+            names[position],
+            function.start.get(),
+            gotos,
+            code.lines.len()
+        ));
+        std::fs::write(dir.join(&names[position]), code.text())?;
     }
+    std::fs::write(dir.join("index.tsv"), index)?;
     Ok(functions.len())
 }
 
@@ -737,7 +753,10 @@ mod tests {
             .expect("read dir")
             .map(|entry| entry.expect("entry").path())
             .collect();
-        assert_eq!(files.len(), written);
+        // One file per function plus the index.
+        assert_eq!(files.len(), written + 1);
+        let index = std::fs::read_to_string(out.join("index.tsv")).expect("index");
+        assert_eq!(index.lines().count(), written + 1, "index rows");
         let l2 = files
             .iter()
             .filter(|path| {
