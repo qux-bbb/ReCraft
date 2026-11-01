@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Repaired four bold markers in `docs/NEXT.md` that a helper script had clipped to a single `*`
+  (§1 量化, 该函数内部的热点, 最纯粹的一例, 规模实测) plus one in `REPORT-2026-10-31.md`; a scan
+  of every document now finds no line opening with a lone `*`.
 - The handoff note repairs two bold markers a script had clipped and adds where the fallbacks
   actually concentrate, measured with `metrics --list`: Go's 263 are almost all runtime internals
   (cpu.processOptions 29, maps.(*Iter).Next 22, pruneTombstones 21, five strconv helpers, five
