@@ -949,7 +949,11 @@ fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
 // ----------------------------------------------------------------- import ----
 
 fn cmd_import(file: &Path, out: &Path) -> Result<()> {
-    let bytes = std::fs::read(file)?;
+    // Name the file: the OS message alone ("the system cannot find the file") does not say which
+    // path was missing, and it is localised.
+    let bytes = std::fs::read(file).map_err(|error| {
+        Error::invalid_argument(format!("cannot read {}: {error}", file.display()))
+    })?;
     let total_bytes = bytes.len();
     let mut last_percent = u64::MAX;
     let mut progress = |done: u64, total: u64| {
