@@ -1113,11 +1113,10 @@ fn name_address_constants(
     if replacements.is_empty() {
         return;
     }
-    for line in lines.iter_mut() {
-        for (from, to) in &replacements {
-            line.text = replace_token(&line.text, from, to);
-        }
-    }
+    // One token pass over the body instead of one rescan per constant: a large function mentions
+    // hundreds of image addresses, and `replace_token` allocates a fresh string per call.
+    let renames: BTreeMap<String, String> = replacements.into_iter().collect();
+    rename_slots(lines, &renames);
 }
 
 /// The image addresses mentioned as `0x<hex>` constants with at least eight digits.
@@ -1746,14 +1745,10 @@ fn structure_instance_name(kind: &str) -> &'static str {
 /// member accesses.
 fn name_structure_instances(lines: &mut [PseudoLine]) {
     let mut instances: Vec<(u64, &'static str)> = Vec::new();
+    let needles = structure_needles();
     for line in lines.iter() {
         let text = line.text.clone();
-        let Some(structure) = KNOWN_STRUCTS.iter().find(|structure| {
-            structure
-                .apis
-                .iter()
-                .any(|api| text.contains(&format!("{api}(")))
-        }) else {
+        let Some(structure) = structure_matching(&text, &needles) else {
             continue;
         };
         let Some(base) = slot_address_after(&text, "&var_") else {
@@ -1798,15 +1793,33 @@ fn name_structure_instances(lines: &mut [PseudoLine]) {
     rename_slots(lines, &renames);
 }
 
-fn name_known_struct_fields(lines: &mut [PseudoLine]) {
-    for index in 0..lines.len() {
-        let text = lines[index].text.clone();
-        let Some(structure) = KNOWN_STRUCTS.iter().find(|structure| {
+// Call needles for the known structures, built once per pass instead of once per line.
+fn structure_needles() -> Vec<(usize, String)> {
+    KNOWN_STRUCTS
+        .iter()
+        .enumerate()
+        .flat_map(|(index, structure)| {
             structure
                 .apis
                 .iter()
-                .any(|api| text.contains(&format!("{api}(")))
-        }) else {
+                .map(move |api| (index, format!("{api}(")))
+        })
+        .collect()
+}
+
+/// The known structure whose API appears in `text`, if any.
+fn structure_matching(text: &str, needles: &[(usize, String)]) -> Option<&'static KnownStruct> {
+    let index = needles
+        .iter()
+        .find(|(_, needle)| text.contains(needle.as_str()))?
+        .0;
+    KNOWN_STRUCTS.get(index)
+}
+fn name_known_struct_fields(lines: &mut [PseudoLine]) {
+    let needles = structure_needles();
+    for index in 0..lines.len() {
+        let text = lines[index].text.clone();
+        let Some(structure) = structure_matching(&text, &needles) else {
             continue;
         };
         let Some(base) = slot_address_after(&text, "&var_") else {
