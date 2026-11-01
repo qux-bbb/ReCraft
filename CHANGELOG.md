@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The JSON metrics report carries the same list under `"unstructured"` (start address, name, goto
+  count, line count), so a dashboard can chart the unstructured bodies without parsing text.
 - `recraft metrics --list` prints the functions the structurer could not reduce, worst first
   (`369 goto  9868 lines  0x140013154  sub_140013154`), which is the work list for the multi-entry
   loop work and the per-function version of the `N goto` header. Notepad: 15 functions, crackme:

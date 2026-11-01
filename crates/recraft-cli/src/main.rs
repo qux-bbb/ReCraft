@@ -1182,6 +1182,17 @@ fn cmd_metrics(
             "coverage": report.coverage(),
             "skipped": report.skipped,
             "intrinsic_top": top,
+            "unstructured": report
+                .functions
+                .iter()
+                .filter(|function| !function.structured)
+                .map(|function| json!({
+                    "start": format!("{:#x}", function.start.get()),
+                    "name": function.name,
+                    "goto": function.fallbacks,
+                    "lines": function.lines,
+                }))
+                .collect::<Vec<_>>(),
         }));
     }
     println!("functions:              {}", report.total());
