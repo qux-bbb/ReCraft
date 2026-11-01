@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft metrics --list` prints the functions the structurer could not reduce, worst first
+  (`369 goto  9868 lines  0x140013154  sub_140013154`), which is the work list for the multi-entry
+  loop work and the per-function version of the `N goto` header. Notepad: 15 functions, crackme:
+  40, the largest being `sub_140006fd0` with 92 jumps.
 - `docs/REPORT-2026-11-02.md` is the stage report for this second pass at source-like output: the
   four text transforms and the correctness fix with the safety rule each relies on, the current
   baseline for all five samples, the full two-level lint sweeps, the 148-test / 453-snapshot

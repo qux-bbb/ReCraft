@@ -230,6 +230,9 @@ enum Commands {
         /// Fail (exit non-zero) when instruction coverage is below this fraction.
         #[arg(long)]
         min_coverage: Option<f64>,
+        /// List the functions the structurer could not reduce, worst first.
+        #[arg(long)]
+        list: bool,
     },
     /// Write or check golden pseudo-C snapshots (normalised L1 text).
     Golden {
@@ -506,6 +509,7 @@ fn run(cli: Cli) -> Result<()> {
             max_functions,
             min_structured,
             min_coverage,
+            list,
         } => {
             let materialized = materialize_project(&project)?;
             cmd_metrics(
@@ -514,6 +518,7 @@ fn run(cli: Cli) -> Result<()> {
                 max_functions,
                 min_structured,
                 min_coverage,
+                list,
             )
         }
         Commands::Golden {
@@ -1158,6 +1163,7 @@ fn cmd_metrics(
     max_functions: usize,
     min_structured: Option<f64>,
     min_coverage: Option<f64>,
+    list_unstructured: bool,
 ) -> Result<()> {
     let mut session = Session::open(project)?;
     let report = recraft_decompile::measure(&mut session, max_functions)?;
@@ -1198,6 +1204,30 @@ fn cmd_metrics(
     println!("inline asm statements:  {}", report.inline_asm());
     if report.skipped > 0 {
         println!("skipped (limit):        {}", report.skipped);
+    }
+    if list_unstructured {
+        // The functions the structurer could not reduce, worst first: this is the work list for
+        // the multi-entry loop work, and it is what the `N goto` header counts per function.
+        let mut loose: Vec<_> = report
+            .functions
+            .iter()
+            .filter(|function| !function.structured)
+            .collect();
+        loose.sort_by_key(|function| std::cmp::Reverse(function.fallbacks));
+        if loose.is_empty() {
+            println!("unstructured functions: none");
+        } else {
+            println!("unstructured functions:");
+            for function in loose {
+                let name = function.name.as_deref().unwrap_or("?");
+                println!(
+                    "  {:>4} goto  {:>5} lines  {:>10}  {name}",
+                    function.fallbacks,
+                    function.lines,
+                    format!("{:#x}", function.start.get())
+                );
+            }
+        }
     }
     let mut failures = Vec::new();
     if let Some(min) = min_structured
