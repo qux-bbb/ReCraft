@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Corrected crackme's inline-asm count: `metrics` reports **265**, not 266 - the sign-extension lift
+  took one more statement there than the bit scans alone, and the docs had stopped at the earlier
+  number. Both tables and the two prose mentions now say 265.
 - The roadmap's quality line now quotes crackme (91.9%) and Go (91.9% of 3261, 98.8% coverage)
   beside the corpus and Notepad figures, and says the snapshot set is 785 with Notepad complete.
 - Three live documents still said 453 snapshots (the handoff's directory listing and warning about
