@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Walked the documented quickstart end to end on a fresh project (`import --out`, `analyze`,
+  `decompile --addr --l2`, `lint`, `metrics --list`): every step succeeds, the corpus comes out at
+  31/31 structured with 0 lint findings, and `--list` reports no unstructured function. The samples
+  in the docs had only been exercised through pre-built projects before.
 - The baseline table in `docs/QUALITY.md` states when and where it was measured (2026-11-02 at
   commit `9ae2537`), so a reader can tell how old the figures are.
 - The goto-into-`do`-body shape is measured and deprioritised: Notepad has **1** instance
