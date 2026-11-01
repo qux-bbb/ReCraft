@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Repaired five headings that a script had demoted to `#` (they were meant to be `##`): `NEXT.md`
+  §0/§1.1/§2.1, `REPORT-2026-10-31.md` §5.1 and `REPORT-2026-11-02.md` §5.1, and the last one now
+  names the current commit.
 - Both READMEs show `metrics notepad.rcraft --list` in the command block, so the work list for the
   unstructured functions is discoverable from the front page.
 - The reference case in `docs/NEXT.md` carries its current line numbers again (`loc_140017355` at

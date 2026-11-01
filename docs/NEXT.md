@@ -4,7 +4,7 @@
 现状与数字见 `docs/REPORT-2026-10-31.md`，失败形状的统计见 `docs/QUALITY.md`
 「结构化失败的形状」。
 
-# 0. 阶段二已完成的部分（2026-11-02 更新）
+## 0. 阶段二已完成的部分（2026-11-02 更新）
 
 这些**已不再是待办**，保留在此仅作索引（细节见 `docs/REPORT-2026-11-02.md`）：
 
@@ -70,7 +70,7 @@ if (rax < r12) {
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
   合计 453 个函数）。
 
-# 1.1 实现地图（代码位置）
+## 1.1 实现地图（代码位置）
 
 - `crates/recraft-decompile/src/structuring.rs`
   - `emit_loop`（约 2670 行）：识别到循环头后决定 `emit_do_while` / 前置条件 `while`，
@@ -100,7 +100,7 @@ if (rax < r12) {
 - 伪 C 中 Go/C++ 符号名（`go:buildid`、`internal/abi.Name.ReadVarint`）不是合法 C 标识符，
   为便于与符号表对照而保留原样；若要合法化，需在渲染层做标识符清洗并同步 golden。
 
-# 2.1 已排查、不必做的方向
+## 2.1 已排查、不必做的方向
 
 - **跳到下一行的 `goto`**（`goto loc_X;` 紧跟 `loc_X:`）：全样本实测 **0 处**，发射器不会产生
   这种形状，写 `drop_fallthrough_gotos` 是白做。
