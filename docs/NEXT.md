@@ -4,6 +4,21 @@
 现状与数字见 `docs/REPORT-2026-10-31.md`，失败形状的统计见 `docs/QUALITY.md`
 「结构化失败的形状」。
 
+# 0. 阶段二已完成的部分（2026-11-02 更新）
+
+这些**已不再是待办**，保留在此仅作索引（细节见 `docs/REPORT-2026-11-02.md`）：
+
+- 嵌套单臂 `if` 合并为 `&&`（`collapse_nested_if_wrappers`，notepad −143 行）；
+- 累加合并（`merge_accumulations`）：`rax = &var_38; rax += 8;` → `rax = (&var_38 + 8);`；
+- 常量折叠支持子寄存器宽度（`ax`/`al`/`r8w`…）与复合赋值右操作数；
+- **修复**跨块常量折叠（循环携带值被当常量并删掉活代码），带回归测试；
+- 命名 pass 性能：`name_address_constants` 45→3 ms、两个结构体匹配 26/25→9/8 ms、
+  `name_handle_slots` 47→15 ms，输出逐字节不变；
+- 工具：`metrics --list` / `--json` 的 `unstructured`、`RECRAFT_PROFILE` 覆盖全流水线。
+
+**当前基线**（notepad 502 函数）：L2 **29 667** 行、`goto` 452、结构化 487（97.0%）、
+覆盖率 99.5%；crackme 453/493（91.9%）；corpus x64/x86 均 100%；Go 回退 196。
+
 ## 1. 多入口循环规范化（唯一能显著提升结构化率的方向）
 
 **症状**：函数体内出现 `loc_…:` 标签 + `goto`，而不是 `while`/`do` 循环。

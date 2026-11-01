@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` opens with what stage two already finished (the nested-if fold, the accumulation
+  merge, the narrow/compound constant folds, the block-boundary fix, the naming-pass speedups and
+  the new `metrics --list`), so the handoff no longer lists them as open work; the current baseline
+  and the unchanged multi-entry section follow.
 - The stage report records the end-of-stage verification on `cf6a8f9`: 148 tests, lint clean on four
   samples, all 453 snapshots matching, fmt/clippy/build clean.
 - Second measured negative result in `docs/PERF.md`: skipping the per-line text clone in
