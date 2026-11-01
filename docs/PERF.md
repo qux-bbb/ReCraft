@@ -80,3 +80,11 @@ notepad 的 45 KB 函数（`sub_140013154`，1620 基本块、约 9.9 千行 L2�
 
 剩余热点：`folds`（50 ms）与 `ifs`（47 ms）两组文本 pass、`first lift`（125 ms）。优化方式同上，
 验收标准仍是 golden 逐字节一致。
+### 反例：`ifs` 组的耗时不在括号重算
+
+曾尝试把 `merge_identical_if_arms` / `collapse_nested_if_wrappers` 里"每次合并后整篇重算
+`line_braces`"改为"只删除对应条目"（合并/删除的区间都是括号平衡的，因此后续前缀深度不变）。
+改完**输出逐字节一致**（453 快照全绿），但 `ifs` 组耗时仍是 **47.1 → 47.2 ms**，说明这 47 ms
+不来自括号重算，而来自三个条件改写 pass 每行构造新字符串（`simplify_negated_conditions`、
+`strip_condition_parentheses`、`strip_inline_condition_parentheses`）。该改动因**无收益**已回退，
+避免留下依赖"区间必定平衡"这一隐含假设的代码。今后若要压缩这 47 ms，应从字符串构造入手。

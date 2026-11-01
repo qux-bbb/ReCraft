@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A measured negative result for the performance work is recorded in `docs/PERF.md`: replacing the
+  whole-body brace recount inside the two `if` merges with local array edits kept the output
+  byte-identical but did not move the `ifs` group (47.1 → 47.2 ms), so that time is spent building
+  new strings in the three condition passes. The change was reverted rather than kept without a
+  gain.
 - `docs/PERF.md` carries the full phase breakdown for the 45 KB function after this round of work
   (cfg 0, first lift 125, alias/arg 37, seeded lift 77, emit 10, text passes ~260 split by group,
   post passes ~34, naming 15, wall clock ~1.0 s) with the three passes that were made to scan the
