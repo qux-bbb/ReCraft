@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Nested single-arm `if`s fold into one condition: `if (a) { if (b) { … } }` is emitted by the
+  structurer whenever two consecutive tests share a join, but the source had one condition. The
+  new pass writes `if (a && b)` and lifts the body a level, only when the inner `if` is the whole
+  outer body and neither arm has an `else`; a side with a top-level `||` is parenthesised, and two
+  identical conditions collapse to one. Notepad: L2 30 102 → **29 959** lines, 68 merged
+  conditions; goto/label counts unchanged. 25 golden snapshots refreshed (merges + re-indent).
 - Third and decisive negative result: no backward `goto` in Notepad has its source and target in
   the same block, i.e. every remaining jump leaves at least one `{}` pair. The text layer is
   therefore exhausted for this shape and only CFG work can remove the rest; `docs/NEXT.md` says so,
