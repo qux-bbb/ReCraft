@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An accumulation merges into the assignment that feeds it: `rax = &var_38; rax += 8;` becomes
+  `rax = (&var_38 + 8);`, and the same for loads and bit tests (`rcx = *(u64*)(rax); rcx |= 1;` →
+  `rcx = (*(u64*)(rax) | 1);`). Guards: same target, constant amount, side-effect-free value, and
+  no narrowing cast (the register add is 64-bit). Notepad: L2 29 921 → **29 651** lines; 67
+  snapshots updated.
 - A single-use constant also folds into a compound assignment: `rdx = 0x140000000; rcx += rdx;` reads
   `rcx += 0x140000000;`. Only the right-hand side of `+=`, `-=`, `&=`, `|=`, `^=`, `*=`, `<<=`,
   `>>=`, `/=`, `%=` is a fold site and the operand must equal the register, so nothing is
