@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed a real output defect found by testing on production code**: `lint` over kernel32.dll
+  reported 34 functions whose body reads `arg5`/`arg6` while the signature stopped at `arg4`. The
+  stack-argument pass widened signatures only for `sub_*` names and only when `arg1` was already
+  declared, so named functions (LCMapStringEx, CompareStringEx, CreateProcessAsUserW, ...) and
+  `(void)` thunks kept a parameter list that did not match their body - an invalid output invariant.
+  Both conditions are gone; kernel32's 5134 texts now lint clean, and the four samples plus all 785
+  snapshots are unchanged.
 - Exercised the project-free paths on the real kernel32.dll (862 KB): `info` lists 8 sections, 107
   import modules and 1292 imported functions, and `eval` reports recall 1.000 with precision 0.942
   against entry + code exports + `.pdata` (2419 ground truth, 2567 detected, 148 unmatched call

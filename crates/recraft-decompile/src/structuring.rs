@@ -1270,7 +1270,10 @@ fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
     let highest = stack_arguments.values().copied().max().unwrap_or(0);
     for line in lines.iter_mut() {
         let text = line.text.trim_end().to_owned();
-        if !text.ends_with('{') || !text.contains("sub_") || !text.contains("arg1") {
+        // Named functions and `(void)` signatures need this too: their stack arguments are
+        // recovered the same way, so a signature that stops at arg4 (or declares none) while the
+        // body reads arg5 is not valid output.
+        if !text.ends_with('{') || !text.contains('(') {
             continue;
         }
         let Some(close) = text.rfind(')') else {
@@ -1298,9 +1301,14 @@ fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
                 .unwrap_or("int64");
             parameters.push(format!("{ty} arg{index}"));
         }
-        let head = &text[..close];
+        let existing = text[open + 1..close].trim();
+        let head = &text[..open + 1];
         let tail = &text[close..];
-        line.text = format!("{head}, {}{tail}", parameters.join(", "));
+        if existing.is_empty() || existing == "void" {
+            line.text = format!("{head}{}{tail}", parameters.join(", "));
+        } else {
+            line.text = format!("{head}{existing}, {}{tail}", parameters.join(", "));
+        }
         break;
     }
 }
@@ -8663,6 +8671,42 @@ mod tests {
         // A slot inside the frame is a local and keeps its name.
         assert_eq!(lines[4].text, "    var_30 = rax;");
     }
+    #[test]
+    fn a_named_function_also_declares_its_stack_arguments() {
+        // kernel32 exposes this: a named function can read arg5/arg6 taken from the caller stack,
+        // and a signature that stops at its register parameters is invalid output.
+        let mut lines = vec![
+            test_line("// L2 params: arg1=rcx"),
+            test_line("int64 Named(int64 arg1) {"),
+            test_line("    rcx = var_70;"),
+            test_line("    return rax;"),
+            test_line("}"),
+        ];
+        name_stack_arguments(&mut lines, 0x48);
+        assert_eq!(
+            lines[1].text,
+            "int64 Named(int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5) {"
+        );
+        assert_eq!(lines[2].text, "    rcx = arg5;");
+    }
+
+    #[test]
+    fn a_void_signature_gains_the_stack_arguments_it_uses() {
+        let mut lines = vec![
+            test_line("// L2 params: (none recovered)"),
+            test_line("int64 Thunkish(void) {"),
+            test_line("    rax = var_78;"),
+            test_line("    return rax;"),
+            test_line("}"),
+        ];
+        name_stack_arguments(&mut lines, 0x48);
+        assert_eq!(
+            lines[1].text,
+            "int64 Thunkish(int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5, int64 arg6) {"
+        );
+        assert_eq!(lines[2].text, "    rax = arg6;");
+    }
+
     #[test]
     fn constants_move_into_their_comparison() {
         let mut lines = vec![
