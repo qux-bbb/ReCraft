@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Proofread the stage report against the final measurements and fixed what had drifted: the snapshot
+  count (453 to 785, with the note that Notepad is now complete), the inline-asm columns
+  (Notepad 134, crackme 266, Go 1905), Go coverage (98.8%) and the reference function's time
+  (1.1 s to 0.56 s, text passes 255 ms to 67 ms).
 - The report and quality page carry the suite's current size again (154).
 - A test pins `--only-unstructured` against a fully structured sample (the x64 corpus): it writes no
   function files, only the index header, and the READMEs show the flag. Suite at 154 tests.
