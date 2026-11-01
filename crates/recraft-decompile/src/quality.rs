@@ -763,6 +763,25 @@ mod tests {
         assert_eq!(report.affected(), 0);
     }
     #[test]
+    fn exporting_only_unstructured_skips_a_fully_structured_sample() {
+        let Some((mut session, _dir)) = corpus_for("x64") else {
+            return;
+        };
+        let out = std::env::temp_dir().join(format!("recraft-hard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let written = export_pseudocode(&mut session, &out, 0, true).expect("export");
+        assert_eq!(written, 0, "the x64 corpus is fully structured");
+        let files: Vec<_> = std::fs::read_dir(&out)
+            .expect("read dir")
+            .map(|entry| entry.expect("entry").file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(files, vec!["index.tsv".to_owned()]);
+        let index = std::fs::read_to_string(out.join("index.tsv")).expect("index");
+        assert_eq!(index.lines().count(), 1, "only the header");
+        std::fs::remove_dir_all(&out).expect("clean up");
+    }
+
+    #[test]
     fn the_histogram_counts_functions_by_fallback_jumps() {
         let Some((mut session, _dir)) = corpus_for("x64") else {
             return;

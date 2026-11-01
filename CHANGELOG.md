@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A test pins `--only-unstructured` against a fully structured sample (the x64 corpus): it writes no
+  function files, only the index header, and the READMEs show the flag. Suite at 154 tests.
 - `export-pseudo` gains `--only-unstructured`, which writes just the functions that still carry a
   fallback jump (crackme: 40 of 493 files), so reviewing the hard cases does not mean scrolling past
   a structured majority.
