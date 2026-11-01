@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Checked all eight single-jump functions in crackme: every one jumps backwards to a label followed by
+  real statements (a `continue` condition, an unmodelled-flag branch, or bookkeeping), so they are the
+  same two-entry shape - none is the easy "jump to the function's trailing return" case.
 - `metrics` prints a `goto histogram` line: how many functions carry 0, 1, 2 … fallback jumps. For
   Notepad it reads `0:487 1:1 2:3 3:1 4:3 9:3 10:2 14:1 369:1` and for crackme
   `0:453 1:8 2:7 … 92:1`, which shows at a glance that the tail is a few big functions plus a long
