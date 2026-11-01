@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The accumulation merge has a defensive test for the block boundary: two adjacent statements
+  where the first belongs to a nested block must not merge, because the value it produces is not
+  the one the second accumulates.
 - **Fixed a correctness bug in the constant fold**: a single-use constant was pushed into the first
   later mention of the register even when that mention sat inside a loop, where the value is
   loop-carried. `eax = 0; do { edx += eax; eax += 2; } while (…)` printed `edx += 0` and dropped

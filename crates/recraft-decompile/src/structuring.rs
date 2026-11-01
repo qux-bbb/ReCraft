@@ -7269,6 +7269,21 @@ mod tests {
         assert!(checked > 20, "only {checked} snapshots read");
     }
     #[test]
+    fn an_accumulation_is_not_merged_across_a_block_boundary() {
+        // The two statements are adjacent but the first one belongs to a nested block, so the
+        // value it produces is not the one the second statement accumulates.
+        let mut lines = snippet(&[
+            "    if (arg1 != 0) {",
+            "        eax = 4;",
+            "        if (arg2 != 0) { eax += 1; }",
+            "    }",
+        ]);
+        merge_accumulations(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("        eax = 4;"), "{text}");
+        assert!(!text.contains("eax = (4 + 1)"), "{text}");
+    }
+    #[test]
     fn a_constant_is_not_pushed_into_a_loop_body() {
         // `eax` is 0 before the loop but 2, 4, … on later iterations, so folding the constant
         // into the body would be wrong. The block boundary has to stop the fold.
