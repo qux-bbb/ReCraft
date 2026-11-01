@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Walked the snapshot workflow from scratch on a temp directory: `golden --dir <new>` wrote 31
+  files, `--check` reported 0 mismatched, and appending one line to a snapshot made `--check` print
+  `mismatched: 1`, `diff: add_leaf.c` and exit 1. Write, check and drift detection all behave as
+  documented.
 - `decompile --json` carries `"gotos"` and `"structured"` next to the lines, the same two facts the
   L2 header prints, so a caller can rank functions by how far they are from structured control flow
   without re-parsing the text.
