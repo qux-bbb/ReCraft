@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Both READMEs show `metrics notepad.rcraft --list` in the command block, so the work list for the
+  unstructured functions is discoverable from the front page.
 - The reference case in `docs/NEXT.md` carries its current line numbers again (`loc_140017355` at
   line 1212, the 15 backward jumps at 7778–7874 of a 9857-line body) and says they move with the
   text passes, so a reader does not hunt for a stale position.
