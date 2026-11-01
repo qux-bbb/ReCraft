@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Final verification on `e7da3b6`: 156 tests, all five snapshot sets at 0 mismatched (785 functions),
+  lint clean on the four samples, working tree clean.
 - The stage report closes with a conclusion (§8): what got shorter, more C-like, more trustworthy and
   faster, the guardrails that grew with it, and the one quantified structural gap that remains
   (multi-entry loops, with the next step pointing at CFG work rather than more text passes).
@@ -1204,6 +1206,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Final verification on `e7da3b6`: 156 tests, all five snapshot sets at 0 mismatched (785 functions),
+  lint clean on the four samples, working tree clean.
 - An x86 function that re-reads an argument after the prologue moved `esp` used to get two
   parameters with the same name (`nested_loops(int32 arg1, int32 arg1)`); parameters are now
   deduplicated by name, giving `nested_loops(int32 arg1)` as on x64.
