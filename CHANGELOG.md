@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Measured whole-sample throughput for `docs/PERF.md`: decompiling all 502 Notepad functions at L2
+  (one process each, startup and project open included) takes 10.9 s, i.e. 22 ms per function on
+  average, with the 45 KB outlier at ~1.0 s and the remaining 501 averaging ~20 ms.
 - Third negative result for the text-pass timing: skipping literal tokens in the temporary
   counter left `folds` unchanged (51.3 ms against 50.5), so the cost is the per-line tokenising
   itself and only merging the passes can move it. Reverted; `docs/PERF.md` lists all three.
