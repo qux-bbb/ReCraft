@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Scanned every exported Notepad function for rendering defects (double negation, `!!`, self
+  comparisons, assignment inside a condition, cast of a cast, negative index, `!= 0 ? -1 : 0`):
+  none of them occur. The two patterns that do appear are intended - `!= 0) ? -1 : 0` is how a
+  `neg`/`sbb` idiom sets a mask, and `sub_X();` is a call whose arguments were set up in another
+  block (documented behaviour).
 - Repository state check: 455 commits, 931 tracked files, `tests/golden` at 1.36 MB, working tree
   clean; the full verification passes on all five sets (785 snapshots), lint on the four samples and
   150 tests.
