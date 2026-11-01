@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Six section headings that a script had glued to the end of a paragraph are on their own lines again
+  (`NEXT.md` sections 1.3, 2 and 3, the earlier report's section 6, and the composition section of
+  this stage's report). A scan for headings embedded in prose now only matches the two changelog
+  entries that talk about headings on purpose.
 - The report's transformation table now lists the two instruction lifts it gained (bit scans and sign
   extension) next to the four text passes, so §1 lists everything this stage changed.
 - Proofread the stage report against the final measurements and fixed what had drifted: the snapshot
