@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Full regression on `e6274b9`: 150 tests, `lint` clean on the four samples (notepad, crackme, corpus,
+  corpus86), all five snapshot sets at 0 mismatched (453 functions), fmt/clippy clean.
 - `docs/QUALITY.md` explains why the "one jump left" functions are not text-fixable either: in
   `sub_14000da7c` (703 lines, a single `goto`) the target is a shared `CoTaskMemFree` tail inside one
   `if` arm while the jump comes from deep inside another, so inlining the tail would still leave a
