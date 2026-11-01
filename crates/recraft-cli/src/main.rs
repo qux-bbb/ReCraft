@@ -27,7 +27,8 @@ enum XrefDirection {
 #[command(
     name = "recraft",
     version,
-    about = "ReCraft — AI-native reverse engineering (pre-alpha)"
+    about = "ReCraft — AI-native reverse engineering (pre-alpha)",
+    long_about = "ReCraft — AI-native reverse engineering (pre-alpha)\n\nA project is a `.rcraft` file that `import` creates from a PE image. A typical session is\n`import <exe> -o <project>`, `analyze <project>`, then `decompile <project> --l2 --addr <addr>`\n(`--addr` accepts `0x…`, a symbol name or `entry`). `metrics`, `lint` and `golden` judge the\noutput without opening the GUI."
 )]
 struct Cli {
     #[command(subcommand)]
