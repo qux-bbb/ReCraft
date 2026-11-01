@@ -286,7 +286,7 @@ pub fn lint(session: &mut Session, limit: usize, level: LintLevel) -> Result<Lin
     let total = functions.len();
     functions.truncate(limit);
     if total == 0 {
-        return Err(Error::internal(
+        return Err(Error::invalid_argument(
             "no functions: run `analyze` before linting the output",
         ));
     }
@@ -322,7 +322,9 @@ pub fn lint(session: &mut Session, limit: usize, level: LintLevel) -> Result<Lin
         .sort_by_key(|finding| (finding.start.get(), finding.kind, finding.detail.clone()));
     if report.checked == 0 {
         // `--limit 0` would otherwise look like a clean run that inspected nothing.
-        return Err(Error::internal("no texts checked: raise --limit above 0"));
+        return Err(Error::invalid_argument(
+            "no texts checked: raise --limit above 0",
+        ));
     }
     Ok(report)
 }

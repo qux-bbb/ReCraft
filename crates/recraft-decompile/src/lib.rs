@@ -1092,7 +1092,7 @@ pub fn pseudocode_l0(
     }
 
     if lifted.is_empty() {
-        return Err(Error::internal(format!(
+        return Err(Error::invalid_argument(format!(
             "nothing to decompile at {:#x}",
             start.get()
         )));

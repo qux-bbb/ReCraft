@@ -224,6 +224,9 @@ pub enum Error {
     #[error("project storage error: {0}")]
     Storage(String),
 
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+
     #[error("operation cancelled")]
     Cancelled,
 
@@ -242,6 +245,10 @@ impl Error {
 
     pub fn unsupported(message: impl Into<String>) -> Self {
         Error::Unsupported(message.into())
+    }
+
+    pub fn invalid_argument(message: impl Into<String>) -> Self {
+        Error::InvalidArgument(message.into())
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

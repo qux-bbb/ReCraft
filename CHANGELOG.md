@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- User-input failures no longer report themselves as internal errors: `Error` gains an
+  `InvalidArgument` variant (`invalid argument: …`), used by "nothing to decompile at 0x…",
+  "no functions: run `analyze` before linting" and "no texts checked: raise --limit above 0". A
+  mistyped address now reads `error: invalid argument: nothing to decompile at 0x0` instead of
+  `error: internal error: …`, which suggested a bug in the tool.
 - The stage report's baseline row for Go now uses the full sample (2998 of 3261 structured,
   91.9%, 263 fallbacks, 1446 labels, 1959 asm) instead of the capped 2000-function numbers, and its
   test count says 149.
