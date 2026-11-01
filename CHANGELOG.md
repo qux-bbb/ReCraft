@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The goto-into-`do`-body shape is measured and deprioritised: Notepad has **1** instance
+  (`0x0140007570` line 88) against **161** of the backward-into-an-`if`-arm shape, so `docs/NEXT.md`
+  tells a future session to do §1 first and leave this one as long-tail cleanup rather than build a
+  general mechanism for it.
 - `docs/NEXT.md` §1.2 documents a second multi-entry shape found by reading the Go output:
   `goto loc_X;` immediately before a `do {` whose body contains `loc_X:`, i.e. an entry into the
   middle of a loop. The note gives the concrete node-splitting recipe (copy the prologue and the
