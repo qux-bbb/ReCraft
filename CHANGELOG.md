@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Checked the least-exercised path, the 32-bit sample at L2: `lint --level l2` reports 0 findings over
+  all 32 functions, and the text shows the expected 32-bit shape (`__cdecl`, parameters written
+  `[esp+0x4]`, callee-saved spills as `var_c = ebx;`, and the `arg2` binding for a stack argument
+  that starts at `[esp+0xc]`).
 - The stage report gains a commit-composition table (§5.2): 116 commits so far, 72 of them
   documentation. The high documentation share is deliberate — the negative results and the
   per-metric priority findings are what save the next session the most time.
