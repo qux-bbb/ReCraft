@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Measured what the L2 output is made of across all 502 Notepad functions (29 664 lines):
+  assignments 44.0%, calls 12.4%, braces/blank 12.4%, other 12.2%, control flow 11.2%, returns 3.0%,
+  headers 2.8%, labels 0.9%, `goto loc_` 0.6% and inline asm 0.5%. The unstructured residue (labels
+  plus jumps plus asm) is under 2% of the text, which puts the remaining work in perspective.
 - Tried wiring the committed corpus snapshots into `cargo test` (so a structuring change could not
   land unnoticed) and dropped the idea: a session built in-test renders one of the 31 functions
   differently from the project the snapshots were taken with, so the test would fail for a reason
