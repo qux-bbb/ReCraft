@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Third negative result for the text-pass timing: skipping literal tokens in the temporary
+  counter left `folds` unchanged (51.3 ms against 50.5), so the cost is the per-line tokenising
+  itself and only merging the passes can move it. Reverted; `docs/PERF.md` lists all three.
 - Verified that the `import` form printed in both READMEs (`import <exe> -o <project>`) still works:
   the positional file plus `-o` produced a project like the `--out` variant, so no documentation
   change was needed.
