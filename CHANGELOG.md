@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A constant folded into a comparison now also matches the register's 16- and 8-bit names:
+  `eax = 0x5a4d; if (word_140000000 != ax)` became three statements with a raw slot, and reads
+  `if (word_140000000 != 0x5a4d)` now. The constant is truncated to the compared width and the fold
+  is refused when it does not fit, so a wide value is never silently rewritten. Notepad: L2
+  29 959 → **29 938** lines; 7 snapshots updated, all of them this fold.
 - The nested-`if` fold has a fixpoint fence: a test reads every `tests/golden/corpus` snapshot,
   runs the pass over it and asserts the text does not change, so the pass is proven already
   saturated on real output and any future edit that leaves foldable nesting behind fails the test.
