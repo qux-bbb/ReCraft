@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The stage report's baseline row for Go now uses the full sample (2998 of 3261 structured,
+  91.9%, 263 fallbacks, 1446 labels, 1959 asm) instead of the capped 2000-function numbers, and its
+  test count says 149.
 - `docs/PERF.md` notes the cost of a full measurement: `metrics --max-functions 0` over the Go
   sample (3261 functions at both levels, debug build) takes about 11–12 minutes, which is why the
   default cap is 2000; the corpus is measured in seconds.
