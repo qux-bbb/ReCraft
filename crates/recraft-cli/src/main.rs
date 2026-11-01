@@ -1249,6 +1249,12 @@ fn cmd_metrics(
         "goto fallback functions: {}",
         report.total().saturating_sub(report.structured())
     );
+    let histogram: Vec<String> = report
+        .fallback_histogram()
+        .into_iter()
+        .map(|(gotos, count)| format!("{gotos}:{count}"))
+        .collect();
+    println!("goto histogram:         {}", histogram.join(" "));
     println!("labels:                 {}", report.labels());
     println!("inline asm statements:  {}", report.inline_asm());
     if report.skipped > 0 {

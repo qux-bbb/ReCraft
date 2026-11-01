@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `metrics` prints a `goto histogram` line: how many functions carry 0, 1, 2 … fallback jumps. For
+  Notepad it reads `0:487 1:1 2:3 3:1 4:3 9:3 10:2 14:1 369:1` and for crackme
+  `0:453 1:8 2:7 … 92:1`, which shows at a glance that the tail is a few big functions plus a long
+  tail of one- and two-jump ones - the same picture the export index gives per file.
 - Commit hygiene check for the final day: 83 commits, none empty, none shorter than 15 characters,
   none labelled wip/temp/fixup, and every one carries a body explaining the change.
 - The stage report ends with a delivery index (§7): which document answers which question (report,

@@ -55,6 +55,16 @@ impl QualityReport {
         self.functions.len()
     }
 
+    /// How many functions carry 0, 1, 2 … fallback jumps, so the shape of the remaining work is
+    /// visible without listing every function.
+    pub fn fallback_histogram(&self) -> std::collections::BTreeMap<usize, usize> {
+        let mut histogram = std::collections::BTreeMap::new();
+        for function in &self.functions {
+            *histogram.entry(function.fallbacks).or_insert(0usize) += 1;
+        }
+        histogram
+    }
+
     pub fn structured(&self) -> usize {
         self.functions.iter().filter(|f| f.structured).count()
     }
