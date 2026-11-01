@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The baseline table in `docs/QUALITY.md` states when and where it was measured (2026-11-02 at
+  commit `9ae2537`), so a reader can tell how old the figures are.
 - The goto-into-`do`-body shape is measured and deprioritised: Notepad has **1** instance
   (`0x0140007570` line 88) against **161** of the backward-into-an-`if`-arm shape, so `docs/NEXT.md`
   tells a future session to do §1 first and leave this one as long-tail cleanup rather than build a
