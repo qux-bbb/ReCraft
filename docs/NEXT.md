@@ -141,7 +141,19 @@ if (rsp > *(u64*)((r14 + 0x10))) {
 "向后跳进 `if` 分支"有 **161 处**。因此：**先做 §1（守卫提升），这条只作为长尾收尾**，
 不要为它单独设计通用机制。**风险与验收**：`break`/`continue` 在复制体内语义不变；复制只发生在 goto 路径（原本就跳过 P）。
 验收仍是 lint（括号/标签/参数）→ golden diff（每处变化都能解释为"复制了一段循环"）→ metrics
-（`goto` 数下降）。notepad 侧应先用 `--list` 找出类似形状再实施。## 2. 次要候选（收益小、风险低）
+（`goto` 数下降）。notepad 侧应先用 `--list` 找出类似形状再实施。## 1.3 位扫描指令（`bsf`/`bsr`/`tzcnt`/`lzcnt`/`popcnt`）仍是 `__asm`
+
+crackme 的 SIMD 字符串函数里出现 `__asm("bsf ecx, eax"); eax = ecx;`，Go 运行时同样大量使用。
+这类指令可以安全地渲染成一行内建表达式（`eax = __builtin_ctz(eax);`），但**需要新增 IR 能力**：
+
+1. `Expr` 增加 `Call { name, args }` 变体（`crates/recraft-ir/src/expr.rs`），
+2. 打印器支持它（`structuring.rs` 的表达式渲染），
+3. `lift.rs` 里 `M::Bsf/*` 分支读源操作数并写目标，
+4. 注意新变体会进入别名分析/常量传播/相等比较等所有 `match Expr`，**影响面较大**，
+   必须跑满五层回归（尤其 453 快照会大面积变动，需要逐块解释）。
+
+收益：每条指令少一行、语义可读（位扫描 → 内建函数）。风险：中等偏高（新 Expr 变体）。
+优先级低于 §1，高于纯文档工作。## 2. 次要候选（收益小、风险低）
 
 - 已完成：嵌套单臂 `if` 折叠为 `&&`（`collapse_nested_if_wrappers`，notepad −143 行）。同类候选
   还有"`else` 分支只有一句时改写成前置守卫"和"`if (a) { return x; } return y;` 折叠为三元"，

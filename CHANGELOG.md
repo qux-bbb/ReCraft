@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` §1.3 records the next bounded feature: `bsf`/`bsr`/`tzcnt`/`lzcnt`/`popcnt` still
+  print as `__asm` (e.g. `__asm("bsf ecx, eax"); eax = ecx;` in crackme's SIMD code), and modelling
+  them needs a new `Expr::Call` variant, which every `match Expr` site must handle. The note lists
+  the four steps and why the snapshot churn makes it a separate, larger piece of work.
 - Checked the least-exercised path, the 32-bit sample at L2: `lint --level l2` reports 0 findings over
   all 32 functions, and the text shows the expected 32-bit shape (`__cdecl`, parameters written
   `[esp+0x4]`, callee-saved spills as `var_c = ebx;`, and the `arg2` binding for a stack argument
