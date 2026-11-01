@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Commit hygiene check for the final day: 83 commits, none empty, none shorter than 15 characters,
+  none labelled wip/temp/fixup, and every one carries a body explaining the change.
 - The stage report ends with a delivery index (§7): which document answers which question (report,
   handoff, invariants, performance and its excluded directions, FAQ, changelog, code entry points,
   the regression net) plus the four-command verification path.
