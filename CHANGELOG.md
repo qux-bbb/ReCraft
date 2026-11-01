@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Ran the test suites crate by crate for the record: UI 73, decompile 152, IR 24, core 17, analysis 16
+  (plus the smaller crates), all green - the decompiler work has not left any crate behind.
 - Sized the local-variable prize: 2 497 `var_XX = …;` writes, but only 339 slots are written more than
   once, so about 2 158 slots are single-write. `docs/NEXT.md` §1.4 records that turning them into
   `int32 v18 = …;` declarations is a product decision, not a pure technical one - it would trade the
