@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Go row of the baseline table was measured on a 220-function sample; a fresh project built with
+  `import`/`analyze` shows what `metrics` actually covers today (the default 2000-function cap, 1261
+  skipped): **1804 of 2000 structured (90.2%)** with the same 196 fallbacks, 98.7% coverage, 1059
+  labels and 1343 inline-asm statements. The table now says so.
 - Measured whole-sample throughput for `docs/PERF.md`: decompiling all 502 Notepad functions at L2
   (one process each, startup and project open included) takes 10.9 s, i.e. 22 ms per function on
   average, with the 45 KB outlier at ~1.0 s and the remaining 501 averaging ~20 ms.
