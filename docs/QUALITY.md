@@ -60,10 +60,10 @@ inline asm statements:  9
 | 样本 | 函数 | 结构化 | 覆盖率 | `loc_` 标签 | `__asm` |
 |---|---|---|---|---|---|
 | notepad.exe（502） | 502 | 487（97.0%） | 99.5% | 267 | 138 |
-| crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 218 | 277 |
+| crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 218 | 266 |
 | corpus x64（31） | 31 | 31（100%） | 97.4% | 0 | 9 |
 | corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
-| go.exe（3261 个已定义函数） | 3261（`--max-functions 0`） | 2998 结构化（91.9%），263 个回退 | 98.7% | 1446 | 1959 |
+| go.exe（3261 个已定义函数） | 3261（`--max-functions 0`） | 2998 结构化（91.9%），263 个回退 | 98.8% | 1446 | 1905 |
 
 `recraft metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集

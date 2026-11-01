@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The baseline table follows the bit-scan lift: crackme's inline asm goes 277 → 266, Go's 1959 → 1905
+  and its coverage 98.7% → 98.8%. Notepad is unchanged (it has no bit scans in its snapshots).
 - `bsf`, `bsr` and `popcnt` are lifted instead of left as text. `UnOp` gains `Ctz`, `Bsr` and
   `Popcount`; `bsf` prints `ctz(x)`, `bsr` prints `(0x1f - clz(x))` (the exact identity, since
   `bsr` returns the index of the highest set bit) and `popcnt` prints `popcnt(x)`. crackme's SIMD
