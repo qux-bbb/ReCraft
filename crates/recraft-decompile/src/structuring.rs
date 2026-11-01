@@ -680,7 +680,9 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         }
-        let Some(use_index) = first_mention(lines, index + 1, 9, &register) else {
+        let mut names = vec![register.clone()];
+        names.extend(narrow_register(&register).into_iter().map(str::to_owned));
+        let Some(use_index) = first_mention_any(lines, index + 1, 9, &names) else {
             index += 1;
             continue;
         };
@@ -689,29 +691,39 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         let Some(condition) = trimmed
             .strip_prefix("if (")
             .and_then(|rest| rest.strip_suffix(") {"))
+            .map(str::to_owned)
         else {
             index += 1;
             continue;
         };
+        // A 16- or 8-bit test reads the low half of the register: `eax = 0x5a4d; … != ax`
+        // folds the same way once the constant is truncated to the width being compared.
+        let (folded, folded_value) = if contains_token(&condition, &register) {
+            (register.clone(), value.clone())
+        } else {
+            let Some(narrow) = narrow_register(&register).into_iter().find(|narrow| {
+                contains_token(&condition, narrow) && is_truncated_constant(&value, narrow)
+            }) else {
+                index += 1;
+                continue;
+            };
+            (narrow.to_owned(), truncate_constant(&value, narrow))
+        };
         // A bare truth test has no comparison to fold into.
-        if condition.trim() == register {
-            index += 1;
-            continue;
-        }
-        if !contains_token(condition, &register) {
+        if condition.trim() == folded {
             index += 1;
             continue;
         }
         // Comparing two known constants would print a constant condition; the register form
         // at least keeps the code readable.
-        if !has_identifier(&replace_token(condition, &register, "")) {
+        if !has_identifier(&replace_token(&condition, &folded, "")) {
             index += 1;
             continue;
         }
         let indent = " ".repeat(leading_spaces(&candidate));
         lines[use_index].text = format!(
             "{indent}if ({}) {{",
-            replace_token(condition, &register, &value)
+            replace_token(&condition, &folded, &folded_value)
         );
         // The register's next mention decides whether the assignment is dead.
         let dead = match first_mention(lines, use_index + 1, lines.len() - use_index - 1, &register)
@@ -727,6 +739,83 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// The 16- and 8-bit names of a 32-bit register (`eax` → `ax`, `al`).
+fn narrow_register(register: &str) -> Vec<&'static str> {
+    let pair = match register {
+        "eax" => ("ax", "al"),
+        "ebx" => ("bx", "bl"),
+        "ecx" => ("cx", "cl"),
+        "edx" => ("dx", "dl"),
+        "esi" => ("si", "si"),
+        "edi" => ("di", "di"),
+        "esp" => ("sp", "sp"),
+        "ebp" => ("bp", "bp"),
+        "r8d" => ("r8w", "r8b"),
+        "r9d" => ("r9w", "r9b"),
+        "r10d" => ("r10w", "r10b"),
+        "r11d" => ("r11w", "r11b"),
+        "r12d" => ("r12w", "r12b"),
+        "r13d" => ("r13w", "r13b"),
+        "r14d" => ("r14w", "r14b"),
+        "r15d" => ("r15w", "r15b"),
+        _ => return Vec::new(),
+    };
+    vec![pair.0, pair.1]
+}
+
+/// Whether a constant keeps the same value in the low 16 or 8 bits of the register, which is
+/// the only case where folding it into a narrower comparison is exact.
+fn is_truncated_constant(value: &str, narrow: &str) -> bool {
+    let Some(number) = parse_constant(value) else {
+        return false;
+    };
+    let mask: u64 = if narrow.ends_with('w') || narrow.ends_with('x') || narrow.ends_with('i') {
+        0xffff
+    } else {
+        0xff
+    };
+    number & mask == number
+}
+
+/// The constant cut to the width of a narrower register, printed in the project's hex style.
+fn truncate_constant(value: &str, narrow: &str) -> String {
+    let Some(number) = parse_constant(value) else {
+        return value.to_owned();
+    };
+    let mask: u64 = if narrow.ends_with('w') || narrow.ends_with('x') || narrow.ends_with('i') {
+        0xffff
+    } else {
+        0xff
+    };
+    format!("0x{:x}", number & mask)
+}
+
+/// A literal as a number: `0x5a4d`, `18`, `0xffffffff80000002`.
+fn parse_constant(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix("0x") {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+    value.parse::<u64>().ok()
+}
+// The first line at or after `from` that mentions any of `names`, within `limit` lines.
+fn first_mention_any(
+    lines: &[PseudoLine],
+    from: usize,
+    limit: usize,
+    names: &[String],
+) -> Option<usize> {
+    let end = (from + limit).min(lines.len());
+    for (index, line) in lines.iter().enumerate().take(end).skip(from) {
+        if names
+            .iter()
+            .any(|name| contains_token(&line.text, name.as_str()))
+        {
+            return Some(index);
+        }
+    }
+    None
+}
 /// The first line at or after `from` that mentions `name` as a token, within `limit` lines.
 fn first_mention(lines: &[PseudoLine], from: usize, limit: usize, name: &str) -> Option<usize> {
     let end = (from + limit).min(lines.len());

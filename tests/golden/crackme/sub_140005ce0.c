@@ -11,9 +11,8 @@ void sub_140005ce0_l1(void) {
     var_40 = rax;
     sub_140004f54(rbp, (r11 - 0xADDR), 0xADDR);
     *(u32*)(rdi) = eax;
-    ecx = 0;
     rax = *(u64*)((rsi + 8));
-    if (*(u8*)((rax + 0xADDR)) == cl) {
+    if (*(u8*)((rax + 0xADDR)) == 0xADDR) {
         rax = var_40;
         if (rax >= *(u64*)((rsi + 0xADDR))) {
             *(u64*)((rsi + 0xADDR)) = rax;

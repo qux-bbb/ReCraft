@@ -4,8 +4,7 @@ void sub_1400022b4_l1(void) {
     if (rax == 0) {
         al = 0;
     } else {
-        ecx = 0xADDR;
-        if (*(u16*)(rax) != cx) {
+        if (*(u16*)(rax) != 0xADDR) {
             al = 0;
             return;
         }
@@ -15,8 +14,7 @@ void sub_1400022b4_l1(void) {
             al = 0;
             return;
         }
-        eax = 0xADDR;
-        if (*(u16*)((rcx + 0xADDR)) != ax) {
+        if (*(u16*)((rcx + 0xADDR)) != 0xADDR) {
             al = 0;
             return;
         } else if (*(u32*)((rcx + 0xADDR)) <= 0xADDR) {

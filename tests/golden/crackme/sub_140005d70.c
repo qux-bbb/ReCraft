@@ -78,14 +78,15 @@ void sub_140005d70_l1(void) {
                                     } else {
                                         rax = *(u64*)((rdi + 0xADDR));
                                         rcx = *(u64*)(rax);
-                                        if ((*(u16*)((rcx + (r8 * 2))) & ax) != 0) {
+                                        eax = 0xADDR;
+                                        if ((*(u16*)((rcx + (r8 * 2))) & 0xADDR) != 0) {
                                             rax = *(u64*)((rbx + 0xADDR));
                                             r8 = *(u64*)((rbx + 8));
                                             edx = *(u32*)((rax + 0xADDR));
                                             edx >>= 0xADDR;
                                             if ((dl & 1) == 0) {
                                                 sub_14000acfc(r9d, *(u64*)((rbx + 0xADDR)));
-                                                if (0xADDR == ebp) {
+                                                if (eax == ebp) {
                                                     *(u32*)((rbx + 0xADDR)) = ebp;
                                                 } else {
                                                     *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + 1);
