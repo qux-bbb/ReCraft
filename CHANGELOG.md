@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/PERF.md` notes the cost of a full measurement: `metrics --max-functions 0` over the Go
+  sample (3261 functions at both levels, debug build) takes about 11–12 minutes, which is why the
+  default cap is 2000; the corpus is measured in seconds.
 - `docs/NEXT.md` carries the full-sample Go figures and uses them as the acceptance baseline: the
   remaining work is 15 unstructured functions in Notepad, 40 in crackme and **263** in Go (out of
   3261), with `metrics --list` as the way to enumerate them.
