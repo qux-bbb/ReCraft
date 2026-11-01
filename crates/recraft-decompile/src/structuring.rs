@@ -471,11 +471,15 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_noop_statements(&mut lines);
     mark("text passes");
     normalize_infinite_loops(&mut lines);
+    mark("  norm loops");
     name_known_struct_fields(&mut lines);
+    mark("  struct fields");
     name_structure_instances(&mut lines);
+    mark("  struct inst");
     name_void_pointer_fields(&mut lines);
-
+    mark("  void fields");
     name_global_data(&mut lines);
+    mark("  globals");
     {
         let mut functions: HashMap<u64, String> = HashMap::new();
         for name in constants(&lines) {
@@ -500,6 +504,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             .collect();
         name_address_constants(&mut lines, &functions, &literals, &data);
     }
+    mark("  constants");
     if info.is_some()
         && let Some(frame) = entry_frame_size(session, &cfg)
     {
@@ -513,6 +518,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
         name_stack_arguments(&mut lines, frame);
     }
+    mark("  stack args");
     mark("post passes");
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
@@ -1438,6 +1444,73 @@ fn raw_field_text(width: &str, base: &str, offset: u64) -> String {
     }
 }
 
+// Rename several `var_…` slots in one pass. Renaming one slot at a time rescans every line for
+/// each slot, which is O(slots × lines) on a function with hundreds of named slots; this rewrites
+/// each line once and only allocates when a token is actually renamed.
+fn rename_slots(lines: &mut [PseudoLine], names: &BTreeMap<String, String>) {
+    if names.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        if !names.keys().any(|from| line.text.contains(from.as_str())) {
+            continue;
+        }
+        let mut output = String::with_capacity(line.text.len());
+        let mut word = String::new();
+        let mut quoted = false;
+        let mut escaped = false;
+        let mut changed = false;
+        for ch in line.text.chars() {
+            if quoted {
+                word.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    quoted = false;
+                    output.push_str(&word);
+                    word.clear();
+                }
+                continue;
+            }
+            if ch == '"' {
+                output.push_str(&word);
+                word.clear();
+                quoted = true;
+                output.push(ch);
+                continue;
+            }
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                word.push(ch);
+                continue;
+            }
+            if !word.is_empty() {
+                match names.get(&word) {
+                    Some(replacement) => {
+                        output.push_str(replacement);
+                        changed = true;
+                    }
+                    None => output.push_str(&word),
+                }
+                word.clear();
+            }
+            output.push(ch);
+        }
+        if !word.is_empty() {
+            match names.get(&word) {
+                Some(replacement) => {
+                    output.push_str(replacement);
+                    changed = true;
+                }
+                None => output.push_str(&word),
+            }
+        }
+        if changed {
+            line.text = output;
+        }
+    }
+}
 /// The `*(u32*)((arg1 + 0x10))` and `*(u8*)(arg1)` occurrences of a line: width, base and
 /// offset.
 fn raw_field_uses(text: &str) -> Vec<(String, String, u64)> {
@@ -1554,9 +1627,12 @@ const HANDLE_SLOTS: &[(&str, usize, &str)] = &[
 fn name_handle_slots(lines: &mut [PseudoLine]) {
     let mut assigned: Vec<(u64, &'static str)> = Vec::new();
     for (api, index, name) in HANDLE_SLOTS {
+        // Building the needle once per API keeps the scan allocation-free: the table has dozens
+        // of entries and the body thousands of lines.
+        let needle = format!("{api}(");
         for line in lines.iter() {
             let text = line.text.as_str();
-            if !text.contains(&format!("{api}(")) {
+            if !text.contains(&needle) {
                 continue;
             }
             let Some(arguments) = call_arguments(text, api) else {
@@ -1707,6 +1783,7 @@ fn name_structure_instances(lines: &mut [PseudoLine]) {
             used.insert(token.to_owned());
         }
     }
+    let mut renames: BTreeMap<String, String> = BTreeMap::new();
     for (base, kind) in instances {
         let stem = structure_instance_name(kind);
         let mut name = stem.to_owned();
@@ -1716,11 +1793,9 @@ fn name_structure_instances(lines: &mut [PseudoLine]) {
             suffix += 1;
         }
         used.insert(name.clone());
-        let from = format!("var_{base:x}");
-        for line in lines.iter_mut() {
-            line.text = replace_token(&line.text, &from, &name);
-        }
+        renames.insert(format!("var_{base:x}"), name);
     }
+    rename_slots(lines, &renames);
 }
 
 fn name_known_struct_fields(lines: &mut [PseudoLine]) {
