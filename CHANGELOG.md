@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Snapshot coverage is now complete for the main sample: `tests/golden/notepad` holds all 502
+  functions (1.1 MB; the 45 KB reference function alone is 576 KB) instead of the first 170 by
+  address. The earlier set stopped at `sub_140004acc`, so the most complex function in the project
+  had no snapshot — which is exactly why the `cdq` lift changed three functions without any snapshot
+  noticing. 785 snapshots in total; all five sets still match.
 - Correction to the previous entry: the `cdq` lift was **not** broken. Comparing L2 exports with and
   without it shows three affected functions and the only change is `__asm("cdq")` becoming
   `edx = ((eax < 0) ? -1 : 0)`, with one site merged into the following mask as
