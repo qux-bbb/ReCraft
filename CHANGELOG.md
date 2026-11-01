@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Checked crackme's fallbacks too: 15 of the 40 have one to three jumps, and the first one inspected
+  (`sub_140002354`, a single `goto`) is the same two-entry shape as in Notepad — the label sits inside
+  an `if` arm while the jump comes from the sibling `else`, so the "repair the small ones first" plan
+  does not get easier on this sample either.
 - Full regression on `e6274b9`: 150 tests, `lint` clean on the four samples (notepad, crackme, corpus,
   corpus86), all five snapshot sets at 0 mismatched (453 functions), fmt/clippy clean.
 - `docs/QUALITY.md` explains why the "one jump left" functions are not text-fixable either: in
