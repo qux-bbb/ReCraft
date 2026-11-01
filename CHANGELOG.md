@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Checked `export-pseudo` on Go symbols, whose names contain `/`, `.`, `(` and `*`: the files come out
+  as `internal_abi_BoundsDecode.c` and `internal_abi___MapType__HashMightPanic.c`, i.e. the stem
+  sanitiser keeps every name a legal Windows file name, and the directory still gets its index.
 - The stage report's verification section names the current commit and mentions the bit-scan lift
   next to the negative results, so the closing summary reflects what actually shipped.
 - `docs/QUALITY.md` audits the 138 inline-asm statements Notepad still has: 30 `lock` atomics,
