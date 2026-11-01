@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` carries the full-sample Go figures and uses them as the acceptance baseline: the
+  remaining work is 15 unstructured functions in Notepad, 40 in crackme and **263** in Go (out of
+  3261), with `metrics --list` as the way to enumerate them.
 - The Go baseline is now the full sample: `metrics --max-functions 0` measures all **3261** functions
   and reports **2998 structured (91.9%)**, 263 fallback functions, 98.7% coverage, 1446 labels and
   1959 inline-asm statements. The table previously carried a 2000-function sample (90.2%, 196

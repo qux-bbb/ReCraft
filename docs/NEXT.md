@@ -17,7 +17,7 @@
 - 工具：`metrics --list` / `--json` 的 `unstructured`、`RECRAFT_PROFILE` 覆盖全流水线。
 
 **当前基线**（notepad 502 函数）：L2 **29 667** 行、`goto` 452、结构化 487（97.0%）、
-覆盖率 99.5%；crackme 453/493（91.9%）；corpus x64/x86 均 100%；Go 回退 196。
+覆盖率 99.5%；crackme 453/493（91.9%）；corpus x64/x86 均 100%；Go **2998/3261（91.9%），263 个回退**（全样本，`metrics --max-functions 0`）。
 
 ## 1. 多入口循环规范化（唯一能显著提升结构化率的方向）
 
@@ -65,7 +65,7 @@ if (rax < r12) {
 3. 若两者在此样本上都不成立，记录结论并保留 `goto`——IDA 同样会这样输出。
 
 **验收标准**：
-- `recraft metrics` 的 `goto fallback functions` 下降（notepad 15 → 更少，Go 196 → 更少）；
+- `recraft metrics --list` 的未结构化函数数下降（notepad 15、crackme 40、Go **263** 是当前起点）；
 - `recraft lint` 全样本仍为 0 findings；
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
   合计 453 个函数）。
