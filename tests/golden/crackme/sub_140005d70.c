@@ -13,8 +13,7 @@ void sub_140005d70_l1(void) {
         } else {
             rcx = *(u64*)((rbx + 0xADDR));
             if (rcx != 0) {
-                eax = *(u32*)((rbx + 0xADDR));
-                eax += 1;
+                eax = (*(u32*)((rbx + 0xADDR)) + 1);
                 *(u32*)((rbx + 0xADDR)) = eax;
                 if (eax == 2) {
                     eax = *(u32*)((rbx + 0xADDR));
@@ -34,8 +33,7 @@ void sub_140005d70_l1(void) {
                             if (al > 0xADDR) {
                                 cl = sil;
                             } else {
-                                rax = (int64)(r8b);
-                                rax -= 0xADDR;
+                                rax = ((int64)(r8b) - 0xADDR);
                                 eax &= 0xADDR;
                                 cl = *(u8*)(((r14 + (rax * 2)) + 1));
                             }
@@ -57,8 +55,7 @@ void sub_140005d70_l1(void) {
                                     if (r8d < ebp /* signed */) {
                                         rax = *(u64*)((rbx + 0xADDR));
                                         rdx = *(u64*)((rbx + 8));
-                                        ecx = *(u32*)((rax + 0xADDR));
-                                        ecx >>= 0xADDR;
+                                        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
                                             ecx = (int32)(r8b);
                                             r8 = rdx;
@@ -82,8 +79,7 @@ void sub_140005d70_l1(void) {
                                         if ((*(u16*)((rcx + (r8 * 2))) & 0xADDR) != 0) {
                                             rax = *(u64*)((rbx + 0xADDR));
                                             r8 = *(u64*)((rbx + 8));
-                                            edx = *(u32*)((rax + 0xADDR));
-                                            edx >>= 0xADDR;
+                                            edx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                             if ((dl & 1) == 0) {
                                                 sub_14000acfc(r9d, *(u64*)((rbx + 0xADDR)));
                                                 if (eax == ebp) {

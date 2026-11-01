@@ -4,8 +4,7 @@ void sub_1400043b8_l1(void) {
     rsi = rcx;
     edi = 0xADDR;
     if (rdx != 0 && (*(u8*)(rdx) & 0xADDR) != 0) {
-        rcx = *(u64*)(rcx);
-        rcx -= 0xADDR;
+        rcx = (*(u64*)(rcx) - 0xADDR);
         rax = *(u64*)(rcx);
         rbx = *(u64*)((rax + 0xADDR));
         rax = *(u64*)((rax + 0xADDR));

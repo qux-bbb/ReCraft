@@ -22,8 +22,7 @@ void sub_140004890_l1(void) {
     sub_140009a28(rbx);
     sub_14000a27c(eax, rsi, edi, rbp);
     if (edi == eax) {
-        eax = *(u32*)((rbx + 0xADDR));
-        eax >>= 2;
+        eax = (*(u32*)((rbx + 0xADDR)) >> 2);
         if ((al & 1) == 0) {
             eax = 0;
             return;

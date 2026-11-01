@@ -14,8 +14,7 @@ void sub_14000491c_l1(void) {
     if (rbx != 0) {
         sub_140004890(rcx, &var_20);
         if (eax == 0) {
-            eax = *(u32*)((rbx + 0xADDR));
-            eax >>= 0xADDR;
+            eax = (*(u32*)((rbx + 0xADDR)) >> 0xADDR);
             if ((al & 1) == 0) {
                 edi = 0;
             } else {

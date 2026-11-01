@@ -5,8 +5,7 @@ void sub_140005814_l1(void) {
     rax = *(u64*)((r8 + 0xADDR));
     if (rax != 0) {
         r8 = rax;
-        rax = *(u64*)((rcx + 0xADDR));
-        rax >>= 1;
+        rax = (*(u64*)((rcx + 0xADDR)) >> 1);
     } else {
         eax = 0xADDR;
     }
@@ -19,8 +18,7 @@ void sub_140005814_l1(void) {
         if (eax > 0 /* signed */) {
             eax -= 1;
             *(u32*)((rcx + 0xADDR)) = eax;
-            al = r9b;
-            al &= 7;
+            al = (r9b & 7);
             r9d >>= 3;
             al += 0xADDR;
             *(u8*)(r8) = al;

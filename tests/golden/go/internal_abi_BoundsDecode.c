@@ -11,8 +11,7 @@ void internal/abi.BoundsDecode_l1(void) {
         rax = 0xADDR;
         rbx = rdx;
         __asm("imul rdx");
-        rdi = (rbx + rdx);
-        rdi >>= 3;
+        rdi = ((rbx + rdx) >> 3);
         rdi -= rcx;
         rdx = (rdi + (rdi * 8));
         rbx -= rdx;
@@ -20,20 +19,16 @@ void internal/abi.BoundsDecode_l1(void) {
         rdi >>= 2;
         if ((ecx & 1) == 0) {
             edi &= 0xADDR;
-            r9 = rcx;
-            r9 >>= 7;
+            r9 = (rcx >> 7);
             rdx = rdi;
             edi = 0;
         } else {
-            rdx = rcx;
-            rdx >>= 3;
+            rdx = (rcx >> 3);
             edi &= 1;
             edx &= 0xADDR;
-            r9 = rcx;
-            r9 >>= 7;
+            r9 = (rcx >> 7);
         }
-        r10 = rcx;
-        r10 >>= 1;
+        r10 = (rcx >> 1);
         if ((r10d & 1) == 0) {
             r11 = r9;
             r9d &= 0xADDR;

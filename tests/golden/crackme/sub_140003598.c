@@ -24,8 +24,7 @@ void sub_140003598_l1(void) {
         var_20 = rdi;
         sub_140002864(&var_98, &var_60, r14d, rbp, rdi, r13d);
         xmm1 = var_98;
-        xmm0 = xmm1;
-        xmm0 >>= 8;
+        xmm0 = (xmm1 >> 8);
         eax = xmm0;
         var_70 = xmm1;
         if (eax >= var_b0) {
@@ -46,14 +45,11 @@ void sub_140003598_l1(void) {
             eax = xmm0;
             var_80 = xmm0;
             if (eax <= r14d /* signed */) {
-                rax = xmm0;
-                rax >>= 0xADDR;
+                rax = (xmm0 >> 0xADDR);
                 if (r14d <= eax /* signed */) {
-                    r15 = *(u64*)((rbp + 8));
-                    r15 -= 0xADDR;
+                    r15 = (*(u64*)((rbp + 8)) - 0xADDR);
                     xmm0 >>= 8;
-                    rax = xmm0;
-                    rax >>= 0xADDR;
+                    rax = (xmm0 >> 0xADDR);
                     rcx = (rax + (rax * 4));
                     rdx += (rcx * 4);
                     r15 += rdx;
@@ -105,8 +101,7 @@ void sub_140003598_l1(void) {
         var_20 = rdi;
         sub_140002864(&var_98, &var_60, r14d, rbp, rdi, r13d);
         xmm1 = var_98;
-        xmm0 = xmm1;
-        xmm0 >>= 8;
+        xmm0 = (xmm1 >> 8);
         eax = xmm0;
         var_70 = xmm1;
         if (eax >= var_b0) {

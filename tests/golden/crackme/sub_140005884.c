@@ -7,8 +7,7 @@ void sub_140005884_l1(void) {
     r11d = edx;
     if (rax != 0) {
         rcx = rax;
-        rax = *(u64*)((r9 + 0xADDR));
-        rax >>= 1;
+        rax = (*(u64*)((r9 + 0xADDR)) >> 1);
     } else {
         eax = 0xADDR;
     }
@@ -24,8 +23,7 @@ void sub_140005884_l1(void) {
             eax = 0xADDR;
             __asm("mul r11d");
             edx >>= 3;
-            al = dl;
-            al <<= 2;
+            al = (dl << 2);
             ecx = (rax + rdx);
             cl += cl;
             r11b -= cl;
@@ -34,10 +32,7 @@ void sub_140005884_l1(void) {
             cl = r11b;
             r11d = edx;
             if (al > 0xADDR /* signed */) {
-                al = bl;
-                al ^= 1;
-                al <<= 5;
-                al += 7;
+                al = (((bl ^ 1) << 5) + 7);
                 al += cl;
             }
             *(u8*)(r10) = al;

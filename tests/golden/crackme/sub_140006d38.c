@@ -11,8 +11,7 @@ void sub_140006d38_l1(void) {
         while (1) {
             rax = *(u64*)(r15);
             edx = (int32)(*(u8*)(r14));
-            ecx = *(u32*)((rax + 0xADDR));
-            ecx >>= 0xADDR;
+            ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
             if ((cl & 1) == 0) {
                 ecx = edx;
                 r8 = rsi;
@@ -26,8 +25,7 @@ void sub_140006d38_l1(void) {
                     if (*(u8*)((rsi + 0xADDR)) == 0) break;
                     if (*(u32*)((rsi + 0xADDR)) != 0xADDR) break;
                     rax = *(u64*)(r15);
-                    ecx = *(u32*)((rax + 0xADDR));
-                    ecx >>= 0xADDR;
+                    ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                     if ((cl & 1) == 0) goto loc_ADDR;
                 }
             } else {

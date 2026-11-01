@@ -2,8 +2,7 @@
 void sub_140006a8c_l1(void) {
     dl = *(u8*)((rcx + 0xADDR));
     rbx = rcx;
-    ecx = *(u32*)((rcx + 0xADDR));
-    ecx -= 2;
+    ecx = (*(u32*)((rcx + 0xADDR)) - 2);
     if (ecx == 0) {
         rcx = *(u64*)((rbx + 0xADDR));
         rdi = (rbx + 0xADDR);

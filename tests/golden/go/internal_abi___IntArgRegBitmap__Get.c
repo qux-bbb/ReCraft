@@ -3,8 +3,7 @@ void internal/abi.(*IntArgRegBitmap).Get_l1(void) {
     rcx = rbx;
     rbx >>= 0xADDR;
     rbx >>= 0xADDR;
-    rdx = (rcx + rbx);
-    rdx >>= 3;
+    rdx = ((rcx + rbx) >> 3);
     rbx = rdx;
     rdx <<= 3;
     rcx -= rdx;

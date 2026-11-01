@@ -23,8 +23,7 @@ void sub_140002100_l1(void) {
         }
         var_1e8 = var_5c8;
         edx = 0;
-        rax = &var_5c8;
-        rax += 8;
+        rax = (&var_5c8 + 8);
         var_188 = rax;
         sub_1400029dc(&var_50, 0, 0xADDR);
         rax = var_5c8;

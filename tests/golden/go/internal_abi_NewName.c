@@ -54,8 +54,7 @@ void internal/abi.NewName_l1(void) {
         internal/abi.writeVarint(rbx, rdx, r8);
         rdx = var_a0;
         rsi = var_58;
-        r8 = (rsi + rdx);
-        r8 += 1;
+        r8 = ((rsi + rdx) + 1);
         r9 = (rdx + rsi);
         r10 = var_b0;
         if (r10 == 0) {
@@ -63,8 +62,7 @@ void internal/abi.NewName_l1(void) {
             rdi = r8;
         } else {
             rdi = (r10 + rax);
-            rdi = (r9 + rdi);
-            rdi += 1;
+            rdi = ((r9 + rdi) + 1);
             r11d = (uint32)(var_b8);
             r11d |= 2;
         }
@@ -85,8 +83,7 @@ void internal/abi.NewName_l1(void) {
         edx = (uint32)(var_4f);
         *(u8*)(rax) = dl;
         rsi = (rcx - 1);
-        rdx = -(rdx);
-        rdx >>= 0xADDR;
+        rdx = (-(rdx) >> 0xADDR);
         edx &= 1;
         rdx += rax;
         rdi = var_58;
@@ -111,8 +108,7 @@ void internal/abi.NewName_l1(void) {
         rsi -= rdi;
         rsi -= 1;
         rdi = rsi;
-        rsi = -(rsi);
-        rsi >>= 0xADDR;
+        rsi = (-(rsi) >> 0xADDR);
         rdx &= rsi;
         rdx += rax;
         rsi = var_a0;
@@ -134,8 +130,7 @@ void internal/abi.NewName_l1(void) {
             rdi = var_70;
             rcx -= rdi;
             r8 = (rcx - 1);
-            rdi = -(rdi);
-            rdi >>= 0xADDR;
+            rdi = (-(rdi) >> 0xADDR);
             rsi &= rdi;
             rsi += rax;
             rdi = var_50;

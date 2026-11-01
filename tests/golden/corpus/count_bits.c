@@ -2,8 +2,7 @@
 void count_bits_l1(void) {
     eax = 0;
     do {
-        edx = ecx;
-        edx &= 1;
+        edx = (ecx & 1);
         eax += edx;
         ecx >>= 1;
     } while (ecx != 0);

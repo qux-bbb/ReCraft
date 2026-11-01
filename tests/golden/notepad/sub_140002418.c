@@ -68,8 +68,7 @@ void sub_140002418_l1(void) {
             rax = var_20;
             al &= bl;
             if (al == bl) {
-                eax = dword_ADDR;
-                eax |= 8;
+                eax = (dword_ADDR | 8);
                 dword_ADDR = 3;
                 dword_ADDR = eax;
                 if ((r11b & 0xADDR) != 0) {

@@ -60,8 +60,7 @@ void sub_1400077b4_l1(void) {
                         edi = esi;
                     }
                 } else {
-                    eax = var_70;
-                    eax -= 1;
+                    eax = (var_70 - 1);
                     qword_ADDR = rbx;
                     dword_ADDR = eax;
                     ecx = 0;

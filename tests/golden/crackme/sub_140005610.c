@@ -10,14 +10,12 @@ void sub_140005610_l1(void) {
             edx = *(u32*)((rcx + 0xADDR));
             rdi = r14;
             rcx = *(u64*)((rcx + 0xADDR));
-            eax = edx;
-            eax >>= 4;
+            eax = (edx >> 4);
             rax = (rcx + 8);
             *(u64*)((rbx + 0xADDR)) = rax;
             rsi = *(u64*)(rcx);
             loc_ADDR:
-            eax = edx;
-            eax >>= 4;
+            eax = (edx >> 4);
             if ((al & 1) != 0 && rsi < 0 /* signed */) {
                 rsi = -(rsi);
                 edx |= 0xADDR;
@@ -42,8 +40,7 @@ void sub_140005610_l1(void) {
             } else {
                 sub_140005ad4(rbx, rsi, r8b);
             }
-            eax = *(u32*)((rbx + 0xADDR));
-            eax >>= 7;
+            eax = (*(u32*)((rbx + 0xADDR)) >> 7);
             if ((al & 1) != 0) {
                 if (*(u32*)((rbx + 0xADDR)) == 0) {
                     *(u64*)((rbx + 0xADDR)) = (*(u64*)((rbx + 0xADDR)) - 1);
@@ -73,8 +70,7 @@ void sub_140005610_l1(void) {
                         edx = *(u32*)((rcx + 0xADDR));
                         edi = 4;
                         rcx = *(u64*)((rcx + 0xADDR));
-                        eax = edx;
-                        eax >>= 4;
+                        eax = (edx >> 4);
                         rax = (rcx + 8);
                         *(u64*)((rbx + 0xADDR)) = rax;
                         if ((al & 1) == 0) goto loc_ADDR;
@@ -102,8 +98,7 @@ void sub_140005610_l1(void) {
                 edx = *(u32*)((rcx + 0xADDR));
                 edi = 1;
                 rcx = *(u64*)((rcx + 0xADDR));
-                eax = edx;
-                eax >>= 4;
+                eax = (edx >> 4);
                 rax = (rcx + 8);
                 *(u64*)((rbx + 0xADDR)) = rax;
                 if ((dil & al) == 0) goto loc_ADDR;
@@ -113,8 +108,7 @@ void sub_140005610_l1(void) {
                     edx = *(u32*)((rcx + 0xADDR));
                     edi = 2;
                     rcx = *(u64*)((rcx + 0xADDR));
-                    eax = edx;
-                    eax >>= 4;
+                    eax = (edx >> 4);
                     rax = (rcx + 8);
                     *(u64*)((rbx + 0xADDR)) = rax;
                     if ((al & 1) == 0) goto loc_ADDR;

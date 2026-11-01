@@ -8,8 +8,7 @@ void sub_140002a5c_l1(void) {
     var_20 = 0;
     r8d = 0;
     edx = 0;
-    rcx = *(u64*)(rax);
-    rcx |= 2;
+    rcx = (*(u64*)(rax) | 2);
     sub_1400028bc(rcx, 0, 0, rdi);
     eax = ((eax < 0 /* signed */) ? -1 : eax);
     return;

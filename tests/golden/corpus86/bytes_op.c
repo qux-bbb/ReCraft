@@ -26,11 +26,9 @@ void bytes_op_l1(void) {
             xmm2 += xmm1;
         } while (eax < ecx /* signed */);
         xmm2 += xmm3;
-        xmm0 = xmm2;
-        xmm0 >>= 8;
+        xmm0 = (xmm2 >> 8);
         xmm2 += xmm0;
-        xmm0 = xmm2;
-        xmm0 >>= 4;
+        xmm0 = (xmm2 >> 4);
         xmm2 += xmm0;
         edi = xmm2;
     }

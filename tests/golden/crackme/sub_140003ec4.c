@@ -15,8 +15,7 @@ void sub_140003ec4_l1(void) {
     while (edi != -1) {
         if (edi <= r12d /* signed */) break;
         sub_140002b30(rcx);
-        r14 = (int64)(edi);
-        r14 <<= 3;
+        r14 = ((int64)(edi) << 3);
         rcx = (int64)(*(u32*)((rsi + 8)));
         rcx += r14;
         edi = *(u32*)((rcx + rax));

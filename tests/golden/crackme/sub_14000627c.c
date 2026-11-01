@@ -20,15 +20,12 @@ void sub_14000627c_l1(void) {
                         var_3a = al;
                         rdi = r13;
                         edx = *(u32*)((rbx + 0xADDR));
-                        eax = edx;
-                        eax >>= 4;
+                        eax = (edx >> 4);
                         if ((al & 1) != 0) {
-                            eax = edx;
-                            eax >>= 6;
+                            eax = (edx >> 6);
                             if ((al & 1) == 0) {
                                 if ((*(u8*)((rbx + 0xADDR)) & 1) == 0) {
-                                    eax = edx;
-                                    eax >>= 1;
+                                    eax = (edx >> 1);
                                     if ((al & 1) != 0) {
                                         var_38 = 0xADDR;
                                         edi = 1;
@@ -47,8 +44,7 @@ void sub_14000627c_l1(void) {
                         if ((al & 0xADDR) != 0) {
                             r8b = r13b;
                         } else {
-                            eax = edx;
-                            eax >>= 5;
+                            eax = (edx >> 5);
                             r8b = 1;
                         }
                         eax = (rcx - 0xADDR);
@@ -70,8 +66,7 @@ void sub_14000627c_l1(void) {
                             if (r15d > 0 /* signed */) {
                                 while (1) {
                                     rax = *(u64*)((rbx + 0xADDR));
-                                    ecx = *(u32*)((rax + 0xADDR));
-                                    ecx >>= 0xADDR;
+                                    ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                     if ((cl & 1) == 0) {
                                         r8 = r14;
                                         sub_14000acfc(0xADDR, *(u64*)((rbx + 0xADDR)));
@@ -94,8 +89,7 @@ void sub_14000627c_l1(void) {
                         rdx = *(u64*)((rbx + 8));
                         rsi = (rbx + 0xADDR);
                         rax = *(u64*)(r14);
-                        ecx = *(u32*)((rax + 0xADDR));
-                        ecx >>= 0xADDR;
+                        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                         if ((cl & 1) == 0) {
                             var_20 = rdx;
                             sub_140006d38(r14, &var_38, edi, rsi, rdx);
@@ -106,8 +100,7 @@ void sub_14000627c_l1(void) {
                             }
                         }
                         ecx = *(u32*)((rbx + 0xADDR));
-                        eax = ecx;
-                        eax >>= 3;
+                        eax = (ecx >> 3);
                         if ((al & 1) != 0) {
                             ecx >>= 2;
                             if ((cl & 1) == 0) {
@@ -116,8 +109,7 @@ void sub_14000627c_l1(void) {
                                 if (r15d > 0 /* signed */) {
                                     while (1) {
                                         rax = *(u64*)(r14);
-                                        ecx = *(u32*)((rax + 0xADDR));
-                                        ecx >>= 0xADDR;
+                                        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
                                             r8 = r12;
                                             sub_14000acfc(0xADDR, *(u64*)(r14));
@@ -144,8 +136,7 @@ void sub_14000627c_l1(void) {
                             r8d = *(u32*)((rbx + 0xADDR));
                             r11 = *(u64*)((rbx + 0xADDR));
                             rax = *(u64*)(r10);
-                            ecx = *(u32*)((rax + 0xADDR));
-                            ecx >>= 0xADDR;
+                            ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                             if ((cl & 1) == 0) {
                                 var_20 = rdx;
                                 sub_140006d38(r10, r11, r8, r9, rdx);
@@ -179,8 +170,7 @@ void sub_14000627c_l1(void) {
                                         if (r8d == 0) break;
                                         rdx = *(u64*)((rbx + 8));
                                         rax = *(u64*)(r14);
-                                        ecx = *(u32*)((rax + 0xADDR));
-                                        ecx >>= 0xADDR;
+                                        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
                                             var_20 = rdx;
                                             sub_140006d38(r14, &var_48, var_n28, (rbx + 0xADDR), rdx);
@@ -209,8 +199,7 @@ void sub_14000627c_l1(void) {
                                         if (rax == -1) break;
                                         rdx = *(u64*)((rbx + 8));
                                         rax = *(u64*)(r14);
-                                        ecx = *(u32*)((rax + 0xADDR));
-                                        ecx >>= 0xADDR;
+                                        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
                                             var_20 = rdx;
                                             sub_140006d38(r14, &var_48, r8, rdi, rdx);
@@ -228,16 +217,14 @@ void sub_14000627c_l1(void) {
                             }
                         }
                         if (*(u32*)((rbx + 0xADDR)) >= r13d /* signed */) {
-                            eax = *(u32*)((rbx + 0xADDR));
-                            eax >>= 2;
+                            eax = (*(u32*)((rbx + 0xADDR)) >> 2);
                             if ((al & 1) != 0) {
                                 rsi = *(u64*)((rbx + 8));
                                 edi = r13d;
                                 if (r15d > 0 /* signed */) {
                                     while (1) {
                                         rax = *(u64*)((rbx + 0xADDR));
-                                        ecx = *(u32*)((rax + 0xADDR));
-                                        ecx >>= 0xADDR;
+                                        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
                                             r8 = rsi;
                                             sub_14000acfc(0xADDR, *(u64*)((rbx + 0xADDR)));
@@ -278,8 +265,7 @@ void sub_14000627c_l1(void) {
             goto loc_ADDR;
         } else if (ecx == 0xADDR) {
             ecx = *(u32*)((rbx + 0xADDR));
-            eax = ecx;
-            eax >>= 5;
+            eax = (ecx >> 5);
             if ((al & 1) != 0) {
                 ecx |= 0xADDR;
                 *(u32*)((rbx + 0xADDR)) = ecx;

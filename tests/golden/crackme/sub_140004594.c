@@ -7,8 +7,7 @@ void sub_140004594_l1(void) {
         rcx = qword_ADDR;
         rcx = *(u64*)((rbx + rcx));
         sub_140009588(rcx);
-        rcx = *(u64*)((rbx + qword_ADDR));
-        rcx += 0xADDR;
+        rcx = (*(u64*)((rbx + qword_ADDR)) + 0xADDR);
         DeleteCriticalSection((rcx + 0xADDR));
         rbx += 8;
     } while (rbx != 0xADDR);

@@ -4,8 +4,7 @@ void sub_140004008_l1(void) {
     r14d = 0;
     eax = (uint32)(*(u16*)((rcx + 0xADDR)));
     rbp = rcx;
-    rsi = (rax + (rax * 4));
-    rsi <<= 4;
+    rsi = ((rax + (rax * 4)) << 4);
     rsi += rdi;
     if (rdi != rsi) {
         rdi += 0xADDR;

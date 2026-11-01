@@ -459,6 +459,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
 
     fold_constant_registers(&mut lines);
+    // The constant fold just turned `rcx += rdx` into `rcx += 0x…`, so an accumulation can now
+    // merge back into the assignment that produced its input.
+    merge_accumulations(&mut lines);
     drop_noop_statements(&mut lines);
     mark("text passes");
     normalize_infinite_loops(&mut lines);
@@ -4807,6 +4810,140 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
 /// Fold `x = (x + y);` into `x += y;`. Compiler-generated pseudo-code spells every
 /// arithmetic update as a load and a separate write of the destination register; the
 /// compound form matches the original source and removes one temporary write per update.
+// `rax = &var_38; rax += 8;` is one step in the source: fold an accumulation into the
+/// assignment that produced its input. Only adjacent statements about the same target qualify,
+/// the right-hand side must be a constant and the input must be side-effect free, so no call is
+/// moved across the merge. A cast to a narrower type is left alone: the register add is 64-bit
+/// and folding it under the cast would change where the value wraps.
+fn merge_accumulations(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let first = lines[index].text.trim().to_owned();
+        let second = lines[index + 1].text.trim().to_owned();
+        let (Some((target, value)), Some((added_to, operator, amount))) =
+            (plain_assignment(&first), accumulation_step(&second))
+        else {
+            index += 1;
+            continue;
+        };
+        if target != added_to || is_cast_to_narrow(value) || has_call(value) {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(leading_spaces(&lines[index].text));
+        lines[index].text = format!("{indent}{target} = ({value} {operator} {amount});");
+        lines.remove(index + 1);
+        // The merged statement may now be the input of the next step.
+    }
+}
+
+/// `x += 8;` -> (`x`, `+`, `8`). Only a constant amount folds.
+fn accumulation_step(statement: &str) -> Option<(&str, &'static str, &str)> {
+    let body = statement.strip_suffix(';')?;
+    for (written, operator) in [
+        (" += ", "+"),
+        (" -= ", "-"),
+        (" &= ", "&"),
+        (" |= ", "|"),
+        (" ^= ", "^"),
+        (" <<= ", "<<"),
+        (" >>= ", ">>"),
+    ] {
+        if let Some((left, right)) = body.split_once(written) {
+            let right = right.trim();
+            if !is_constant(right) || left.trim().is_empty() {
+                return None;
+            }
+            return Some((left.trim(), operator, right));
+        }
+    }
+    None
+}
+
+// Whether the expression calls a function. A cast (`(int64)x`) is not a call, so the type
+/// keywords are skipped when the identifier before `(` is inspected.
+fn has_call(expression: &str) -> bool {
+    let bytes = expression.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'(' || index == 0 {
+            continue;
+        }
+        let name: String = expression[..index]
+            .chars()
+            .rev()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if !name.is_empty() && !is_type_name(&name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `name` names a type, so `(u32)x` is a cast.
+fn is_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "char"
+            | "short"
+            | "int"
+            | "long"
+            | "wchar_t"
+            | "float"
+            | "double"
+            | "void"
+            | "unsigned"
+            | "signed"
+            | "bool"
+            | "size_t"
+            | "sizeof"
+    )
+}
+/// Whether the expression starts with a cast to a narrower integer type. Arithmetic under such
+/// a cast happens in the narrow type, so a following 64-bit add cannot be folded underneath it.
+fn is_cast_to_narrow(expression: &str) -> bool {
+    let Some(rest) = expression.trim_start().strip_prefix('(') else {
+        return false;
+    };
+    let Some((kind, _)) = rest.split_once(')') else {
+        return false;
+    };
+    matches!(
+        kind.trim(),
+        "u8" | "u16"
+            | "u32"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "char"
+            | "short"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+    )
+}
+
 fn fold_compound_assignments(lines: &mut [PseudoLine]) {
     for line in lines.iter_mut() {
         let Some(statement) = line.text.trim().strip_suffix(';') else {
@@ -7095,6 +7232,19 @@ mod tests {
         assert!(checked > 20, "only {checked} snapshots read");
     }
     #[test]
+    fn an_accumulation_merges_into_its_input_assignment() {
+        let mut lines = snippet(&[
+            "    rcx = (int64)(dword_14000003c);",
+            "    rcx += 0x140000000;",
+        ]);
+        merge_accumulations(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].text.trim(),
+            "rcx = ((int64)(dword_14000003c) + 0x140000000);"
+        );
+    }
+    #[test]
     fn nested_single_if_wrappers_collapse_into_one_condition() {
         let mut lines = snippet(&[
             "void sub_1(int64 arg1) {",
@@ -8716,8 +8866,11 @@ mod tests {
         };
         let start = function_start(&session, "corpus_counter_bump").unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
-        // The increment stays visible *and* the loaded value is not lost to the caller.
-        assert!(text.contains("eax = dword_"), "{text}");
+        // The increment stays visible *and* the loaded value is not lost to the caller. The
+        // accumulation folds into the load (`eax = (dword_… + 1);`), so the assertions look at
+        // the increment and at the store that keeps the value in memory.
+        assert!(text.contains("dword_140003028 + 1)"), "{text}");
+        assert!(text.contains("dword_140003028 = eax;"), "{text}");
         assert!(text.contains("return eax;"), "{text}");
     }
 

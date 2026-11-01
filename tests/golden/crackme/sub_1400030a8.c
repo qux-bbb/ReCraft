@@ -101,8 +101,7 @@ void sub_1400030a8_l1(void) {
     var_20 = rsi;
     sub_140002864(&var_d8, &var_b8, ebx, r14, rsi, var_1a0);
     xmm1 = var_d8;
-    xmm0 = xmm1;
-    xmm0 >>= 8;
+    xmm0 = (xmm1 >> 8);
     eax = xmm0;
     var_c8 = xmm1;
     if (eax >= var_f0) goto loc_ADDR;
@@ -121,14 +120,12 @@ void sub_1400030a8_l1(void) {
         eax = xmm0;
         var_a0 = xmm0;
         if (eax > ebx /* signed */) goto loc_ADDR;
-        rax = xmm0;
-        rax >>= 0xADDR;
+        rax = (xmm0 >> 0xADDR);
         if (ebx <= eax /* signed */) {
             rcx += *(u64*)((r14 + 8));
             r12d = 0;
             xmm0 >>= 8;
-            rax = xmm0;
-            rax >>= 0xADDR;
+            rax = (xmm0 >> 0xADDR);
             var_90 = rax;
             if (eax != 0) {
                 while (1) {
@@ -191,8 +188,7 @@ void sub_1400030a8_l1(void) {
         r15d += 1;
     } while (r15d < var_f0);
     loc_ADDR:
-    eax = *(u32*)(rsi);
-    eax &= 0xADDR;
+    eax = (*(u32*)(rsi) & 0xADDR);
     if (eax < 0xADDR) {
         sub_14000217c(rcx);
         if (*(u64*)((rax + 0xADDR)) != 0) {

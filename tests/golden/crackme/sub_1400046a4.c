@@ -14,8 +14,7 @@ void sub_1400046a4_l1(void) {
         rdx = *(u64*)(rsi);
         if (rcx != 0) {
             ecx = *(u32*)((rcx + 0xADDR));
-            eax = ecx;
-            eax >>= 0xADDR;
+            eax = (ecx >> 0xADDR);
             if ((al & 1) != 0) {
                 eax = ecx;
                 al &= 3;

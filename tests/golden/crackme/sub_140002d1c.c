@@ -66,11 +66,9 @@ void sub_140002d1c_l1(void) {
                             sub_140008860();
                             return;
                         }
-                        al = *(u8*)(r14);
-                        al &= 4;
+                        al = (*(u8*)(r14) & 4);
                         al = -(al);
-                        ecx = ((al != 0) ? 1 : 0);
-                        ecx += 1;
+                        ecx = (((al != 0) ? 1 : 0) + 1);
                         edi = ecx;
                         var_20 = ecx;
                         eax = edi;

@@ -16,8 +16,7 @@ void internal/abi.Name.Tag_l1(void) {
         internal/abi.Name.ReadVarint();
         rcx = var_30;
         rcx += var_28;
-        rbx = (rcx + rax);
-        rbx += 1;
+        rbx = ((rcx + rax) + 1);
         internal/abi.Name.DataChecked(off_1400dd27c);
         if (rbx < 0 /* signed */) {
             runtime.panicunsafestringlen();

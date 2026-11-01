@@ -8,8 +8,7 @@ void sub_140004608_l1(void) {
     rcx = *(u64*)(rax);
     if (rcx != 0) {
         ecx = *(u32*)((rcx + 0xADDR));
-        eax = ecx;
-        eax >>= 0xADDR;
+        eax = (ecx >> 0xADDR);
         if ((al & 1) != 0) {
             eax = ecx;
             al &= 3;
@@ -30,8 +29,7 @@ void sub_140004608_l1(void) {
                     } else {
                         rax = *(u64*)(rbx);
                         rcx = *(u64*)(rax);
-                        eax = *(u32*)((rcx + 0xADDR));
-                        eax >>= 1;
+                        eax = (*(u32*)((rcx + 0xADDR)) >> 1);
                     }
                 } else {
                     *(u32*)(rdx) = (*(u32*)(rdx) + 1);

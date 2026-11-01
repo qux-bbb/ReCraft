@@ -5,8 +5,7 @@ void sub_140001de4_l1(void) {
     if (eax == 0) {
         sub_140001e88(off_140034dc0);
         qword_ADDR = var_28;
-        rax = &var_28;
-        rax += 8;
+        rax = (&var_28 + 8);
         qword_ADDR = rax;
         qword_ADDR = qword_ADDR;
         dword_ADDR = 0xADDR;

@@ -27,11 +27,9 @@ void bytes_op_l1(void) {
             xmm2 += xmm1;
         } while (rax < r9 /* signed */);
         xmm2 += xmm3;
-        xmm0 = xmm2;
-        xmm0 >>= 8;
+        xmm0 = (xmm2 >> 8);
         xmm2 += xmm0;
-        xmm0 = xmm2;
-        xmm0 >>= 4;
+        xmm0 = (xmm2 >> 4);
         xmm2 += xmm0;
         r9d = xmm2;
     }

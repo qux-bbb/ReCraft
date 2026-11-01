@@ -56,8 +56,7 @@ void sub_140001a34_l1(void) {
             r11d = ebx;
         }
     }
-    rax = qword_ADDR;
-    rax &= -0xADDR;
+    rax = (qword_ADDR & -0xADDR);
     dword_ADDR = 1;
     dword_ADDR = 2;
     qword_ADDR = rax;

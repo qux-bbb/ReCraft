@@ -24,15 +24,13 @@ void sub_140004460_l1(void) {
             sub_1400092bc((r14 + 0xADDR), 0xADDR);
             rax = qword_ADDR;
             r8 = off_140023f50;
-            rdx = rbp;
-            rdx >>= 6;
+            rdx = (rbp >> 6);
             *(u64*)((rbx + rax)) = r14;
             rax = rbp;
             eax &= 0xADDR;
             rcx = (rax + (rax * 8));
             rax = *(u64*)((r8 + (rdx * 8)));
-            rcx = *(u64*)(((rax + (rcx * 8)) + 0xADDR));
-            rcx += 2;
+            rcx = (*(u64*)(((rax + (rcx * 8)) + 0xADDR)) + 2);
             if (rcx <= 2) {
                 *(u32*)(rsi) = 0xADDR;
             }

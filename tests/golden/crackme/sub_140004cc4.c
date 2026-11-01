@@ -15,8 +15,7 @@ void sub_140004cc4_l1(void) {
     if (rcx != 0) {
         sub_140004580(ebx);
         var_e0 = rax;
-        ecx = *(u32*)((rax + 0xADDR));
-        ecx >>= 0xADDR;
+        ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
         if ((bl & cl) != 0) {
             rax = var_d8;
             rdi = -1;
@@ -46,8 +45,7 @@ void sub_140004cc4_l1(void) {
                 r10 = r9;
             } else {
                 rcx = r8;
-                rax = r8;
-                rax >>= 6;
+                rax = (r8 >> 6);
                 ecx &= 0xADDR;
                 rax = *(u64*)((r11 + (rax * 8)));
                 rcx += (rcx * 8);
@@ -68,8 +66,7 @@ void sub_140004cc4_l1(void) {
             } else {
                 eax = (r8 + 2);
                 if (eax > ebx) {
-                    rax = rdx;
-                    rax >>= 6;
+                    rax = (rdx >> 6);
                     edx &= 0xADDR;
                     rax = *(u64*)((r11 + (rax * 8)));
                     rcx = (rdx + (rdx * 8));
