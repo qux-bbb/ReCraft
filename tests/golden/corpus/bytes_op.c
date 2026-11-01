@@ -5,37 +5,35 @@ void bytes_op_l1(void) {
     r10 = rcx;
     r9d = r8d;
     ecx = r8d;
-    if (edx > 0 /* signed */) {
-        if (r11d >= 8) {
-            r9 = r11;
-            xmm3 = 0;
-            r9 &= -0xADDR;
-            xmm2 = 0;
-            rdx = r10;
-            do {
-                xmm1 = *(u32*)(rdx);
-                xmm0 = 0;
-                __asm("punpcklbw xmm1, xmm0");
-                ecx += 8;
-                __asm("punpcklwd xmm1, xmm0");
-                xmm3 += xmm1;
-                xmm1 = *(u32*)((rdx + 4));
-                rdx += 8;
-                __asm("punpcklbw xmm1, xmm0");
-                rax = rdx;
-                __asm("punpcklwd xmm1, xmm0");
-                rax -= r10;
-                xmm2 += xmm1;
-            } while (rax < r9 /* signed */);
-            xmm2 += xmm3;
-            xmm0 = xmm2;
-            xmm0 >>= 8;
-            xmm2 += xmm0;
-            xmm0 = xmm2;
-            xmm0 >>= 4;
-            xmm2 += xmm0;
-            r9d = xmm2;
-        }
+    if (edx > 0 /* signed */ && r11d >= 8) {
+        r9 = r11;
+        xmm3 = 0;
+        r9 &= -0xADDR;
+        xmm2 = 0;
+        rdx = r10;
+        do {
+            xmm1 = *(u32*)(rdx);
+            xmm0 = 0;
+            __asm("punpcklbw xmm1, xmm0");
+            ecx += 8;
+            __asm("punpcklwd xmm1, xmm0");
+            xmm3 += xmm1;
+            xmm1 = *(u32*)((rdx + 4));
+            rdx += 8;
+            __asm("punpcklbw xmm1, xmm0");
+            rax = rdx;
+            __asm("punpcklwd xmm1, xmm0");
+            rax -= r10;
+            xmm2 += xmm1;
+        } while (rax < r9 /* signed */);
+        xmm2 += xmm3;
+        xmm0 = xmm2;
+        xmm0 >>= 8;
+        xmm2 += xmm0;
+        xmm0 = xmm2;
+        xmm0 >>= 4;
+        xmm2 += xmm0;
+        r9d = xmm2;
     }
     rax = (int64)(ecx);
     edx = r8d;

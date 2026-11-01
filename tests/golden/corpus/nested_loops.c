@@ -16,25 +16,23 @@ void nested_loops_l1(void) {
         edx = 0;
         xmm1 = r11d;
         __asm("pshufd xmm1, xmm1, 0xADDR");
-        if (ebx >= 8) {
-            if (ebp >= 2 /* signed */) {
-                ecx = ebx;
-                ecx &= -0xADDR;
-                do {
-                    xmm0 = edx;
-                    eax = (rdx + 4);
-                    __asm("pshufd xmm0, xmm0, 0xADDR");
-                    edx += 8;
-                    xmm0 += xmm3;
-                    xmm0 *= xmm1;
-                    xmm4 += xmm0;
-                    xmm0 = eax;
-                    __asm("pshufd xmm0, xmm0, 0xADDR");
-                    xmm0 += xmm3;
-                    xmm0 *= xmm1;
-                    xmm2 += xmm0;
-                } while (edx < ecx /* signed */);
-            }
+        if (ebx >= 8 && ebp >= 2 /* signed */) {
+            ecx = ebx;
+            ecx &= -0xADDR;
+            do {
+                xmm0 = edx;
+                eax = (rdx + 4);
+                __asm("pshufd xmm0, xmm0, 0xADDR");
+                edx += 8;
+                xmm0 += xmm3;
+                xmm0 *= xmm1;
+                xmm4 += xmm0;
+                xmm0 = eax;
+                __asm("pshufd xmm0, xmm0, 0xADDR");
+                xmm0 += xmm3;
+                xmm0 *= xmm1;
+                xmm2 += xmm0;
+            } while (edx < ecx /* signed */);
         }
         r8d = 0;
         r9d = 0;

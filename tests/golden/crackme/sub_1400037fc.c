@@ -38,18 +38,12 @@ void sub_1400037fc_l1(void) {
             rcx += rax;
             if (rbx == rcx) {
                 al = 2;
-                if ((*(u8*)(r14) & 2) == 0) {
-                    if ((*(u8*)(r15) & 1) == 0) {
-                        if ((*(u8*)(r15) & 4) == 0) {
-                            if ((*(u8*)(r15) & al) == 0) {
-                                edi = 1;
-                            } else if ((*(u8*)(rsi) & al) != 0) {
-                                edi = 1;
-                                eax = edi;
-                                return;
-                            }
-                        }
-                    }
+                if ((*(u8*)(r14) & 2) == 0 && (*(u8*)(r15) & 1) == 0 && (*(u8*)(r15) & 4) == 0 && (*(u8*)(r15) & 2) == 0) {
+                    edi = 1;
+                } else if ((*(u8*)(rsi) & al) != 0) {
+                    edi = 1;
+                    eax = edi;
+                    return;
                 }
                 eax = edi;
             } else {

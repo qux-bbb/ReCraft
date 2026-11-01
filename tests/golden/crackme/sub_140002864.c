@@ -39,11 +39,9 @@ void sub_140002864_l1(void) {
     rcx = (rdi + r11);
     do {
         if (r9 == 0) {
-            if (r14d >= *(u32*)(rcx) /* signed */) {
-                if (r14d <= *(u32*)((rcx + 4)) /* signed */) {
-                    r13d = edx;
-                    r8d = ((r8d == r12d) ? edx : r8d);
-                }
+            if (r14d >= *(u32*)(rcx) /* signed */ && r14d <= *(u32*)((rcx + 4)) /* signed */) {
+                r13d = edx;
+                r8d = ((r8d == r12d) ? edx : r8d);
             }
         } else {
             eax = *(u32*)((r9 + 4));

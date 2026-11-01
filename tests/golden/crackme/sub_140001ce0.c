@@ -87,43 +87,39 @@ void sub_140001ce0_l1(void) {
                 edi += 1;
             } else {
                 eax = *(u32*)(((rbx + (rcx * 8)) + 8));
-                if (r14 < rax) {
-                    if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) != 0) {
-                        if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) == 1) {
-                            if (*(u32*)(rsi) == 0xADDR) {
-                                if (qword_ADDR != 0) {
-                                    sub_140015ab0(off_1400184d0);
-                                    if (eax != 0) {
-                                        edx = 1;
-                                        rcx = rsi;
-                                        (*qword_ADDR)();
-                                    }
-                                }
+                if (r14 < rax && *(u32*)(((rbx + (rcx * 8)) + 0xADDR)) != 0) {
+                    if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) == 1) {
+                        if (*(u32*)(rsi) == 0xADDR && qword_ADDR != 0) {
+                            sub_140015ab0(off_1400184d0);
+                            if (eax != 0) {
+                                edx = 1;
+                                rcx = rsi;
+                                (*qword_ADDR)();
                             }
-                            rax = (rbp + 1);
-                            rax += rax;
-                            ecx = *(u32*)((rbx + (rax * 8)));
-                            rcx += r12;
-                            sub_1400020f0(rcx, r13, 1);
-                            rax = (rbp + 1);
-                            rax += rax;
-                            edx = *(u32*)((rbx + (rax * 8)));
-                            rax = *(u64*)((r15 + 0xADDR));
-                            rdx += r12;
-                            var_28 = rax;
-                            rax = *(u64*)((r15 + 0xADDR));
-                            var_20 = rax;
-                            RtlUnwindEx(r13, (rdx + r12), rsi, *(u32*)(rsi), *(u64*)((r15 + 0xADDR)), *(u64*)((r15 + 0xADDR)));
-                            sub_140002120();
-                        } else {
-                            eax = *(u32*)(((rbx + (rcx * 8)) + 0xADDR));
-                            rdx = r13;
-                            rax += r12;
-                            rcx = &var_30;
-                            (*rax)();
-                            if (eax >= 0 /* signed */) {
-                                if (eax <= 0 /* signed */) goto loc_ADDR;
-                            }
+                        }
+                        rax = (rbp + 1);
+                        rax += rax;
+                        ecx = *(u32*)((rbx + (rax * 8)));
+                        rcx += r12;
+                        sub_1400020f0(rcx, r13, 1);
+                        rax = (rbp + 1);
+                        rax += rax;
+                        edx = *(u32*)((rbx + (rax * 8)));
+                        rax = *(u64*)((r15 + 0xADDR));
+                        rdx += r12;
+                        var_28 = rax;
+                        rax = *(u64*)((r15 + 0xADDR));
+                        var_20 = rax;
+                        RtlUnwindEx(r13, (rdx + r12), rsi, *(u32*)(rsi), *(u64*)((r15 + 0xADDR)), *(u64*)((r15 + 0xADDR)));
+                        sub_140002120();
+                    } else {
+                        eax = *(u32*)(((rbx + (rcx * 8)) + 0xADDR));
+                        rdx = r13;
+                        rax += r12;
+                        rcx = &var_30;
+                        (*rax)();
+                        if (eax >= 0 /* signed */) {
+                            if (eax <= 0 /* signed */) goto loc_ADDR;
                         }
                     }
                 }

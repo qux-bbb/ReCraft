@@ -384,6 +384,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // generator's extra parentheses.
     simplify_negated_conditions(&mut lines);
     strip_condition_parentheses(&mut lines);
+    collapse_nested_if_wrappers(&mut lines);
     strip_inline_condition_parentheses(&mut lines);
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
@@ -6161,6 +6162,137 @@ fn standalone_if_block(
     None
 }
 
+/// The condition of a block `if` line (`if (cond) {`), or `None` for anything else.
+fn if_condition(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("if (")?;
+    let condition = rest.strip_suffix(") {")?;
+    // `if () {` is already a lint finding; never manufacture one here.
+    if condition.trim().is_empty() || condition.contains(") {") {
+        return None;
+    }
+    Some(condition)
+}
+
+/// Index of the line closing the block opened at `open`, using precomputed brace counts.
+fn block_end_by_braces(braces: &[isize], open: usize) -> Option<usize> {
+    let mut depth = 0isize;
+    for (index, net) in braces.iter().enumerate().skip(open) {
+        depth += net;
+        if depth == 0 {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// An `if` whose entire body is another `if` reads as two nested blocks, but the source had one
+/// condition: `if (a) { if (b) { … } }` folds into `if (a && b) { … }`. Neither arm may have an
+/// `else` — otherwise the inner `else` would rebind — so only the plain nesting is folded, and
+/// the body moves one indentation level out to keep the surrounding shape.
+fn collapse_nested_if_wrappers(lines: &mut Vec<PseudoLine>) {
+    let mut braces = line_braces(lines);
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let outer = lines[index].text.clone();
+        let outer_trimmed = outer.trim_start();
+        let Some(outer_condition) = if_condition(outer_trimmed) else {
+            index += 1;
+            continue;
+        };
+        let inner = lines[index + 1].text.clone();
+        let inner_trimmed = inner.trim_start();
+        let Some(inner_condition) = if_condition(inner_trimmed) else {
+            index += 1;
+            continue;
+        };
+        let outer_indent = outer.len() - outer_trimmed.len();
+        let inner_indent = inner.len() - inner_trimmed.len();
+        if inner_indent <= outer_indent {
+            index += 1;
+            continue;
+        }
+        let Some(inner_end) = block_end_by_braces(&braces, index + 1) else {
+            index += 1;
+            continue;
+        };
+        // The inner block has to be the whole outer body, and the inner `if` must own no
+        // `else`: the close right after it is the outer one.
+        if lines[inner_end].text.trim() != "}" {
+            index += 1;
+            continue;
+        }
+        if lines.get(inner_end + 1).map(|line| line.text.trim()) != Some("}") {
+            index += 1;
+            continue;
+        }
+        if lines[index + 2..inner_end].iter().any(|line| {
+            let text = line.text.trim();
+            (text == "} else {" || text.starts_with("else"))
+                && line.text.len() - line.text.trim_start().len() == inner_indent
+        }) {
+            index += 1;
+            continue;
+        }
+        if inner_end == index + 2 {
+            // Empty inner body: folding would only produce `if (a && b) { }`.
+            index += 1;
+            continue;
+        }
+        let merged = merge_conditions(outer_condition, inner_condition);
+        lines[index].text = format!("{}if ({merged}) {{", " ".repeat(outer_indent));
+        // Drop the inner header and its close, and lift the body one level.
+        lines.remove(index + 1);
+        lines.remove(inner_end - 1);
+        let shift = inner_indent - outer_indent;
+        for line in lines[index + 1..inner_end - 1].iter_mut() {
+            let text = line.text.clone();
+            if text.trim().is_empty() {
+                continue;
+            }
+            let indent = text.len() - text.trim_start().len();
+            if indent < shift {
+                continue;
+            }
+            line.text = text[shift..].to_owned();
+        }
+        braces = line_braces(lines);
+        // The merged `if` may now wrap another single `if`; retry at the same index.
+    }
+}
+
+/// Join two conditions for an `if`, parenthesising a side that carries a top-level `||`.
+fn merge_conditions(outer: &str, inner: &str) -> String {
+    // `a && a` is just `a`; the CFG splits a repeated test into two blocks.
+    if outer.trim() == inner.trim() {
+        return outer.trim().to_owned();
+    }
+    let wrap = |condition: &str| -> String {
+        if has_top_level_or(condition) {
+            format!("({condition})")
+        } else {
+            condition.to_owned()
+        }
+    };
+    format!("{} && {}", wrap(outer), wrap(inner))
+}
+
+/// Whether `condition` has a `||` outside any parentheses.
+fn has_top_level_or(condition: &str) -> bool {
+    let mut depth = 0isize;
+    let bytes = condition.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b'|' if depth == 0 && bytes.get(index + 1) == Some(&b'|') => return true,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
+}
+
 /// Net braces opened by each line, so a block scan does not recount them per candidate.
 fn line_braces(lines: &[PseudoLine]) -> Vec<isize> {
     lines
@@ -6772,6 +6904,78 @@ mod tests {
     use recraft_analysis::{BasicBlock, analyze, persist};
     use tempfile::TempDir;
 
+    /// Turn indented source lines into pseudo lines for the text passes.
+    fn snippet(lines: &[&str]) -> Vec<PseudoLine> {
+        lines
+            .iter()
+            .map(|text| PseudoLine {
+                addr: Address::new(0x1000),
+                text: (*text).to_owned(),
+            })
+            .collect()
+    }
+
+    fn joined(lines: &[PseudoLine]) -> String {
+        lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn nested_single_if_wrappers_collapse_into_one_condition() {
+        let mut lines = snippet(&[
+            "void sub_1(int64 arg1) {",
+            "    if (arg1 != 0) {",
+            "        if (arg2 != 0) {",
+            "            eax = 0;",
+            "        }",
+            "    }",
+            "}",
+        ]);
+        collapse_nested_if_wrappers(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("if (arg1 != 0 && arg2 != 0) {"), "{text}");
+        assert!(!text.contains("if (arg2 != 0) {"), "{text}");
+        assert!(text.contains("\n        eax = 0;\n"), "{text}");
+    }
+
+    #[test]
+    fn nested_if_with_an_else_is_left_alone() {
+        let mut lines = snippet(&[
+            "void sub_1(int64 arg1) {",
+            "    if (arg1 != 0) {",
+            "        if (arg2 != 0) {",
+            "            eax = 0;",
+            "        } else {",
+            "            eax = 1;",
+            "        }",
+            "    }",
+            "}",
+        ]);
+        collapse_nested_if_wrappers(&mut lines);
+        assert!(joined(&lines).contains("if (arg2 != 0) {"));
+    }
+
+    #[test]
+    fn a_disjunction_is_parenthesised_when_merged() {
+        let mut lines = snippet(&[
+            "void sub_1(int64 arg1) {",
+            "    if (arg1 != 0 || arg3 != 0) {",
+            "        if (arg2 != 0) {",
+            "            eax = 0;",
+            "        }",
+            "    }",
+            "}",
+        ]);
+        collapse_nested_if_wrappers(&mut lines);
+        let text = joined(&lines);
+        assert!(
+            text.contains("if ((arg1 != 0 || arg3 != 0) && arg2 != 0) {"),
+            "{text}"
+        );
+    }
     #[test]
     fn conditional_sibling_tail_goto_is_folded() {
         let mut lines = vec![

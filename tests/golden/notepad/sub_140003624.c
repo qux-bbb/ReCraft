@@ -63,10 +63,8 @@ void sub_140003624_l1(void) {
         sub_140028010(&var_20);
     }
     rax = qword_ADDR;
-    if (rax != 0) {
-        if ((var_24 & 2) == 0) {
-            sub_140028010(&var_20);
-        }
+    if (rax != 0 && (var_24 & 2) == 0) {
+        sub_140028010(&var_20);
     }
     if (var_28 >= r12d /* signed */) {
         sub_1400091d4();
@@ -75,11 +73,9 @@ void sub_140003624_l1(void) {
         if ((var_24 & 2) == 0) {
             rax = qword_ADDR;
             ebx = 0xADDR;
-            if (rax != 0) {
-                if (byte_ADDR == r12b) {
-                    r8d = ebx;
-                    sub_140028010(&var_20, &var_4c0);
-                }
+            if (rax != 0 && byte_ADDR == r12b) {
+                r8d = ebx;
+                sub_140028010(&var_20, &var_4c0);
             }
             if (var_4c0 == r12w) {
                 sub_1400054a4(&var_4c0, rbx, &var_20);
@@ -87,12 +83,10 @@ void sub_140003624_l1(void) {
             OutputDebugStringW(&var_4c0);
         } else {
             rax = qword_ADDR;
-            if (rax != 0) {
-                if (byte_ADDR == r12b) {
-                    r8d = 0;
-                    edx = 0;
-                    sub_140028010(&var_20);
-                }
+            if (rax != 0 && byte_ADDR == r12b) {
+                r8d = 0;
+                edx = 0;
+                sub_140028010(&var_20);
             }
         }
     } else {

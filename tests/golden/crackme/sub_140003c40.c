@@ -41,19 +41,15 @@ void sub_140003c40_l1(void) {
     var_28 = rax;
     rdi = var_c0;
     sub_140002adc(r12);
-    if (r15d == 0) {
-        if (*(u32*)(rsi) == 0xADDR) {
-            if (*(u32*)((rsi + 0xADDR)) == 4) {
-                eax = *(u32*)((rsi + 0xADDR));
-                if (eax == 0xADDR) {
-                    sub_140001fcc(*(u64*)((rsi + 0xADDR)));
-                    if (eax != 0) {
-                        sub_140001f54(rsi, 1);
-                    }
-                } else {
-                    eax += 0xADDR;
-                }
+    if (r15d == 0 && *(u32*)(rsi) == 0xADDR && *(u32*)((rsi + 0xADDR)) == 4) {
+        eax = *(u32*)((rsi + 0xADDR));
+        if (eax == 0xADDR) {
+            sub_140001fcc(*(u64*)((rsi + 0xADDR)));
+            if (eax != 0) {
+                sub_140001f54(rsi, 1);
             }
+        } else {
+            eax += 0xADDR;
         }
     }
     sub_14000217c(rcx);

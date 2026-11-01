@@ -51,12 +51,10 @@ void sub_140004f54_l1(void) {
                                 eax = 8;
                                 eax = ((ebp != 0) ? ebp : eax);
                                 ebp = eax;
-                                if (dl != 0) {
-                                    if (*(u8*)(rcx) != dl) {
-                                        sub_140008e30();
-                                        *(u32*)(rax) = 0xADDR;
-                                        sub_140008c88();
-                                    }
+                                if (dl != 0 && *(u8*)(rcx) != dl) {
+                                    sub_140008e30();
+                                    *(u32*)(rax) = 0xADDR;
+                                    sub_140008c88();
                                 }
                             }
                         }
@@ -116,12 +114,10 @@ void sub_140004f54_l1(void) {
             }
             rax = (r8 - 1);
             *(u64*)(rbx) = rax;
-            if (sil != 0) {
-                if (*(u8*)(rax) != sil) {
-                    sub_140008e30();
-                    *(u32*)(rax) = 0xADDR;
-                    sub_140008c88();
-                }
+            if (sil != 0 && *(u8*)(rax) != sil) {
+                sub_140008e30();
+                *(u32*)(rax) = 0xADDR;
+                sub_140008c88();
             }
             if ((dil & 8) != 0) {
                 r8d = 0xADDR;

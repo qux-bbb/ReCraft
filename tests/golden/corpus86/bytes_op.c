@@ -8,33 +8,31 @@ void bytes_op_l1(void) {
     var_4 = esi;
     var_0 = edi;
     edi = 0;
-    if (ebx > 0 /* signed */) {
-        if (ebx >= 8) {
-            ecx = ebx;
-            xmm3 = 0;
-            ecx &= -0xADDR;
-            xmm2 = 0;
-            do {
-                xmm1 = *(u32*)((eax + ebp));
-                xmm0 = 0;
-                __asm("punpcklbw xmm1, xmm0");
-                __asm("punpcklwd xmm1, xmm0");
-                xmm3 += xmm1;
-                xmm1 = *(u32*)(((eax + ebp) + 4));
-                __asm("punpcklbw xmm1, xmm0");
-                eax += 8;
-                __asm("punpcklwd xmm1, xmm0");
-                xmm2 += xmm1;
-            } while (eax < ecx /* signed */);
-            xmm2 += xmm3;
-            xmm0 = xmm2;
-            xmm0 >>= 8;
-            xmm2 += xmm0;
-            xmm0 = xmm2;
-            xmm0 >>= 4;
-            xmm2 += xmm0;
-            edi = xmm2;
-        }
+    if (ebx > 0 /* signed */ && ebx >= 8) {
+        ecx = ebx;
+        xmm3 = 0;
+        ecx &= -0xADDR;
+        xmm2 = 0;
+        do {
+            xmm1 = *(u32*)((eax + ebp));
+            xmm0 = 0;
+            __asm("punpcklbw xmm1, xmm0");
+            __asm("punpcklwd xmm1, xmm0");
+            xmm3 += xmm1;
+            xmm1 = *(u32*)(((eax + ebp) + 4));
+            __asm("punpcklbw xmm1, xmm0");
+            eax += 8;
+            __asm("punpcklwd xmm1, xmm0");
+            xmm2 += xmm1;
+        } while (eax < ecx /* signed */);
+        xmm2 += xmm3;
+        xmm0 = xmm2;
+        xmm0 >>= 8;
+        xmm2 += xmm0;
+        xmm0 = xmm2;
+        xmm0 >>= 4;
+        xmm2 += xmm0;
+        edi = xmm2;
     }
     edx = 0;
     esi = 0;

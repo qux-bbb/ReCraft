@@ -59,33 +59,31 @@ void sub_140002418_l1(void) {
         dword_ADDR = r9d;
         ebx = 6;
         dword_ADDR = ebx;
-        if (((edi >> 0xADDR) & 1) != 0) {
-            if (((edi >> 0xADDR) & 1) != 0) {
-                ecx = 0;
-                __asm("xgetbv");
-                rdx <<= 0xADDR;
-                rdx |= rax;
-                var_20 = rdx;
-                rax = var_20;
-                al &= bl;
-                if (al == bl) {
-                    eax = dword_ADDR;
-                    eax |= 8;
-                    dword_ADDR = 3;
+        if (((edi >> 0xADDR) & 1) != 0 && ((edi >> 0xADDR) & 1) != 0) {
+            ecx = 0;
+            __asm("xgetbv");
+            rdx <<= 0xADDR;
+            rdx |= rax;
+            var_20 = rdx;
+            rax = var_20;
+            al &= bl;
+            if (al == bl) {
+                eax = dword_ADDR;
+                eax |= 8;
+                dword_ADDR = 3;
+                dword_ADDR = eax;
+                if ((r11b & 0xADDR) != 0) {
+                    eax |= 0xADDR;
+                    dword_ADDR = 5;
                     dword_ADDR = eax;
-                    if ((r11b & 0xADDR) != 0) {
-                        eax |= 0xADDR;
-                        dword_ADDR = 5;
-                        dword_ADDR = eax;
-                        eax = 0xADDR;
-                        r11d &= eax;
-                        if (r11d == eax) {
-                            rax = var_20;
-                            al &= 0xADDR;
-                            if (al == 0xADDR) {
-                                dword_ADDR = (dword_ADDR | 0xADDR);
-                                dword_ADDR = ebx;
-                            }
+                    eax = 0xADDR;
+                    r11d &= eax;
+                    if (r11d == eax) {
+                        rax = var_20;
+                        al &= 0xADDR;
+                        if (al == 0xADDR) {
+                            dword_ADDR = (dword_ADDR | 0xADDR);
+                            dword_ADDR = ebx;
                         }
                     }
                 }

@@ -23,10 +23,8 @@ void sub_1400060f4_l1(void) {
                     if (al != 0xADDR) {
                         if (al != 0xADDR) {
                             al -= 0xADDR;
-                            if (al <= 0xADDR) {
-                                if (((0xADDR >> rax) & 1) != 0) {
-                                    *(u32*)((rcx + 0xADDR)) = 9;
-                                }
+                            if (al <= 0xADDR && ((0xADDR >> rax) & 1) != 0) {
+                                *(u32*)((rcx + 0xADDR)) = 9;
                             }
                         } else if (*(u8*)((r8 + 1)) == 0xADDR) {
                             rax = (r8 + 2);

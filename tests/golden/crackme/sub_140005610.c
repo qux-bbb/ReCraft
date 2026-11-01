@@ -18,12 +18,10 @@ void sub_140005610_l1(void) {
             loc_ADDR:
             eax = edx;
             eax >>= 4;
-            if ((al & 1) != 0) {
-                if (rsi < 0 /* signed */) {
-                    rsi = -(rsi);
-                    edx |= 0xADDR;
-                    *(u32*)((rbx + 0xADDR)) = edx;
-                }
+            if ((al & 1) != 0 && rsi < 0 /* signed */) {
+                rsi = -(rsi);
+                edx |= 0xADDR;
+                *(u32*)((rbx + 0xADDR)) = edx;
             }
             if (*(u32*)((rbx + 0xADDR)) >= 0 /* signed */) {
                 r8 = *(u64*)((rbx + 8));

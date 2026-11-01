@@ -19,26 +19,24 @@ void nested_loops_l1(void) {
         xmm0 = ebp;
         eax = 0;
         __asm("pshufd xmm1, xmm0, 0xADDR");
-        if (esi >= 8) {
-            if (*(u32*)(0xADDR) >= 2 /* signed */) {
-                edx = esi;
-                edx &= -0xADDR;
-                do {
-                    xmm0 = eax;
-                    ecx = (eax + 4);
-                    __asm("pshufd xmm0, xmm0, 0xADDR");
-                    eax += 8;
-                    xmm0 += xmm3;
-                    xmm0 *= xmm1;
-                    xmm4 += xmm0;
-                    xmm0 = ecx;
-                    __asm("pshufd xmm0, xmm0, 0xADDR");
-                    xmm0 += xmm3;
-                    xmm0 *= xmm1;
-                    xmm2 += xmm0;
-                } while (eax < edx /* signed */);
-                edx = var_10;
-            }
+        if (esi >= 8 && *(u32*)(0xADDR) >= 2 /* signed */) {
+            edx = esi;
+            edx &= -0xADDR;
+            do {
+                xmm0 = eax;
+                ecx = (eax + 4);
+                __asm("pshufd xmm0, xmm0, 0xADDR");
+                eax += 8;
+                xmm0 += xmm3;
+                xmm0 *= xmm1;
+                xmm4 += xmm0;
+                xmm0 = ecx;
+                __asm("pshufd xmm0, xmm0, 0xADDR");
+                xmm0 += xmm3;
+                xmm0 *= xmm1;
+                xmm2 += xmm0;
+            } while (eax < edx /* signed */);
+            edx = var_10;
         }
         edi = 0;
         ebx = 0;

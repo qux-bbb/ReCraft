@@ -4,11 +4,9 @@ void sub_140006830_l1(void) {
     rbx = rcx;
     eax = *(u32*)((rcx + 0xADDR));
     if (eax >= 0 /* signed */) {
-        if (eax == 0) {
-            if (*(u8*)((rcx + 0xADDR)) == 0xADDR) {
-                *(u32*)((rcx + 0xADDR)) = 1;
-                eax = 1;
-            }
+        if (eax == 0 && *(u8*)((rcx + 0xADDR)) == 0xADDR) {
+            *(u32*)((rcx + 0xADDR)) = 1;
+            eax = 1;
         }
     } else {
         al = *(u8*)((rcx + 0xADDR));
@@ -73,43 +71,41 @@ void sub_140006830_l1(void) {
     sub_14000c060(&var_60, rdx, r10);
     eax = *(u32*)((rbx + 0xADDR));
     eax >>= 5;
-    if ((al & 1) != 0) {
-        if (*(u32*)((rbx + 0xADDR)) == 0) {
-            rdi = *(u64*)((rbx + 8));
-            if (*(u8*)((rdi + 0xADDR)) == 0) {
-                sub_140006cc0(rdi);
-            }
-            r9 = *(u64*)((rbx + 0xADDR));
-            r10 = *(u64*)((rdi + 0xADDR));
-            r8d = (uint32)(*(u8*)(r9));
-            rax = *(u64*)((r10 + 0xADDR));
-            if (*(u8*)((r8 + rax)) != 0xADDR) {
-                rax = *(u64*)(r10);
-                do {
-                    r9 += 1;
-                    r8d = (uint32)(*(u8*)(r9));
-                } while ((*(u8*)((rax + (r8 * 2))) & 4) != 0);
-            }
-            rax = *(u64*)((r10 + 0xADDR));
-            ecx = (uint32)(r8b);
-            if (*(u8*)((rcx + rax)) == 0xADDR) {
-                r8b = *(u8*)((r9 + 2));
-            }
-            rax = *(u64*)((r10 + 0xADDR));
-            rdx = (r9 + 2);
-            __asm("cmovne rdx, r9");
-            rcx = *(u64*)(rax);
-            al = *(u8*)(rcx);
-            *(u8*)(rdx) = al;
-            rdx += 1;
-            do {
-                al = *(u8*)(rdx);
-                cl = r8b;
-                *(u8*)(rdx) = r8b;
-                rdx += 1;
-                r8b = al;
-            } while (cl != 0);
+    if ((al & 1) != 0 && *(u32*)((rbx + 0xADDR)) == 0) {
+        rdi = *(u64*)((rbx + 8));
+        if (*(u8*)((rdi + 0xADDR)) == 0) {
+            sub_140006cc0(rdi);
         }
+        r9 = *(u64*)((rbx + 0xADDR));
+        r10 = *(u64*)((rdi + 0xADDR));
+        r8d = (uint32)(*(u8*)(r9));
+        rax = *(u64*)((r10 + 0xADDR));
+        if (*(u8*)((r8 + rax)) != 0xADDR) {
+            rax = *(u64*)(r10);
+            do {
+                r9 += 1;
+                r8d = (uint32)(*(u8*)(r9));
+            } while ((*(u8*)((rax + (r8 * 2))) & 4) != 0);
+        }
+        rax = *(u64*)((r10 + 0xADDR));
+        ecx = (uint32)(r8b);
+        if (*(u8*)((rcx + rax)) == 0xADDR) {
+            r8b = *(u8*)((r9 + 2));
+        }
+        rax = *(u64*)((r10 + 0xADDR));
+        rdx = (r9 + 2);
+        __asm("cmovne rdx, r9");
+        rcx = *(u64*)(rax);
+        al = *(u8*)(rcx);
+        *(u8*)(rdx) = al;
+        rdx += 1;
+        do {
+            al = *(u8*)(rdx);
+            cl = r8b;
+            *(u8*)(rdx) = r8b;
+            rdx += 1;
+            r8b = al;
+        } while (cl != 0);
     }
     al = *(u8*)((rbx + 0xADDR));
     al -= 0xADDR;

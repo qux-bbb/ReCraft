@@ -35,10 +35,8 @@ void sub_1400017a0_l1(void) {
         var_48 = rax;
         SetUnhandledExceptionFilter(0);
         UnhandledExceptionFilter(&var_40);
-        if (eax == 0) {
-            if (ebx != 1) {
-                sub_140001794((rax + 3));
-            }
+        if (eax == 0 && ebx != 1) {
+            sub_140001794((rax + 3));
         }
         return;
     }

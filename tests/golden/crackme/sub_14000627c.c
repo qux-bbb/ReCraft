@@ -311,20 +311,18 @@ void sub_14000627c_l1(void) {
         }
     } else if (ecx != 0xADDR) {
         if (ecx > 0xADDR /* signed */) {
-            if (ecx != 0xADDR) {
-                if (ecx == 0xADDR) {
-                    sub_1400067b4(rbx);
-                    goto loc_ADDR;
-                } else if (ecx != 0xADDR) {
-                    if (ecx != 0xADDR) {
-                        al = 0;
-                        r11 = &var_60;
-                        return;
-                    }
-                    edx = 0;
-                    sub_140006a8c(rbx);
-                    goto loc_ADDR;
+            if (ecx != 0xADDR && ecx == 0xADDR) {
+                sub_1400067b4(rbx);
+                goto loc_ADDR;
+            } else if (ecx != 0xADDR) {
+                if (ecx != 0xADDR) {
+                    al = 0;
+                    r11 = &var_60;
+                    return;
                 }
+                edx = 0;
+                sub_140006a8c(rbx);
+                goto loc_ADDR;
             }
         } else if (ecx != 0xADDR) {
             ecx -= 0xADDR;
@@ -334,12 +332,10 @@ void sub_14000627c_l1(void) {
                     ecx -= 2;
                     if (ecx != 0) {
                         ecx -= 1;
-                        if (ecx != 0) {
-                            if (ecx != 1) {
-                                al = 0;
-                                r11 = &var_60;
-                                return;
-                            }
+                        if (ecx != 0 && ecx != 1) {
+                            al = 0;
+                            r11 = &var_60;
+                            return;
                         }
                     }
                 }
