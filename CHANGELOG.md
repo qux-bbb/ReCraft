@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Sized the local-variable prize: 2 497 `var_XX = …;` writes, but only 339 slots are written more than
+  once, so about 2 158 slots are single-write. `docs/NEXT.md` §1.4 records that turning them into
+  `int32 v18 = …;` declarations is a product decision, not a pure technical one - it would trade the
+  1:1 mapping between `var_18` and the stack offset for a more C-like look - so it is left for a
+  human to choose rather than changed unilaterally at the end of a stage.
 - Split the "other" 12.2% of the output composition: 2 352 lines are `x = f(y);` assignments, 743 are
   memory stores and 517 are function signatures - nothing unclassifiable.
 - Implemented and reverted a register copy-propagation pass. The rule was sound - within a window
