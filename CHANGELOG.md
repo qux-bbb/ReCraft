@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` records what `export-pseudo`'s index makes obvious: of Notepad's 15 unstructured
+  functions, 14 have only 1–14 jumps and one has 369, so the two metrics pull apart — fixing the 14
+  small ones alone would take the structured rate from 487/502 to 501/502 (99.8%), while the jump
+  total needs the outlier. The note lists the four functions with one or two jumps as the cheapest
+  starting points.
 - `export-pseudo` also writes `index.tsv` (`file`, `address`, `gotos`, `lines`) so a directory of
   several hundred files can be triaged: sorting by `gotos` puts the functions furthest from
   structured control flow first. The export test checks the row count.
