@@ -780,7 +780,7 @@ fn resolve_address(session: &Session, raw: &str) -> Result<Address> {
     }
     raw.parse::<u64>()
         .map(Address::new)
-        .map_err(|_| Error::internal(format!("invalid address or unknown symbol: {raw}")))
+        .map_err(|_| Error::invalid_argument(format!("invalid address or unknown symbol: {raw}")))
 }
 
 fn permission_string(section: &recraft_format::Section) -> String {
@@ -1405,6 +1405,13 @@ fn cmd_golden(project: &Path, dir: Option<&Path>, check: bool, limit: Option<usi
         }
         if report.ok() {
             Ok(())
+        } else if report.mismatched.is_empty() && report.missing.len() == report.checked {
+            // Every function is "missing": the directory holds no snapshots at all, which is a
+            // setup mistake rather than a regression.
+            Err(Error::invalid_argument(format!(
+                "no golden snapshots in {} (run without --check to write them)",
+                dir.display()
+            )))
         } else {
             Err(Error::internal(format!(
                 "golden regression: {} mismatched, {} missing in {}",

@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Two more user-facing messages say what actually went wrong: a bad `--addr` value reads
+  `error: invalid argument: invalid address or unknown symbol: …`, and `golden --check` against a
+  directory that holds no snapshots says `no golden snapshots in <dir> (run without --check to write
+  them)` instead of reporting 502 "missing" as a regression.
 - User-input failures no longer report themselves as internal errors: `Error` gains an
   `InvalidArgument` variant (`invalid argument: …`), used by "nothing to decompile at 0x…",
   "no functions: run `analyze` before linting" and "no texts checked: raise --limit above 0". A
