@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Both stage reports lost their stale figures: the newer one said 196 Go fallbacks (now 263, with the
+  runtime internals named) and 148 tests (now 150), the older one said 196 as well (now 263 with a
+  note that 196 came from a 2000-function sample), and the verification heading names the current
+  commit.
 - Checked crackme's fallbacks too: 15 of the 40 have one to three jumps, and the first one inspected
   (`sub_140002354`, a single `goto`) is the same two-entry shape as in Notepad — the label sits inside
   an `if` arm while the jump comes from the sibling `else`, so the "repair the small ones first" plan
