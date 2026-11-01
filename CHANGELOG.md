@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Correction to the previous entry: the `cdq` lift was **not** broken. Comparing L2 exports with and
+  without it shows three affected functions and the only change is `__asm("cdq")` becoming
+  `edx = ((eax < 0) ? -1 : 0)`, with one site merged into the following mask as
+  `edx = (((eax < 0) ? -1 : 0) & 3)`. The earlier note mistook the ban on single-character
+  speculation for a dropped assignment. The lift is in: `UnOp` keeps `Ctz`/`Bsr`/`Popcount` and
+  `cdq`/`cqo`/`cwd` reuse `Expr::Select`, taking Notepad's inline asm from 138 to 134.
 - Tried lifting `cdq`/`cqo`/`cwd` to `edx = (eax < 0) ? -1 : 0` and reverted it: the raw
   `__asm("idiv …")` that follows is treated as clobbering every register, so the dead-write pass
   deleted the assignment it had just produced and the printed program lost the dividend's high half.

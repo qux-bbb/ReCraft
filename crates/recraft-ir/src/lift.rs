@@ -115,6 +115,7 @@ impl Lifter {
             M::Movzx => self.lift_movx(insn, &mut stmts, false),
             M::Movsx | M::Movsxd => self.lift_movx(insn, &mut stmts, true),
             M::Cdqe => self.lift_cdqe(&mut stmts),
+            M::Cdq | M::Cqo | M::Cwd => self.lift_cdq(insn, &mut stmts),
             M::Lea => self.lift_lea(insn, &mut stmts),
             M::Add | M::Sub | M::And | M::Or | M::Xor => {
                 self.lift_binary(insn, &mut stmts);
@@ -940,6 +941,35 @@ impl Lifter {
         let reg = RegView::full(Reg::Rax);
         stmts.push(Stmt::WriteReg { reg, value });
         self.reg_env.insert(Reg::Rax, value);
+        Flow::Fallthrough
+    }
+
+    fn lift_cdq(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Mnemonic as M;
+        let width = match insn.mnemonic() {
+            M::Cqo => 8u8,
+            M::Cwd => 2,
+            _ => 4,
+        };
+        let source = self.reg(RegView::new(Reg::Rax, width, 0));
+        let zero = self.constant(0);
+        let negative = self.push(Expr::Cmp {
+            kind: CondKind::SignedLt,
+            lhs: source,
+            rhs: zero,
+        });
+        let minus_one = self.constant(u64::MAX);
+        let zero = self.constant(0);
+        let value = self.push(Expr::Select {
+            cond: negative,
+            then: minus_one,
+            otherwise: zero,
+        });
+        stmts.push(Stmt::WriteReg {
+            reg: RegView::new(Reg::Rdx, width, 0),
+            value,
+        });
+        self.reg_env.insert(Reg::Rdx, value);
         Flow::Fallthrough
     }
 
