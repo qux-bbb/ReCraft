@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-ran both full L2 lint sweeps after the bit-scan and sign-extend lifts: Notepad 502/502 and Go
+  3261/3261 texts, 0 findings each. The invariants hold on the biggest sample at both levels.
 - Measured the snapshot suite after it grew to 502 Notepad functions: `golden --check` takes 12.7 s
   in a debug build, dominated by the 576 KB reference function; the other 501 cost about 2 s
   together, and the Go 60-snapshot check is 0.6 s. Recorded in `docs/PERF.md`.
