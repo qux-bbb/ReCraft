@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The report's transformation table now lists the two instruction lifts it gained (bit scans and sign
+  extension) next to the four text passes, so §1 lists everything this stage changed.
 - Proofread the stage report against the final measurements and fixed what had drifted: the snapshot
   count (453 to 785, with the note that Notepad is now complete), the inline-asm columns
   (Notepad 134, crackme 266, Go 1905), Go coverage (98.8%) and the reference function's time
