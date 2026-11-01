@@ -751,6 +751,19 @@ mod tests {
         assert_eq!(report.affected(), 0);
     }
     #[test]
+    fn the_histogram_counts_functions_by_fallback_jumps() {
+        let Some((mut session, _dir)) = corpus_for("x64") else {
+            return;
+        };
+        let report = measure(&mut session, 0).expect("measure");
+        let histogram = report.fallback_histogram();
+        let counted: usize = histogram.values().sum();
+        assert_eq!(counted, report.total());
+        // A structured function contributes to the "0 jumps" bucket.
+        assert_eq!(histogram.get(&0).copied().unwrap_or(0), report.structured());
+    }
+
+    #[test]
     fn a_zero_limit_measures_every_function() {
         let Some((mut session, _dir)) = corpus_for("x64") else {
             return;

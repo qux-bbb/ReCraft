@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A test covers the histogram: the buckets add up to the function count and the "0 jumps" bucket
+  equals the structured count. The suite is at 153 tests.
 - Checked all eight single-jump functions in crackme: every one jumps backwards to a label followed by
   real statements (a `continue` condition, an unmodelled-flag branch, or bookkeeping), so they are the
   same two-entry shape - none is the easy "jump to the function's trailing return" case.
