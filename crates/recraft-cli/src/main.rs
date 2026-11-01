@@ -197,6 +197,9 @@ enum Commands {
         /// Emit L2 structured pseudo-C with argument/stack variable names.
         #[arg(long)]
         l2: bool,
+        /// Write the pseudo-C to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
@@ -612,16 +615,20 @@ fn run(cli: Cli) -> Result<()> {
             addresses,
             structured,
             l2,
+            out,
         } => {
             let materialized = materialize_project(&project)?;
             cmd_decompile(
                 &materialized.path,
-                addr.as_deref(),
-                max_insns,
-                json,
-                addresses,
-                structured,
-                l2,
+                DecompileOptions {
+                    addr: addr.as_deref(),
+                    max_insns,
+                    as_json: json,
+                    with_addresses: addresses,
+                    structured,
+                    l2,
+                    out_file: out,
+                },
             )
         }
         Commands::Rename {
@@ -2830,15 +2837,27 @@ fn cmd_funcs(project: &Path, as_json: bool) -> Result<()> {
 
 // ---------------------------------------------------------------- decompile ----
 
-fn cmd_decompile(
-    project: &Path,
-    addr: Option<&str>,
+/// Rendering options for `decompile`, grouped so the function keeps a readable signature.
+struct DecompileOptions<'a> {
+    addr: Option<&'a str>,
     max_insns: usize,
     as_json: bool,
     with_addresses: bool,
     structured: bool,
     l2: bool,
-) -> Result<()> {
+    out_file: Option<PathBuf>,
+}
+
+fn cmd_decompile(project: &Path, options: DecompileOptions<'_>) -> Result<()> {
+    let DecompileOptions {
+        addr,
+        max_insns,
+        as_json,
+        with_addresses,
+        structured,
+        l2,
+        out_file,
+    } = options;
     let mut session = Session::open(project)?;
     let start = match addr {
         Some(raw) => resolve_address(&session, raw)?,
@@ -2882,6 +2901,24 @@ fn cmd_decompile(
             "structured": gotos == 0,
             "lines": lines,
         }));
+    }
+
+    if let Some(path) = out_file {
+        // Rendering to a file keeps the terminal free and lets scripts diff the output directly.
+        let mut text = String::new();
+        for line in &code.lines {
+            if with_addresses {
+                text.push_str(&format!("{:#012x}  {}\n", line.addr.get(), line.text));
+            } else {
+                text.push_str(&line.text);
+                text.push('\n');
+            }
+        }
+        std::fs::write(&path, text).map_err(|error| {
+            Error::invalid_argument(format!("cannot write {}: {error}", path.display()))
+        })?;
+        eprintln!("wrote {} lines to {}", code.lines.len(), path.display());
+        return Ok(());
     }
 
     for line in &code.lines {

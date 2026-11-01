@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `decompile` gains `--out <FILE>`, which writes the rendered pseudo-C to a file (honouring
+  `--addresses` as well) and prints `wrote N lines to <path>` on stderr. A bad path reports
+  `invalid argument: cannot write <path>: …`. The rendering options moved into a
+  `DecompileOptions` struct so the function stays under clippy's argument limit.
 - `docs/PERF.md` is consistent again: the mid-stage "1.0 s" figures point at the newer 556 ms
   measurement, the whole-sample note says ~0.6 s for the outlier, and a `### 反例` heading that an
   insertion had glued to the previous paragraph is back on its own line.
