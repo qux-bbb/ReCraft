@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-measured the 45 KB function at the end of the stage: the phases add up to about **556 ms**
+  (first lift 122, alias/arg 38, seeded lift 76, emit 10, text passes 67, naming 15), down from the
+  1.0 s recorded mid-stage, with `docs/PERF.md` carrying the table.
 - `fold_constant_registers` no longer carries two unrelated paragraphs in its doc comment: the
   `GetClientRect`/`RECT` sentence moved to `name_known_struct_fields`, where the code it describes
   lives, and the constant-fold note states that it also folds into a compound assignment.

@@ -80,7 +80,22 @@ notepad 的 45 KB 函数（`sub_140013154`，1620 基本块、约 9.9 千行 L2�
 
 剩余热点：`folds`（50 ms）与 `ifs`（47 ms）两组文本 pass、`first lift`（125 ms）。优化方式同上，
 验收标准仍是 golden 逐字节一致。
-### 反例：`ifs` 组的耗时不在括号重算
+## 阶段二收尾复测（2026-11-02，提交 f540dea）
+
+同一函数 `sub_140013154` 的分段耗时（debug 构建）：
+
+| 段 | ms |
+|---|---|
+| first lift | 122.4 |
+| alias/arg analysis | 37.8 |
+| seeded lift | 76.1 |
+| emit | 10.0 |
+| text passes | 67.3（tails 39.5 / gotos 11.8 / folds 51.8 / ifs 48.4 / spills 24.7 / returns 17.8，含重叠计时的子项） |
+| 余下（frame probe、norm loops、struct fields、struct inst、void fields、globals、constants、stack args、post passes） | 约 35 |
+| naming | 14.6 |
+| **合计** | **约 556 ms**（墙钟约 0.6 s；阶段初为 12 s） |
+
+与阶段中途的 1.0 s 相比进一步下降，主要因为逐函数缓存与一次遍历命名已全部生效。### 反例：`ifs` 组的耗时不在括号重算
 
 曾尝试把 `merge_identical_if_arms` / `collapse_nested_if_wrappers` 里"每次合并后整篇重算
 `line_braces`"改为"只删除对应条目"（合并/删除的区间都是括号平衡的，因此后续前缀深度不变）。
