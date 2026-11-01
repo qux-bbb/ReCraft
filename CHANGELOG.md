@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The two instruction lifts have encoder-level tests: `bsf eax, ecx` becomes `UnOp::Ctz` and
+  `popcnt eax, ecx` becomes `UnOp::Popcount` (both checked through the real opcode bytes), and `cdq`
+  writes `edx` with a `Select` whose condition is `SignedLt`. IR crate tests 24 → 26.
 - Checked that the pipeline is deterministic: `import` + `analyze` of corpus.exe into a fresh project
   produces exactly the metrics of the committed sample (31 functions, 391 instructions, 97.4%
   coverage, `0:31`) and its L1 text matches the committed snapshots, so a project's text depends on

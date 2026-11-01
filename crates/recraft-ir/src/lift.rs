@@ -1522,6 +1522,55 @@ mod tests {
     }
 
     #[test]
+    fn bit_scan_instructions_become_unary_expressions() {
+        // bsf eax, ecx -> eax = ctz(ecx)
+        let (lifter, item) = lift_one(&[0x0f, 0xbc, 0xc1], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.name(), "eax");
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Un { op: UnOp::Ctz, .. }
+                ));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // popcnt eax, ecx -> eax = popcnt(ecx)
+        let (lifter, item) = lift_one(&[0xf3, 0x0f, 0xb8, 0xc1], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { value, .. } => {
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Un {
+                        op: UnOp::Popcount,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cdq_writes_the_sign_of_eax_to_edx() {
+        // cdq
+        let (lifter, item) = lift_one(&[0x99], 0x1000);
+        match &item.stmts[0] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.name(), "edx");
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Select {
+                        cond,
+                        ..
+                    } if matches!(lifter.expr(*cond), Expr::Cmp { kind: CondKind::SignedLt, .. })
+                ));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
     fn cdqe_sign_extends_eax() {
         // cdqe
         let (lifter, item) = lift_one(&[0x48, 0x98], 0x1000);
