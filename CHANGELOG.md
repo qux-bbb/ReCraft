@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A single-use constant also folds into a compound assignment: `rdx = 0x140000000; rcx += rdx;` reads
+  `rcx += 0x140000000;`. Only the right-hand side of `+=`, `-=`, `&=`, `|=`, `^=`, `*=`, `<<=`,
+  `>>=`, `/=`, `%=` is a fold site and the operand must equal the register, so nothing is
+  truncated. Notepad: L2 29 938 → **29 921** lines; 8 snapshots updated.
 - A constant folded into a comparison now also matches the register's 16- and 8-bit names:
   `eax = 0x5a4d; if (word_140000000 != ax)` became three statements with a raw slot, and reads
   `if (word_140000000 != 0x5a4d)` now. The constant is truncated to the compared width and the fold
