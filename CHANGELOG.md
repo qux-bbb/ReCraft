@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Two more tests for behaviour that only the CLI exercised: `measure(session, 0)` proves a zero
+  limit means "all functions" (and that `skipped` counts the rest), and `check_golden_limited` on an
+  empty directory proves every function is reported missing, which is the case behind the
+  "no golden snapshots in <dir>" message. The suite is at 152 tests.
 - Measured the register-to-register copies behind the "looks like assembly" feeling: 1 508 of the
   29 664 output lines are plain copies, and only 126 of them are dead writes - the other 1 382 carry
   real data flow. That makes local-variable reconstruction, not text cleanup, the next big feature;

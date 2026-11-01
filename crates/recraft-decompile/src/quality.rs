@@ -741,6 +741,32 @@ mod tests {
         assert_eq!(report.affected(), 0);
     }
     #[test]
+    fn a_zero_limit_measures_every_function() {
+        let Some((mut session, _dir)) = corpus_for("x64") else {
+            return;
+        };
+        let all = measure(&mut session, 0).expect("measure all");
+        let capped = measure(&mut session, 5).expect("measure five");
+        assert!(all.total() > capped.total());
+        assert_eq!(capped.total(), 5);
+        assert_eq!(capped.skipped, all.total() - 5);
+    }
+
+    #[test]
+    fn checking_a_directory_without_snapshots_reports_them_all_missing() {
+        let Some((mut session, _dir)) = corpus_for("x64") else {
+            return;
+        };
+        let empty = std::env::temp_dir().join(format!("recraft-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).expect("create dir");
+        let report = check_golden_limited(&mut session, &empty, usize::MAX).expect("check");
+        assert!(report.mismatched.is_empty());
+        assert_eq!(report.missing.len(), report.checked);
+        std::fs::remove_dir_all(&empty).expect("clean up");
+    }
+
+    #[test]
     fn exporting_pseudocode_writes_one_l2_file_per_function() {
         let Some((mut session, _dir)) = corpus_for("x64") else {
             return;
