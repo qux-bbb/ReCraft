@@ -153,6 +153,12 @@ impl Lifter {
                 self.intrinsic(insn, &mut stmts)
             }
             M::Imul => self.lift_imul(insn, &mut stmts),
+            // Bit scans read one operand and write another; rendering them as builtin calls keeps
+            // the result usable instead of leaving `__asm("bsf ...")` plus a move in the output.
+            M::Bsf | M::Bsr | M::Popcnt => {
+                self.lift_bit_scan(insn, &mut stmts);
+                Flow::Fallthrough
+            }
             M::Push => self.lift_push(insn, &mut stmts),
             M::Pop => self.lift_pop(insn, &mut stmts),
             // Packed integer SIMD: lane-wise arithmetic prints as scalar operators.
@@ -560,6 +566,25 @@ impl Lifter {
             rhs: zero,
             source: CmpSource::ZeroOnly,
         });
+        if !self.write_operand(insn, 0, result, stmts) {
+            stmts.push(Stmt::Intrinsic { text: insn.asm() });
+        }
+    }
+
+    /// `bsf`/`bsr`/`popcnt`: one operand in, one operand out, no flags we model.
+    fn lift_bit_scan(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) {
+        use iced_x86::Mnemonic as M;
+        let op = match insn.mnemonic() {
+            M::Bsf => UnOp::Ctz,
+            M::Bsr => UnOp::Bsr,
+            _ => UnOp::Popcount,
+        };
+        // The source is operand 1; operand 0 is the destination.
+        let Some(arg) = self.read_operand(insn, 1) else {
+            stmts.push(Stmt::Intrinsic { text: insn.asm() });
+            return;
+        };
+        let result = self.push(Expr::Un { op, arg });
         if !self.write_operand(insn, 0, result, stmts) {
             stmts.push(Stmt::Intrinsic { text: insn.asm() });
         }

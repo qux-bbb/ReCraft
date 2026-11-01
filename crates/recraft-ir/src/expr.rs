@@ -66,6 +66,13 @@ impl BinOp {
 pub enum UnOp {
     Not,
     Neg,
+    /// `bsf`: index of the lowest set bit (`ctz(x)`). The zero-input result is undefined in the
+    /// instruction and in the builtin, so the rendering keeps the same contract.
+    Ctz,
+    /// `bsr`: index of the highest set bit, printed as `(0x1f - clz(x))` by the printer.
+    Bsr,
+    /// `popcnt`: number of set bits.
+    Popcount,
 }
 
 /// Comparison predicates (also used for `jcc`).

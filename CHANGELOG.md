@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `bsf`, `bsr` and `popcnt` are lifted instead of left as text. `UnOp` gains `Ctz`, `Bsr` and
+  `Popcount`; `bsf` prints `ctz(x)`, `bsr` prints `(0x1f - clz(x))` (the exact identity, since
+  `bsr` returns the index of the highest set bit) and `popcnt` prints `popcnt(x)`. crackme's SIMD
+  string scan loses 11 lines of `__asm` (277 → 266) and reads `ecx = ctz(eax);` where it had
+  `__asm("bsf ecx, eax"); eax = ecx;`. One snapshot (`crackme/sub_140006fd0.c`) changed and was
+  reviewed: exactly the two bit-scan lines, nothing else.
 - `docs/NEXT.md` §1.3 records the next bounded feature: `bsf`/`bsr`/`tzcnt`/`lzcnt`/`popcnt` still
   print as `__asm` (e.g. `__asm("bsf ecx, eax"); eax = ecx;` in crackme's SIMD code), and modelling
   them needs a new `Expr::Call` variant, which every `match Expr` site must handle. The note lists

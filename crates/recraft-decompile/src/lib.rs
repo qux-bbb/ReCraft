@@ -2344,6 +2344,11 @@ impl Printer<'_> {
                 let symbol = match op {
                     UnOp::Not => "~",
                     UnOp::Neg => "-",
+                    // Bit scans print as the builtin-style calls the rest of the output uses
+                    // (`ror`/`rol`), which one line beats `__asm("bsf ...")` plus a move.
+                    UnOp::Ctz => return format!("ctz({})", self.expr(*arg)),
+                    UnOp::Bsr => return format!("(0x1f - clz({}))", self.expr(*arg)),
+                    UnOp::Popcount => return format!("popcnt({})", self.expr(*arg)),
                 };
                 format!("{symbol}({})", self.expr(*arg))
             }

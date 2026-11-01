@@ -24,7 +24,7 @@ void sub_140006fd0_l1(void) {
                 __asm("pcmpeqb xmm0, xmm3");
                 __asm("pmovmskb eax, xmm0");
                 if (eax != 0) {
-                    __asm("bsf ecx, eax");
+                    ecx = ctz(eax);
                     eax = ecx;
                     rax -= r10;
                     rax += 0xADDR;
@@ -66,7 +66,7 @@ void sub_140006fd0_l1(void) {
             }
             if (*(u8*)((rbx + 1)) == dil) goto loc_ADDR;
         }
-        __asm("bsf edx, eax");
+        edx = ctz(eax);
         if (r10 != 0) {
             ecx = 0xADDR;
             eax = edx;
