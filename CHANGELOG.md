@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Checked that the pipeline is deterministic: `import` + `analyze` of corpus.exe into a fresh project
+  produces exactly the metrics of the committed sample (31 functions, 391 instructions, 97.4%
+  coverage, `0:31`) and its L1 text matches the committed snapshots, so a project's text depends on
+  the binary and the code, not on the order things were measured in.
 - The command cheatsheet in `docs/QUALITY.md` lists the flags this stage added: `metrics --list`,
   `metrics --max-functions 0` and `export-pseudo --only-unstructured`, next to the existing lint,
   gate and snapshot commands.
