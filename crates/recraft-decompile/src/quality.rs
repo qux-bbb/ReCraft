@@ -485,6 +485,25 @@ pub fn write_golden_limited(session: &mut Session, dir: &Path, limit: usize) -> 
     Ok(written)
 }
 
+/// Write one L2 pseudo-C file per function into `dir`. This is the export counterpart of the
+/// snapshots: same file names, but the text a reader wants rather than the normalised L1 form.
+pub fn export_pseudocode(session: &mut Session, dir: &Path, limit: usize) -> Result<usize> {
+    std::fs::create_dir_all(dir)?;
+    let mut functions = sorted_functions(session)?;
+    let limit = if limit == 0 {
+        functions.len()
+    } else {
+        limit.min(functions.len())
+    };
+    functions.truncate(limit);
+    let names = golden_file_names(session, &functions)?;
+    for (index, function) in functions.iter().enumerate() {
+        let text = pseudocode_l2(session, function.start)?.text();
+        std::fs::write(dir.join(&names[index]), text)?;
+    }
+    Ok(functions.len())
+}
+
 /// Compare the project against snapshots in `dir`.
 pub fn check_golden(session: &mut Session, dir: &Path) -> Result<GoldenReport> {
     check_golden_limited(session, dir, usize::MAX)

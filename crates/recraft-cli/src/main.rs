@@ -201,6 +201,16 @@ enum Commands {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Write one L2 pseudo-C file per function into a directory.
+    ExportPseudo {
+        project: PathBuf,
+        /// Directory to write into (created if missing).
+        #[arg(long)]
+        dir: PathBuf,
+        /// Export at most this many functions (0 exports all of them).
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+    },
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
         project: PathBuf,
@@ -630,6 +640,20 @@ fn run(cli: Cli) -> Result<()> {
                     out_file: out,
                 },
             )
+        }
+        Commands::ExportPseudo {
+            project,
+            dir,
+            limit,
+        } => {
+            let materialized = materialize_project(&project)?;
+            let written = recraft_decompile::export_pseudocode(
+                &mut Session::open(&materialized.path)?,
+                &dir,
+                limit,
+            )?;
+            println!("wrote {written} files to {}", dir.display());
+            Ok(())
         }
         Commands::Rename {
             project,

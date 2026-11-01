@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- New `export-pseudo <project> --dir <dir> [--limit N]`: writes one L2 pseudo-C file per function,
+  using the same file names the golden snapshots use (so `dir/sub_140001480.c` matches
+  `tests/golden/.../sub_140001480.c`). The corpus exports 31 files whose content is the readable L2
+  text, not the normalised L1 form the snapshots store.
 - `decompile` gains `--out <FILE>`, which writes the rendered pseudo-C to a file (honouring
   `--addresses` as well) and prints `wrote N lines to <path>` on stderr. A bad path reports
   `invalid argument: cannot write <path>: …`. The rendering options moved into a
