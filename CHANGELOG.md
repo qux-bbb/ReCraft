@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Measured the register-to-register copies behind the "looks like assembly" feeling: 1 508 of the
+  29 664 output lines are plain copies, and only 126 of them are dead writes - the other 1 382 carry
+  real data flow. That makes local-variable reconstruction, not text cleanup, the next big feature;
+  `docs/NEXT.md` §1.4 records the prize, the three steps and why it needs its own stage.
 - Measured what the L2 output is made of across all 502 Notepad functions (29 664 lines):
   assignments 44.0%, calls 12.4%, braces/blank 12.4%, other 12.2%, control flow 11.2%, returns 3.0%,
   headers 2.8%, labels 0.9%, `goto loc_` 0.6% and inline asm 0.5%. The unstructured residue (labels
