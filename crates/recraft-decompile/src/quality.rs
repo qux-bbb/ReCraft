@@ -497,7 +497,12 @@ pub fn write_golden_limited(session: &mut Session, dir: &Path, limit: usize) -> 
 
 /// Write one L2 pseudo-C file per function into `dir`. This is the export counterpart of the
 /// snapshots: same file names, but the text a reader wants rather than the normalised L1 form.
-pub fn export_pseudocode(session: &mut Session, dir: &Path, limit: usize) -> Result<usize> {
+pub fn export_pseudocode(
+    session: &mut Session,
+    dir: &Path,
+    limit: usize,
+    only_unstructured: bool,
+) -> Result<usize> {
     std::fs::create_dir_all(dir)?;
     let mut functions = sorted_functions(session)?;
     let limit = if limit == 0 {
@@ -510,6 +515,7 @@ pub fn export_pseudocode(session: &mut Session, dir: &Path, limit: usize) -> Res
     // The index makes a directory of a few hundred files navigable: file, address, jump count and
     // size, which is exactly what "which function should I read first" needs.
     let mut index = String::from("file\taddress\tgotos\tlines\n");
+    let mut written = 0usize;
     for (position, function) in functions.iter().enumerate() {
         let code = pseudocode_l2(session, function.start)?;
         let gotos = code
@@ -517,6 +523,11 @@ pub fn export_pseudocode(session: &mut Session, dir: &Path, limit: usize) -> Res
             .iter()
             .filter(|line| line.text.contains("goto loc_"))
             .count();
+        // Reviewing the hard cases only: a function with no fallback jump is already structured, so
+        // its file is noise in that workflow.
+        if only_unstructured && gotos == 0 {
+            continue;
+        }
         index.push_str(&format!(
             "{}\t{:#x}\t{}\t{}\n",
             names[position],
@@ -525,9 +536,10 @@ pub fn export_pseudocode(session: &mut Session, dir: &Path, limit: usize) -> Res
             code.lines.len()
         ));
         std::fs::write(dir.join(&names[position]), code.text())?;
+        written += 1;
     }
     std::fs::write(dir.join("index.tsv"), index)?;
-    Ok(functions.len())
+    Ok(written)
 }
 
 /// Compare the project against snapshots in `dir`.
@@ -796,7 +808,7 @@ mod tests {
         };
         let out = std::env::temp_dir().join(format!("recraft-export-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
-        let written = export_pseudocode(&mut session, &out, 0).expect("export");
+        let written = export_pseudocode(&mut session, &out, 0, false).expect("export");
         assert!(written >= 30, "only {written} functions exported");
         let files: Vec<_> = std::fs::read_dir(&out)
             .expect("read dir")

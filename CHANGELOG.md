@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `export-pseudo` gains `--only-unstructured`, which writes just the functions that still carry a
+  fallback jump (crackme: 40 of 493 files), so reviewing the hard cases does not mean scrolling past
+  a structured majority.
 - The stage report and the quality page carry the current test count (153) instead of 149/150.
 - A test covers the histogram: the buckets add up to the function count and the "0 jumps" bucket
   equals the structured count. The suite is at 153 tests.

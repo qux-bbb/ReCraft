@@ -210,6 +210,9 @@ enum Commands {
         /// Export at most this many functions (0 exports all of them).
         #[arg(long, default_value_t = 0)]
         limit: usize,
+        /// Export only the functions that still contain a fallback jump.
+        #[arg(long)]
+        only_unstructured: bool,
     },
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
@@ -645,12 +648,14 @@ fn run(cli: Cli) -> Result<()> {
             project,
             dir,
             limit,
+            only_unstructured,
         } => {
             let materialized = materialize_project(&project)?;
             let written = recraft_decompile::export_pseudocode(
                 &mut Session::open(&materialized.path)?,
                 &dir,
                 limit,
+                only_unstructured,
             )?;
             println!("wrote {written} files to {}", dir.display());
             Ok(())
