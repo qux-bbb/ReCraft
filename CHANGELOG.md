@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/PERF.md` carries the full phase breakdown for the 45 KB function after this round of work
+  (cfg 0, first lift 125, alias/arg 37, seeded lift 77, emit 10, text passes ~260 split by group,
+  post passes ~34, naming 15, wall clock ~1.0 s) with the three passes that were made to scan the
+  body once instead of once per candidate, and the next hotspots named.
 - `RECRAFT_PROFILE=1` now splits the phases that were missing, so the profile covers the whole
   pipeline instead of stopping at the text passes. For the 45 KB function: `cfg` 0 ms,
   `first lift` 125, `alias/arg analysis` 37, `seeded lift` 78, `emit` 10, **`text passes` 258**,

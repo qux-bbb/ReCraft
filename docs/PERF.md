@@ -57,3 +57,26 @@ notepad 函数的输出逐字节未变。
 - 内存统计是 20 ms 采样的下界，峰值可能略低；如需精确峰值可换 ETW/Job Object
   `PeakProcessMemoryUsed`，后续按需引入。
 - CI 的磁盘/时间成本约 10–20 s（写 1 GiB + 读回），可接受。
+
+## 反编译视图剖析更新（2026-11-02）
+
+`RECRAFT_PROFILE=1 recraft decompile <project> --addr 0x140013154 --l2` 现在覆盖整条流水线。
+notepad 的 45 KB 函数（`sub_140013154`，1620 基本块、约 9.9 千行 L2）在本机 debug 构建下：
+
+| 阶段 | 耗时 |
+|---|---|
+| `cfg` | 0 ms |
+| `first lift` | 125 ms |
+| `alias/arg analysis` | 37 ms |
+| `seeded lift` | 77 ms |
+| `emit` | 10 ms |
+| `text passes` | ~260 ms（`tails` 40、`folds` 50、`ifs` 47、`spills` 24、`returns` 18、`gotos` 11、其余 68） |
+| `post passes`（命名） | ~34 ms（`struct fields` 9、`struct inst` 8、`void fields` 7、`globals` 7、`constants` 3） |
+| `naming` | 15 ms |
+
+整函数墙钟约 **1.0 s**（进程启动 + 打开工程仅 30 ms）。本轮把三个"按候选反复扫整篇"的命名 pass
+改成"每趟只扫一次 + 预建索引"（`name_address_constants` 45→3 ms、两个结构体匹配 26/25→9/8 ms、
+`name_handle_slots` 47→15 ms），输出**逐字节不变**（453 个 golden 快照全部一致）。
+
+剩余热点：`folds`（50 ms）与 `ifs`（47 ms）两组文本 pass、`first lift`（125 ms）。优化方式同上，
+验收标准仍是 golden 逐字节一致。
