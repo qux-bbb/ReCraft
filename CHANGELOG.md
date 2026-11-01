@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tried wiring the committed corpus snapshots into `cargo test` (so a structuring change could not
+  land unnoticed) and dropped the idea: a session built in-test renders one of the 31 functions
+  differently from the project the snapshots were taken with, so the test would fail for a reason
+  that has nothing to do with the decompiler. `recraft golden --check` stays the way to run them.
 - Scanned every exported Notepad function for rendering defects (double negation, `!!`, self
   comparisons, assignment inside a condition, cast of a cast, negative index, `!= 0 ? -1 : 0`):
   none of them occur. The two patterns that do appear are intended - `!= 0) ? -1 : 0` is how a
