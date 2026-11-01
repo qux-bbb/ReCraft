@@ -46,7 +46,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
             0,
             PseudoLine {
                 addr: start,
-                text: "// L1 unavailable: run analysis first".to_owned(),
+                text: "// no function starts here: showing the flat instruction listing".to_owned(),
             },
         );
         return Ok(fallback);

@@ -2898,12 +2898,20 @@ fn cmd_decompile(project: &Path, options: DecompileOptions<'_>) -> Result<()> {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
-    let function_start = session
+    let containing = session
         .functions()?
         .iter()
         .find(|function| start >= function.start && start < function.end)
-        .map(|function| function.start)
-        .unwrap_or(start);
+        .map(|function| function.start);
+    // Structured output is per function: asking for it at an address that no function covers is a
+    // bad request, not something to render as a one-off listing.
+    if containing.is_none() && (structured || l2) {
+        return Err(Error::invalid_argument(format!(
+            "no analysed function contains {:#x}",
+            start.get()
+        )));
+    }
+    let function_start = containing.unwrap_or(start);
     let code = if l2 {
         recraft_decompile::pseudocode_l2(&mut session, function_start)?
     } else if structured {

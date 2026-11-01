@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A structured request for an address that no analysed function covers now fails with
+  `invalid argument: no analysed function contains 0x…` instead of printing a flat listing headed
+  "L1 unavailable: run analysis first" (analysis had run - the address simply was not a function).
+  The remaining fallback text says what is true: `no function starts here: showing the flat
+  instruction listing`.
 - Validated on more production code after the signature fix: user32.dll (3040 functions) and
   advapi32.dll (1861) both lint at L1 with **0 findings**, and `metrics` reports 92.0% / 93.3%
   structured with 99.3% / 99.5% coverage over the first 2000 functions of each. Together with
