@@ -71,6 +71,10 @@ if (rax < r12) {
 
 ## 2. 次要候选（收益小、风险低）
 
+- 已完成：嵌套单臂 `if` 折叠为 `&&`（`collapse_nested_if_wrappers`，notepad −143 行）。同类候选
+  还有"`else` 分支只有一句时改写成前置守卫"和"`if (a) { return x; } return y;` 折叠为三元"，
+  都属安全的纯文本改写。
+
 - `__asm` 剩余 138 行：原子指令（`lock xadd`/`lock cmpxchg`/`xchg`）、单操作数
   `imul`/`mul`、间接 `jmp`、未建模标志的分支。前者可在 lifter 层展开为三条语句，
   后者需要更完整的标志建模。
