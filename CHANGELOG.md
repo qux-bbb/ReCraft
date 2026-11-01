@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The stage report and the quality page carry the current test count (153) instead of 149/150.
 - A test covers the histogram: the buckets add up to the function count and the "0 jumps" bucket
   equals the structured count. The suite is at 153 tests.
 - Checked all eight single-jump functions in crackme: every one jumps backwards to a label followed by
