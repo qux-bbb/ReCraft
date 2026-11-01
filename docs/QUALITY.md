@@ -58,7 +58,7 @@ inline asm statements:  9
 | 样本 | 函数 | 结构化 | 覆盖率 | `loc_` 标签 | `__asm` |
 |---|---|---|---|---|---|
 | notepad.exe（502） | 502 | 487（97.0%） | 99.5% | 267 | 138 |
-| crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 155 | 275 |
+| crackme.exe（493） | 493 | 453（91.9%） | 98.5% | 218 | 277 |
 | corpus x64（31） | 31 | 31（100%） | 97.4% | 0 | 9 |
 | corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
 | go.exe（3261 个已定义函数） | 220 | 196 结构化（89.1%） | 98.7% | 1059 | 1343 |
@@ -192,7 +192,7 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
 - 更新流程：改动反编译器后运行 `recraft golden <corpus-project> --dir tests/golden/corpus`，
   **人工 review `git diff tests/golden/corpus`**，确认变化符合预期后提交。
- 已提交快照合计 **453** 个函数（notepad 170、crackme 160、corpus 31、corpus86 32、go 40），
+ 已提交快照合计 **453** 个函数（notepad 170、crackme 160、corpus 31、corpus86 32、go 60），
   全部通过 `--check`；配合 `recraft lint` 与 `recraft metrics` 构成三层回归- CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
   CI 先写入临时目录再 `--check` 做**确定性/归一化回环**校验。仓库快照用于本地与
   review 时的真实回归。M3 引入固定 toolchain 容器后改为直接对比提交的快照。

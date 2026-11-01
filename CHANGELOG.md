@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Two stale figures in `docs/QUALITY.md` corrected against the current metrics: crackme's label and
+  inline-asm counts are 218 and 277 (the table still had 155 and 275), and the snapshot summary says
+  go 60 rather than 40.
 - Repaired five headings that a script had demoted to `#` (they were meant to be `##`): `NEXT.md`
   §0/§1.1/§2.1, `REPORT-2026-10-31.md` §5.1 and `REPORT-2026-11-02.md` §5.1, and the last one now
   names the current commit.
