@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Second measured negative result in `docs/PERF.md`: skipping the per-line text clone in
+  `strip_condition_parentheses` left the `ifs` group unchanged (52 ms, within noise of 47–50), so
+  that cost is the four full scans themselves. Reverted, with the conclusion that only merging
+  adjacent text passes into one traversal can move it.
 - A measured negative result for the performance work is recorded in `docs/PERF.md`: replacing the
   whole-body brace recount inside the two `if` merges with local array edits kept the output
   byte-identical but did not move the `ifs` group (47.1 → 47.2 ms), so that time is spent building

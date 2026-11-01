@@ -88,3 +88,9 @@ notepad 的 45 KB 函数（`sub_140013154`，1620 基本块、约 9.9 千行 L2�
 不来自括号重算，而来自三个条件改写 pass 每行构造新字符串（`simplify_negated_conditions`、
 `strip_condition_parentheses`、`strip_inline_condition_parentheses`）。该改动因**无收益**已回退，
 避免留下依赖"区间必定平衡"这一隐含假设的代码。今后若要压缩这 47 ms，应从字符串构造入手。
+### 第二个反例：`strip_condition_parentheses` 的整行 clone 也不是瓶颈
+
+该 pass 对每一行先 `line.text.clone()` 再判断前缀。改成"先在借用上判前缀、命中后才 clone"后，
+输出逐字节一致（notepad 170 + corpus 31 快照全绿），但 `ifs` 组仍是 52.4 ms（前一版 47–50 ms，
+属噪声级别）。说明这组耗时也不来自行文本克隆——47 ms 是四次全表扫描本身的成本，只有把
+相邻的文本 pass 合并成一次遍历（或共享一次字符串缓冲）才可能真正下降。改动因无收益已回退。
