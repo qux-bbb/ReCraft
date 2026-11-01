@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ntdll.dll and shell32.dll also lint clean at L1, so five system libraries (kernel32, user32,
+  advapi32, ntdll, shell32) pass the invariants. The stage report gains §6.1 recording the
+  validation and the two defects it found, with the lesson that controlled samples returning zero
+  findings does not imply the same for production code.
 - A structured request for an address that no analysed function covers now fails with
   `invalid argument: no analysed function contains 0x…` instead of printing a flat listing headed
   "L1 unavailable: run analysis first" (analysis had run - the address simply was not a function).
