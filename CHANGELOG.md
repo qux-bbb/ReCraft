@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The stage report records the end-of-stage verification on `cf6a8f9`: 148 tests, lint clean on four
+  samples, all 453 snapshots matching, fmt/clippy/build clean.
 - Second measured negative result in `docs/PERF.md`: skipping the per-line text clone in
   `strip_condition_parentheses` left the `ifs` group unchanged (52 ms, within noise of 47–50), so
   that cost is the four full scans themselves. Reverted, with the conclusion that only merging
