@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-ran the full Go sweep at L1 after all the stage-two text changes: **3261** functions, 0
+  findings, so the invariants still hold on the largest sample with the nested-if fold, the
+  accumulation merge, the narrow/compound constant folds and the block-boundary fix in place.
 - `docs/NEXT.md` opens with what stage two already finished (the nested-if fold, the accumulation
   merge, the narrow/compound constant folds, the block-boundary fix, the naming-pass speedups and
   the new `metrics --list`), so the handoff no longer lists them as open work; the current baseline
