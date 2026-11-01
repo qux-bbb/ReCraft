@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Both READMEs show `export-pseudo notepad.rcraft --dir pseudo-out` in the command block, next to
+  the `golden --check` example it complements (snapshots for regression, exported files for reading).
 - New `export-pseudo <project> --dir <dir> [--limit N]`: writes one L2 pseudo-C file per function,
   using the same file names the golden snapshots use (so `dir/sub_140001480.c` matches
   `tests/golden/.../sub_140001480.c`). The corpus exports 31 files whose content is the readable L2

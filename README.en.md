@@ -129,6 +129,7 @@ cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
 cargo run -p recraft-cli -- metrics notepad.rcraft --list
 cargo run -p recraft-cli -- lint notepad.rcraft --level l1
 cargo run -p recraft-cli -- golden notepad.rcraft --dir golden-out --check
+cargo run -p recraft-cli -- export-pseudo notepad.rcraft --dir pseudo-out
 ```
 
 The analysis corpus is built with MSVC (no CRT) and doubles as a regression benchmark

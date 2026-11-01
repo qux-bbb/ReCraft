@@ -128,6 +128,7 @@ cargo run -p recraft-cli -- eval C:\Windows\System32\kernel32.dll
 cargo run -p recraft-cli -- metrics notepad.rcraft --list
 cargo run -p recraft-cli -- lint notepad.rcraft --level l1
 cargo run -p recraft-cli -- golden notepad.rcraft --dir golden-out --check
+cargo run -p recraft-cli -- export-pseudo notepad.rcraft --dir pseudo-out
 ```
 
 分析语料使用 MSVC（无 CRT）构建，同时作为回归基准，其中导出表 + `.pdata` 是基准真值：
