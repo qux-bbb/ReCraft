@@ -86,7 +86,32 @@ if (rax < r12) {
 - 该改动只影响 CFG 的边/块归属，不涉及文本 pass；预期影响面由 `recraft lint`（不变量）与
   五套 goldens 的 diff 逐条核对，结构化率由 `recraft metrics` 判定。
 
-## 2. 次要候选（收益小、风险低）
+# 1.2 第二种多入口形状：`goto` 跳进紧邻的 `do` 体内（Go 样本）
+
+Go 的 `internal/abi.Name.ReadVarint`（0x140001ba0，8 块、2 处 goto）展示了另一种形态：
+
+```c
+if (rsp > *(u64*)((r14 + 0x10))) {
+    … 两条赋值 …
+    goto loc_140001bd3;        // 跳过 do 体开头的两条语句
+    do {
+        rcx = (rdx + 1);
+        rdx = rbx;
+        loc_140001bd3:         // ← 这里被上面的 goto 命中
+        …循环体…
+    } while (…);
+```
+
+**可用的解法是"循环复制"（node splitting 的文本版）**，且比守卫提升更机械：
+
+1. 识别 `goto loc_X;` 紧跟 `do {`，且 `loc_X:` 位于该 `do` 体内（首个语句之后）；
+2. 取 `do {` 开头到 `loc_X:` 之前的语句段 P（此例仅 2 条）；
+3. 在 goto 处复制 P + `loc_X:` 起的整个循环体 + 同一 `while` 条件，形成一个独立 `do … while`；
+4. 若 P 或复制体超过阈值（例如 40 行）则放弃，保持现状。
+
+**风险与验收**：`break`/`continue` 在复制体内语义不变；复制只发生在 goto 路径（原本就跳过 P）。
+验收仍是 lint（括号/标签/参数）→ golden diff（每处变化都能解释为"复制了一段循环"）→ metrics
+（`goto` 数下降）。notepad 侧应先用 `--list` 找出类似形状再实施。## 2. 次要候选（收益小、风险低）
 
 - 已完成：嵌套单臂 `if` 折叠为 `&&`（`collapse_nested_if_wrappers`，notepad −143 行）。同类候选
   还有"`else` 分支只有一句时改写成前置守卫"和"`if (a) { return x; } return y;` 折叠为三元"，
