@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tried lifting `cdq`/`cqo`/`cwd` to `edx = (eax < 0) ? -1 : 0` and reverted it: the raw
+  `__asm("idiv …")` that follows is treated as clobbering every register, so the dead-write pass
+  deleted the assignment it had just produced and the printed program lost the dividend's high half.
+  That hazard predates the change (a `cdq` intrinsic could not be dropped), and lifting these
+  instructions needs the raw-asm statements to stop being treated as unconditional writes first.
+  `docs/QUALITY.md` records it next to the asm audit.
 - Checked `export-pseudo` on Go symbols, whose names contain `/`, `.`, `(` and `*`: the files come out
   as `internal_abi_BoundsDecode.c` and `internal_abi___MapType__HashMightPanic.c`, i.e. the stem
   sanitiser keeps every name a legal Windows file name, and the directory still gets its index.
