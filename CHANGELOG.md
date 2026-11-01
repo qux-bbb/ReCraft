@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed a correctness bug in the constant fold**: a single-use constant was pushed into the first
+  later mention of the register even when that mention sat inside a loop, where the value is
+  loop-carried. `eax = 0; do { edx += eax; eax += 2; } while (…)` printed `edx += 0` and dropped
+  `eax = 0;`. The fold now requires both lines to be in the same block, and a compound assignment
+  (`eax += 2`) counts as a read rather than an overwrite, so a still-live constant is kept.
+  Two more iterations of the constant fold and the accumulation merge run later, which recovers
+  more lines than the stricter rule gives up (notepad L2 29 651 → 29 667: longer because wrong
+  dead-code deletion is gone). Block depths are precomputed, so the 45 KB function still needs
+  ~255 ms of text passes instead of 1.7 s. 8 snapshots updated; a regression test pins the
+  loop-carried case.
 - An accumulation merges into the assignment that feeds it: `rax = &var_38; rax += 8;` becomes
   `rax = (&var_38 + 8);`, and the same for loads and bit tests (`rcx = *(u64*)(rax); rcx |= 1;` →
   `rcx = (*(u64*)(rax) | 1);`). Guards: same target, constant amount, side-effect-free value, and
