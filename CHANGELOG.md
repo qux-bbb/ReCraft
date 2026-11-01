@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Go baseline is now the full sample: `metrics --max-functions 0` measures all **3261** functions
+  and reports **2998 structured (91.9%)**, 263 fallback functions, 98.7% coverage, 1446 labels and
+  1959 inline-asm statements. The table previously carried a 2000-function sample (90.2%, 196
+  fallbacks, 1059 labels, 1343 asm), which understated both the rate and the remaining work.
 - The Go row of the baseline table was measured on a 220-function sample; a fresh project built with
   `import`/`analyze` shows what `metrics` actually covers today (the default 2000-function cap, 1261
   skipped): **1804 of 2000 structured (90.2%)** with the same 196 fallbacks, 98.7% coverage, 1059
