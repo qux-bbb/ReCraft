@@ -2869,8 +2869,17 @@ fn cmd_decompile(
                 })
             })
             .collect();
+        // The jump count and the structured flag are what the L2 header prints; exposing them
+        // lets a caller sort functions by "how far from structured" without re-parsing the text.
+        let gotos = code
+            .lines
+            .iter()
+            .filter(|line| line.text.contains("goto loc_"))
+            .count();
         return json_result(&json!({
             "start": format!("{:#x}", code.func_start.get()),
+            "gotos": gotos,
+            "structured": gotos == 0,
             "lines": lines,
         }));
     }

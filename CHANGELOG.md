@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `decompile --json` carries `"gotos"` and `"structured"` next to the lines, the same two facts the
+  L2 header prints, so a caller can rank functions by how far they are from structured control flow
+  without re-parsing the text.
 - Repaired four bold markers in `docs/NEXT.md` that a helper script had clipped to a single `*`
   (§1 量化, 该函数内部的热点, 最纯粹的一例, 规模实测) plus one in `REPORT-2026-10-31.md`; a scan
   of every document now finds no line opening with a lone `*`.
