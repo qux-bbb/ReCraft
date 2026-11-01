@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Full-sweep evidence for the invariants: `recraft lint .tmp/go.rcraft --level l2` covers all
+  **3261** Go functions and reports 0 findings, so the six output invariants now hold on every
+  sample at both levels (Notepad, crackme and both corpora were already swept at L1 + L2, and Go
+  at L1 earlier).
 - The accumulation merge has a defensive test for the block boundary: two adjacent statements
   where the first belongs to a nested block must not merge, because the value it produces is not
   the one the second accumulates.
