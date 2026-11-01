@@ -229,7 +229,7 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 ## golden 快照
 
-- 目录（合计 **453** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
+- 目录（合计 **785** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
   （32 位语料，32）、`tests/golden/notepad/`（notepad **全部 502 个函数**，含 45 KB 的多入口循环参考函数）、
   `tests/golden/crackme/`（前 160，`--limit 160`）、`tests/golden/go/`（Go 前 60，`--limit 60`，含 `internal/abi.Name.ReadVarint` 这一参考例；
   Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数

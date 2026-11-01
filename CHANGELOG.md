@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Three live documents still said 453 snapshots (the handoff's directory listing and warning about
+  churn, and the quality page's directory summary); they now say 785, matching the set. The
+  measurements recorded in `PERF.md` keep their original figure because they describe a run made
+  when the set was smaller.
 - The two instruction lifts have encoder-level tests: `bsf eax, ecx` becomes `UnOp::Ctz` and
   `popcnt eax, ecx` becomes `UnOp::Popcount` (both checked through the real opcode bytes), and `cdq`
   writes `edx` with a `Select` whose condition is `SignedLt`. IR crate tests 24 → 26.

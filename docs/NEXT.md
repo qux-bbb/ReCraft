@@ -95,7 +95,7 @@ if (rax < r12) {
 - `recraft metrics --list` 的未结构化函数数下降（notepad 15、crackme 40、Go **263** 是当前起点）；
 - `recraft lint` 全样本仍为 0 findings；
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
-  合计 453 个函数）。
+  合计 785 个函数）。
 
 ## 1.1 实现地图（代码位置）
 
@@ -152,7 +152,7 @@ crackme 的 SIMD 字符串函数里出现 `__asm("bsf ecx, eax"); eax = ecx;`，
 2. 打印器支持它（`structuring.rs` 的表达式渲染），
 3. `lift.rs` 里 `M::Bsf/*` 分支读源操作数并写目标，
 4. 注意新变体会进入别名分析/常量传播/相等比较等所有 `match Expr`，**影响面较大**，
-   必须跑满五层回归（尤其 453 快照会大面积变动，需要逐块解释）。
+   必须跑满五层回归（尤其 785 快照会大面积变动，需要逐块解释）。
 
 收益：每条指令少一行、语义可读（位扫描 → 内建函数）。风险：中等偏高（新 Expr 变体）。
 优先级低于 §1，高于纯文档工作。
