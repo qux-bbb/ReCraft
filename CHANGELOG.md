@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Sampled Go's single-jump fallbacks too (cmpbody, maps.(*Map).getWithoutKey, runtime.mapaccess2,
+  strconv.FormatInt): each jumps backwards to a label followed by loop-body statements, so the
+  single-jump slice is not an easy win on that sample either.
 - Re-measured the Go sample after the sign-extension lift: inline asm 1905 → **1899** and the
   histogram is `0:2998 1:60 2:38 3:31 4:27 … 45:1`, so 60 of the 263 fallbacks carry a single jump -
   the most actionable slice for that sample. Docs updated, and the histogram is now recorded next to
