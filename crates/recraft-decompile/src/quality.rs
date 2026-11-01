@@ -697,6 +697,34 @@ mod tests {
         assert_eq!(report.affected(), 0);
     }
     #[test]
+    fn the_corpus_keeps_its_structured_rate_and_coverage() {
+        // A structured-rate regression would not show up in the text snapshots (they store the L1
+        // shape), so the measurement itself is fenced here.
+        for bits in ["x64", "x86"] {
+            let Some((mut session, _dir)) = corpus_for(bits) else {
+                continue;
+            };
+            let report = measure(&mut session, usize::MAX).unwrap();
+            assert_eq!(
+                report.structured(),
+                report.total(),
+                "{bits}: {} of {} functions structured",
+                report.structured(),
+                report.total()
+            );
+            assert!(
+                report.coverage() >= 0.97,
+                "{bits}: coverage {:.3}",
+                report.coverage()
+            );
+            assert!(
+                report.total() >= 30,
+                "{bits}: only {} functions",
+                report.total()
+            );
+        }
+    }
+    #[test]
     fn the_corpus_passes_every_output_invariant() {
         let Some((mut session, _dir)) = corpus() else {
             return;
