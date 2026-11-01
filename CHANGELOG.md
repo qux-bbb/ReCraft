@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/NEXT.md` points at `recraft metrics <project> --list` as the first step of the structural
+  work, with the numbers it prints today (Notepad: 15 functions, the largest 369 jumps over 9868
+  lines; crackme: 40, largest 92).
 - The JSON metrics report carries the same list under `"unstructured"` (start address, name, goto
   count, line count), so a dashboard can chart the unstructured bodies without parsing text.
 - `recraft metrics --list` prints the functions the structurer could not reduce, worst first
