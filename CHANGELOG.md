@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A corpus test covers `export_pseudocode`: it exports the whole x64 sample into a temp directory,
+  asserts the file count matches the return value, that every file carries the L2 header (so the
+  readable rendering is what gets written) and removes the directory afterwards. 150 tests now.
 - Both READMEs show `export-pseudo notepad.rcraft --dir pseudo-out` in the command block, next to
   the `golden --check` example it complements (snapshots for regression, exported files for reading).
 - New `export-pseudo <project> --dir <dir> [--limit N]`: writes one L2 pseudo-C file per function,

@@ -725,6 +725,32 @@ mod tests {
         assert_eq!(report.affected(), 0);
     }
     #[test]
+    fn exporting_pseudocode_writes_one_l2_file_per_function() {
+        let Some((mut session, _dir)) = corpus_for("x64") else {
+            return;
+        };
+        let out = std::env::temp_dir().join(format!("recraft-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let written = export_pseudocode(&mut session, &out, 0).expect("export");
+        assert!(written >= 30, "only {written} functions exported");
+        let files: Vec<_> = std::fs::read_dir(&out)
+            .expect("read dir")
+            .map(|entry| entry.expect("entry").path())
+            .collect();
+        assert_eq!(files.len(), written);
+        let l2 = files
+            .iter()
+            .filter(|path| {
+                std::fs::read_to_string(path)
+                    .map(|text| text.contains("// L2 structure recovery"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(l2, written, "exported text is not the L2 rendering");
+        std::fs::remove_dir_all(&out).expect("clean up");
+    }
+
+    #[test]
     fn the_corpus_keeps_its_structured_rate_and_coverage() {
         // A structured-rate regression would not show up in the text snapshots (they store the L1
         // shape), so the measurement itself is fenced here.
