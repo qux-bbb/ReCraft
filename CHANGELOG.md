@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The stage report closes with a conclusion (§8): what got shorter, more C-like, more trustworthy and
+  faster, the guardrails that grew with it, and the one quantified structural gap that remains
+  (multi-entry loops, with the next step pointing at CFG work rather than more text passes).
 - The handoff's work-list section now carries the real-library distribution beside the samples
   (kernel32 111 of 2000, user32 159, advapi32 125), so the remaining difficulty is visibly a property
   of the code shape rather than of the chosen samples.
