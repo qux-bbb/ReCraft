@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Verified that the `import` form printed in both READMEs (`import <exe> -o <project>`) still works:
+  the positional file plus `-o` produced a project like the `--out` variant, so no documentation
+  change was needed.
 - Walked the documented quickstart end to end on a fresh project (`import --out`, `analyze`,
   `decompile --addr --l2`, `lint`, `metrics --list`): every step succeeds, the corpus comes out at
   31/31 structured with 0 lint findings, and `--list` reports no unstructured function. The samples
