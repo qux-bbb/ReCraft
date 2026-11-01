@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Validated on more production code after the signature fix: user32.dll (3040 functions) and
+  advapi32.dll (1861) both lint at L1 with **0 findings**, and `metrics` reports 92.0% / 93.3%
+  structured with 99.3% / 99.5% coverage over the first 2000 functions of each. Together with
+  kernel32 (94.5% at 99.1%) the decompiler holds up on real system libraries.
 - **Fixed a real output defect found by testing on production code**: `lint` over kernel32.dll
   reported 34 functions whose body reads `arg5`/`arg6` while the signature stopped at `arg4`. The
   stack-argument pass widened signatures only for `sub_*` names and only when `arg1` was already
