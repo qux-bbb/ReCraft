@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Split the "other" 12.2% of the output composition: 2 352 lines are `x = f(y);` assignments, 743 are
+  memory stores and 517 are function signatures - nothing unclassifiable.
 - Implemented and reverted a register copy-propagation pass. The rule was sound - within a window
   where `src` is neither written nor clobbered and `dst` is overwritten, rename the readers of `dst`
   to `src` and drop the copy - but it fired **zero** times across 502 Notepad functions (29 664 lines,
