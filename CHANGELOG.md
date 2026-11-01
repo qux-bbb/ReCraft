@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `recraft --help` mentions the work list: the `metrics` line now reads "…; `--list` names the
+  functions the structurer could not reduce".
 - `import` names the file it could not read: `invalid argument: cannot read <path>: <os error>`. The
   bare I/O message did not say which path was missing and is localised by the OS.
 - Two more user-facing messages say what actually went wrong: a bad `--addr` value reads

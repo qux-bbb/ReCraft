@@ -217,7 +217,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Measure decompiler quality gates (semantic coverage / structured rate).
+    /// Measure decompiler quality gates (semantic coverage / structured rate); `--list` names the
+    /// functions the structurer could not reduce.
     Metrics {
         project: PathBuf,
         #[arg(long)]
