@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The FAQ's answer to "how good is the output" now quotes all four samples (corpus 100%, Notepad
+  97.0%, crackme 91.9%, Go 91.9% of 3261 with 98.8% coverage) instead of only the first two, so the
+  Go binary's real numbers are visible where users look first.
 - Re-ran both full L2 lint sweeps after the bit-scan and sign-extend lifts: Notepad 502/502 and Go
   3261/3261 texts, 0 findings each. The invariants hold on the biggest sample at both levels.
 - Measured the snapshot suite after it grew to 502 Notepad functions: `golden --check` takes 12.7 s
