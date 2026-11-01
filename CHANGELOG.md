@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `docs/PERF.md` is consistent again: the mid-stage "1.0 s" figures point at the newer 556 ms
+  measurement, the whole-sample note says ~0.6 s for the outlier, and a `### 反例` heading that an
+  insertion had glued to the previous paragraph is back on its own line.
 - Re-measured the 45 KB function at the end of the stage: the phases add up to about **556 ms**
   (first lift 122, alias/arg 38, seeded lift 76, emit 10, text passes 67, naming 15), down from the
   1.0 s recorded mid-stage, with `docs/PERF.md` carrying the table.
