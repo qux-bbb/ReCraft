@@ -19,8 +19,7 @@ void sub_140001f98_l1(void) {
         rax ^= var_40;
         rax ^= var_20;
         rax ^= rcx;
-        rcx = 0xADDR;
-        rax &= rcx;
+        rax &= 0xADDR;
         rcx = 0xADDR;
         rax = ((rax == rbx) ? rcx : rax);
         qword_ADDR = rax;

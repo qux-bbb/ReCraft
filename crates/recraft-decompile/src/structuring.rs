@@ -688,43 +688,78 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         };
         let candidate = lines[use_index].text.clone();
         let trimmed = candidate.trim();
-        let Some(condition) = trimmed
+        let condition = trimmed
             .strip_prefix("if (")
             .and_then(|rest| rest.strip_suffix(") {"))
-            .map(str::to_owned)
+            .map(str::to_owned);
+        // `rcx += rdx;` with `rdx = 0x140000000` is one arithmetic step: fold the constant into
+        // the compound assignment. Only the right-hand side is a fold site — `rdx += rcx` writes
+        // the register instead of reading it.
+        let compound = if condition.is_none() {
+            compound_operand(trimmed, &register)
+        } else {
+            None
+        };
+        let Some((folded, folded_value)) =
+            Some(match (condition.as_deref(), compound.as_deref()) {
+                (Some(condition), _) => {
+                    // A 16- or 8-bit test reads the low half of the register: `eax = 0x5a4d; … != ax`
+                    // folds the same way once the constant is truncated to the width compared.
+                    if contains_token(condition, &register) {
+                        (register.clone(), value.clone())
+                    } else {
+                        let Some(narrow) = narrow_register(&register).into_iter().find(|narrow| {
+                            contains_token(condition, narrow)
+                                && is_truncated_constant(&value, narrow)
+                        }) else {
+                            index += 1;
+                            continue;
+                        };
+                        (narrow.to_owned(), truncate_constant(&value, narrow))
+                    }
+                }
+                (None, Some(operand)) => {
+                    if operand == register {
+                        (register.clone(), value.clone())
+                    } else {
+                        let Some(narrow) = narrow_register(&register).into_iter().find(|narrow| {
+                            operand == *narrow && is_truncated_constant(&value, narrow)
+                        }) else {
+                            index += 1;
+                            continue;
+                        };
+                        (narrow.to_owned(), truncate_constant(&value, narrow))
+                    }
+                }
+                (None, None) => {
+                    index += 1;
+                    continue;
+                }
+            })
         else {
             index += 1;
             continue;
         };
-        // A 16- or 8-bit test reads the low half of the register: `eax = 0x5a4d; … != ax`
-        // folds the same way once the constant is truncated to the width being compared.
-        let (folded, folded_value) = if contains_token(&condition, &register) {
-            (register.clone(), value.clone())
-        } else {
-            let Some(narrow) = narrow_register(&register).into_iter().find(|narrow| {
-                contains_token(&condition, narrow) && is_truncated_constant(&value, narrow)
-            }) else {
+        if let Some(condition) = condition.as_deref() {
+            // A bare truth test has no comparison to fold into.
+            if condition.trim() == folded {
                 index += 1;
                 continue;
-            };
-            (narrow.to_owned(), truncate_constant(&value, narrow))
-        };
-        // A bare truth test has no comparison to fold into.
-        if condition.trim() == folded {
-            index += 1;
-            continue;
+            }
+            // Comparing two known constants would print a constant condition; the register form
+            // at least keeps the code readable.
+            if !has_identifier(&replace_token(condition, &folded, "")) {
+                index += 1;
+                continue;
+            }
+            let indent = " ".repeat(leading_spaces(&candidate));
+            lines[use_index].text = format!(
+                "{indent}if ({}) {{",
+                replace_token(condition, &folded, &folded_value)
+            );
+        } else {
+            lines[use_index].text = replace_token(&candidate, &folded, &folded_value);
         }
-        // Comparing two known constants would print a constant condition; the register form
-        // at least keeps the code readable.
-        if !has_identifier(&replace_token(&condition, &folded, "")) {
-            index += 1;
-            continue;
-        }
-        let indent = " ".repeat(leading_spaces(&candidate));
-        lines[use_index].text = format!(
-            "{indent}if ({}) {{",
-            replace_token(&condition, &folded, &folded_value)
-        );
         // The register's next mention decides whether the assignment is dead.
         let dead = match first_mention(lines, use_index + 1, lines.len() - use_index - 1, &register)
         {
@@ -739,6 +774,21 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+// The register named on the right of a compound assignment (`x += rdx;` → `rdx`).
+fn compound_operand(statement: &str, register: &str) -> Option<String> {
+    let body = statement.trim_end_matches(';');
+    for operator in [
+        " += ", " -= ", " &= ", " |= ", " ^= ", " *= ", " <<= ", " >>= ", " /= ", " %= ",
+    ] {
+        if let Some((_, right)) = body.split_once(operator) {
+            let right = right.trim();
+            if right == register {
+                return Some(right.to_owned());
+            }
+        }
+    }
+    None
+}
 /// The 16- and 8-bit names of a 32-bit register (`eax` → `ax`, `al`).
 fn narrow_register(register: &str) -> Vec<&'static str> {
     let pair = match register {

@@ -6,7 +6,7 @@ void sub_140001b28_l1(void) {
     } else {
         rcx = (int64)(dword_ADDR);
         rdx = 0xADDR;
-        rcx += rdx;
+        rcx += 0xADDR;
         if (*(u32*)(rcx) != 0xADDR) {
             al = 0;
             return;

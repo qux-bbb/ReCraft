@@ -8,7 +8,7 @@ void loopy_l1(void) {
         esi = (edi + 0xADDR);
         do {
             edx += 1;
-            ecx += eax;
+            ecx += 0;
             edx += eax;
             eax += 2;
         } while (eax < esi /* signed */);
