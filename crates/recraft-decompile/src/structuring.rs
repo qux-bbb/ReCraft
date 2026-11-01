@@ -361,11 +361,13 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     for _ in 0..4 {
         drop_unreachable_tails(&mut lines);
     }
+    mark("  tails");
     fold_jumps_over_braces(&mut lines);
     fold_sibling_tail_gotos(&mut lines);
     fold_return_labels(&mut lines);
     fold_return_tail_labels(&mut lines);
     fold_last_label_tails(&mut lines);
+    mark("  gotos");
     merge_identical_if_arms(&mut lines);
     fold_compound_assignments(&mut lines);
     fold_load_modify_store(&mut lines);
@@ -376,6 +378,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     drop_dead_register_writes(&mut lines);
     drop_unused_register_writes(&mut lines);
     fold_store_value_temporaries(&mut lines);
+    mark("  folds");
     strip_condition_parentheses(&mut lines);
     hoist_invariant_loop_setups(&mut lines);
     fold_constant_loops(&mut lines);
@@ -387,6 +390,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     strip_condition_parentheses(&mut lines);
     collapse_nested_if_wrappers(&mut lines);
     strip_inline_condition_parentheses(&mut lines);
+    mark("  ifs");
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
     drop_overwritten_assignments(&mut lines);
@@ -399,6 +403,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     hide_callee_saves(&mut lines);
     propagate_argument_spills(&mut lines);
     propagate_argument_copies(&mut lines);
+    mark("  spills");
     materialize_missing_labels(&mut lines);
     // Runs last: the return value is folded only once every rewrite that can move or drop
     // the producing statement has settled.
@@ -411,6 +416,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         fold_assigned_returns(&mut lines);
     }
     // Shared exit paths are now `return <value>;`; a jump to one is an early return.
+    mark("  returns");
     fold_trivial_return_labels(&mut lines);
     // Recover loops and guards from the labelled fallback text. Each fold can expose
     // another one (a loop body with its own skips), so repeat until settled.
