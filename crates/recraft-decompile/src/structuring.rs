@@ -462,6 +462,11 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // The constant fold just turned `rcx += rdx` into `rcx += 0x…`, so an accumulation can now
     // merge back into the assignment that produced its input.
     merge_accumulations(&mut lines);
+    // Later passes move loads and copies around, which exposes more adjacent pairs.
+    for _ in 0..2 {
+        fold_constant_registers(&mut lines);
+        merge_accumulations(&mut lines);
+    }
     drop_noop_statements(&mut lines);
     mark("text passes");
     normalize_infinite_loops(&mut lines);
@@ -661,6 +666,7 @@ const KNOWN_STRUCTS: [KnownStruct; 3] = [
 /// dropped when the register is written again before any other read, so the value cannot be
 /// live afterwards.
 fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
+    let mut depths = line_depths(lines);
     let mut index = 0;
     while index < lines.len() {
         let text = lines[index].text.trim().to_owned();
@@ -689,6 +695,12 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         };
+        // The fold only holds if the assignment and its use sit in the same block: a use deeper in
+        // a loop body may see a value the loop carried, not the constant above it.
+        if depths[index] != depths[use_index] {
+            index += 1;
+            continue;
+        }
         let candidate = lines[use_index].text.clone();
         let trimmed = candidate.trim();
         let condition = trimmed
@@ -766,11 +778,14 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         // The register's next mention decides whether the assignment is dead.
         let dead = match first_mention(lines, use_index + 1, lines.len() - use_index - 1, &register)
         {
-            Some(next) => assigns_to(lines[next].text.trim().trim_end_matches(';'), &register),
+            Some(next) => {
+                overwrites_plainly(lines[next].text.trim().trim_end_matches(';'), &register)
+            }
             None => true,
         };
         if dead {
             lines.remove(index);
+            depths.remove(index);
             continue;
         }
         index += 1;
@@ -880,6 +895,28 @@ fn first_mention(lines: &[PseudoLine], from: usize, limit: usize, name: &str) ->
     None
 }
 
+/// The brace depth before each line, i.e. how many blocks enclose it. Precomputed because the
+/// constant fold asks for it on every candidate.
+fn line_depths(lines: &[PseudoLine]) -> Vec<isize> {
+    let mut depths = Vec::with_capacity(lines.len());
+    let mut depth = 0isize;
+    for line in lines {
+        depths.push(depth);
+        let text = line.text.trim();
+        depth += text.matches('{').count() as isize - text.matches('}').count() as isize;
+    }
+    depths
+}
+
+/// Whether the statement overwrites `name` without reading it (`eax = …`). A compound
+/// assignment reads the old value, so it does not make an earlier constant dead.
+fn overwrites_plainly(statement: &str, name: &str) -> bool {
+    let trimmed = statement.trim_start();
+    let Some(rest) = trimmed.strip_prefix(name) else {
+        return false;
+    };
+    rest.trim_start().starts_with('=') && !rest.trim_start().starts_with("==")
+}
 /// Whether `text` holds an identifier (a number such as `0x12a` does not).
 fn has_identifier(text: &str) -> bool {
     let mut chars = text.chars().peekable();
@@ -7230,6 +7267,22 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 20, "only {checked} snapshots read");
+    }
+    #[test]
+    fn a_constant_is_not_pushed_into_a_loop_body() {
+        // `eax` is 0 before the loop but 2, 4, … on later iterations, so folding the constant
+        // into the body would be wrong. The block boundary has to stop the fold.
+        let mut lines = snippet(&[
+            "    eax = 0;",
+            "    do {",
+            "        edx += eax;",
+            "        eax += 2;",
+            "    } while (eax < esi);",
+        ]);
+        fold_constant_registers(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("edx += eax;"), "{text}");
+        assert!(text.contains("eax = 0;"), "{text}");
     }
     #[test]
     fn an_accumulation_merges_into_its_input_assignment() {

@@ -4,7 +4,7 @@ void sub_140004460_l1(void) {
     ebx = 0;
     edi = 3;
     if (eax != 0) {
-        if (eax < 3 /* signed */) {
+        if (eax < edi /* signed */) {
             eax = edi;
             dword_ADDR = eax;
         }

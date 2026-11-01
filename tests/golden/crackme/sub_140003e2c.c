@@ -10,7 +10,7 @@ void sub_140003e2c_l1(void) {
         r8d = 0xADDR;
         if (*(u32*)((r9 + 0xADDR)) == 4) {
             eax = *(u32*)((r9 + 0xADDR));
-            if (eax == 0xADDR) {
+            if (eax == r8d) {
                 rax = *(u64*)((rdx + 0xADDR));
                 if (*(u64*)((r9 + 0xADDR)) == rax) {
                     *(u32*)(rbx) = 1;

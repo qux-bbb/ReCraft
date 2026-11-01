@@ -156,7 +156,7 @@ void sub_14000391c_l1(void) {
             return;
         }
         sub_140002cb4(rbx, rsi, *(u64*)((rsi + 0xADDR)));
-        if ((1 < -1 /* signed */) || (1 >= *(u32*)((rbx + 4)) /* signed */)) {
+        if ((eax < -1 /* signed */) || (eax >= *(u32*)((rbx + 4)) /* signed */)) {
             sub_140008860();
             return;
         }

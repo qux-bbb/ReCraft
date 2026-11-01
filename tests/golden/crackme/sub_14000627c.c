@@ -15,7 +15,7 @@ void sub_14000627c_l1(void) {
                 loc_ADDR:
                 r13d = 0;
                 if (al != 0) {
-                    if (*(u8*)((rbx + 0xADDR)) == 0xADDR) {
+                    if (*(u8*)((rbx + 0xADDR)) == r13b) {
                         var_38 = ax;
                         var_3a = al;
                         rdi = r13;

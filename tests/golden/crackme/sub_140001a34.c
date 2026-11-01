@@ -87,12 +87,11 @@ void sub_140001a34_l1(void) {
                     eax |= 0xADDR;
                     dword_ADDR = 5;
                     dword_ADDR = eax;
-                    ecx = 0xADDR;
                     rax = qword_ADDR;
                     r9d &= 0xADDR;
                     rax &= -0xADDR;
                     qword_ADDR = rax;
-                    if (r9d == ecx) {
+                    if (r9d == 0xADDR) {
                         rax = var_20;
                         al &= dl;
                         if (al == dl) {
