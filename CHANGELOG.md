@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Restored the two headings that had never been real headings: `NEXT.md` §1.2 (the goto-into-`do`
+  shape) was left as a single `#` and §1.4 (local-variable reconstruction) was glued to the end of
+  §1.3. The document now lists all seven sections, and a scan finds no numbered heading using a
+  single `#` and no heading embedded in prose.
 - Six section headings that a script had glued to the end of a paragraph are on their own lines again
   (`NEXT.md` sections 1.3, 2 and 3, the earlier report's section 6, and the composition section of
   this stage's report). A scan for headings embedded in prose now only matches the two changelog
