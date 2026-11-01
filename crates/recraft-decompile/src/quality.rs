@@ -112,6 +112,13 @@ impl QualityReport {
 pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
     let mut functions = session.functions()?;
     functions.sort_by_key(|function| function.start);
+    // A limit of zero means "measure everything": a sample with more functions than the default
+    // cap (the Go binary has 3261 against a 2000 default) otherwise needs a magic large number.
+    let limit = if limit == 0 {
+        functions.len()
+    } else {
+        limit.min(functions.len())
+    };
     let skipped = functions.len().saturating_sub(limit);
     functions.truncate(limit);
 

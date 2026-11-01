@@ -222,6 +222,7 @@ enum Commands {
         project: PathBuf,
         #[arg(long)]
         json: bool,
+        /// Measure at most this many functions (0 measures all of them).
         #[arg(long, default_value_t = 2000)]
         max_functions: usize,
         /// Fail (exit non-zero) when the structured rate is below this fraction.
