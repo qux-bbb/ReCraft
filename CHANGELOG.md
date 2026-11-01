@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `RECRAFT_PROFILE=1` now splits the phases that were missing, so the profile covers the whole
+  pipeline instead of stopping at the text passes. For the 45 KB function: `cfg` 0 ms,
+  `first lift` 125, `alias/arg analysis` 37, `seeded lift` 78, `emit` 10, **`text passes` 258**,
+  **`post passes` 117**, **`naming` 48**. The last two were previously invisible and are where the
+  remaining text work sits.
 - `docs/NEXT.md` points at `recraft metrics <project> --list` as the first step of the structural
   work, with the numbers it prints today (Notepad: 15 functions, the largest 369 jumps over 9868
   lines; crackme: 40, largest 92).

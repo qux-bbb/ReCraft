@@ -104,6 +104,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
         phase = std::time::Instant::now();
     };
+    mark("cfg");
     // The IAT slot map is the same for every block; build it once per function.
     let imports = crate::import_names(session);
     for block in &cfg.blocks {
@@ -512,9 +513,11 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         }
         name_stack_arguments(&mut lines, frame);
     }
+    mark("post passes");
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
+    mark("naming");
     lines.push(PseudoLine {
         addr: start,
         text: "}".to_owned(),
