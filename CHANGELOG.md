@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The roadmap's quality line now quotes crackme (91.9%) and Go (91.9% of 3261, 98.8% coverage)
+  beside the corpus and Notepad figures, and says the snapshot set is 785 with Notepad complete.
 - Three live documents still said 453 snapshots (the handoff's directory listing and warning about
   churn, and the quality page's directory summary); they now say 785, matching the set. The
   measurements recorded in `PERF.md` keep their original figure because they describe a run made
