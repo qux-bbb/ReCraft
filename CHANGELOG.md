@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **String extraction now matches IDA's *Strings* window defaults** (`analyze` output is
+  no longer flooded with instruction bytes). A literal must be NUL-terminated
+  (`STRTYPE_C` / `STRTYPE_C_16`), at least 4 characters, and may contain the control
+  characters `ida.cfg`'s `StrlitChars` accepts (`\a\b\t\n\v\f\r`, `ESC`); candidates
+  inside a decoded function are skipped (IDA's *Ignore instructions/data definitions* is
+  off by default), and overlapping C/C16 candidates are dropped like IDA's step-over
+  scan. Notepad: **3,578 → 778** strings — 1,962 of the old entries were `.text` opcode
+  bytes such as `D$pH`, none of which IDA lists; corpus: 39 → 45 (punctuation-only
+  strings are no longer filtered). `StringScanOptions` / `extract_strings_with` keep the
+  old "any non-printable byte ends a run" scan reachable (`nul_terminated: false`,
+  `skip_code: false`). Seven notepad golden snapshots now render `off_…` where they used
+  to show a non-terminated 4-byte run (`"ETW0"`); the Go corpus drops to 9,099 strings
+  because Go string data has no NUL terminators.
 - **Renamed the executables**: the desktop GUI is now `recraft.exe` (was `recraft-ui.exe`) and
   the command line is now `recraft-cli.exe` (was `recraft.exe`). Only the binary target names
   changed — the cargo packages are still `recraft-ui` / `recraft-cli`, so

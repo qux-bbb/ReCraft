@@ -79,7 +79,7 @@ void sub_1400054a4_l1(void) {
             var_20 = ecx;
             sub_14000627c(r14, rdi, "%hs(%d) tid(%x) %08X %ws", rsi, *(u32*)((rbx + 0xADDR)), eax, ebp, &var_40);
             if (*(u64*)((rbx + 0xADDR)) != r15) {
-                sub_14000627c(rax, rdi, " ", r9);
+                sub_14000627c(rax, rdi, "    ", r9);
                 r9 = *(u64*)((rbx + 0xADDR));
                 if (r9 != 0) {
                     sub_14000627c(rax, rdi, "Msg:[%ws] ", r9);
@@ -96,11 +96,11 @@ void sub_1400054a4_l1(void) {
                     if (r9 == 0) {
                         sub_14000627c(rax, rdi, "\n", r9);
                     } else {
-                        sub_14000627c(rax, rdi, "[%hs]", r9);
+                        sub_14000627c(rax, rdi, "[%hs]\n", r9);
                     }
                 } else {
                     var_20 = rcx;
-                    sub_14000627c(rax, rdi, "[%hs(%hs)]", r9, rcx);
+                    sub_14000627c(rax, rdi, "[%hs(%hs)]\n", r9, rcx);
                 }
             }
         } else if (byte_ADDR != r15b) {

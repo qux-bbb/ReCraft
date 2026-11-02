@@ -12,12 +12,12 @@ void sub_1400012dc_l1(void) {
     rax = *(u64*)((rcx + 8));
     ecx = (uint32)(*(u16*)(rax));
     *(u32*)((r8 + 8)) = ecx;
-    rcx = "ETW0";
+    rcx = off_14002e7f0;
     *(u64*)((r8 + 0xADDR)) = rdx;
     *(u32*)((r8 + 0xADDR)) = 2;
     eax = (uint32)(*(u16*)(rdx));
     *(u32*)((r8 + 0xADDR)) = eax;
-    rax = 0xADDR;
+    rax = off_14002ed7f;
     eax -= ecx;
     *(u32*)((r8 + 0xADDR)) = 1;
     var_78 = eax;

@@ -8,7 +8,8 @@
 //!   function seeds, and calls/jumps leaving the function are treated as tail calls.
 //! - **Cross-references**: direct call edges, branch edges and data references from
 //!   absolute/RIP-relative memory operands.
-//! - **Strings**: ASCII and UTF-16LE extraction (see [`strings`]).
+//! - **Strings**: ASCII and UTF-16LE extraction with IDA-compatible defaults (see
+//!   [`strings`]).
 //!
 //! Evaluation lives in the CLI (`recraft eval`) and uses exports + `.pdata` as ground
 //! truth — see `corpus/` for the CRT-free benchmark binary.
@@ -32,8 +33,8 @@ pub use boundaries::merge_pdata_functions;
 pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
 pub use golang::{GoFunction, parse_pclntab};
 pub use strings::{
-    ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, extract_strings,
-    persist_strings,
+    ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, StringScanOptions,
+    extract_strings, extract_strings_with, persist_strings,
 };
 
 /// `xref.type` for a direct call.

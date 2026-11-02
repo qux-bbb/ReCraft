@@ -16,7 +16,7 @@ void sub_14001e1dc_l1(void) {
     var_68 = 1;
     var_78 = rax;
     var_70 = "Notepad";
-    rax = "@SUVWATAVAWH";
+    rax = 0xADDR;
     var_38 = rax;
     var_48 = rdi;
     var_60 = 6;

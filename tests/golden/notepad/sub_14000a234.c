@@ -33,7 +33,7 @@ void sub_14000a234_l1(void) {
     edx = 0;
     sub_1400029dc(&var_80);
     var_98 = qword_ADDR;
-    rax = "@USVWH";
+    rax = sub_14000a630;
     var_80 = ebx;
     rbx = "BannerClass";
     var_88 = rax;
@@ -79,7 +79,7 @@ void sub_14000a234_l1(void) {
     var_20 = esi;
     CreateWindowExW(0, "Button", qword_ADDR, 0xADDR, esi, esi, esi, esi, qword_ADDR, 0xADDR, qword_ADDR, rsi);
     qword_ADDR = rax;
-    ord_410(rax, sub_14000ab30, 0, 0);
+    ord_410(rax, 0xADDR, 0, 0);
     rax = qword_ADDR;
     var_58 = rsi;
     var_50 = rax;

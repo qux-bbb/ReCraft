@@ -60,7 +60,7 @@ void sub_14000d078_l1(void) {
         if (eax == 0) {
             GetModuleHandleA("comdlg32.dll");
             if (rax != 0) {
-                MessageBoxW(var_68, "Not implemented.", "FileDialog", 0);
+                MessageBoxW(var_68, "Not implemented.\nUse command line to specify file name instead.", "FileDialog", 0);
             }
             CommDlgExtendedError();
             if (eax != 0) {

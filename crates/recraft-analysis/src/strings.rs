@@ -3,8 +3,24 @@
 
 //! String extraction (M1): ASCII and UTF-16LE runs in readable segments.
 //!
-//! Scans segment bytes in chunks so a 1 GiB sample does not have to be materialised in
-//! memory. Runs split across chunk boundaries are carried over.
+//! The default scan mirrors IDA's *Strings* window (Shift-F12) defaults, so a list built
+//! here is comparable with what IDA shows for the same binary:
+//!
+//! - a literal is **NUL-terminated** (IDA's `STRTYPE_C` / `STRTYPE_C_16`); a printable run
+//!   that ends at another non-printable byte, at a segment boundary or at EOF is not a
+//!   string, which keeps x86 opcode bytes such as `D$pH` out of the list;
+//! - at least `min_len` characters (4 by default, i.e. IDA's *minimal string length* of 5
+//!   once its terminator is counted);
+//! - the control characters `ida.cfg`'s default `StrlitChars` accepts (`\a\b\t\n\v\f\r`,
+//!   `ESC`) may appear *inside* a literal, so a CRLF-separated message stays one string
+//!   instead of becoming two;
+//! - bytes inside a decoded function are skipped: IDA does not look for strings inside
+//!   instructions unless *Ignore instructions/data definitions* is enabled;
+//! - ASCII and UTF-16LE are both extracted, and no string overlaps another.
+//!
+//! [`StringScanOptions`] relaxes any of those to reproduce the older "any non-printable
+//! byte ends a run" behaviour. Scans run in chunks so a 1 GiB sample is never materialised
+//! in memory; runs split across chunk boundaries are carried over.
 
 use recraft_common::{Address, Result};
 use recraft_core::Session;
@@ -19,19 +35,51 @@ pub const STRING_KIND_GENERIC: i64 = 0;
 const CHUNK_BYTES: usize = 256 * 1024;
 const MAX_STRING_CHARS: usize = 1024;
 
+/// How literals are delimited and which candidates count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StringScanOptions {
+    /// Minimum number of characters (the terminator is not counted).
+    pub min_len: usize,
+    /// Extract NUL-terminated ASCII literals (`STRTYPE_C`).
+    pub ascii: bool,
+    /// Extract NUL-terminated UTF-16LE literals (`STRTYPE_C_16`).
+    pub utf16: bool,
+    /// Require a terminator, as IDA does. When `false` any non-printable byte ends a
+    /// run, so instruction bytes and count-prefixed text are reported too.
+    pub nul_terminated: bool,
+    /// Let `StrlitChars` control characters be part of a literal (IDA default).
+    pub control_chars: bool,
+    /// Skip candidates that start inside a decoded function (IDA's default).
+    pub skip_code: bool,
+}
+
+impl Default for StringScanOptions {
+    fn default() -> Self {
+        Self {
+            min_len: 4,
+            ascii: true,
+            utf16: true,
+            nul_terminated: true,
+            control_chars: true,
+            skip_code: true,
+        }
+    }
+}
+
 /// One extracted string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedString {
     pub addr: Address,
-    /// Length in bytes (ASCII: bytes, UTF-16: 2 * chars).
+    /// Length in bytes (ASCII: bytes, UTF-16: 2 * chars), terminator excluded.
     pub len: u32,
     pub enc: i64,
     pub text: String,
 }
 
-#[derive(Default)]
 struct Scanner {
-    min_len: usize,
+    opts: StringScanOptions,
+    /// Merged, sorted function bodies; empty when `skip_code` is off.
+    code: Vec<(u64, u64)>,
     max_strings: usize,
     out: Vec<ExtractedString>,
     ascii_start: Option<u64>,
@@ -42,18 +90,54 @@ struct Scanner {
     wide_overflow: bool,
     /// Byte waiting for its second half when a chunk ends on an odd offset.
     wide_pending: Option<(u64, u8)>,
-    /// Last byte of the previous chunk (for the "inside an ASCII run" check).
+    /// Last byte of the previous chunk (the "inside an ASCII run" check).
     prev_byte: Option<u8>,
 }
 
 impl Scanner {
+    fn new(opts: StringScanOptions, code: Vec<(u64, u64)>, max_strings: usize) -> Self {
+        Self {
+            opts,
+            code,
+            max_strings,
+            out: Vec::new(),
+            ascii_start: None,
+            ascii: Vec::new(),
+            ascii_overflow: false,
+            wide_start: None,
+            wide: Vec::new(),
+            wide_overflow: false,
+            wide_pending: None,
+            prev_byte: None,
+        }
+    }
+
     fn full(&self) -> bool {
         self.out.len() >= self.max_strings
     }
 
+    /// Is `addr` inside a decoded function body?
+    fn inside_code(&self, addr: u64) -> bool {
+        if self.code.is_empty() {
+            return false;
+        }
+        let index = self.code.partition_point(|&(_, end)| end <= addr);
+        self.code
+            .get(index)
+            .is_some_and(|&(start, end)| start <= addr && addr < end)
+    }
+
+    /// A candidate literal may not start inside instruction bytes (IDA's default).
+    fn may_start(&self, addr: u64) -> bool {
+        !(self.opts.skip_code && self.inside_code(addr))
+    }
+
     fn push_ascii(&mut self, addr: u64, byte: u8) {
-        if is_printable_ascii(byte) {
+        if is_printable_ascii(byte) || (self.opts.control_chars && is_control(byte)) {
             if self.ascii_start.is_none() {
+                if !self.may_start(addr) {
+                    return;
+                }
                 self.ascii_start = Some(addr);
                 self.ascii.clear();
                 self.ascii_overflow = false;
@@ -63,15 +147,19 @@ impl Scanner {
             } else {
                 self.ascii_overflow = true;
             }
+        } else if self.opts.nul_terminated {
+            // Only the terminator completes a literal; anything else invalidates the run.
+            self.flush_ascii(byte == 0);
         } else {
-            self.flush_ascii();
+            self.flush_ascii(true);
         }
     }
 
-    fn flush_ascii(&mut self) {
+    fn flush_ascii(&mut self, terminated: bool) {
         if let Some(start) = self.ascii_start.take()
+            && terminated
             && !self.ascii_overflow
-            && self.ascii.len() >= self.min_len
+            && self.ascii.len() >= self.opts.min_len
         {
             let text = String::from_utf8_lossy(&self.ascii).into_owned();
             self.out.push(ExtractedString {
@@ -85,13 +173,22 @@ impl Scanner {
         self.ascii_overflow = false;
     }
 
-    fn push_wide(&mut self, addr: u64, value: u16, prev_byte: Option<u8>) {
-        let printable = value == 0x20 || value == 0x09 || (0x21..=0x7e).contains(&value);
-        if printable {
+    fn is_wide_content(&self, value: u16) -> bool {
+        (0x20..=0x7e).contains(&value)
+            || (self.opts.control_chars && value < 0x80 && is_control(value as u8))
+    }
+
+    fn push_wide(&mut self, addr: u64, value: u16, previous: Option<u8>) {
+        if self.is_wide_content(value) {
             if self.wide_start.is_none() {
-                // Don't start in the middle of an ASCII run: the trailing ASCII byte
-                // plus its NUL terminator looks like a printable UTF-16 code unit.
-                if prev_byte.is_some_and(is_printable_ascii) {
+                // Don't start in the middle of an ASCII run: a trailing ASCII byte plus
+                // its NUL terminator is a printable UTF-16 code unit, so `flags\0Wide`
+                // would otherwise also yield `sWide`. IDA steps over the ASCII literal
+                // and starts at the next unit instead.
+                if previous.is_some_and(is_printable_ascii) {
+                    return;
+                }
+                if !self.may_start(addr) {
                     return;
                 }
                 self.wide_start = Some(addr);
@@ -103,15 +200,18 @@ impl Scanner {
             } else {
                 self.wide_overflow = true;
             }
+        } else if self.opts.nul_terminated {
+            self.flush_wide(value == 0);
         } else {
-            self.flush_wide();
+            self.flush_wide(true);
         }
     }
 
-    fn flush_wide(&mut self) {
+    fn flush_wide(&mut self, terminated: bool) {
         if let Some(start) = self.wide_start.take()
+            && terminated
             && !self.wide_overflow
-            && self.wide.len() >= self.min_len
+            && self.wide.len() >= self.opts.min_len
         {
             let text: String = self
                 .wide
@@ -171,39 +271,67 @@ impl Scanner {
         }
         self.prev_byte = bytes.last().copied();
     }
+
+    /// Flush at the end of a segment: a literal that runs into the boundary has no
+    /// terminator, so IDA would not report it.
+    fn flush_segment(&mut self) {
+        let terminated = !self.opts.nul_terminated;
+        self.flush_ascii(terminated);
+        self.flush_wide(terminated);
+        self.wide_pending = None;
+        self.prev_byte = None;
+    }
 }
 
 fn is_printable_ascii(byte: u8) -> bool {
     (0x20..=0x7e).contains(&byte)
 }
 
-/// Heuristic filter for "interesting" strings: drop pure whitespace and control junk.
-fn worth_keeping(text: &str) -> bool {
-    text.chars().any(|ch| ch.is_ascii_alphanumeric())
+/// `ida.cfg`'s default `StrlitChars` adds these to printable ASCII: `\a \b \t \n \v \f
+/// \r ESC`.
+fn is_control(byte: u8) -> bool {
+    matches!(byte, 0x07 | 0x08 | 0x09 | 0x0a | 0x0b | 0x0c | 0x0d | 0x1b)
 }
 
-/// Extract ASCII and UTF-16LE strings from readable segments.
+/// Extract ASCII and UTF-16LE strings with IDA's defaults.
 ///
-/// `min_len` is in characters (4 is a good default). `max_strings` bounds memory on
-/// pathological inputs.
+/// `min_len` is in characters (4, so IDA's minimal length of 5 including the terminator).
+/// `max_strings` bounds memory on pathological inputs.
 pub fn extract_strings(
     session: &mut Session,
     min_len: usize,
     max_strings: usize,
 ) -> Result<Vec<ExtractedString>> {
-    let segments = session.segments().to_vec();
-    let mut scanner = Scanner {
-        min_len: min_len.max(2),
-        max_strings: max_strings.max(1),
-        ..Scanner::default()
+    let options = StringScanOptions {
+        min_len,
+        ..StringScanOptions::default()
     };
+    extract_strings_with(session, options, max_strings)
+}
+
+/// Extract strings with explicit [`StringScanOptions`].
+pub fn extract_strings_with(
+    session: &mut Session,
+    options: StringScanOptions,
+    max_strings: usize,
+) -> Result<Vec<ExtractedString>> {
+    let segments = session.segments().to_vec();
+    let options = StringScanOptions {
+        min_len: options.min_len.max(2),
+        ..options
+    };
+    let code = if options.skip_code {
+        function_ranges(session)?
+    } else {
+        Vec::new()
+    };
+    let mut scanner = Scanner::new(options, code, max_strings.max(1));
     let mut buffer = vec![0u8; CHUNK_BYTES];
 
     for segment in segments {
         if !segment.perm.is_readable() || segment.file_size == 0 {
             continue;
         }
-        scanner.prev_byte = None;
         let size = segment.file_size.min(segment.len());
         let mut offset = 0u64;
         while offset < size {
@@ -221,16 +349,60 @@ pub fn extract_strings(
             scanner.feed(segment.range.start.get() + offset, &buffer[..read]);
             offset += read as u64;
         }
-        scanner.flush_ascii();
-        scanner.flush_wide();
-        scanner.wide_pending = None;
+        scanner.flush_segment();
         if scanner.full() {
             break;
         }
     }
 
-    scanner.out.retain(|string| worth_keeping(&string.text));
-    Ok(scanner.out)
+    Ok(drop_overlaps(scanner.out))
+}
+
+/// IDA walks the database once and steps over each literal it reports, so a later
+/// candidate that overlaps an earlier one is never listed. The ASCII and UTF-16 scans
+/// here are independent passes, so the same rule is applied to the merged list: lowest
+/// address first, ties to `C` (IDA checks `STRTYPE_C` first).
+fn drop_overlaps(mut strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
+    strings.sort_by_key(|string| {
+        (
+            string.addr.get(),
+            if string.enc == STRING_ENC_ASCII { 0 } else { 1 },
+        )
+    });
+    let mut kept: Vec<ExtractedString> = Vec::with_capacity(strings.len());
+    let mut end = 0u64;
+    for string in strings {
+        if string.addr.get() < end {
+            continue;
+        }
+        end = string.addr.get() + u64::from(string.len) + terminator_len(string.enc);
+        kept.push(string);
+    }
+    kept
+}
+
+/// Bytes a literal occupies beyond its content.
+fn terminator_len(enc: i64) -> u64 {
+    if enc == STRING_ENC_UTF16LE { 2 } else { 1 }
+}
+
+/// Merged function bodies: candidates must not start inside them.
+fn function_ranges(session: &Session) -> Result<Vec<(u64, u64)>> {
+    let mut ranges: Vec<(u64, u64)> = session
+        .functions()?
+        .into_iter()
+        .map(|function| (function.start.get(), function.end.get()))
+        .filter(|(start, end)| end > start)
+        .collect();
+    ranges.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    Ok(merged)
 }
 
 /// Persist strings into the session's derived string table.
@@ -251,6 +423,115 @@ mod tests {
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/build/x64/corpus.exe");
         path.exists().then_some(path)
+    }
+
+    /// Feed one buffer through a fresh scanner at `base`.
+    fn scan(base: u64, bytes: &[u8], opts: StringScanOptions) -> Vec<ExtractedString> {
+        let mut scanner = Scanner::new(opts, Vec::new(), 1_000);
+        scanner.feed(base, bytes);
+        scanner.flush_segment();
+        scanner.out
+    }
+
+    #[test]
+    fn nul_terminated_ascii_is_extracted() {
+        let strings = scan(0x1000, b"hello\0", StringScanOptions::default());
+        assert_eq!(strings.len(), 1);
+        assert_eq!(strings[0].text, "hello");
+        assert_eq!(strings[0].len, 5);
+        assert_eq!(strings[0].enc, STRING_ENC_ASCII);
+    }
+
+    #[test]
+    fn unterminated_printable_run_is_not_a_string() {
+        // x86 bytes (`D$pH`) have no terminator, so IDA never lists them.
+        let opts = StringScanOptions::default();
+        assert!(scan(0x1000, b"D$pH", opts).is_empty());
+        assert!(scan(0x1000, b"D$pH\0", opts).len() == 1);
+        // Same bytes at a segment boundary: still unterminated.
+        assert!(scan(0x1000, b"abcdefgh", opts).is_empty());
+    }
+
+    #[test]
+    fn short_literals_need_a_terminator_too() {
+        let opts = StringScanOptions::default();
+        assert!(scan(0x1000, b"abc\0", opts).is_empty());
+        assert!(scan(0x1000, b"abcd\0", opts).len() == 1);
+    }
+
+    #[test]
+    fn legacy_mode_ends_runs_at_any_non_printable_byte() {
+        let opts = StringScanOptions {
+            nul_terminated: false,
+            ..StringScanOptions::default()
+        };
+        let strings = scan(0x1000, b"hello\x01world", opts);
+        assert_eq!(strings.len(), 2);
+        assert_eq!(strings[0].text, "hello");
+        assert_eq!(strings[1].text, "world");
+    }
+
+    #[test]
+    fn control_characters_stay_inside_a_literal() {
+        let strings = scan(0x1000, b"line1\r\nline2\0", StringScanOptions::default());
+        assert_eq!(strings.len(), 1);
+        assert_eq!(strings[0].text, "line1\r\nline2");
+        assert_eq!(strings[0].len, 12);
+    }
+
+    #[test]
+    fn nul_inside_a_literal_invalidates_the_run() {
+        // `abc` then NUL then `def\0`: the NUL completes "abc" (too short) and starts a
+        // new candidate at `def`, which is also too short. Nothing is reported.
+        let strings = scan(0x1000, b"abc\0def\0", StringScanOptions::default());
+        assert!(strings.is_empty());
+    }
+
+    #[test]
+    fn candidates_inside_decoded_code_are_skipped() {
+        let opts = StringScanOptions::default();
+        let mut scanner = Scanner::new(opts, vec![(0x1000, 0x1004)], 100);
+        scanner.feed(0x1000, b"abcd\0efgh\0");
+        scanner.flush_segment();
+        let strings = scanner.out;
+        assert_eq!(strings.len(), 1);
+        assert_eq!(strings[0].addr, Address::new(0x1005));
+        assert_eq!(strings[0].text, "efgh");
+    }
+
+    #[test]
+    fn utf16_literals_are_extracted() {
+        let bytes: Vec<u8> = "wide\0\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let strings = scan(0x1000, &bytes, StringScanOptions::default());
+        assert_eq!(strings.len(), 1);
+        assert_eq!(strings[0].text, "wide");
+        assert_eq!(strings[0].enc, STRING_ENC_UTF16LE);
+        assert_eq!(strings[0].len, 8);
+    }
+
+    #[test]
+    fn utf16_literal_needs_its_terminator() {
+        let bytes: Vec<u8> = "wide".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(scan(0x1000, &bytes, StringScanOptions::default()).is_empty());
+    }
+
+    #[test]
+    fn overlapping_wide_candidate_is_dropped() {
+        // `flags\0` is an ASCII literal; the UTF-16 pass would otherwise also read the
+        // trailing `s` plus its NUL as the start of `sWide`.
+        let mut bytes = b"flags\0".to_vec();
+        for unit in "Wide\0".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let mut scanner = Scanner::new(StringScanOptions::default(), Vec::new(), 100);
+        scanner.feed(0x1000, &bytes);
+        scanner.flush_segment();
+        let strings = drop_overlaps(scanner.out);
+        let texts: Vec<&str> = strings.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, vec!["flags", "Wide"]);
     }
 
     #[test]

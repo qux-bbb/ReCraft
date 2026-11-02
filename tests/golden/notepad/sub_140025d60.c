@@ -62,7 +62,7 @@ void sub_140025d60_l1(void) {
                 return;
             }
         } else {
-            eax = *(u32*)("&,FY");
+            eax = dword_ADDR;
             if (*(u32*)((rdx + 4)) == eax) {
                 eax = dword_ADDR;
                 if (*(u32*)((rdx + 8)) == eax) {
