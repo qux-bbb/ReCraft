@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Recraft) {
-    $Recraft = Join-Path $repo 'target\debug\recraft.exe'
+    $Recraft = Join-Path $repo 'target\debug\recraft-cli.exe'
     if (-not (Test-Path -LiteralPath $Recraft)) {
         Push-Location $repo
         try { & cargo build -p recraft-cli --quiet } finally { Pop-Location }
@@ -140,7 +140,7 @@ try {
     Step 'done'
     if ($Keep) {
         Write-Host "project kept: $project"
-        Write-Host "open the GUI: $((Split-Path -Parent $Recraft))\recraft-ui.exe $project"
+        Write-Host "open the GUI: $((Split-Path -Parent $Recraft))\recraft.exe $project"
     } else {
         Write-Host 'DEMO PASS (temporary project removed; pass -Keep to open it in the GUI)'
     }

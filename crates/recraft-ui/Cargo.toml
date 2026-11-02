@@ -10,6 +10,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[[bin]]
+name = "recraft"
+path = "src/main.rs"
+
 [dependencies]
 recraft-common = { workspace = true }
 recraft-app = { workspace = true }

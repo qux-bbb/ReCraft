@@ -33,12 +33,12 @@ UninstPage instfiles
 Section "ReCraft (required)"
   SetOutPath "$INSTDIR"
   File /r "${STAGE}\*.*"
-  CreateShortcut "$SMPROGRAMS\ReCraft.lnk" "$INSTDIR\recraft-ui.exe"
+  CreateShortcut "$SMPROGRAMS\ReCraft.lnk" "$INSTDIR\recraft.exe"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayName" "ReCraft ${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "Publisher" "ReCraft contributors"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayIcon" "$INSTDIR\recraft-ui.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "DisplayIcon" "$INSTDIR\recraft.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "InstallLocation" "$INSTDIR"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ReCraft" "NoRepair" 1

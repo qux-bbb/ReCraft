@@ -42,7 +42,7 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 {
   "mcpServers": {
     "recraft-notepad": {
-      "command": "C:\\path\\to\\recraft.exe",
+      "command": "C:\\path\\to\\recraft-cli.exe",
       "args": ["serve-mcp", "C:\\work\\notepad.rcraft"]
     }
   }

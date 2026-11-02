@@ -52,7 +52,7 @@ python assets/generate_icon.py
 
 ## 接入位置
 
-- `crates/recraft-ui/build.rs`：调用 Windows SDK `rc.exe` 编译 `1 ICON "assets/recraft.ico"` 并链接进 `recraft-ui.exe`；
+- `crates/recraft-ui/build.rs`：调用 Windows SDK `rc.exe` 编译 `1 ICON "assets/recraft.ico"` 并链接进 `recraft.exe`（GUI）；
 - `crates/recraft-ui/src/main.rs`：`ViewportBuilder::with_icon` 设置窗口/任务栏图标；
 - `packaging/installer.nsi` + `scripts/package.ps1`：安装器使用同一 ICO；
 - 快捷方式/资源管理器直接读取 exe 内嵌图标。

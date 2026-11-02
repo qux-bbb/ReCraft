@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Recraft) {
-    $Recraft = Join-Path $repo 'target\debug\recraft.exe'
+    $Recraft = Join-Path $repo 'target\debug\recraft-cli.exe'
     if (-not (Test-Path -LiteralPath $Recraft)) {
         Push-Location $repo
         try { & cargo build -p recraft-cli --quiet } finally { Pop-Location }

@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$cli = Join-Path $root 'target\debug\recraft.exe'
+$cli = Join-Path $root 'target\debug\recraft-cli.exe'
 $serverScript = Join-Path $PSScriptRoot 'ai_mock_server.py'
 $project = Join-Path $env:TEMP ("recraft-ai-polish-{0}.rcraft" -f [guid]::NewGuid().ToString('N').Substring(0, 8))
 

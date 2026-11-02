@@ -52,7 +52,7 @@ try {
     Assert-Condition ($install.ExitCode -eq 0) "installer exit code $($install.ExitCode)"
     $installed = $true
 
-    foreach ($entry in @('recraft.exe', 'recraft-ui.exe', 'uninstall.exe', 'LICENSE', 'VERSION.txt', 'docs\DESIGN.md')) {
+    foreach ($entry in @('recraft.exe', 'recraft-cli.exe', 'uninstall.exe', 'LICENSE', 'VERSION.txt', 'docs\DESIGN.md')) {
         Assert-Condition (Test-Path -LiteralPath (Join-Path $target $entry)) "missing installed file: $entry"
     }
     Assert-Condition (Test-Path -LiteralPath $shortcut) 'Start Menu shortcut missing'
@@ -62,16 +62,16 @@ try {
     Assert-Condition ($reg.InstallLocation -eq $target) "InstallLocation mismatch: $($reg.InstallLocation)"
     Write-Host '[install] files, shortcut and registry entry present'
 
-    $info = & (Join-Path $target 'recraft.exe') info $env:SystemRoot\System32\notepad.exe 2>$null
+    $info = & (Join-Path $target 'recraft-cli.exe') info $env:SystemRoot\System32\notepad.exe 2>$null
     Assert-Condition (($info -join "`n") -match 'PE32') 'installed CLI info failed'
     $project = Join-Path $work 'installed.rcraft'
-    & (Join-Path $target 'recraft.exe') import $env:SystemRoot\System32\notepad.exe -o $project 2>$null | Out-Null
-    & (Join-Path $target 'recraft.exe') analyze $project 2>$null | Out-Null
-    $metrics = (& (Join-Path $target 'recraft.exe') metrics $project --json 2>$null) | ConvertFrom-Json
+    & (Join-Path $target 'recraft-cli.exe') import $env:SystemRoot\System32\notepad.exe -o $project 2>$null | Out-Null
+    & (Join-Path $target 'recraft-cli.exe') analyze $project 2>$null | Out-Null
+    $metrics = (& (Join-Path $target 'recraft-cli.exe') metrics $project --json 2>$null) | ConvertFrom-Json
     Assert-Condition ($metrics.functions -gt 100) "installed metrics returned $($metrics.functions) functions"
     Write-Host "[install] installed CLI OK ($($metrics.functions) functions, coverage $([math]::Round($metrics.coverage * 100, 1))%)"
 
-    $uiProcess = Start-Process -FilePath (Join-Path $target 'recraft-ui.exe') -PassThru
+    $uiProcess = Start-Process -FilePath (Join-Path $target 'recraft.exe') -PassThru
     Start-Sleep -Seconds 4
     $uiProcess.Refresh()
     Assert-Condition (-not $uiProcess.HasExited) 'GUI exited during startup'

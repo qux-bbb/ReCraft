@@ -37,8 +37,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'release build failed' }
     }
 
-    $cli = Join-Path $repo 'target\release\recraft.exe'
-    $ui = Join-Path $repo 'target\release\recraft-ui.exe'
+    $cli = Join-Path $repo 'target\release\recraft-cli.exe'
+    $ui = Join-Path $repo 'target\release\recraft.exe'
     foreach ($binary in @($cli, $ui)) {
         if (-not (Test-Path -LiteralPath $binary)) { throw "missing release binary: $binary" }
     }
@@ -48,8 +48,8 @@ try {
     Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-    Copy-Item -LiteralPath $cli -Destination (Join-Path $stage 'recraft.exe')
-    Copy-Item -LiteralPath $ui -Destination (Join-Path $stage 'recraft-ui.exe')
+    Copy-Item -LiteralPath $cli -Destination (Join-Path $stage 'recraft-cli.exe')
+    Copy-Item -LiteralPath $ui -Destination (Join-Path $stage 'recraft.exe')
     foreach ($file in @('LICENSE', 'README.md', 'CHANGELOG.md')) {
         if (Test-Path -LiteralPath $file) {
             Copy-Item -LiteralPath $file -Destination (Join-Path $stage $file)
@@ -81,8 +81,8 @@ try {
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zipPath -CompressionLevel Optimal
     Write-Host ('[package] zip: {0} ({1:N1} MiB)' -f $zipPath, ((Get-Item -LiteralPath $zipPath).Length / 1MB))
 
-    $exeHash = (Get-FileHash -LiteralPath (Join-Path $stage 'recraft.exe') -Algorithm SHA256).Hash
-    $uiHash = (Get-FileHash -LiteralPath (Join-Path $stage 'recraft-ui.exe') -Algorithm SHA256).Hash
+    $exeHash = (Get-FileHash -LiteralPath (Join-Path $stage 'recraft-cli.exe') -Algorithm SHA256).Hash
+    $uiHash = (Get-FileHash -LiteralPath (Join-Path $stage 'recraft.exe') -Algorithm SHA256).Hash
     $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
 
     $installer = $null
@@ -111,8 +111,8 @@ try {
     # Checksums are written after the optional installer so it can be covered too.
     $sums = @(
         "$zipHash  $zipName"
-        "$exeHash  recraft.exe"
-        "$uiHash  recraft-ui.exe"
+        "$exeHash  recraft-cli.exe"
+        "$uiHash  recraft.exe"
     )
     if ($installer) {
         $setupName = Split-Path -Leaf $installer

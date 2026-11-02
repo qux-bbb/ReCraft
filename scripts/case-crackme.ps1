@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$cli = Join-Path $root 'target\debug\recraft.exe'
+$cli = Join-Path $root 'target\debug\recraft-cli.exe'
 
 if (-not (Test-Path -LiteralPath $Binary)) {
     throw "binary not found: $Binary"

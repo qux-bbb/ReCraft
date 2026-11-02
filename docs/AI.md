@@ -10,24 +10,24 @@ DESIGN §9 的 AI 层分两半：**确定性的离线能力** 与 **可插拔 LL
 
 ```powershell
 # 函数解释：API 标签、引用字符串、直接调用、指令数（离线，无网络）
-recraft ai explain notepad.rcraft --addr entry [--json]
+recraft-cli ai explain notepad.rcraft --addr entry [--json]
 
 # 命名建议：只针对 sub_* 函数，输出 Proposal（证据 + 置信度 + 理由），不修改项目
-recraft ai suggest notepad.rcraft [--limit 20] [--json] [--out proposals.json]
+recraft-cli ai suggest notepad.rcraft [--limit 20] [--json] [--out proposals.json]
 
 # 样本摘要：API 分类统计、可疑函数 top-N、URL
-recraft ai triage notepad.rcraft [--json]
+recraft-cli ai triage notepad.rcraft [--json]
 
 # 应用已 review 的 proposals（无 --yes 直接拒绝）
-recraft ai apply notepad.rcraft proposals.json --yes
+recraft-cli ai apply notepad.rcraft proposals.json --yes
 
 # 自然语言查询（DESIGN §9.2）：离线意图解析 → 本地表查询
-recraft ai query notepad.rcraft "find every function that references a URL" [--json]
-recraft ai query notepad.rcraft "找所有引用字符串 Microsoft 的函数"
-recraft ai query notepad.rcraft "which functions call CreateFileW"
+recraft-cli ai query notepad.rcraft "find every function that references a URL" [--json]
+recraft-cli ai query notepad.rcraft "找所有引用字符串 Microsoft 的函数"
+recraft-cli ai query notepad.rcraft "which functions call CreateFileW"
 
 # 伪代码润色（DESIGN §9.2）：需要已配置 LLM；只输出建议，不写回项目
-recraft ai polish notepad.rcraft --addr entry [--json] [--no-cache]
+recraft-cli ai polish notepad.rcraft --addr entry [--json] [--no-cache]
 ```
 
 ## 自然语言查询（离线）
@@ -69,7 +69,7 @@ recraft ai polish notepad.rcraft --addr entry [--json] [--no-cache]
 ```
 
 - `apply` 把 `rename` / `comment` / `prototype` / `apply_type` 映射为对应 `Command`
-  （`Rename`/`SetComment`/`SetPrototype`/`ApplyType`），写入 journal，可 `recraft undo`
+  （`Rename`/`SetComment`/`SetPrototype`/`ApplyType`），写入 journal，可 `recraft-cli undo`
   撤销；`apply_type` 的 proposal value 形如 `"0:Probe"`（槽位:结构体名，空类型名=清除）。
   `ai suggest` 本身永不写库。
 - 无 `--yes` 时返回 "refusing to apply proposals without --yes"，防止误操作。
@@ -126,10 +126,10 @@ HTTP 传输已实现（OpenAI-compatible + Ollama；见 `recraft-ai/transport.rs
 provider 层：
 
 ```powershell
-recraft ai provider                      # 解析后的配置（不打印密钥）
-recraft ai explain notepad.rcraft --addr entry --llm
-recraft ai polish notepad.rcraft --addr entry
-recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
+recraft-cli ai provider                      # 解析后的配置（不打印密钥）
+recraft-cli ai explain notepad.rcraft --addr entry --llm
+recraft-cli ai polish notepad.rcraft --addr entry
+recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 ```
 
 - **默认离线**：`ProviderSettings` 默认 `heuristic`/`disabled`；启用 HTTP provider 必须同时
@@ -182,7 +182,7 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   `OpenAiCompatibleProvider`（`POST {endpoint}/v1/chat/completions`，Bearer key 从
   配置的环境变量读取）；`provider_from_settings` 在 disabled/heuristic 时返回
   `HeuristicProvider`（拒绝假装是模型）。
-- 使用：`recraft ai explain notepad.rcraft --addr entry --llm` 会在启用 provider 后把
+- 使用：`recraft-cli ai explain notepad.rcraft --addr entry --llm` 会在启用 provider 后把
   脱敏 prompt 发送出去，并打印模型回答（`--json` 含 provider/tokens/response）；默认配置
   下会明确报 "no LLM provider configured"。
 
@@ -209,7 +209,7 @@ recraft ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   - 运行方式：
     ```powershell
     cargo test -p recraft-ai --test prompt_eval
-    recraft ai eval corpus-project.rcraft [--json]     # 5/5 passed，失败时非 0 退出
+    recraft-cli ai eval corpus-project.rcraft [--json]     # 5/5 passed，失败时非 0 退出
     ```
 - 这只保证 **prompt 输入质量**；LLM 回答的准确率/命名质量仍需模型评测集（后续版本）。
 

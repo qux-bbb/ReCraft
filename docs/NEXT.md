@@ -61,7 +61,7 @@ if (rax < r12) {
 advapi32 125 个（93.3%）——比例与 crackme（91.9%）相当，说明剩余难度是**代码形态**决定的，
 不是样本挑选造成的。
 
-**开工前先取工作清单**：`recraft metrics <project> --list` 按跳转数降序列出未结构化函数
+**开工前先取工作清单**：`recraft-cli metrics <project> --list` 按跳转数降序列出未结构化函数
 （notepad 15 个，最大 `sub_140013154` 369 处 goto / 9868 行，占全样本 82%；crackme 40 个，最大
 `sub_140006fd0` 92 处）。`--json` 的 `unstructured` 字段提供同一份数据。
 
@@ -96,8 +96,8 @@ advapi32 125 个（93.3%）——比例与 crackme（91.9%）相当，说明剩�
 3. 若两者在此样本上都不成立，记录结论并保留 `goto`——IDA 同样会这样输出。
 
 **验收标准**：
-- `recraft metrics --list` 的未结构化函数数下降（notepad 15、crackme 40、Go **263** 是当前起点）；
-- `recraft lint` 全样本仍为 0 findings；
+- `recraft-cli metrics --list` 的未结构化函数数下降（notepad 15、crackme 40、Go **263** 是当前起点）；
+- `recraft-cli lint` 全样本仍为 0 findings；
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
   合计 785 个函数）。
 
@@ -114,8 +114,8 @@ advapi32 125 个（93.3%）——比例与 crackme（91.9%）相当，说明剩�
 - 因此**守卫提升的落点是 `compute_loops` 之后、发射之前**：把"第二入口的前驱块"重定向到
   循环头（必要时把前驱里的前置语句下沉进循环体），让 `loop_blocks` 完整、循环头重新支配回边；
   之后再走现有 `emit_loop`，输出自然成为 `while`/`do-while`。
-- 该改动只影响 CFG 的边/块归属，不涉及文本 pass；预期影响面由 `recraft lint`（不变量）与
-  五套 goldens 的 diff 逐条核对，结构化率由 `recraft metrics` 判定。
+- 该改动只影响 CFG 的边/块归属，不涉及文本 pass；预期影响面由 `recraft-cli lint`（不变量）与
+  五套 goldens 的 diff 逐条核对，结构化率由 `recraft-cli metrics` 判定。
 
 ## 1.2 第二种多入口形状：`goto` 跳进紧邻的 `do` 体内（Go 样本）
 
@@ -222,5 +222,5 @@ notepad 全部 502 个函数的 29 664 行里，**44.0% 是赋值**，其中 **1
 
 - 不要为了"看起来像 C"而删除或合并语义不明的分支（尤其 `if (0x80004005 >= 0)` 这类
   常量条件，它可能暴露的是我们常量归属推断的边界）。
-- 不要在未跑 `recraft lint` 的情况下提交文本 pass 改动——它能立刻发现未定义标签、
+- 不要在未跑 `recraft-cli lint` 的情况下提交文本 pass 改动——它能立刻发现未定义标签、
   括号失衡、参数未声明等硬错误。

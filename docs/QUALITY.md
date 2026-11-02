@@ -23,15 +23,15 @@
 ## 命令
 
 ```powershell
-recraft lint <project> [--limit N] [--level l1|l2] [--json]     # 输出不变量自检
-recraft metrics <project> [--json]
-recraft metrics <project> --min-structured 0.6 --min-coverage 0.75   # 门禁
-recraft metrics <project> --list                                       # 未结构化函数清单（跳转数降序）
-recraft metrics <project> --max-functions 0                            # 全样本（默认上限 2000）
-recraft export-pseudo <project> --dir out --only-unstructured          # 把待改造的函数导出成文件
-recraft golden <project> --dir tests/golden/corpus                    # 写入快照
-recraft golden <project> --dir tests/golden/go --limit 60             # 大项目只取前 N 个函数
-recraft golden <project> --dir tests/golden/corpus --check           # 对比快照
+recraft-cli lint <project> [--limit N] [--level l1|l2] [--json]     # 输出不变量自检
+recraft-cli metrics <project> [--json]
+recraft-cli metrics <project> --min-structured 0.6 --min-coverage 0.75   # 门禁
+recraft-cli metrics <project> --list                                       # 未结构化函数清单（跳转数降序）
+recraft-cli metrics <project> --max-functions 0                            # 全样本（默认上限 2000）
+recraft-cli export-pseudo <project> --dir out --only-unstructured          # 把待改造的函数导出成文件
+recraft-cli golden <project> --dir tests/golden/corpus                    # 写入快照
+recraft-cli golden <project> --dir tests/golden/go --limit 60             # 大项目只取前 N 个函数
+recraft-cli golden <project> --dir tests/golden/corpus --check           # 对比快照
 ```
 
 `metrics` 与 `golden` 都要求先 `import` + `analyze`。
@@ -58,7 +58,7 @@ labels:                 0
 inline asm statements:  9
 ```
 
-下表于 **2026-11-02** 在提交 `9ae2537` 上实测（`recraft metrics`）：
+下表于 **2026-11-02** 在提交 `9ae2537` 上实测（`recraft-cli metrics`）：
 
 | 样本 | 函数 | 结构化 | 覆盖率 | `loc_` 标签 | `__asm` |
 |---|---|---|---|---|---|
@@ -68,7 +68,7 @@ inline asm statements:  9
 | corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
 | go.exe（3261 个已定义函数） | 3261（`--max-functions 0`） | 2998 结构化（91.9%），263 个回退 | 98.8% | 1446 | 1899 |
 
-`recraft metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
+`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
 `xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是
@@ -239,9 +239,9 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 - 内容：**归一化后的 L1 文本**——`0x...` 地址与 `loc_...` 标签替换为 `0xADDR` /
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
-- 更新流程：改动反编译器后运行 `recraft golden <corpus-project> --dir tests/golden/corpus`，
+- 更新流程：改动反编译器后运行 `recraft-cli golden <corpus-project> --dir tests/golden/corpus`，
   **人工 review `git diff tests/golden/corpus`**，确认变化符合预期后提交。
  已提交快照合计 **785** 个函数（notepad **502（全部函数）**、crackme 160、corpus 31、corpus86 32、go 60），
-  全部通过 `--check`；配合 `recraft lint` 与 `recraft metrics` 构成三层回归- CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
+  全部通过 `--check`；配合 `recraft-cli lint` 与 `recraft-cli metrics` 构成三层回归- CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
   CI 先写入临时目录再 `--check` 做**确定性/归一化回环**校验。仓库快照用于本地与
   review 时的真实回归。M3 引入固定 toolchain 容器后改为直接对比提交的快照。

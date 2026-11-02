@@ -73,7 +73,7 @@ try {
     $extract = Join-Path $work 'pkg'
     Expand-Archive -LiteralPath $Zip -DestinationPath $extract -Force
     $required = @(
-        'recraft.exe', 'recraft-ui.exe', 'LICENSE', 'README.md', 'CHANGELOG.md', 'VERSION.txt',
+        'recraft.exe', 'recraft-cli.exe', 'LICENSE', 'README.md', 'CHANGELOG.md', 'VERSION.txt',
         'docs\AI.md', 'docs\DESIGN.md', 'docs\FAQ.md', 'docs\ROADMAP.md', 'docs\M4.md'
     )
     foreach ($entry in $required) {
@@ -83,9 +83,9 @@ try {
     }
     Write-Host "[verify] package entries present ($($required.Count) checked)"
 
-    $exe = Join-Path $extract 'recraft.exe'
+    $exe = Join-Path $extract 'recraft-cli.exe'
     $info = & $exe info $PEFile
-    if ($LASTEXITCODE -ne 0) { throw 'packaged recraft info failed' }
+    if ($LASTEXITCODE -ne 0) { throw 'packaged recraft-cli info failed' }
     Assert-Contains ($info -join "`n") 'PE32' 'PE header output'
 
     $project = Join-Path $work 'verify.rcraft'
@@ -95,7 +95,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'packaged analyze failed' }
     $pseudo = & $exe decompile $project --addr entry --l2
     if ($LASTEXITCODE -ne 0) { throw 'packaged decompile failed' }
-    Assert-Contains ($pseudo -join "`n") '// L1 structure recovery' 'pseudocode output'
+    Assert-Contains ($pseudo -join "`n") '// L2 structure recovery' 'pseudocode output'
 
     $provider = & $exe ai provider
     Assert-Contains ($provider -join "`n") 'state=disabled' 'AI provider defaults offline'

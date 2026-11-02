@@ -6,7 +6,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `dist/ReCraft-<version>/` | 绿色目录：`recraft.exe`、`recraft-ui.exe`、`LICENSE`、`README.md`、`CHANGELOG.md`、`VERSION.txt`、`docs/*.md` |
+| `dist/ReCraft-<version>/` | 绿色目录：`recraft.exe`（GUI）、`recraft-cli.exe`（命令行）、`LICENSE`、`README.md`、`CHANGELOG.md`、`VERSION.txt`、`docs/*.md` |
 | `dist/recraft-v<version>-windows-x64.zip` | 便携 zip（约 10.3 MiB；含 rustls/ureq TLS 与 docs/adr） |
 | `dist/SHA256SUMS.txt` | zip、两个 exe 与安装器（若生成）的 SHA-256 |
 | `dist/recraft-<version>-setup.exe` | NSIS 安装器（检测到 `makensis` 时生成；CI installer job 必建） |
@@ -56,7 +56,7 @@ pwsh -File scripts/verify-installer.ps1        # 安装→CLI/GUI→卸载 全�
 [verify] installer SHA256 + PE header OK (recraft-0.1.0-setup.exe, 10.3 MiB)
 [verify] analyze/decompile/AI/metrics OK (functions=502)
 [verify] PACKAGE PASS
-[release demo] dist\ReCraft-0.1.0\recraft.exe → DEMO PASS
+[release demo] dist\ReCraft-0.1.0\recraft-cli.exe → DEMO PASS
 [release metrics] notepad: 502 functions, coverage 99.4%, structured 432/502 (86.1%)
 [installer] PASS：silent install → files/shortcut/registry → installed CLI（502 函数、
             覆盖率 99.4%）→ GUI 启动（窗口标题 ReCraft）→ silent uninstall →
@@ -89,7 +89,7 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 - 在此之前以 `SHA256SUMS.txt` 作为完整性凭据，并在 README/Release Notes 说明 SmartScreen
   操作（更多信息 → 仍要运行）。
 
-签名恢复时需：`signtool` 签 `recraft.exe`、`recraft-ui.exe`、`setup.exe`，NSIS 卸载器用
+签名恢复时需：`signtool` 签 `recraft-cli.exe`、`recraft.exe`、`setup.exe`，NSIS 卸载器用
 `!uninstfinalize` 一并签，然后重打 zip/安装器并更新校验和；本仓库打包脚本无需改动。
 
 ## 发布清单

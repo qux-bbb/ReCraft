@@ -18,7 +18,7 @@ corpus 基准：语义覆盖 97.4%、结构化成功率 100%；真实样本（no
 默认**不联网**：AI 功能需要先显式配置 provider（DeepSeek / OpenCode Go / 自定义
 OpenAI 兼容端点）、endpoint 和 API key，否则解释/建议/查询/润色都会提示先配置；
 配置后发送前仍会经过脱敏（URL/IP/邮箱）与 token 预算裁剪，并且可以用
-`recraft ai prompt` 先审阅。详见 [docs/AI.md](AI.md)。
+`recraft-cli ai prompt` 先审阅。详见 [docs/AI.md](AI.md)。
 
 ## 4. AI 能直接改我的数据库吗？
 
@@ -49,7 +49,7 @@ ReCraft 只做**静态解析**，不加载、不执行、不解包样本；但�
 
 ## 9. 有 MCP 吗？能接 Claude/Cursor 吗？
 
-有。`recraft serve-mcp <project>` 通过 stdio 提供只读工具（反汇编、伪代码、xrefs、字符串、
+有。`recraft-cli serve-mcp <project>` 通过 stdio 提供只读工具（反汇编、伪代码、xrefs、字符串、
 导入、调用图、字节搜索、函数摘要）与项目资源；配置示例见 [docs/DEMO.md](DEMO.md)。
 
 ## 10. 什么时候有公开预览？

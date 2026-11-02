@@ -21,7 +21,7 @@ pwsh -File scripts/demo.ps1 -PEFile C:\Windows\System32\notepad.exe
 
 | 步骤 | 展示点 |
 |---|---|
-| 1 PE headers | 架构、镜像基址、节表（`recraft info`） |
+| 1 PE headers | 架构、镜像基址、节表（`recraft-cli info`） |
 | 2 import + analysis | 导入 → 函数/字符串/xref/API 标签，分析耗时 |
 | 3 function discovery | 函数列表（corpus 28 个） |
 | 4 structured pseudocode | `decompile --l2`：签名、参数名、结构（if/while） |
@@ -47,13 +47,13 @@ AI 片段：
 0.65  0x01400012dc -> interesting_1400012dc
       calls api-ms-win-eventing-provider-l1-1-0.dll!EventWriteTransfer; 1 string ref(s)
       evidence 0x0140001368 api_tag: ...
-$ recraft ai apply ... --yes
+$ recraft-cli ai apply ... --yes
 applied 3 proposal(s) through the command bus (undoable)
 ```
 
 ## GUI 走查（1–2 分钟）
 
-1. 启动 `recraft-ui.exe`，**File → Open/Import** 选择 `%TEMP%\recraft-demo-*\demo.rcraft`
+1. 启动 `recraft.exe`，**File → Open/Import** 选择 `%TEMP%\recraft-demo-*\demo.rcraft`
    （用 `-Keep` 运行演示脚本会打印路径）。
 2. `F5` 运行分析（后台线程，可取消）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
@@ -115,7 +115,7 @@ applied 3 proposal(s) through the command bus (undoable)
 {
   "mcpServers": {
     "recraft": {
-      "command": "C:\\path\\to\\recraft.exe",
+      "command": "C:\\path\\to\\recraft-cli.exe",
       "args": ["serve-mcp", "C:\\path\\to\\project.rcraft"]
     }
   }
@@ -134,9 +134,9 @@ $env:RECRAFT_AI_PROVIDER = 'ollama'
 $env:RECRAFT_AI_ENDPOINT = 'http://127.0.0.1:11434'
 $env:RECRAFT_AI_MODEL = 'qwen2.5-coder'
 $env:RECRAFT_AI_API_KEY = 'local'      # Ollama 不校验，但启用条件要求存在
-recraft ai provider                     # state=enabled
-recraft ai prompt demo.rcraft --addr entry   # 发送前 review 脱敏 prompt
-recraft ai explain demo.rcraft --addr entry --llm
+recraft-cli ai provider                     # state=enabled
+recraft-cli ai prompt demo.rcraft --addr entry   # 发送前 review 脱敏 prompt
+recraft-cli ai explain demo.rcraft --addr entry --llm
 ```
 
 ## 演示话术（对外 10 分钟）

@@ -450,12 +450,12 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 ## 10. CLI / headless
 
 ```
-recraft analyze <file> [--json] [--out project.rcraft]
-recraft strings|imports|functions|callgraph <file> [--json]
-recraft decompile <file> --func 0x401000 [--json]
-recraft search --bytes/--string ...
-recraft serve-mcp <project.rcraft> [--stdio|--http]
-recraft batch <script.json>
+recraft-cli analyze <file> [--json] [--out project.rcraft]
+recraft-cli strings|imports|functions|callgraph <file> [--json]
+recraft-cli decompile <file> --func 0x401000 [--json]
+recraft-cli search --bytes/--string ...
+recraft-cli serve-mcp <project.rcraft> [--stdio|--http]
+recraft-cli batch <script.json>
 ```
 
 CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质量门禁。

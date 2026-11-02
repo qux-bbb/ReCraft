@@ -106,6 +106,10 @@ Run the desktop app against a project (or drag a PE file onto its window):
 cargo run -p recraft-ui -- path\to\sample.rcraft
 ```
 
+The build produces `target\debug\recraft.exe` (desktop GUI) and
+`target\debug\recraft-cli.exe` (command line; the cargo package names stay
+`recraft-ui` / `recraft-cli`).
+
 First import a binary from the command line (read-only commands such as `strings`,
 `funcs`, `decompile`, `search` or `callgraph` also accept a PE path directly and
 auto-analyze it into a temporary project):

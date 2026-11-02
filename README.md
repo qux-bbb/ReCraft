@@ -106,6 +106,9 @@ cargo test --workspace
 cargo run -p recraft-ui -- path\to\sample.rcraft
 ```
 
+构建产物是 `target\debug\recraft.exe`（图形界面）与 `target\debug\recraft-cli.exe`
+（命令行，cargo 包名仍为 `recraft-ui` / `recraft-cli`）。
+
 先在命令行导入二进制（`strings`、`funcs`、`decompile`、`search`、`callgraph` 等只读命令
 也接受 PE 路径，并自动分析到临时项目）：
 

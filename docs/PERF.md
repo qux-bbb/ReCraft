@@ -6,7 +6,7 @@
 
 1. 把 `notepad.exe`（或 `-PEFile`）复制成临时样本，并在文件尾追加 `-OverlayMB`（默认
    1024）MiB 零数据，得到一个 **1 GiB 样本**（overlay 不在任何映射段内，PE 结构不变）。
-2. 用 `recraft import` 测量导入墙钟时间，`recraft analyze` 测量分析墙钟时间。
+2. 用 `recraft-cli import` 测量导入墙钟时间，`recraft-cli analyze` 测量分析墙钟时间。
 3. 直接使用 `System.Diagnostics.Process` 启动子进程，每 20 ms 采样 `WorkingSet64` 得到
    **峰值工作集**（PowerShell 的 `Start-Process` 无 `-Wait` 时丢失 ExitCode、带 `-Wait`
    时丢失 PeakWorkingSet64，所以脚本自己实现）。
@@ -60,7 +60,7 @@ notepad 函数的输出逐字节未变。
 
 ## 反编译视图剖析更新（2026-11-02）
 
-`RECRAFT_PROFILE=1 recraft decompile <project> --addr 0x140013154 --l2` 现在覆盖整条流水线。
+`RECRAFT_PROFILE=1 recraft-cli decompile <project> --addr 0x140013154 --l2` 现在覆盖整条流水线。
 notepad 的 45 KB 函数（`sub_140013154`，1620 基本块、约 9.9 千行 L2）在本机 debug 构建下：
 
 | 阶段 | 耗时 |
