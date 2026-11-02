@@ -733,6 +733,15 @@ enum AiMode {
     Custom,
 }
 
+/// What the AI result pane holds. Polished C is coloured like the Decompile view;
+/// explanation reports are prose and stay plain text.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum AiResultKind {
+    #[default]
+    Prose,
+    Code,
+}
+
 impl AiMode {
     fn from_settings(settings: &recraft_ai::ProviderSettings) -> Self {
         if settings.endpoint.contains("api.deepseek.com") {
@@ -930,6 +939,9 @@ pub struct ReCraftApp {
     ai_cache: recraft_ai::PromptCache,
     ai_cache_fingerprint: Option<String>,
     ai_explanation: Option<String>,
+    /// Whether [`Self::ai_explanation`] holds polished C (syntax-coloured) or a plain
+    /// explanation report.
+    ai_result_kind: AiResultKind,
     /// Streamed chain-of-thought (`reasoning_content`) for the running or last AI call.
     ai_reasoning: String,
     /// Whether the thinking section is expanded; collapsed automatically when a call ends.
@@ -1021,6 +1033,7 @@ impl Default for ReCraftApp {
             ai_cache: recraft_ai::PromptCache::new(),
             ai_cache_fingerprint: None,
             ai_explanation: None,
+            ai_result_kind: AiResultKind::Prose,
             ai_reasoning: String::new(),
             ai_reasoning_open: false,
             ai_thinking: false,
@@ -1788,6 +1801,9 @@ impl ReCraftApp {
                         self.ai_cache.insert(prompt, &text);
                     }
                     self.ai_explanation = Some(text);
+                    // A completed AI job is always a polish answer: pseudo-C, so the result
+                    // pane colours it like the Decompile view.
+                    self.ai_result_kind = AiResultKind::Code;
                     // Fold the chain-of-thought once the answer is complete.
                     self.ai_reasoning_open = false;
                     self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
@@ -3635,6 +3651,7 @@ impl ReCraftApp {
             }
         });
         ui.add_space(4.0);
+        let result_kind = self.ai_result_kind;
         match self.ai_explanation.clone() {
             Some(text) => {
                 card_frame(pal).show(ui, |ui| {
@@ -3645,7 +3662,12 @@ impl ReCraftApp {
                         .auto_shrink([false, false])
                         .stick_to_bottom(self.ai_job.is_some())
                         .show(ui, |ui| {
-                            ui.label(RichText::new(text).monospace().size(11.0).color(pal.text));
+                            let mono = FontId::monospace(11.0);
+                            let mut job = LayoutJob::default();
+                            append_ai_result(&mut job, &text, result_kind, pal, &mono);
+                            // Wrap long lines at the pane width, like the plain label did.
+                            job.wrap.max_width = ui.available_width();
+                            ui.label(job);
                         });
                 });
             }
@@ -5764,6 +5786,7 @@ impl ReCraftApp {
                 self.ai_selected = None;
                 self.ai_status.clear();
                 self.ai_explanation = None;
+                self.ai_result_kind = AiResultKind::Prose;
                 self.ai_reasoning.clear();
                 self.ai_reasoning_open = false;
                 self.ai_answer = None;
@@ -5813,6 +5836,8 @@ impl ReCraftApp {
                     Ok(explanation) => {
                         self.ai_status = explanation.summary.clone();
                         self.ai_explanation = Some(format_explanation(&explanation));
+                        // The offline explanation is a prose report, not pseudo-C.
+                        self.ai_result_kind = AiResultKind::Prose;
                     }
                     Err(error) => self.set_error(error),
                 }
@@ -5865,6 +5890,8 @@ impl ReCraftApp {
                     prompt
                 };
                 self.ai_explanation = None;
+                // Polish answers are pseudo-C: colour them like the Decompile view.
+                self.ai_result_kind = AiResultKind::Code;
                 self.ai_reasoning.clear();
                 self.ai_reasoning_open = self.ai_thinking;
                 if let Some(cached) = self.ai_cache.get(&prompt) {
@@ -6483,6 +6510,21 @@ fn append_pseudo_line(job: &mut LayoutJob, text: &str, pal: Palette, mono: &Font
     }
     if plain < text.len() {
         append(job, &text[plain..], pal.text, mono);
+    }
+}
+
+/// Lay out the AI result pane. A polish answer is pseudo-C and gets the same syntax
+/// colours as the Decompile view; an explanation report is prose and stays plain text.
+fn append_ai_result(
+    job: &mut LayoutJob,
+    text: &str,
+    kind: AiResultKind,
+    pal: Palette,
+    mono: &FontId,
+) {
+    match kind {
+        AiResultKind::Code => append_pseudo_line(job, text, pal, mono),
+        AiResultKind::Prose => append(job, text, pal.text, mono),
     }
 }
 
@@ -7693,6 +7735,31 @@ mod tests {
         let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
         output.textures_delta.clear();
         assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_panel_renders_a_coloured_polish_result() {
+        // Exercises the code path that lays out a long, wrapped, syntax-coloured result
+        // (a panic here would only show up at runtime, not in the tokenizer tests).
+        let mut app = ReCraftApp {
+            ai_explanation: Some(
+                "if (rcx != 0) {\n    sub_140001000(\"name\", 0x10);\n}\nreturn 0;".to_owned(),
+            ),
+            ai_result_kind: AiResultKind::Code,
+            ..ReCraftApp::default()
+        };
+        app.focus_pane(Pane::Ai);
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert_eq!(app.ai_result_kind, AiResultKind::Code);
     }
 
     #[test]
@@ -8995,12 +9062,49 @@ mod tests {
         };
         app.tick();
         assert_eq!(app.ai_explanation.as_deref(), Some("int main(void) {}"));
+        assert_eq!(
+            app.ai_result_kind,
+            AiResultKind::Code,
+            "a polish answer is coloured as code"
+        );
         assert!(
             app.ai_status.starts_with("polish done"),
             "{}",
             app.ai_status
         );
         assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_result_colours_polished_code_but_not_prose() {
+        let mono = FontId::monospace(11.0);
+        let code = "if (rcx != 0) sub_140001000(\"x\", 0x10); // note";
+        let mut job = LayoutJob::default();
+        append_ai_result(&mut job, code, AiResultKind::Code, Palette::DARK, &mono);
+        assert_eq!(job.text, code, "colour sections must not change the text");
+        let color = |needle: &str| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    let range = &section.byte_range;
+                    &job.text[range.start.0..range.end.0] == needle
+                })
+                .map(|section| section.format.color)
+                .unwrap_or_else(|| panic!("no section for {needle:?}"))
+        };
+        assert_eq!(color("if"), Palette::DARK.mnemonic);
+        assert_eq!(color("rcx"), Palette::DARK.register);
+        assert_eq!(color("sub_140001000"), Palette::DARK.name);
+        assert_eq!(color("0x10"), Palette::DARK.number);
+        assert_eq!(color("// note"), Palette::DARK.comment);
+
+        // An explanation report is prose: colouring it as C would tint random words.
+        let prose = "This function opens a file.";
+        let mut job = LayoutJob::default();
+        append_ai_result(&mut job, prose, AiResultKind::Prose, Palette::DARK, &mono);
+        assert_eq!(job.text, prose);
+        assert_eq!(job.sections.len(), 1, "prose stays one plain section");
+        assert_eq!(job.sections[0].format.color, Palette::DARK.text);
     }
 
     #[test]

@@ -110,7 +110,9 @@ recraft ai polish notepad.rcraft --addr entry [--json] [--no-cache]
 - **Query（离线 NL 查询）**：输入 `urls`、`callers of CreateFileW`、`text http` 等自然语言，
   复用 `answer_query` 意图解析；结果显示 kind/地址/文本与相关函数，点击条目反跳反汇编。
 - **Polish**：对当前函数构建润色 prompt 并调用已启用的 provider；未启用时提示先配置。
-  请求在后台线程执行，UI 不阻塞；结果只做展示（不写回伪代码）。
+  请求在后台线程执行，UI 不阻塞；结果只做展示（不写回伪代码），并按伪代码语法着色
+  （关键字/类型蓝、寄存器紫、符号名金、数字与字符串/注释绿，与 Decompile 视图同一套配色；
+  Explain 的说明文本保持纯色）。
 - **Provider settings**：UI 内直接编辑 provider 类型、endpoint、model、API key 环境变量名与
   max tokens，保存到 `%LOCALAPPDATA%\ReCraft\ai-settings.json`（只存环境变量名，**不存密钥**）。
   保存后从环境变量重算 `enabled`；CLI 的 `ai provider` 仍可查看解析结果。

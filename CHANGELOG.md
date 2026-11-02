@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer completes. `Provider::complete_stream_with_reasoning` forwards reasoning deltas
   (the plain streaming entry point ignores them), and the UI receives them as
   `AiMessage::Reasoning`.
+- The AI panel's **polish result is syntax-coloured** like the Decompile view. `AiResultKind`
+  records whether the result pane holds polished C (`Code`) or a prose report (`Prose`);
+  `append_ai_result` routes code through the existing `append_pseudo_line` highlighter
+  (keywords/types blue, registers purple, names gold, numbers and strings/comments green)
+  and keeps explanation reports a single plain section. The copy button still copies the
+  unmodified text, and the layout wraps at the pane width as before.
 
 ### Changed
 
