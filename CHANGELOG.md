@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Decompile view colours its pseudo-C like Hex-Rays: keywords and type names blue,
+  registers purple, function/label/global names gold, numbers take the immediate
+  colour, and string literals and comments green, while locals, punctuation and
+  whitespace keep the plain text colour.
+  `append_pseudo_line` scans each row in one pass (comments and quoted literals swallow
+  their contents) and appends only `LayoutJob` sections, so the row text is unchanged and
+  click/double-click hit-testing keeps working. Both themes share the existing semantic
+  palette; 4 new tests cover the classifier, the section split, comment/string containment
+  and the rendered view.
 - The AI panel has a **Thinking mode** toggle. With it on, polish keeps the provider's
   reasoning pass and the streamed `reasoning_content` is shown in a collapsible
   “Thinking” section that expands while the model reasons and folds automatically when the
@@ -18,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The disassembly Text view now recognises the whole register file (`r8b`…`r15d`,
+  `r8w`, `sil`/`dil`/`bpl`/`spl`, `rip`/`eip`, segment registers, `ymm`/`zmm`) through
+  the same `is_register` matcher the pseudo-C highlighter uses, instead of a fixed list.
 - Final verification on `e7da3b6`: 156 tests, all five snapshot sets at 0 mismatched (785 functions),
   lint clean on the four samples, working tree clean.
 - The stage report closes with a conclusion (§8): what got shorter, more C-like, more trustworthy and

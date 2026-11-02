@@ -4913,7 +4913,7 @@ impl ReCraftApp {
                         pal.line_number,
                     );
                     let mut job = LayoutJob::default();
-                    append(&mut job, &line.text, pal.text, &mono);
+                    append_pseudo_line(&mut job, &line.text, pal, &mono);
                     let galley = ui.painter().layout_job(job);
                     ui.painter().with_clip_rect(text_clip).galley(
                         text_pos,
@@ -6149,6 +6149,44 @@ enum OperandKind {
     Other,
 }
 
+/// Whether `token` names an x86/x64 register, including the 8/16/32-bit aliases and
+/// the `r8b`…`r15d`, `xmm`/`ymm`/`zmm` families.
+fn is_register(token: &str) -> bool {
+    is_register_lower(&token.to_ascii_lowercase())
+}
+
+/// [`is_register`] for a caller that already lowercased the token.
+fn is_register_lower(lower: &str) -> bool {
+    const NAMED: &[&str] = &[
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip", "eax", "ebx", "ecx", "edx",
+        "esi", "edi", "ebp", "esp", "eip", "ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ip",
+        "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh", "sil", "dil", "bpl", "spl", "cs", "ds",
+        "es", "fs", "gs", "ss",
+    ];
+    if NAMED.contains(&lower) {
+        return true;
+    }
+    for prefix in ["xmm", "ymm", "zmm"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            return !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit());
+        }
+    }
+    let Some(rest) = lower.strip_prefix('r') else {
+        return false;
+    };
+    let digits = rest
+        .strip_suffix('b')
+        .or_else(|| rest.strip_suffix('w'))
+        .or_else(|| rest.strip_suffix('d'))
+        .unwrap_or(rest);
+    !digits.is_empty()
+        && digits.len() <= 2
+        && digits.chars().all(|ch| ch.is_ascii_digit())
+        && digits
+            .parse::<u8>()
+            .is_ok_and(|number| (8..=15).contains(&number))
+}
+
 fn classify_operand(token: &str) -> OperandKind {
     if token.len() >= 2
         && ((token.starts_with('"') && token.ends_with('"'))
@@ -6157,12 +6195,7 @@ fn classify_operand(token: &str) -> OperandKind {
         return OperandKind::String;
     }
     let lower = token.to_ascii_lowercase();
-    const REGISTERS: [&str; 33] = [
-        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12",
-        "r13", "r14", "r15", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "ax", "bx",
-        "cx", "dx", "al", "bl", "cl", "dl", "xmm0",
-    ];
-    if REGISTERS.contains(&lower.as_str()) || lower.starts_with("xmm") {
+    if is_register_lower(&lower) {
         return OperandKind::Register;
     }
     const NAME_PREFIXES: [&str; 12] = [
@@ -6235,6 +6268,222 @@ fn append_operand_token(job: &mut LayoutJob, token: &str, pal: Palette, mono: &F
         OperandKind::Other => pal.text,
     };
     append(job, token, color, mono);
+}
+
+/// Syntax class of one pseudo-C token. The decompiler emits a small C subset, so only
+/// these classes can occur; everything else keeps the plain text colour.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PseudoKind {
+    Keyword,
+    Type,
+    Register,
+    Name,
+    Number,
+    String,
+    Comment,
+}
+
+/// Pseudo-C keywords printed by the emitter. `__asm` is an intrinsic marker, not a C
+/// keyword, but it reads like one in the listing.
+fn is_pseudo_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "__asm"
+            | "break"
+            | "case"
+            | "continue"
+            | "default"
+            | "do"
+            | "else"
+            | "for"
+            | "goto"
+            | "if"
+            | "return"
+            | "sizeof"
+            | "switch"
+            | "while"
+    )
+}
+
+/// Type names the decompiler prints: the set `structuring::is_type_name` recognises plus
+/// the pointer/scalar aliases `l2` uses for recovered signatures.
+fn is_pseudo_type(word: &str) -> bool {
+    matches!(
+        word,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "f32"
+            | "f64"
+            | "__m128"
+            | "__int128"
+            | "bool"
+            | "char"
+            | "char16_t"
+            | "double"
+            | "float"
+            | "int"
+            | "long"
+            | "short"
+            | "signed"
+            | "size_t"
+            | "unsigned"
+            | "void"
+            | "wchar_t"
+    )
+}
+
+/// Whether a pseudo-C word names a function, label or global rather than a local.
+/// Auto names carry the decompiler's prefixes; imported/API names carry an uppercase
+/// letter (`SendMessageW`, `_CxxThrowException`), which the generated locals never do.
+fn is_pseudo_symbol(word: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "sub_", "loc_", "off_", "unk_", "byte_", "word_", "dword_", "qword_", "xmmword_",
+        "ymmword_", "zmmword_", "asc_", "stru_", "flt_", "dbl_", "ord_",
+    ];
+    PREFIXES.iter().any(|prefix| word.starts_with(prefix))
+        || (word.len() > 1 && word.starts_with('_'))
+        || word.chars().any(|ch| ch.is_ascii_uppercase())
+}
+
+fn pseudo_word_kind(word: &str) -> Option<PseudoKind> {
+    if is_pseudo_keyword(word) {
+        Some(PseudoKind::Keyword)
+    } else if is_pseudo_type(word) {
+        Some(PseudoKind::Type)
+    } else if is_register(word) {
+        Some(PseudoKind::Register)
+    } else if is_pseudo_symbol(word) {
+        Some(PseudoKind::Name)
+    } else {
+        None
+    }
+}
+
+fn pseudo_color(kind: PseudoKind, pal: Palette) -> Color32 {
+    match kind {
+        PseudoKind::Keyword | PseudoKind::Type => pal.mnemonic,
+        PseudoKind::Register => pal.register,
+        PseudoKind::Name => pal.name,
+        PseudoKind::Number => pal.number,
+        PseudoKind::String | PseudoKind::Comment => pal.comment,
+    }
+}
+
+/// Index just past the string or character literal opening at `start` (unterminated
+/// literals run to the end of the line).
+fn pseudo_quoted_end(text: &str, start: usize) -> usize {
+    let quote = text.as_bytes()[start];
+    let mut index = start + 1;
+    while index < text.len() {
+        match text.as_bytes()[index] {
+            b'\\' => index += 2,
+            byte if byte == quote => return index + 1,
+            _ => index += 1,
+        }
+    }
+    text.len()
+}
+
+/// Index just past the number starting at `start` (`0x` hex, decimal, or a float with
+/// an exponent), including integer/float suffixes.
+fn pseudo_number_end(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut index = start;
+    if bytes.get(index) == Some(&b'0') && matches!(bytes.get(index + 1), Some(b'x' | b'X')) {
+        index += 2;
+        while index < bytes.len() && (bytes[index].is_ascii_hexdigit() || bytes[index] == b'_') {
+            index += 1;
+        }
+    } else {
+        while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'.') {
+            index += 1;
+        }
+        if matches!(bytes.get(index), Some(b'e' | b'E')) {
+            let mut exponent = index + 1;
+            if matches!(bytes.get(exponent), Some(b'+' | b'-')) {
+                exponent += 1;
+            }
+            if bytes.get(exponent).is_some_and(u8::is_ascii_digit) {
+                index = exponent;
+                while index < bytes.len() && bytes[index].is_ascii_digit() {
+                    index += 1;
+                }
+            }
+        }
+    }
+    while matches!(
+        bytes.get(index),
+        Some(b'u' | b'U' | b'l' | b'L' | b'f' | b'F')
+    ) {
+        index += 1;
+    }
+    index
+}
+
+/// Append one pseudo-C line, colouring its C syntax (keywords and types blue, registers
+/// purple, symbol names yellow, numbers and string literals green) while keeping the
+/// row's text byte-for-byte identical to `text`.
+fn append_pseudo_line(job: &mut LayoutJob, text: &str, pal: Palette, mono: &FontId) {
+    let mut plain = 0;
+    let mut index = 0;
+    let bytes = text.as_bytes();
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let (end, kind) = if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            let end = text[index..]
+                .find('\n')
+                .map_or(text.len(), |offset| index + offset);
+            (end, Some(PseudoKind::Comment))
+        } else if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            let end = text[index + 2..]
+                .find("*/")
+                .map_or(text.len(), |offset| index + 2 + offset + 2);
+            (end, Some(PseudoKind::Comment))
+        } else if byte == b'"' || byte == b'\'' {
+            (pseudo_quoted_end(text, index), Some(PseudoKind::String))
+        } else if byte.is_ascii_alphabetic() || byte == b'_' {
+            let mut end = index + 1;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                end += 1;
+            }
+            let mut kind = pseudo_word_kind(&text[index..end]);
+            // Lower-case CRT/API names (`wcsnlen`, `memcpy`) carry no auto prefix and no
+            // upper-case letter, so recognise them by the call syntax that follows.
+            if kind.is_none() && text[end..].trim_start().starts_with('(') {
+                kind = Some(PseudoKind::Name);
+            }
+            (end, kind)
+        } else if byte.is_ascii_digit() {
+            (pseudo_number_end(text, index), Some(PseudoKind::Number))
+        } else {
+            index += text[index..].chars().next().map_or(1, char::len_utf8);
+            continue;
+        };
+        if let Some(kind) = kind {
+            if plain < index {
+                append(job, &text[plain..index], pal.text, mono);
+            }
+            append(job, &text[index..end], pseudo_color(kind, pal), mono);
+            plain = end;
+        }
+        index = end;
+    }
+    if plain < text.len() {
+        append(job, &text[plain..], pal.text, mono);
+    }
 }
 
 /// Default screen position/size for detached tool windows.
@@ -7934,6 +8183,18 @@ mod tests {
         }
     }
 
+    /// The first laid-out text run whose whole text is `needle`, so a test can inspect
+    /// the colour sections of one rendered row.
+    fn find_text_galley<'a>(shape: &'a egui::Shape, needle: &str) -> Option<&'a egui::Galley> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.job.text == needle => Some(&text.galley),
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .find_map(|shape| find_text_galley(shape, needle)),
+            _ => None,
+        }
+    }
+
     /// Screen position of the middle of `char_index` in the first text run equal to `needle`.
     fn char_click_pos(shape: &egui::Shape, needle: &str, char_index: usize) -> Option<egui::Pos2> {
         match shape {
@@ -8096,6 +8357,59 @@ mod tests {
         assert!(
             !texts.iter().any(|(text, _)| text.contains("0x140001000")),
             "the pseudo-C view must not show an address prefix"
+        );
+    }
+
+    #[test]
+    fn pseudo_view_colours_decompiled_code() {
+        let start = Address::new(0x140001000);
+        let line = "if (rax != 0) return 0;";
+        let mut app = ReCraftApp {
+            pseudo_start: start,
+            pseudo: Some(vec![PseudoLine {
+                addr: start,
+                text: line.to_owned(),
+            }]),
+            ..ReCraftApp::default()
+        };
+        let pal = app.palette();
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 500.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(input, |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|clipped| find_text_galley(&clipped.shape, line))
+            .expect("the pseudo-C row must be on screen");
+        let colours: Vec<Color32> = galley
+            .job
+            .sections
+            .iter()
+            .map(|section| section.format.color)
+            .collect();
+        assert!(
+            colours.contains(&pal.mnemonic),
+            "keywords must be coloured, got {colours:?}"
+        );
+        assert!(
+            colours.contains(&pal.register),
+            "registers must be coloured, got {colours:?}"
+        );
+        assert!(
+            colours.contains(&pal.number),
+            "numbers must be coloured, got {colours:?}"
+        );
+        assert!(
+            colours.contains(&pal.text),
+            "punctuation must stay plain, got {colours:?}"
         );
     }
 
@@ -8902,6 +9216,11 @@ mod tests {
     fn operand_tokens_are_classified_like_ida() {
         assert_eq!(classify_operand("rsp"), OperandKind::Register);
         assert_eq!(classify_operand("xmm3"), OperandKind::Register);
+        assert_eq!(classify_operand("r8d"), OperandKind::Register);
+        assert_eq!(classify_operand("r9w"), OperandKind::Register);
+        assert_eq!(classify_operand("r15b"), OperandKind::Register);
+        assert_eq!(classify_operand("ymm2"), OperandKind::Register);
+        assert_eq!(classify_operand("gs"), OperandKind::Register);
         assert_eq!(classify_operand("0x140001f98"), OperandKind::Number);
         assert_eq!(classify_operand("0x28"), OperandKind::Number);
         assert_eq!(classify_operand("sub_140001f98"), OperandKind::Name);
@@ -8915,6 +9234,110 @@ mod tests {
             job.sections.len() >= 3,
             "operands must use several coloured sections"
         );
+    }
+
+    #[test]
+    fn pseudo_c_words_are_classified_like_hex_rays() {
+        assert_eq!(pseudo_word_kind("if"), Some(PseudoKind::Keyword));
+        assert_eq!(pseudo_word_kind("else"), Some(PseudoKind::Keyword));
+        assert_eq!(pseudo_word_kind("return"), Some(PseudoKind::Keyword));
+        assert_eq!(pseudo_word_kind("__asm"), Some(PseudoKind::Keyword));
+        assert_eq!(pseudo_word_kind("int64"), Some(PseudoKind::Type));
+        assert_eq!(pseudo_word_kind("uint32"), Some(PseudoKind::Type));
+        assert_eq!(pseudo_word_kind("__m128"), Some(PseudoKind::Type));
+        assert_eq!(pseudo_word_kind("r8d"), Some(PseudoKind::Register));
+        assert_eq!(pseudo_word_kind("xmm0"), Some(PseudoKind::Register));
+        assert_eq!(pseudo_word_kind("SendMessageW"), Some(PseudoKind::Name));
+        assert_eq!(pseudo_word_kind("loc_140001234"), Some(PseudoKind::Name));
+        assert_eq!(pseudo_word_kind("qword_140001000"), Some(PseudoKind::Name));
+        assert_eq!(pseudo_word_kind("_initterm"), Some(PseudoKind::Name));
+        assert_eq!(pseudo_word_kind("var_40"), None);
+        assert_eq!(pseudo_word_kind("arg1"), None);
+        assert_eq!(pseudo_word_kind("field_1a"), None);
+        assert_eq!(pseudo_word_kind("_"), None);
+    }
+
+    #[test]
+    fn pseudo_c_line_is_split_into_coloured_tokens() {
+        let line = r#"if (r8d != 0) sub_140001000("a\"b", 0x10); // note"#;
+        let mut job = LayoutJob::default();
+        let mono = FontId::monospace(12.0);
+        append_pseudo_line(&mut job, line, Palette::DARK, &mono);
+        assert_eq!(job.text, line, "colour sections must not change the text");
+        let color = |needle: &str| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    let range = &section.byte_range;
+                    &job.text[range.start.0..range.end.0] == needle
+                })
+                .map(|section| section.format.color)
+                .unwrap_or_else(|| panic!("no section for {needle:?}"))
+        };
+        assert_eq!(color("if"), Palette::DARK.mnemonic);
+        assert_eq!(color("r8d"), Palette::DARK.register);
+        assert_eq!(color("0x10"), Palette::DARK.number);
+        assert_eq!(color(r#""a\"b""#), Palette::DARK.comment);
+        assert_eq!(color("// note"), Palette::DARK.comment);
+        assert_eq!(color("sub_140001000"), Palette::DARK.name);
+        assert_eq!(color("("), Palette::DARK.text);
+
+        // A lower-case CRT call has no upper-case letter or auto prefix; the call
+        // parentheses are what mark it as a symbol.
+        let mut job = LayoutJob::default();
+        append_pseudo_line(&mut job, "wcsnlen(arg4, 0x20);", Palette::DARK, &mono);
+        let color = |needle: &str| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    let range = &section.byte_range;
+                    &job.text[range.start.0..range.end.0] == needle
+                })
+                .map(|section| section.format.color)
+                .unwrap_or_else(|| panic!("no section for {needle:?}"))
+        };
+        assert_eq!(color("wcsnlen"), Palette::DARK.name);
+        assert_eq!(color("(arg4, "), Palette::DARK.text);
+    }
+
+    #[test]
+    fn pseudo_c_comments_and_strings_swallow_their_contents() {
+        let mut job = LayoutJob::default();
+        let mono = FontId::monospace(12.0);
+        append_pseudo_line(&mut job, "// if (rax) {", Palette::DARK, &mono);
+        assert_eq!(job.text, "// if (rax) {");
+        assert_eq!(job.sections.len(), 1, "a comment is one colour section");
+        assert_eq!(job.sections[0].format.color, Palette::DARK.comment);
+
+        let mut job = LayoutJob::default();
+        append_pseudo_line(
+            &mut job,
+            r#"if (edi < 2 /* signed */) { "#,
+            Palette::DARK,
+            &mono,
+        );
+        let comment = job
+            .sections
+            .iter()
+            .find(|section| {
+                let range = &section.byte_range;
+                &job.text[range.start.0..range.end.0] == "/* signed */"
+            })
+            .expect("the inline comment must be a section of its own");
+        assert_eq!(comment.format.color, Palette::DARK.comment);
+        assert!(
+            job.sections
+                .iter()
+                .any(|section| section.format.color == Palette::DARK.mnemonic),
+            "the if keyword must still be coloured"
+        );
+
+        // Unterminated literals and comments must not panic or drop text.
+        for line in ["return \"unterminated;", "/* open", "char c = 'x;"] {
+            let mut job = LayoutJob::default();
+            append_pseudo_line(&mut job, line, Palette::DARK, &mono);
+            assert_eq!(job.text, line);
+        }
     }
 
     #[test]
