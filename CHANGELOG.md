@@ -1158,6 +1158,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scrolling a string window in the Disassembly view keeps the literals as data.** A window
+  anchored on a stored string is a row list of literals, but paging it went through
+  `Session::rewind`/`advance`, which walk instruction boundaries: one wheel notch up from a
+  literal lands in the padding *before* it (notepad's `.rdata` literals are separated by two
+  zero bytes, which decode as `add [rax], al`), and the next refresh then decoded the literal
+  bytes as code — the report "double-click a string, scroll up, the strings vanished and the
+  whole view became disassembly". `ReCraftApp::disasm_data_window` records that the loaded
+  rows are a data listing, and `step_data_window` pages the literal list instead for the wheel
+  (`extend_disasm_window`), PageUp/PageDown and the arrow keys at the window edges. A data
+  window stops at the first/last literal instead of decoding past it; code windows are
+  unchanged. Regression test `scrolling_a_string_window_keeps_the_literals_as_data` replays
+  the reported gesture on notepad and fails on the old code ("scrolling left the data
+  window").
 - A user-set prototype is now authoritative for the parameter list. Stack slots the body reads
   beyond it keep their `var_…` names and are reported in a
   `// stack args (not in the prototype): var_b0 (incoming #5, int64*)` comment, instead of

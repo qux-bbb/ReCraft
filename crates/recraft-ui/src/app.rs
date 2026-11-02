@@ -879,6 +879,10 @@ pub struct ReCraftApp {
     disasm_rows: Vec<DisasmLine>,
     selected: usize,
     disasm_dirty: bool,
+    /// Whether `disasm_rows` is a data listing (stored strings / literals) instead of
+    /// decoded instructions. A data window is a row list, so paging it must step through
+    /// that list rather than ask the code walker for instruction boundaries.
+    disasm_data_window: bool,
     /// Vertical scroll offset of the disassembly view, as reported by the scroll area.
     disasm_offset: f32,
     /// One-shot scroll offset to apply on the next frame (keeps rows in place when the
@@ -992,6 +996,7 @@ impl Default for ReCraftApp {
             disasm_rows: Vec::new(),
             selected: 0,
             disasm_dirty: false,
+            disasm_data_window: false,
             disasm_offset: 0.0,
             disasm_scroll_to: None,
             key_pass: None,
@@ -1912,6 +1917,26 @@ impl ReCraftApp {
         Some(lines)
     }
 
+    /// Step a string data window by `rows` literals, returning the address to re-anchor on.
+    ///
+    /// The window shows one row per stored string, and literals are separated by padding
+    /// (`int3`, zero fill) and vary in length. Paging it through the code walker therefore
+    /// lands in that padding — one wheel notch up from a string used to anchor two bytes
+    /// before it, and the next refresh decoded the literals as instructions. A data window
+    /// must page its own list instead.
+    fn step_data_window(&self, rows: i32) -> Option<Address> {
+        if rows == 0 {
+            return None;
+        }
+        let (index, _) = string_row_at(&self.strings, self.disasm_start)?;
+        let target = i64::try_from(index).ok()? + i64::from(rows);
+        if target < 0 || target >= i64::try_from(self.strings.len()).ok()? {
+            return None;
+        }
+        let addr = self.strings.get(usize::try_from(target).ok()?)?.addr;
+        (addr != self.disasm_start).then_some(addr)
+    }
+
     /// Data row for a literal reached from the decompile view that no stored string
     /// covers. Short strings (`"\r\n"`, `")"`) fall below the extraction minimum but
     /// still name data, so their quoted text is enough to show the row.
@@ -1965,6 +1990,7 @@ impl ReCraftApp {
         if let Some(rows) = self.string_data_rows(DISASM_ROWS) {
             self.disasm_rows = rows;
             self.disasm_dirty = false;
+            self.disasm_data_window = true;
             if self.selected >= self.disasm_rows.len() {
                 self.selected = self.disasm_rows.len().saturating_sub(1);
             }
@@ -1973,9 +1999,11 @@ impl ReCraftApp {
         if let Some(rows) = self.literal_data_rows() {
             self.disasm_rows = rows;
             self.disasm_dirty = false;
+            self.disasm_data_window = true;
             self.selected = self.selected.min(self.disasm_rows.len().saturating_sub(1));
             return;
         }
+        self.disasm_data_window = false;
         let Some(session) = self.session.as_mut() else {
             self.disasm_rows.clear();
             self.disasm_dirty = false;
@@ -4673,11 +4701,15 @@ impl ReCraftApp {
     /// scroll offset that keeps the visible rows in place.
     fn extend_disasm_window(&mut self, ui: &egui::Ui, direction: i32) -> Option<f32> {
         let anchor = self.disasm_start;
-        let session = self.session.as_mut()?;
-        let target = if direction < 0 {
-            session.rewind(anchor, DISASM_SCROLL_ROWS).ok()?
+        let target = if self.disasm_data_window {
+            self.step_data_window(direction * DISASM_SCROLL_ROWS as i32)?
         } else {
-            session.advance(anchor, DISASM_SCROLL_ROWS).ok()?
+            let session = self.session.as_mut()?;
+            if direction < 0 {
+                session.rewind(anchor, DISASM_SCROLL_ROWS).ok()?
+            } else {
+                session.advance(anchor, DISASM_SCROLL_ROWS).ok()?
+            }
         };
         if target == anchor {
             // Already at the start/end of the image.
@@ -6049,6 +6081,16 @@ impl ReCraftApp {
     /// decode garbage as soon as the instruction sizes varied.
     fn shift_window(&mut self, rows: i32) {
         if self.session.is_none() || rows == 0 {
+            return;
+        }
+        if self.disasm_data_window {
+            // A data window is a row list of literals: step it directly. `rewind`/`advance`
+            // would land in the padding between literals and decode them as code.
+            if let Some(next) = self.step_data_window(rows) {
+                self.disasm_start = next;
+                self.refresh_disasm();
+                self.selected = self.selected.min(self.disasm_rows.len().saturating_sub(1));
+            }
             return;
         }
         let anchor = self.disasm_start;
@@ -7635,6 +7677,139 @@ mod tests {
             line.operands
         );
         assert!(line.flags.is_data());
+    }
+
+    /// Scrolling a string data window must keep the literals as data.
+    ///
+    /// Bug report: double-click a string in the Strings view, then turn the wheel up — the
+    /// strings vanished and the whole window became disassembly. The window anchored on a
+    /// literal was paged with `Session::rewind`, which walks instruction boundaries: one
+    /// notch up from a literal lands in the padding *before* it (notepad's strings are
+    /// preceded by two zero bytes), so the next refresh decoded the literal bytes as code.
+    #[test]
+    fn scrolling_a_string_window_keeps_the_literals_as_data() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("string-scroll.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        app.refresh_strings();
+        // A literal that follows other literals and whose predecessor byte is not part of
+        // a stored string: the padding that used to swallow the anchor.
+        let (index, row) = app
+            .strings
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| !is_string_noise(&row.segment, &row.text))
+            .find(|(index, row)| {
+                *index >= 80
+                    && string_row_at(&app.strings, Address::new(row.addr.get() - 1)).is_none()
+            })
+            .map(|(index, row)| (index, row.clone()))
+            .expect("notepad has a padded literal");
+        let previous = app.strings[index - 1].addr;
+        // The old path: the instruction walker cannot stop on the literal, it stops in the
+        // padding right before it, where no string covers the address.
+        let session = app.session.as_mut().unwrap();
+        let walked = session.rewind(row.addr, 1).unwrap();
+        assert_ne!(walked, row.addr, "the walker must move off the literal");
+        assert!(
+            string_row_at(&app.strings, walked).is_none(),
+            "expected the rewind to land in padding, got {:#x}",
+            walked.get()
+        );
+
+        app.apply_action(
+            &egui::Context::default(),
+            Action::NavigateToDisasm(row.addr),
+        );
+        app.tick();
+        assert!(app.disasm_data_window, "a string address is a data window");
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            Some(row.addr)
+        );
+
+        // One wheel notch up (the report's gesture): stay on the literal list.
+        app.shift_window(-1);
+        assert!(app.disasm_data_window, "scrolling left the data window");
+        assert!(
+            app.disasm_rows.iter().all(|line| line.flags.is_data()),
+            "scrolling up decoded data as code: {:?}",
+            app.disasm_rows.first()
+        );
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            Some(previous),
+            "one row up must show the previous literal"
+        );
+        assert!(
+            app.disasm_rows.iter().any(|line| line.addr == row.addr),
+            "the literal that was on screen must stay in the window"
+        );
+
+        // A page up and the wheel path (`extend_disasm_window`) behave the same way.
+        app.shift_window(1);
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            Some(row.addr),
+            "one row down must return to the literal"
+        );
+        app.shift_window(-20);
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            app.strings.get(index - 20).map(|row| row.addr),
+            "PageUp must move by literals, not by bytes"
+        );
+        assert!(app.disasm_rows.iter().all(|line| line.flags.is_data()));
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut offset = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            offset = app.extend_disasm_window(ui, -1);
+        });
+        output.textures_delta.clear();
+        assert!(offset.is_some(), "the wheel must load earlier literals");
+        assert!(
+            app.disasm_rows.iter().all(|line| line.flags.is_data()),
+            "the wheel path decoded data as code"
+        );
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            app.strings
+                .get(index - 20 - DISASM_SCROLL_ROWS)
+                .map(|row| row.addr),
+            "the wheel must move by literals, not by bytes"
+        );
+
+        // At the last literal the window stays data and simply stops (no code decode).
+        let last = app.strings.last().cloned().expect("strings");
+        app.navigate(last.addr);
+        app.tick();
+        app.shift_window(1);
+        assert!(app.disasm_data_window);
+        assert!(app.disasm_rows.iter().all(|line| line.flags.is_data()));
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            Some(last.addr)
+        );
     }
 
     #[test]

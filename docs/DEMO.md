@@ -78,7 +78,8 @@ applied 3 proposal(s) through the command bus (undoable)
    String**；按数据库编码解码（UTF-16LE 不再乱码）、不再截断到 64 字节；单击选中并同步
    反汇编光标、双击跳到反汇编；可勾选隐藏 header/节名噪声，过滤框保留。双击字符串会
    在 Disassembly 中以数据行显示（`db '…',0` 或 `dw`，带 `; DATA XREF`），而不是把
-   字节当指令反汇编。
+   字节当指令反汇编；滚轮/PageUp/PageDown/上下键在数据行窗口里按字符串列表翻页，
+   不会把字面量前后的填充字节当成指令解码。
    ![Strings view](images/strings.png)
    **Text 模式**操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
    ![Text mode operand colours](images/text-view.png)
