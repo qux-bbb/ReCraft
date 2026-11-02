@@ -522,7 +522,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         {
             line.text = format!("{}, frame {frame:#x}", line.text.trim_end_matches(')')) + ")";
         }
-        name_stack_arguments(&mut lines, frame);
+        name_stack_arguments(&mut lines, frame, parsed_proto.is_some());
     }
     mark("  stack args");
     mark("post passes");
@@ -1195,11 +1195,13 @@ fn name_global_data(lines: &mut [PseudoLine]) {
 }
 
 /// Incoming stack arguments of an x64 function: a read of `[rsp + disp]` beyond the frame the
-/// prologue allocates is the caller's argument, not a local. The slot is renamed to the
-/// parameter it is (`var_78` at frame 0x48 reads the second stack slot, `arg6`) and added to
-/// the signature. Slots the function writes are outgoing arguments of its own calls and stay
-/// as slots.
-fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
+/// prologue allocates is the caller's argument, not a local. Without a user prototype the slot
+/// is renamed to the parameter it is (`var_78` at frame 0x48 reads the second stack slot,
+/// `arg6`) and added to the signature. With a user prototype the signature belongs to the user:
+/// widening it would contradict `(void)` and duplicate the named parameters, so the slots keep
+/// their `var_…` names and are listed in a comment instead. Slots the function writes are
+/// outgoing arguments of its own calls and stay as slots in both cases.
+fn name_stack_arguments(lines: &mut Vec<PseudoLine>, frame: u64, user_prototype: bool) {
     // Frame-relative displacements of every slot the function writes.
     let mut written: BTreeSet<u64> = BTreeSet::new();
     for line in lines.iter() {
@@ -1247,6 +1249,35 @@ fn name_stack_arguments(lines: &mut [PseudoLine], frame: u64) {
             })
             .unwrap_or("int64");
         stack_types.insert(*index, ty.to_owned());
+    }
+    // A user prototype owns the parameter list, so it is never widened: `(void)` would turn into
+    // five fabricated parameters, and named parameters would be followed by duplicates. The
+    // recovered slots keep their `var_…` names and are reported in their own comment line.
+    if user_prototype {
+        let note = stack_arguments
+            .iter()
+            .map(|(offset, index)| {
+                let ty = stack_types
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or("int64");
+                format!("var_{offset:x} (incoming #{index}, {ty})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Some(signature) = lines.iter().position(|line| {
+            line.text.trim_end().ends_with('{') && !line.text.trim_start().starts_with("//")
+        }) {
+            let addr = lines[signature].addr;
+            lines.insert(
+                signature,
+                PseudoLine {
+                    addr,
+                    text: format!("// stack args (not in the prototype): {note}"),
+                },
+            );
+        }
+        return;
     }
     for line in lines.iter_mut() {
         for (offset, index) in &stack_arguments {
@@ -8640,7 +8671,7 @@ mod tests {
             test_line("    return 0;"),
             test_line("}"),
         ];
-        name_stack_arguments(&mut lines, 0x48);
+        name_stack_arguments(&mut lines, 0x48, false);
         // var_78 is entry+0x30 (arg6) and is written through as a 64-bit pointer.
         assert!(lines[1].text.contains("int64* arg6"), "{}", lines[1].text);
         assert_eq!(lines[2].text, "    r8 = arg6;");
@@ -8657,7 +8688,7 @@ mod tests {
             test_line("}"),
         ];
         // Frame 0x48: var_70 sits at entry+0x28 (arg5), var_78 at entry+0x30 (arg6).
-        name_stack_arguments(&mut lines, 0x48);
+        name_stack_arguments(&mut lines, 0x48, false);
         assert_eq!(
             lines[1].text,
             "int64 sub_40(int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5, int64 arg6) {"
@@ -8682,7 +8713,7 @@ mod tests {
             test_line("    return rax;"),
             test_line("}"),
         ];
-        name_stack_arguments(&mut lines, 0x48);
+        name_stack_arguments(&mut lines, 0x48, false);
         assert_eq!(
             lines[1].text,
             "int64 Named(int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5) {"
@@ -8699,12 +8730,51 @@ mod tests {
             test_line("    return rax;"),
             test_line("}"),
         ];
-        name_stack_arguments(&mut lines, 0x48);
+        name_stack_arguments(&mut lines, 0x48, false);
         assert_eq!(
             lines[1].text,
             "int64 Thunkish(int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5, int64 arg6) {"
         );
         assert_eq!(lines[2].text, "    rax = arg6;");
+    }
+
+    #[test]
+    fn a_user_void_prototype_is_not_widened_by_stack_reads() {
+        // notepad: `int entry_proto(void)` still reads incoming stack slots. The prototype wins,
+        // so the signature keeps `(void)` and the slots are reported beside it.
+        let mut lines = vec![
+            test_line("int64 entry_proto(void) {"),
+            test_line("    r8 = var_78;"),
+            test_line("    *(u64*)(r8) = 0;"),
+            test_line("}"),
+        ];
+        name_stack_arguments(&mut lines, 0x48, true);
+        assert_eq!(
+            lines[0].text,
+            "// stack args (not in the prototype): var_78 (incoming #6, int64*)"
+        );
+        assert_eq!(lines[1].text, "int64 entry_proto(void) {");
+        assert_eq!(lines[2].text, "    r8 = var_78;");
+        assert!(!lines[1].text.contains("arg"), "{}", lines[1].text);
+    }
+
+    #[test]
+    fn a_user_prototype_with_named_parameters_is_not_extended() {
+        let mut lines = vec![
+            test_line("// L2 params: a=rcx, b=rdx"),
+            test_line("int32 entry_named(int32 a, int32 b) {"),
+            test_line("    rcx = var_78;"),
+            test_line("}"),
+        ];
+        name_stack_arguments(&mut lines, 0x48, true);
+        assert_eq!(lines[0].text, "// L2 params: a=rcx, b=rdx");
+        assert_eq!(
+            lines[1].text,
+            "// stack args (not in the prototype): var_78 (incoming #6, int64)"
+        );
+        // The named parameters are not duplicated by fabricated `arg1…arg5`.
+        assert_eq!(lines[2].text, "int32 entry_named(int32 a, int32 b) {");
+        assert_eq!(lines[3].text, "    rcx = var_78;");
     }
 
     #[test]

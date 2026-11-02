@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Renamed the executables**: the desktop GUI is now `recraft.exe` (was `recraft-ui.exe`) and
+  the command line is now `recraft-cli.exe` (was `recraft.exe`). Only the binary target names
+  changed — the cargo packages are still `recraft-ui` / `recraft-cli`, so
+  `cargo run -p recraft-ui` / `cargo run -p recraft-cli` and every workspace task keep working.
+  The clap usage line now reads `recraft-cli`, and the packaging script, NSIS shortcut and
+  uninstall icon, the `verify-package` / `verify-installer` / demo / e2e / bench scripts, and the
+  reference docs (`recraft <cmd>` examples became `recraft-cli <cmd>`) were updated to match.
 - The disassembly Text view now recognises the whole register file (`r8b`…`r15d`,
   `r8w`, `sil`/`dil`/`bpl`/`spl`, `rip`/`eip`, segment registers, `ymm`/`zmm`) through
   the same `is_register` matcher the pseudo-C highlighter uses, instead of a fixed list.
@@ -1123,6 +1130,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A user-set prototype is now authoritative for the parameter list. Stack slots the body reads
+  beyond it keep their `var_…` names and are reported in a
+  `// stack args (not in the prototype): var_b0 (incoming #5, int64*)` comment, instead of
+  rewriting the signature: `int entry_proto(void)` used to become
+  `int32 entry_proto(int64 arg1, …, int64* arg5)`, and a prototype with named parameters
+  (`int f(int a, int b)`) was followed by duplicate `arg1…arg5` entries. Inferred signatures
+  (no prototype) still widen to the highest stack argument, so the decompiler baselines are
+  unchanged (notepad lint 0 findings on 1004 texts, golden 502/502, 487/502 structured).
+- `scripts/verify-package.ps1` looked for the old `// L1 structure recovery` banner, so the
+  packaged-binary check failed once the decompiler printed `// L2 structure recovery`. It now
+  asserts the current heading, and `PACKAGE PASS` (zip hashes, entries, import/analyze/
+  decompile/AI/metrics) is green again on the renamed `recraft-cli.exe`.
 - Double-clicking a string literal in the Decompile view now opens the string data it names
   (`db '…',0` in the disassembly) instead of the instruction that loads it. The pseudo-C
   renderer records every quoted literal with the address it quotes, so the view can follow
