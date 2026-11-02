@@ -17,67 +17,50 @@ void sub_140004264_l1(void) {
         WaitForSingleObjectEx(rbx, (edx | -1), 0);
         if (eax == 0xADDR) {
             r14d = 0;
-            loc_ADDR:
-            var_48 = 0;
-            r8 = &var_48;
-            sub_1400088d4(&var_50, rdx);
-            edi = eax;
-            if (eax >= 0 /* signed */) {
-                rax = var_48;
-                rcx = (rax * 4);
-                if (rcx == 0) {
-                    *(u64*)(r15) = 0;
-                    sub_140006634(8, rsi);
-                    rdi = rax;
-                    if (rax != 0) {
-                        var_38 = 0;
-                        sub_140004acc(&var_38, &var_50, rdi);
-                        esi = eax;
-                        if (eax >= 0 /* signed */) {
-                            rax = var_38;
-                            *(u64*)((rdi + 8)) = rbx;
-                            edx = 0;
-                            ebx = 0;
-                            *(u64*)((rdi + 0xADDR)) = rax;
-                            rax = var_40;
-                            var_38 &= rbx;
-                            var_40 &= rbx;
-                            *(u32*)(rdi) = 1;
-                            var_30 = rbx;
-                            *(u64*)((rdi + 0xADDR)) = rax;
-                            sub_1400029dc((rdi + 0xADDR), 0, (rbx + 0xADDR));
-                            *(u16*)((rdi + 0xADDR)) = 0xADDR;
-                            edx = 0;
-                            *(u32*)((rdi + 0xADDR)) = 1;
-                            sub_1400029dc((rdi + 0xADDR), 0, (rbx + 0xADDR));
-                            *(u64*)(r15) = rdi;
-                            sub_140003fa0(&var_38);
-                            loc_ADDR:
-                            if (r14 == 0) {
-                                if (rbx == 0) {
-                                    eax = 0;
-                                    return;
-                                }
-                                CloseHandle(rbx);
-                                if (eax == 0) {
-                                    sub_1400091e4(var_298, 0xADDR);
-                                }
-                            }
-                            ReleaseMutex(r14);
-                            if (eax == 0) {
-                                sub_1400091e4(var_298, 0xADDR);
-                            }
-                        }
-                        r9d = eax;
-                        sub_140007cf0(var_298, 0xADDR, "wil");
+        } else {
+            if ((eax & 0xADDR) != 0) {
+                sub_140004f24(var_298);
+            }
+            r14 = rbx;
+        }
+        var_48 = 0;
+        r8 = &var_48;
+        sub_1400088d4(&var_50, rdx);
+        edi = eax;
+        if (eax >= 0 /* signed */) {
+            rax = var_48;
+            rcx = (rax * 4);
+            if (rcx == 0) {
+                *(u64*)(r15) = 0;
+                sub_140006634(8, rsi);
+                rdi = rax;
+                if (rax != 0) {
+                    var_38 = 0;
+                    sub_140004acc(&var_38, &var_50, rdi);
+                    esi = eax;
+                    if (eax >= 0 /* signed */) {
+                        rax = var_38;
+                        *(u64*)((rdi + 8)) = rbx;
+                        edx = 0;
+                        ebx = 0;
+                        *(u64*)((rdi + 0xADDR)) = rax;
+                        rax = var_40;
+                        var_38 &= rbx;
+                        var_40 &= rbx;
+                        *(u32*)(rdi) = 1;
+                        var_30 = rbx;
+                        *(u64*)((rdi + 0xADDR)) = rax;
+                        sub_1400029dc((rdi + 0xADDR), 0, (rbx + 0xADDR));
+                        *(u16*)((rdi + 0xADDR)) = 0xADDR;
+                        edx = 0;
+                        *(u32*)((rdi + 0xADDR)) = 1;
+                        sub_1400029dc((rdi + 0xADDR), 0, (rbx + 0xADDR));
+                        *(u64*)(r15) = rdi;
                         sub_140003fa0(&var_38);
-                        GetProcessHeap();
-                        HeapFree(rax, 0, rdi);
-                        r9d = esi;
-                        sub_140007cf0(var_298, 0xADDR, "wil");
+                        loc_ADDR:
                         if (r14 == 0) {
                             if (rbx == 0) {
-                                eax = esi;
+                                eax = 0;
                                 return;
                             }
                             CloseHandle(rbx);
@@ -90,9 +73,11 @@ void sub_140004264_l1(void) {
                             sub_1400091e4(var_298, 0xADDR);
                         }
                     }
-                    esi = 0xADDR;
-                    r9d = esi;
+                    r9d = eax;
                     sub_140007cf0(var_298, 0xADDR, "wil");
+                    sub_140003fa0(&var_38);
+                    GetProcessHeap();
+                    HeapFree(rax, 0, rdi);
                     r9d = esi;
                     sub_140007cf0(var_298, 0xADDR, "wil");
                     if (r14 == 0) {
@@ -109,45 +94,59 @@ void sub_140004264_l1(void) {
                     if (eax == 0) {
                         sub_1400091e4(var_298, 0xADDR);
                     }
-                    eax = edi;
-                    return;
                 }
-                *(u64*)(r15) = rcx;
-                ecx = *(u32*)(rcx);
-                rax = *(u64*)(r15);
-                ecx += 1;
-                rbx = var_30;
-                *(u32*)(rax) = ecx;
-                goto loc_ADDR;
-            }
-            r9d = eax;
-            sub_140007cf0(var_298, 0xADDR, "wil");
-            r9d = edi;
-            sub_140007cf0(var_298, 0xADDR, "wil");
-            r9d = edi;
-            sub_140007cf0(var_298, 0xADDR, "wil");
-            if (r14 == 0) {
-                if (rbx == 0) {
-                    eax = edi;
-                    return;
+                esi = 0xADDR;
+                r9d = esi;
+                sub_140007cf0(var_298, 0xADDR, "wil");
+                r9d = esi;
+                sub_140007cf0(var_298, 0xADDR, "wil");
+                if (r14 == 0) {
+                    if (rbx == 0) {
+                        eax = esi;
+                        return;
+                    }
+                    CloseHandle(rbx);
+                    if (eax == 0) {
+                        sub_1400091e4(var_298, 0xADDR);
+                    }
                 }
-                CloseHandle(rbx);
+                ReleaseMutex(r14);
                 if (eax == 0) {
                     sub_1400091e4(var_298, 0xADDR);
                 }
                 eax = edi;
                 return;
             }
-            ReleaseMutex(r14);
+            *(u64*)(r15) = rcx;
+            ecx = *(u32*)(rcx);
+            rax = *(u64*)(r15);
+            ecx += 1;
+            rbx = var_30;
+            *(u32*)(rax) = ecx;
+            goto loc_ADDR;
+        }
+        r9d = eax;
+        sub_140007cf0(var_298, 0xADDR, "wil");
+        r9d = edi;
+        sub_140007cf0(var_298, 0xADDR, "wil");
+        r9d = edi;
+        sub_140007cf0(var_298, 0xADDR, "wil");
+        if (r14 == 0) {
+            if (rbx == 0) {
+                eax = edi;
+                return;
+            }
+            CloseHandle(rbx);
             if (eax == 0) {
                 sub_1400091e4(var_298, 0xADDR);
             }
+            eax = edi;
+            return;
         }
-        if ((eax & 0xADDR) != 0) {
-            sub_140004f24(var_298);
+        ReleaseMutex(r14);
+        if (eax == 0) {
+            sub_1400091e4(var_298, 0xADDR);
         }
-        r14 = rbx;
-        goto loc_ADDR;
     }
     sub_1400057d8();
     edi = eax;

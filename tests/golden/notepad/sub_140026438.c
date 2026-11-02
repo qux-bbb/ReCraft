@@ -86,7 +86,6 @@ void sub_140026438_l1(void) {
                                 var_30 = rsi;
                                 rdx = *(u64*)(rcx);
                                 rax = *(u64*)((rdx + 0xADDR));
-                                sub_140028010(rcx, rdx, r8, r9);
                             }
                         } else {
                             edx = 0xADDR;
@@ -125,9 +124,6 @@ void sub_140026438_l1(void) {
                                 var_30 = rsi;
                                 rax = *(u64*)(rcx);
                                 rax = *(u64*)((rax + 0xADDR));
-                                sub_140028010(rcx, rdx, r8, r9);
-                                eax = ebx;
-                                return;
                             }
                         }
                     } else {
@@ -146,7 +142,9 @@ void sub_140026438_l1(void) {
         }
         r9d = eax;
         sub_140007cf0(var_b8, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
+    } else {
+        r9d = eax;
+        sub_140007cf0(var_b8, (rsi + 0xADDR), "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
     }
-    r9d = eax;
-    sub_140007cf0(var_b8, (rsi + 0xADDR), "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
+    sub_140028010(rcx, rdx, r8, r9);
 }

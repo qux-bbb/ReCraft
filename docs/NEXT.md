@@ -14,12 +14,26 @@
 - **修复**跨块常量折叠（循环携带值被当常量并删掉活代码），带回归测试；
 - 命名 pass 性能：`name_address_constants` 45→3 ms、两个结构体匹配 26/25→9/8 ms、
   `name_handle_slots` 47→15 ms，输出逐字节不变；
-- 工具：`metrics --list` / `--json` 的 `unstructured`、`RECRAFT_PROFILE` 覆盖全流水线。
+- 工具：`metrics --list` / `--json` 的 `unstructured`、`RECRAFT_PROFILE` 覆盖全流水线；
+- **join 包装**（2026-11-03）：`may_post_dominators` + 干净菱形门，notepad 5 个快照变短、
+  Go 多结构化 5 个函数（见 §1 顶部说明）。
 
-**当前基线**（notepad 502 函数）：L2 **29 667** 行、`goto` 452、结构化 487（97.0%）、
-覆盖率 99.5%；crackme 453/493（91.9%）；corpus x64/x86 均 100%；Go **2998/3261（91.9%），263 个回退**（全样本，`metrics --max-functions 0`）。
+**当前基线**（notepad 502 函数）：L2 **29 626** 行、`goto` 450、结构化 487（97.0%）、
+覆盖率 99.5%；crackme 453/493（91.9%）；corpus x64/x86 均 100%；Go **3003/3261（92.1%），258 个回退**（全样本，`metrics --max-functions 0`）。
 
 ## 1. 多入口循环规范化（唯一能显著提升结构化率的方向）
+
+> **2026-11-03 更新（已部分落地，结论先行）**：复核发现 notepad 15 个回退函数里 **12 个不是
+> 多入口循环**，而是「一侧分支以 `ret`/`int3`/noreturn 调用结束 → 严格后支配分析报 `None` →
+> 另一侧分支被当成早退 → 幸存路径越过 join，把另一侧的 fallthrough 变成 `goto`」。
+> 已实现 `may_post_dominators`（终止路径不施加约束的后支配集合）并用「干净菱形」做门
+> （join 的每个前驱都无条件落入、join 在循环体内、两臂都未发射）后：notepad 5 个快照变短
+> （`sub_140007924` −19 行、`sub_140007ab4` −17、`sub_140026438` −2、两个 mutex helper 各 −1），
+> Go 结构化 **2,998 → 3,003（92.1%）**；crackme / corpus / corpus86 / go 快照零变化，
+> lint 仍 0 findings。**更宽的 join 串联不要再试**（去掉"干净菱形"门）：它让 crackme 的
+> `sub_1400030a8` 把同一段尾部复制 5 次、`sub_14000391c` 生成 `while (1)` 套 `goto`——这是
+> emitter 对任意 join 不够健壮，不是分析本身的问题。其余回退（notepad 15 个、Go 258 个）
+> 仍未消除，下面 §1.1/§1.2 的复现与实现路径继续有效。
 
 **症状**：函数体内出现 `loc_…:` 标签 + `goto`，而不是 `while`/`do` 循环。
 
@@ -147,19 +161,12 @@ if (rsp > *(u64*)((r14 + 0x10))) {
 验收仍是 lint（括号/标签/参数）→ golden diff（每处变化都能解释为"复制了一段循环"）→ metrics
 （`goto` 数下降）。notepad 侧应先用 `--list` 找出类似形状再实施。
 
-## 1.3 位扫描指令（`bsf`/`bsr`/`tzcnt`/`lzcnt`/`popcnt`）仍是 `__asm`
+## 1.3 位扫描指令（`bsf`/`bsr`/`tzcnt`/`lzcnt`/`popcnt`）——**已完成（阶段二）**
 
-crackme 的 SIMD 字符串函数里出现 `__asm("bsf ecx, eax"); eax = ecx;`，Go 运行时同样大量使用。
-这类指令可以安全地渲染成一行内建表达式（`eax = __builtin_ctz(eax);`），但**需要新增 IR 能力**：
-
-1. `Expr` 增加 `Call { name, args }` 变体（`crates/recraft-ir/src/expr.rs`），
-2. 打印器支持它（`structuring.rs` 的表达式渲染），
-3. `lift.rs` 里 `M::Bsf/*` 分支读源操作数并写目标，
-4. 注意新变体会进入别名分析/常量传播/相等比较等所有 `match Expr`，**影响面较大**，
-   必须跑满五层回归（尤其 785 快照会大面积变动，需要逐块解释）。
-
-收益：每条指令少一行、语义可读（位扫描 → 内建函数）。风险：中等偏高（新 Expr 变体）。
-优先级低于 §1，高于纯文档工作。
+这些指令已 Lift 成 `ctz`/`clz`/`popcnt`（`crates/recraft-ir/src/lift.rs`，`UnOp::Ctz`/`Bsr`/
+`Popcnt`），crackme 的 `__asm` 由 277 降到 265、Go 由 1959 降到 1899，notepad 现为 134 条、
+`bsf`/`bsr` 不再出现。剩余 `__asm` 是原子指令、单操作数 `imul`/`mul`、间接 `jmp` 与未建模
+标志的分支（见 `docs/QUALITY.md`「剩余的 `__asm` 是什么」），不再单独开阶段。
 
 ## 1.4 局部变量重建（"向源码"的第二大缺口，数据来自 2026-11-02 实测）
 

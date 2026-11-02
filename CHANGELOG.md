@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **If/else packaging survives an arm that cannot continue** (`may_post_dominators`). When one
+  path through a branch ended in a `ret`/`int3`/noreturn call, strict post-dominance reported
+  "no reconvergence", so the other arm was emitted as an early exit and the surviving path ran
+  past the join — turning the second arm's fallthrough into `goto loc_…`. The structurer now
+  computes a second set of post-dominator links in which a terminating path imposes no
+  constraint, and packages both arms around the shared join when it is a clean diamond (every
+  predecessor falls into it unconditionally, it stays inside the enclosing loop, and neither arm
+  has been emitted yet). Notepad: `sub_140007924` 82 → 63 lines, `sub_140007ab4` 113 → 96,
+  `sub_140026438` 152 → 150, `sub_140004264`/`sub_14000468c` one line shorter each (the cleanup
+  tail is no longer reproduced three times in the two mutex helpers). Go: 2,998 → **3,003**
+  structured functions (+5). No snapshot changed on crackme (160), corpus (31), corpus86 (32) or
+  go (60); notepad still 487/502 and lint stays at 0 findings on notepad (1,004 texts) and
+  kernel32 (5,134). The wider join chaining that would also fix the remaining multi-entry shapes
+  is not adopted: it made two crackme functions duplicate a tail block up to five times and
+  produced a `while (1)` around a goto, so the gate stays conservative.
 - **String extraction now matches IDA's *Strings* window defaults** (`analyze` output is
   no longer flooded with instruction bytes). A literal must be NUL-terminated
   (`STRTYPE_C` / `STRTYPE_C_16`), at least 4 characters, and may contain the control

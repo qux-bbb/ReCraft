@@ -2172,6 +2172,10 @@ struct Structurer {
     rpo: Vec<usize>,
     idom: Vec<Option<usize>>,
     ipdom: Vec<Option<usize>>,
+    /// Nearest block that every continuing path from a node passes through, where a path
+    /// that ends in a `ret`/`int3`/noreturn block imposes no constraint. See
+    /// [`Structurer::may_post_dominators`].
+    join_ipdom: Vec<Option<usize>>,
     loop_headers: BTreeSet<usize>,
     loop_of: Vec<Option<usize>>,
     loop_blocks: BTreeMap<usize, BTreeSet<usize>>,
@@ -2289,6 +2293,7 @@ impl Structurer {
             rpo: Vec::new(),
             idom: vec![None; bodies.len()],
             ipdom: vec![None; bodies.len()],
+            join_ipdom: vec![None; bodies.len()],
             loop_headers: BTreeSet::new(),
             loop_of: vec![None; bodies.len()],
             loop_blocks: BTreeMap::new(),
@@ -2371,6 +2376,11 @@ impl Structurer {
     /// Post-dominators with a virtual exit node; `None` means "can reach function end
     /// without reconverging", which disables if/else packaging for that header.
     fn compute_post_dominators(&mut self) {
+        self.ipdom = self.post_dominator_links();
+        self.join_ipdom = self.may_post_dominators();
+    }
+
+    fn post_dominator_links(&self) -> Vec<Option<usize>> {
         let count = self.blocks.len();
         let virtual_exit = count;
         let mut predecessors = vec![Vec::new(); count + 1];
@@ -2407,8 +2417,8 @@ impl Structurer {
         let mut ipdom: Vec<Option<usize>> = vec![None; count + 1];
         ipdom[virtual_exit] = Some(virtual_exit);
         // Exit blocks post-dominate directly from the virtual exit.
-        for (node, successors) in self.successors.iter().enumerate() {
-            if successors.is_empty() {
+        for (node, nexts) in self.successors.iter().enumerate() {
+            if nexts.is_empty() {
                 ipdom[node] = Some(virtual_exit);
             }
         }
@@ -2436,9 +2446,112 @@ impl Structurer {
                 }
             }
         }
-        self.ipdom = (0..count)
+        (0..count)
             .map(|node| ipdom[node].filter(|&value| value != virtual_exit))
+            .collect()
+    }
+
+    /// Nearest block that every *continuing* path from a node passes through.
+    ///
+    /// `post_dominator_links` gives up (`None`) as soon as one path ends in a `ret`/`int3`
+    /// block. That is what lets an `if` / `else if` chain whose middle arm never returns
+    /// swallow the join into its first arm, leaving the other arm's fallthrough as a `goto`.
+    /// Here a terminating path imposes no constraint: leaf successors are left out of the
+    /// intersection, so the paths that do continue still share a join.
+    fn may_post_dominators(&self) -> Vec<Option<usize>> {
+        let count = self.blocks.len();
+        if count == 0 {
+            return Vec::new();
+        }
+        let words = count.div_ceil(64);
+        let mut universe = vec![!0u64; words];
+        if count % 64 != 0 {
+            universe[words - 1] = (1u64 << (count % 64)) - 1;
+        }
+        let terminal: Vec<bool> = self
+            .successors
+            .iter()
+            .map(|nexts| nexts.is_empty())
             .collect();
+        let mut sets = vec![0u64; count * words];
+        for node in 0..count {
+            let base = node * words;
+            if terminal[node] {
+                sets[base + node / 64] = 1u64 << (node % 64);
+            } else {
+                sets[base..base + words].copy_from_slice(&universe);
+            }
+        }
+        let mut acc = vec![0u64; words];
+        let mut changed = true;
+        let mut rounds = 0usize;
+        while changed && rounds <= count {
+            rounds += 1;
+            changed = false;
+            for node in 0..count {
+                if terminal[node] {
+                    continue;
+                }
+                let mut constrained = false;
+                acc.copy_from_slice(&universe);
+                for &next in &self.successors[node] {
+                    if terminal[next] {
+                        continue;
+                    }
+                    constrained = true;
+                    let base = next * words;
+                    for (word, other) in acc.iter_mut().zip(&sets[base..base + words]) {
+                        *word &= *other;
+                    }
+                }
+                if !constrained {
+                    acc.fill(0);
+                }
+                let base = node * words;
+                for word in 0..words {
+                    let mut value = acc[word];
+                    if word == node / 64 {
+                        value |= 1u64 << (node % 64);
+                    }
+                    if value != sets[base + word] {
+                        sets[base + word] = value;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        // Nearest = the candidate with the largest set: the first block on the continuing
+        // paths has every later one in its own set.
+        let sizes: Vec<u32> = (0..count)
+            .map(|node| {
+                let base = node * words;
+                sets[base..base + words]
+                    .iter()
+                    .map(|word| word.count_ones())
+                    .sum()
+            })
+            .collect();
+        let mut nearest = vec![None; count];
+        for (node, slot) in nearest.iter_mut().enumerate() {
+            let base = node * words;
+            let mut best: Option<(u32, usize)> = None;
+            for candidate in 0..count {
+                if candidate == node
+                    || sets[base + candidate / 64] & (1u64 << (candidate % 64)) == 0
+                {
+                    continue;
+                }
+                let better = match best {
+                    None => true,
+                    Some((best_size, _)) => sizes[candidate] > best_size,
+                };
+                if better {
+                    best = Some((sizes[candidate], candidate));
+                }
+            }
+            *slot = best.map(|(_, candidate)| candidate);
+        }
+        nearest
     }
 
     fn compute_loops(&mut self) {
@@ -2490,6 +2603,28 @@ impl Structurer {
             match self.idom[current] {
                 Some(parent) if parent != current => current = parent,
                 _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Whether `to` can be reached from `from` along CFG edges.
+    fn reaches(&self, from: usize, to: usize) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut seen = vec![false; self.blocks.len()];
+        let mut work = vec![from];
+        seen[from] = true;
+        while let Some(block) = work.pop() {
+            for &next in &self.successors[block] {
+                if next == to {
+                    return true;
+                }
+                if !seen[next] {
+                    seen[next] = true;
+                    work.push(next);
+                }
             }
         }
         false
@@ -2819,7 +2954,49 @@ impl Structurer {
                             continue;
                         }
                     }
-                    let join = self.ipdom[current];
+                    let join = self.ipdom[current].or_else(|| {
+                        // Strict post-dominance failed: some path ends without continuing.
+                        // When both arms still reconverge on a shared block, package them
+                        // around it instead of letting the first arm run past the join and
+                        // turn the other arm's fallthrough into a `goto`.
+                        let join = self.join_ipdom[current]?;
+                        if join >= self.blocks.len()
+                            || self.successors[join].is_empty()
+                            || self.loop_headers.contains(&join)
+                        {
+                            return None;
+                        }
+                        // A join is a clean diamond only when every predecessor falls into it
+                        // unconditionally: a predecessor that branches to the join as one of
+                        // several edges leaves the region mid-arm, and stopping the arm there
+                        // drops that branch.
+                        let clean = self.predecessors[join]
+                            .iter()
+                            .all(|&pred| self.successors[pred].len() == 1);
+                        // Joining at the taken successor is a plain diamond only when the
+                        // other arm jumps straight there.
+                        let direct = join != taken || self.predecessors[join].contains(&not_taken);
+                        let reachable = join == not_taken
+                            || (self.reaches(taken, join) && self.reaches(not_taken, join));
+                        // Inside a loop the join has to stay in the body: joining past the
+                        // latch would end the `while` early and push the rest of the body
+                        // outside it. Both arms must still be unemitted, or there is no code
+                        // left to put at the join.
+                        let inside_loop = match self.loop_stack.last() {
+                            Some(&(header, _)) => self
+                                .loop_blocks
+                                .get(&header)
+                                .is_some_and(|body| body.contains(&join)),
+                            None => true,
+                        };
+                        (direct
+                            && clean
+                            && reachable
+                            && inside_loop
+                            && !self.emitted[taken]
+                            && !self.emitted[not_taken])
+                            .then_some(join)
+                    });
                     if let Some(join) = join {
                         // A join inside the enclosing region's stop set is fine: the arms
                         // stop at it and the region ends there (early-exit chains).

@@ -68,6 +68,11 @@ inline asm statements:  9
 | corpus x86（32） | 32 | 32（100%） | 97.6% | 0 | 8 |
 | go.exe（3261 个已定义函数） | 3261（`--max-functions 0`） | 2998 结构化（91.9%），263 个回退 | 98.8% | 1446 | 1899 |
 
+**2026-11-03 复核（`may_post_dominators` 之后）**：notepad 仍 **487/502（97.0%）**，`loc_` 标签
+**267 → 265**、`__asm` 134；Go 结构化 **2998 → 3003（92.1%）**、回退 **263 → 258**；
+crackme / corpus / corpus86 的数字未变（这三套快照零变化，crackme 的 493 个函数未重测
+`metrics`，160 份快照全部一致）。
+
 `recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
@@ -114,15 +119,23 @@ sub_…(cookie)` 变成真实返回值），跨块调用实参补回 99 处（�
 |---|---|---|---|
 | 循环第二入口 | 往回跳到循环体中部的标签（重试/清理入口），循环因此有两个入口点，规则 CFG 无法化简成 `while` | 15/15 | 绝大多数（如 `internal/abi.Name.ReadVarint`） |
 | 跨层退出 | 内层循环的分支直接跳到外层循环之后 | 少量 | 少量 |
+| join 被分支吞掉（2026-11-03 新增） | 一侧分支以 `ret`/`int3`/noreturn 结束，严格后支配分析报 `None`，另一侧分支被当作早退；幸存路径越过 join，另一侧的 fallthrough 变成 `goto` | 15 个回退里 12 个属于此类 | Go 同类（`internal/abi.Name.Name`/`Tag`） |
 
 notepad 的 15 个回退函数已逐个核对：每个都有一处**向后**跳转落在 `if` 分支内部的标签上
 （例如 `loc_14000459c:` 之前的 `sub_140003fa0(&var_38);` 会被重试路径再次执行），
 即"goto 式重试循环"，不是结构化器的随机失败|
 
 两个样本都只在"循环不是单入口"时回退，其余部分照常结构化（notepad 487/502、
-Go 2998/3261 函数无任何 `goto`）。这类形状 IDA 同样常以 `goto` + 标签呈现；
+Go 3003/3261 函数无任何 `goto`）。这类形状 IDA 同样常以 `goto` + 标签呈现；
 要彻底消除需要在结构器里引入多入口循环的规范化（把第二入口提升为守卫条件），
 属于下一步的结构化工作，而不是文本后处理能安全完成的事情。
+
+**join 被吞掉那一类已部分修复**（2026-11-03）：`may_post_dominators` 让终止路径不参与
+交集，只要两侧分支在"干净菱形"的 join 上重新汇合就按 if/else 发射。notepad 有 5 个快照
+因此变短（`sub_140007924` −19 行、`sub_140007ab4` −17、`sub_140026438` −2），Go 多结构化
+5 个函数。**更宽的 join 串联被否决**：它让 crackme `sub_1400030a8` 把同一段尾部复制 5 次、
+`sub_14000391c` 生成 `while (1)` 套 `goto`，说明发射器对任意 join 还不够健壮——那条路要
+先重写区域发射（region-based emission），不是加门就能修的。
 
 **crackme 的 8 个"单跳转"函数也一样**（2026-11-02 核对）：`sub_140002354`、`sub_140008f70`、
 `sub_14000ad14`、`sub_14000c6a8`、`sub_14000ce90`、`sub_14000e4f8`、`sub_14000f184`、`sub_140012f70`——
