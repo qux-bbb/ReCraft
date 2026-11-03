@@ -495,10 +495,8 @@ fn misplaced_case_labels(lines: &[&str]) -> Vec<(LintKind, String)> {
     for line in lines {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
-        let label = (trimmed.starts_with("case ")
-            && (trimmed.ends_with(':') || trimmed.ends_with('{')))
-            || trimmed == "default:"
-            || trimmed == "default: {";
+        let label =
+            trimmed.starts_with("case ") || trimmed == "default:" || trimmed == "default: {";
         if let Some(&(_, switch_indent)) = switches.last()
             && label
             && indent != switch_indent + 4
