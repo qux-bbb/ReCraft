@@ -46,19 +46,21 @@ void sub_1400269b0_l1(void) {
                 }
                 eax = 0;
             } else {
-                ecx -= 1;
-                if (ecx == 0) {
-                    rcx = var_20;
-                    if (rcx != 0) {
-                        var_20 = 0;
-                        rax = *(u64*)(rcx);
-                        rax = *(u64*)((rax + 0xADDR));
-                        sub_140028010(rcx, rdx, r8);
+                switch (ecx) {
+                    case 0xADDR: {
+                        ecx -= 0xADDR;
+                        rcx = var_20;
+                        if (rcx != 0) {
+                            var_20 = 0;
+                            rax = *(u64*)(rcx);
+                            rax = *(u64*)((rax + 0xADDR));
+                            sub_140028010(rcx, rdx, r8);
+                        }
+                        eax = 1;
+                        break;
                     }
-                    eax = 1;
-                } else {
-                    ecx -= 1;
-                    if (ecx == 0) {
+                    case 0xADDR: {
+                        ecx -= 0xADDR;
                         rcx = var_20;
                         if (rcx != 0) {
                             var_20 = 0;
@@ -67,7 +69,10 @@ void sub_1400269b0_l1(void) {
                             sub_140028010(rcx, rdx, r8);
                         }
                         eax = 2;
-                    } else if (ecx == 1) {
+                        break;
+                    }
+                    case 0xADDR: {
+                        ecx -= 0xADDR;
                         rcx = var_20;
                         if (rcx != 0) {
                             var_20 = 0;
@@ -76,6 +81,7 @@ void sub_1400269b0_l1(void) {
                             sub_140028010(rcx, rdx, r8);
                         }
                         eax = 3;
+                        break;
                     }
                 }
             }

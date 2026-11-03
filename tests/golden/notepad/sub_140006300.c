@@ -35,15 +35,18 @@ void sub_140006300_l1(void) {
     ecx = (uint32)(var_64);
     eax = var_60;
     *(u32*)((rbx + 0xADDR)) = eax;
-    ecx -= 1;
-    if (ecx == 0) {
-        *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 1);
-    } else {
-        ecx -= 1;
-        if (ecx == 0) {
+    switch (ecx) {
+        case 0xADDR: {
+            *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 1);
+            break;
+        }
+        case 0xADDR: {
             *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 2);
-        } else if (ecx == 1) {
+            break;
+        }
+        case 0xADDR: {
             *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 4);
+            break;
         }
     }
     return;

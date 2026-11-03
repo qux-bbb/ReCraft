@@ -140,20 +140,27 @@ void sub_140005d70_l1(void) {
                                                 *(u32*)((rbx + 0xADDR)) = esi;
                                                 goto loc_ADDR;
                                             }
-                                            ecx -= 1;
-                                            if (ecx == 0) {
-                                                if (r8b == 0xADDR) goto loc_ADDR;
-                                            } else {
-                                                ecx -= 1;
-                                                if (ecx == 0) {
+                                            switch (ecx) {
+                                                case 0xADDR: {
+                                                    ecx -= 0xADDR;
+                                                    if (r8b == 0xADDR) goto loc_ADDR;
+                                                    break;
+                                                }
+                                                case 0xADDR: {
+                                                    ecx -= 0xADDR;
                                                     sub_1400060f4(rbx);
                                                     goto loc_ADDR;
-                                                } else if (ecx != 1) {
-                                                    eax = ebp;
-                                                    return;
                                                 }
+                                                case 0xADDR: {
+                                                    ecx -= 0xADDR;
                                                 sub_14000627c(rbx);
                                                 goto loc_ADDR;
+                                                }
+                                                default: {
+                                                    ecx -= 0xADDR;
+                                                eax = ebp;
+                                                return;
+                                                }
                                             }
                                         }
                                     }

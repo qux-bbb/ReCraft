@@ -17,25 +17,35 @@ void sub_14000f1d0_l1(void) {
         eax = edx;
         dword_ADDR = edx;
         if (eax != 6) {
-            edx -= 1;
-            if (edx == 0) {
-                r8 = qword_ADDR;
-            } else {
-                edx -= 1;
-                if (edx == 0) {
+            switch (edx) {
+                case 0xADDR: {
+                    edx -= 0xADDR;
                     r8 = qword_ADDR;
-                } else {
-                    edx -= 1;
-                    if (edx == 0) {
-                        r8 = qword_ADDR;
-                    } else {
-                        edx -= 1;
-                        if (edx == 0) {
-                            r8 = qword_ADDR;
-                        } else if (edx == 1) {
-                            r8 = qword_ADDR;
-                        }
-                    }
+                    break;
+                }
+                case 0xADDR: {
+                    edx -= 0xADDR;
+                    r8 = qword_ADDR;
+                    break;
+                }
+                case 0xADDR: {
+                    edx -= 0xADDR;
+                    r8 = qword_ADDR;
+                    break;
+                }
+                case 0xADDR: {
+                    edx -= 0xADDR;
+                    r8 = qword_ADDR;
+                    break;
+                }
+                case 0xADDR: {
+                    edx -= 0xADDR;
+                    r8 = qword_ADDR;
+                    break;
+                }
+                default: {
+                    edx -= 0xADDR;
+                    break;
                 }
             }
         } else {

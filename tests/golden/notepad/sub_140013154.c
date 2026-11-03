@@ -2840,19 +2840,28 @@ void sub_140013154_l1(void) {
                                                     eax &= 1;
                                                     ecx = ebx;
                                                     var_814 = eax;
-                                                    ecx -= 1;
-                                                    if (ecx == 0) {
-                                                        var_78 = 0xADDR;
-                                                        loc_ADDR:
-                                                        var_108 = 0xADDR;
-                                                    } else {
-                                                        ecx -= 1;
-                                                        if (ecx == 0) {
+                                                    switch (ecx) {
+                                                        case 0xADDR: {
+                                                            ecx -= 0xADDR;
+                                                            var_78 = 0xADDR;
+                                                            loc_ADDR:
+                                                            var_108 = 0xADDR;
+                                                            break;
+                                                        }
+                                                        case 0xADDR: {
+                                                            ecx -= 0xADDR;
                                                             var_78 = 0xADDR;
                                                             goto loc_ADDR;
-                                                        } else if (ecx == 1) {
+                                                        }
+                                                        case 0xADDR: {
+                                                            ecx -= 0xADDR;
                                                             var_78 = 0xADDR;
                                                             var_108 = 0xADDR;
+                                                            break;
+                                                        }
+                                                        default: {
+                                                            ecx -= 0xADDR;
+                                                            break;
                                                         }
                                                     }
                                                     edi = 0xADDR;

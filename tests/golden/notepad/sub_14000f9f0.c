@@ -28,25 +28,35 @@ void sub_14000f9f0_l1(void) {
     sub_1400029dc(&var_20, 0, 0xADDR);
     ecx = dword_ADDR;
     if (ecx != 6) {
-        ecx -= 1;
-        if (ecx == 0) {
-            r9 = qword_ADDR;
-        } else {
-            ecx -= 1;
-            if (ecx == 0) {
+        switch (ecx) {
+            case 0xADDR: {
+                ecx -= 0xADDR;
                 r9 = qword_ADDR;
-            } else {
-                ecx -= 1;
-                if (ecx == 0) {
-                    r9 = qword_ADDR;
-                } else {
-                    ecx -= 1;
-                    if (ecx == 0) {
-                        r9 = qword_ADDR;
-                    } else if (ecx == 1) {
-                        r9 = qword_ADDR;
-                    }
-                }
+                break;
+            }
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                r9 = qword_ADDR;
+                break;
+            }
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                r9 = qword_ADDR;
+                break;
+            }
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                r9 = qword_ADDR;
+                break;
+            }
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                r9 = qword_ADDR;
+                break;
+            }
+            default: {
+                ecx -= 0xADDR;
+                break;
             }
         }
     } else {

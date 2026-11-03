@@ -85,17 +85,19 @@ void sub_140010f48_l1(void) {
             ecx = var_58;
             if (ecx != 0) {
                 if (ecx != 6) {
-                    ecx -= 1;
-                    if (ecx == 0) {
-                        loc_ADDR:
-                        var_30 = 1;
-                        var_48 = esi;
-                        r15d = esi;
-                        loc_ADDR:
-                        rax = var_40;
-                    } else {
-                        ecx -= 1;
-                        if (ecx == 0) {
+                    switch (ecx) {
+                        case 0xADDR: {
+                            ecx -= 0xADDR;
+                            loc_ADDR:
+                            var_30 = 1;
+                            var_48 = esi;
+                            r15d = esi;
+                            loc_ADDR:
+                            rax = var_40;
+                            break;
+                        }
+                        case 0xADDR: {
+                            ecx -= 0xADDR;
                             eax = 0xADDR;
                             var_4c = 1;
                             edi = r13d;
@@ -104,27 +106,31 @@ void sub_140010f48_l1(void) {
                             var_34 = edi;
                             var_38 = 1;
                             if (*(u16*)(r14) != ax) goto loc_ADDR;
-                        } else {
-                            ecx -= 1;
-                            if (ecx == 0) {
-                                ebx = 3;
-                                eax = 0xADDR;
-                            } else {
-                                ecx -= 1;
-                                if (ecx == 0) {
-                                    r15d = 0xADDR;
-                                    var_48 = 0xADDR;
-                                    var_30 = ebx;
-                                    if (r13d > 2) {
-                                        if (*(u16*)(r14) == 0xADDR && *(u8*)((r14 + 2)) == 0xADDR) {
-                                            var_40 = (r14 + 3);
-                                            r13d -= 0xADDR;
-                                        }
-                                    }
-                                } else {
-                                    if (ecx != 1) goto loc_ADDR;
+                            break;
+                        }
+                        case 0xADDR: {
+                            ecx -= 0xADDR;
+                            ebx = 3;
+                            eax = 0xADDR;
+                            break;
+                        }
+                        case 0xADDR: {
+                            ecx -= 0xADDR;
+                            r15d = 0xADDR;
+                            var_48 = 0xADDR;
+                            var_30 = ebx;
+                            if (r13d > 2) {
+                                if (*(u16*)(r14) == 0xADDR && *(u8*)((r14 + 2)) == 0xADDR) {
+                                    var_40 = (r14 + 3);
+                                    r13d -= 0xADDR;
                                 }
                             }
+                            break;
+                        }
+                        default: {
+                            ecx -= 0xADDR;
+                        if (ecx != 1) goto loc_ADDR;
+                            break;
                         }
                     }
                 } else {

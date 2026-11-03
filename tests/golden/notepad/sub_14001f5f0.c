@@ -107,20 +107,30 @@ void sub_14001f5f0_l1(void) {
         ecx -= 1;
         if (ecx == 0) {
             edx = 0;
-            r11d -= 2;
-            if (r11d == 0) {
-                edx = 2;
-            } else {
-                r11d -= 1;
-                if (r11d == 0) {
+            switch (r11d) {
+                case 0xADDR: {
+                    r11d -= 0xADDR;
+                    edx = 2;
+                    break;
+                }
+                case 0xADDR: {
+                    r11d -= 0xADDR;
                     edx = 8;
-                } else {
-                    r11d -= 3;
-                    if (r11d == 0) {
-                        edx = 4;
-                    } else if (r11d == 1) {
-                        edx = (r11 + 0xADDR);
-                    }
+                    break;
+                }
+                case 0xADDR: {
+                    r11d -= 0xADDR;
+                    edx = 4;
+                    break;
+                }
+                case 0xADDR: {
+                    r11d -= 0xADDR;
+                    edx = (r11 + 0xADDR);
+                    break;
+                }
+                default: {
+                    r11d -= 0xADDR;
+                    break;
                 }
             }
             eax = *(u32*)(rsi);

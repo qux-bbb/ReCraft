@@ -73,18 +73,19 @@ inline asm statements:  9
 crackme / corpus / corpus86 的数字未变（这三套快照零变化，crackme 的 493 个函数未重测
 `metrics`，160 份快照全部一致）。
 
-**2026-11-04 复核（帧基址判定 + 常量折叠扩展之后）**：notepad 502 / **487（97.0%）** / 99.6% /
-标签 **265** / `__asm` 134（`goto` 450 处不变），L2 文本 **29 626 → 29 428 行**（−198，帧基址
-−14、常量折叠 −184）；crackme 493 / **453（91.9%）** / 98.5% / 标签 **218 → 216** / `__asm` 265；
-corpus x64 与 x86 结构化不变；Go `--max-functions 0` 结构化仍 **3003/3261（92.1%）**、回退
-**258**、标签 **1446 → 1436**、`__asm` **1899 → 1897**。快照动了 **30 个 notepad + 7 个
-crackme + 2 个 corpus + 1 个 corpus86 + 6 个 go**（两处改动合计，逐条核对：帧基址 9 个、
-条件/复合折叠 28 个、常量存储折叠 9 个；改动全是"赋值行的寄存器名换成字面量"或"保留仍被读
-的常量赋值"，没有 goto/标签/花括号/`__asm` 行被删），`recraft-cli lint` 五个样本仍
-**0 findings**（notepad 1 004 + crackme 986 + corpus 62 + corpus86 64 份文本，另抽查 kernel32
-5 134 份文本），785 份快照全部 `--check` 通过。**注意**：`--check` 前必须用当前构建重跑一次
-`analyze`，否则项目里旧的派生数据（字符串表）会让快照出现与代码无关的假 diff（本次先遇到
-7 个这种假 diff，重新 `analyze` 后归零）。
+**2026-11-04 复核（帧基址判定 + 常量折叠 + 派发阶梯之后）**：notepad 502 / **487（97.0%）** /
+99.6% / 标签 **265** / `__asm` 134（`goto` 450 处不变），L2 文本 **29 626 → 29 497 行**（帧基址
+−14、常量折叠 −184、派发阶梯 +69：`switch` 的 `case`/`break`/`}` 比嵌套 `if` 多行，换来的是
+**11 层缩进变 1 层**，9 个函数受益）；crackme 493 / **453（91.9%）** / 98.5% / 标签
+**218 → 216** / `__asm` 265；corpus x64 与 x86 结构化不变；Go `--max-functions 0` 结构化仍
+**3003/3261（92.1%）**、回退 **258**、标签 **1446 → 1436**、`__asm` **1899 → 1897**。快照动了
+**30 个 notepad + 7 个 crackme + 2 个 corpus + 1 个 corpus86 + 6 个 go**（三处改动合计，逐条
+核对：帧基址 9 个、条件/复合折叠 28 个、常量存储折叠 9 个、派发阶梯 10 个；除阶梯外都是
+"赋值行的寄存器名换成字面量"或"保留仍被读的常量赋值"，没有 goto/标签/花括号/`__asm` 行被删），
+`recraft-cli lint` 五个样本仍 **0 findings**（notepad 1 004 + crackme 986 + corpus 62 +
+corpus86 64 份文本，另抽查 kernel32 5 134 份文本），785 份快照全部 `--check` 通过。**注意**：
+`--check` 前必须用当前构建重跑一次 `analyze`，否则项目里旧的派生数据（字符串表）会让快照出现
+与代码无关的假 diff（本次先遇到 7 个这种假 diff，重新 `analyze` 后归零）。
 
 `recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
@@ -219,6 +220,7 @@ Go 1959→1899）。其余类别或涉及原子性、或涉及双寄存器结果
 | 循环收敛 | 唯一出口是 `if (cond) break;` 的 `while (1)`：测试在循环体开头时写回 `while (!cond)`，在末尾时改写为 `do { ... } while (!cond)`；体内有 `continue` 时保持原样（`continue` 会先到达闩锁，改条件会跳过原语义） |
 | else-if 合并 | `} else { if (cond) { ... } }` 在 else 分支只有这一条语句时折叠为 `} else if (cond) { ... }`，分支体整体左移一级 |
 | else 展平 | then 分支以 `return`/`break`/`continue`/`goto` 结尾时去掉冗余 `else`，else 分支体左移一级（早退风格） |
+| 派发阶梯 | 编译器把稀疏 `switch` 降成 `sub`/`je` 阶梯（`ebx -= 2; if (ebx == 0) { … } else { ebx -= 0xe; … }`，寄存器里是"累计余数"）时，重建为 `switch (ebx)`：case 值 = 累计减法之和，末尾的 `else if (ebx != K)` / `else if (ebx == K)` 分别重建为"最后一个 case + default"和"最后一个 case（无 default）"；只有当 case 体或 switch 之后的代码还读该寄存器时才在每个 case 开头补回 `ebx -= <累计>;`，否则保持干净。含顶层 `break`（会改绑到 switch）的阶梯不转换；`continue`/`return`/`goto` 安全 |
 | 栈槽地址 | `lea` 得到的栈槽地址写成 `&var_XX`（`rsp` 或真帧基址 `rbp`）；裸 `[rsp]`/`[rbp]` 槽写成 `var_0`；非帧基址的 `rbp` 只输出指针运算 |
 | 单行条件 | 单行 `if (cond) break/continue/return/goto;` 去掉生成器加的多余括号 |
 | 死寄存器写 | 直线段内下一次出现即被同基址 32/64 位完整重写时删除该写（调用/分支/标签/汇编中止扫描，重写语句自身读该寄存器则保留），并删除全函数再无提及的寄存器写（`rax` 与实参寄存器除外） |

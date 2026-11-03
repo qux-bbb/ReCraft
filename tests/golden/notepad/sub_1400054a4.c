@@ -14,21 +14,30 @@ void sub_1400054a4_l1(void) {
             if (ecx == 0) {
                 rsi = "Exception";
             } else {
-                ecx -= 1;
-                if (ecx == 0) {
-                    rax = "ReturnHr";
-                    rsi = "ReturnNt";
-                    rsi = (((*(u8*)((rbx + 4)) & bpl) == 0) ? rax : rsi);
-                } else {
-                    ecx -= 1;
-                    if (ecx == 0) {
+                switch (ecx) {
+                    case 0xADDR: {
+                        ecx -= 0xADDR;
+                        rax = "ReturnHr";
+                        rsi = "ReturnNt";
+                        rsi = (((*(u8*)((rbx + 4)) & bpl) == 0) ? rax : rsi);
+                        break;
+                    }
+                    case 0xADDR: {
+                        ecx -= 0xADDR;
                         rax = "LogHr";
                         rsi = "LogNt";
                         rsi = (((*(u8*)((rbx + 4)) & bpl) == 0) ? rax : rsi);
                         eax = 0;
                         return;
-                    } else if (ecx == 1) {
+                    }
+                    case 0xADDR: {
+                        ecx -= 0xADDR;
                         rsi = "FailFast";
+                        break;
+                    }
+                    default: {
+                        ecx -= 0xADDR;
+                        break;
                     }
                 }
             }

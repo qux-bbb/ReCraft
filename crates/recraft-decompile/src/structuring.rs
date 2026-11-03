@@ -475,6 +475,10 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         merge_accumulations(&mut lines);
     }
     drop_noop_statements(&mut lines);
+    // The dispatch ladder is rebuilt from the final text: the constant folds above have
+    // already settled the subtracted immediates, and nothing after this point rewrites the
+    // arm bodies in a way that would break the `case` labels.
+    fold_dispatch_ladders(&mut lines);
     mark("text passes");
     normalize_infinite_loops(&mut lines);
     mark("  norm loops");
@@ -7387,6 +7391,352 @@ fn merge_else_if(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+/// Rewrite a subtract-and-compare dispatch ladder as a `switch`.
+///
+/// MSVC lowers a `switch` over a sparse set of ids into a chain of `sub`/`je`: every level
+/// subtracts the next case value from the selector and tests the remainder for zero, so the
+/// register holds a *running remainder*. The emitter prints that chain as one nested `if` per
+/// case — a dialog proc reaches eleven levels — which hides the dispatch completely. A `switch`
+/// shows the cases at one level. The remainder is rebuilt at the top of each case
+/// (`ebx -= 0x110;`) whenever the register is still read afterwards, so the text stays exactly
+/// equivalent: the body and any later reader see the same remainder the ladder left behind.
+fn fold_dispatch_ladders(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let Some(ladder) = parse_dispatch_ladder(lines, index) else {
+            index += 1;
+            continue;
+        };
+        let indent = leading_spaces(&lines[index].text);
+        // A body that jumps with `break` would rebind to the switch, so such a ladder is left
+        // as it is; `continue`, `return` and `goto` mean the same thing inside a `case`.
+        if ladder
+            .cases
+            .iter()
+            .any(|case| case.body.iter().any(|line| line.text.trim() == "break;"))
+            || ladder
+                .default
+                .as_ref()
+                .is_some_and(|(_, _, body)| body.iter().any(|line| line.text.trim() == "break;"))
+        {
+            index += 1;
+            continue;
+        }
+        // The remainder has to be rebuilt when a body reads the register (it expects the
+        // ladder's remainder) or when the code after the switch does; a body that never looks
+        // at it stays as clean as the source's `case`.
+        let after_reads = lines[ladder.end + 1..]
+            .iter()
+            .any(|line| reads_register(&line.text, &ladder.reg));
+        let body_reads = |body: &[PseudoLine]| {
+            body.iter()
+                .any(|line| reads_register(&line.text, &ladder.reg))
+        };
+        let pad = " ".repeat(indent);
+        let case_pad = " ".repeat(indent + 4);
+        let inner = " ".repeat(indent + 8);
+        let addr = lines[index].addr;
+        let mut replacement = Vec::with_capacity(ladder.cases.len() * 4 + 3);
+        replacement.push(PseudoLine {
+            addr,
+            text: format!("{pad}switch ({}) {{", ladder.reg),
+        });
+        for case in &ladder.cases {
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{case_pad}case {:#x}: {{", case.value),
+            });
+            if after_reads || body_reads(&case.body) {
+                replacement.push(PseudoLine {
+                    addr,
+                    text: format!("{inner}{} -= {:#x};", ladder.reg, case.total),
+                });
+            }
+            push_reindented(&mut replacement, &case.body, case.base, indent + 8);
+            if !ends_with_jump(&case.body) {
+                replacement.push(PseudoLine {
+                    addr,
+                    text: format!("{inner}break;"),
+                });
+            }
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{case_pad}}}"),
+            });
+        }
+        if let Some((total, base, body)) = &ladder.default
+            && !body.is_empty()
+        {
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{case_pad}default: {{"),
+            });
+            if after_reads || body_reads(body) {
+                replacement.push(PseudoLine {
+                    addr,
+                    text: format!("{inner}{} -= {total:#x};", ladder.reg),
+                });
+            }
+            push_reindented(&mut replacement, body, *base, indent + 8);
+            if !ends_with_jump(body) {
+                replacement.push(PseudoLine {
+                    addr,
+                    text: format!("{inner}break;"),
+                });
+            }
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{case_pad}}}"),
+            });
+        } else if after_reads && let Some(last) = ladder.cases.last() {
+            // A ladder without a default still subtracted on every path, so a value that
+            // matches no case has to leave the same remainder behind.
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{case_pad}default: {{"),
+            });
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{inner}{} -= {:#x};", ladder.reg, last.total),
+            });
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{inner}break;"),
+            });
+            replacement.push(PseudoLine {
+                addr,
+                text: format!("{case_pad}}}"),
+            });
+        }
+        replacement.push(PseudoLine {
+            addr,
+            text: format!("{pad}}}"),
+        });
+        lines.splice(index..=ladder.end, replacement);
+        index += 1;
+    }
+}
+
+struct DispatchCase {
+    /// Selector value that picks this case.
+    value: u64,
+    /// Running subtraction applied before the case body runs.
+    total: u64,
+    /// Column the body's statements start at in the ladder text.
+    base: usize,
+    body: Vec<PseudoLine>,
+}
+struct DispatchLadder {
+    /// Index of the last line the ladder occupies.
+    end: usize,
+    reg: String,
+    cases: Vec<DispatchCase>,
+    /// `(running subtraction, body column, body)` of the `else` arm, when there is one.
+    default: Option<(u64, usize, Vec<PseudoLine>)>,
+}
+
+/// `ebx -= 0x10;` -> (`ebx`, 0x10).
+fn subtract_step(text: &str) -> Option<(String, u64)> {
+    let statement = text.trim().strip_suffix(';')?;
+    let (name, value) = statement.split_once(" -= ")?;
+    let name = name.trim();
+    register_base_any(name)?;
+    let value = parse_constant(value.trim())?;
+    (value != 0).then(|| (name.to_owned(), value))
+}
+
+/// Index of the line that closes the block opened at `open` (`} else {` closes it too).
+fn arm_close(lines: &[PseudoLine], open: usize) -> Option<usize> {
+    let text = lines.get(open)?.text.trim();
+    // `} else {` closes the previous arm and opens the next one: net zero braces, one block.
+    let mut depth = if text.starts_with('}') {
+        1
+    } else {
+        text.matches('{').count() as isize - text.matches('}').count() as isize
+    };
+    if depth <= 0 {
+        return None;
+    }
+    for (index, line) in lines.iter().enumerate().skip(open + 1) {
+        let text = line.text.trim();
+        if depth == 1 && text.starts_with('}') {
+            return Some(index);
+        }
+        depth += text.matches('{').count() as isize - text.matches('}').count() as isize;
+        if depth <= 0 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Append `body` shifted from `from` columns to `to` columns. The ladder nests one level per
+/// case, so the bodies arrive indented deeper than the `case` block they now belong to.
+fn push_reindented(out: &mut Vec<PseudoLine>, body: &[PseudoLine], from: usize, to: usize) {
+    let shift = to as isize - from as isize;
+    for line in body {
+        let lead = leading_spaces(&line.text) as isize + shift;
+        let cut = lead.max(0) as usize;
+        out.push(PseudoLine {
+            addr: line.addr,
+            text: format!("{}{}", " ".repeat(cut), line.text.trim_start()),
+        });
+    }
+}
+
+/// Last statement of a body never falls out of it.
+fn ends_with_jump(body: &[PseudoLine]) -> bool {
+    let Some(last) = body
+        .iter()
+        .rev()
+        .map(|line| line.text.trim())
+        .find(|text| !text.is_empty() && *text != "}")
+    else {
+        return false;
+    };
+    last == "break;"
+        || last == "continue;"
+        || (last.starts_with("return") && last.ends_with(';'))
+        || (last.starts_with("goto ") && last.ends_with(';'))
+}
+
+fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchLadder> {
+    let ladder_indent = leading_spaces(&lines[start].text);
+    let (reg, _) = subtract_step(&lines[start].text)?;
+    let mut cases: Vec<DispatchCase> = Vec::new();
+    let mut total = 0u64;
+    let mut index = start;
+    loop {
+        let (name, step) = subtract_step(&lines[index].text)?;
+        if name != reg {
+            return None;
+        }
+        if lines.get(index + 1)?.text.trim() != format!("if ({reg} == 0) {{") {
+            return None;
+        }
+        let close = arm_close(lines, index + 1)?;
+        total += step;
+        cases.push(DispatchCase {
+            value: total,
+            total,
+            base: ladder_indent + 4 * (cases.len() + 1),
+            body: lines[index + 2..close].to_vec(),
+        });
+        let tail = lines[close].text.trim();
+        if tail == "} else {" {
+            let next = close + 1;
+            if lines
+                .get(next)
+                .and_then(|line| subtract_step(&line.text))
+                .is_some_and(|(name, _)| name == reg)
+            {
+                index = next;
+                continue;
+            }
+            let else_close = arm_close(lines, close)?;
+            if cases.len() < 3 {
+                return None;
+            }
+            let default_base = ladder_indent + 4 * (cases.len() + 1);
+            return Some(DispatchLadder {
+                end: ladder_close(lines, else_close + 1, ladder_indent)?,
+                reg,
+                cases,
+                default: Some((total, default_base, lines[close + 1..else_close].to_vec())),
+            });
+        }
+        // `} else if (ebx == 1) { last case }`: the comparison names the last selector value
+        // and there is no default arm — everything else continues after the ladder.
+        let rest = tail.strip_prefix("} else if (")?.strip_suffix(") {")?;
+        if let Some((name, value)) = rest.split_once(" == ") {
+            if name.trim() != reg {
+                return None;
+            }
+            let value = parse_constant(value.trim())?;
+            let else_close = arm_close(lines, close)?;
+            let body = lines[close + 1..else_close].to_vec();
+            cases.push(DispatchCase {
+                value: total + value,
+                total,
+                // The arm body sits one level below the `else if` itself.
+                base: ladder_indent + 4 * cases.len(),
+                body,
+            });
+            if cases.len() < 3 {
+                return None;
+            }
+            return Some(DispatchLadder {
+                end: ladder_close(lines, else_close + 1, ladder_indent)?,
+                reg,
+                cases,
+                default: None,
+            });
+        }
+        // `} else if (ebx != 1) { default }` followed by the last case body: the comparison
+        // names the last selector value, and the default arm has to leave on its own or it
+        // would fall into that body.
+        let (name, value) = rest.split_once(" != ")?;
+        if name.trim() != reg {
+            return None;
+        }
+        let value = parse_constant(value.trim())?;
+        let else_close = arm_close(lines, close)?;
+        let default_body = lines[close + 1..else_close].to_vec();
+        if !ends_with_jump(&default_body) {
+            return None;
+        }
+        // The last case body lives in the *innermost* arm's scope, not the ladder's: it starts
+        // at the `if`'s own column and ends where that arm closes.
+        let scope = leading_spaces(&lines[close].text);
+        let mut body_end = else_close + 1;
+        while body_end < lines.len() && leading_spaces(&lines[body_end].text) >= scope {
+            body_end += 1;
+        }
+        let last_body = lines[else_close + 1..body_end].to_vec();
+        if last_body.is_empty() {
+            return None;
+        }
+        // The trailing body sits in the innermost `if`'s own scope; the default arm one level
+        // deeper.
+        let last_base = ladder_indent + 4 * cases.len();
+        let default_base = last_base + 4;
+        cases.push(DispatchCase {
+            value: total + value,
+            total,
+            base: last_base,
+            body: last_body,
+        });
+        if cases.len() < 3 {
+            return None;
+        }
+        return Some(DispatchLadder {
+            end: ladder_close(lines, body_end, ladder_indent)?,
+            reg,
+            cases,
+            default: Some((total, default_base, default_body)),
+        });
+    }
+}
+
+/// The `}` that closes the ladder's outermost `if`, starting at `from`. The arms' own closing
+/// braces sit deeper than the ladder and belong to it as well.
+fn ladder_close(lines: &[PseudoLine], from: usize, ladder_indent: usize) -> Option<usize> {
+    for (index, line) in lines.iter().enumerate().skip(from) {
+        let text = line.text.trim();
+        let lead = leading_spaces(&line.text);
+        if !text.starts_with('}') {
+            return None;
+        }
+        if lead == ladder_indent {
+            return Some(index);
+        }
+        if lead < ladder_indent {
+            return None;
+        }
+    }
+    None
+}
+
 /// Rewrite `while (1)` loops whose only exit test the structurer could not fold.
 ///
 /// Compilers lower pre-tested loops and do-while loops to an unconditional loop with a
@@ -7689,6 +8039,139 @@ mod tests {
         fold_constant_registers(&mut lines);
         assert_eq!(lines.len(), 2, "{}", joined(&lines));
         assert!(lines[1].text.contains("xmm0"), "{}", joined(&lines));
+    }
+    #[test]
+    fn a_subtract_and_compare_ladder_becomes_a_switch() {
+        let mut lines = snippet(&[
+            "    ebx -= 2;",
+            "    if (ebx == 0) {",
+            "        eax = 0;",
+            "    } else {",
+            "        ebx -= 0xe;",
+            "        if (ebx == 0) {",
+            "            eax = 1;",
+            "        } else {",
+            "            ebx -= 0x100;",
+            "            if (ebx == 0) {",
+            "                eax = 2;",
+            "            } else {",
+            "                return 0;",
+            "            }",
+            "        }",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("switch (ebx) {"), "{text}");
+        assert!(text.contains("case 0x2: {"), "{text}");
+        assert!(text.contains("case 0x10: {"), "{text}");
+        assert!(text.contains("case 0x110: {"), "{text}");
+        assert!(text.contains("default: {"), "{text}");
+        // Nothing reads ebx afterwards, so the remainder is not rebuilt.
+        assert!(!text.contains("ebx -= 0x110;"), "{text}");
+    }
+    #[test]
+    fn a_ladder_keeps_the_remainder_when_a_body_reads_it() {
+        let mut lines = snippet(&[
+            "    ebx -= 2;",
+            "    if (ebx == 0) {",
+            "        eax = 0;",
+            "    } else {",
+            "        ebx -= 0xe;",
+            "        if (ebx == 0) {",
+            "            EnableWindow(rax, ebx);",
+            "        } else {",
+            "            ebx -= 0x100;",
+            "            if (ebx == 0) {",
+            "                eax = 2;",
+            "            } else {",
+            "                return 0;",
+            "            }",
+            "        }",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("switch (ebx) {"), "{text}");
+        assert!(text.contains("ebx -= 0x10;"), "{text}");
+        assert!(text.contains("EnableWindow(rax, ebx);"), "{text}");
+    }
+    #[test]
+    fn a_ladder_ending_in_a_not_equal_default_becomes_a_switch() {
+        let mut lines = snippet(&[
+            "    ebx -= 2;",
+            "    if (ebx == 0) {",
+            "        eax = 0;",
+            "    } else {",
+            "        ebx -= 0xe;",
+            "        if (ebx == 0) {",
+            "            eax = 1;",
+            "        } else {",
+            "            ebx -= 0x100;",
+            "            if (ebx == 0) {",
+            "                eax = 2;",
+            "            } else if (ebx != 1) {",
+            "                return 0;",
+            "            }",
+            "            eax = 3;",
+            "        }",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("switch (ebx) {"), "{text}");
+        assert!(text.contains("case 0x111: {"), "{text}");
+        assert!(text.contains("eax = 3;"), "{text}");
+        assert!(text.contains("default: {"), "{text}");
+    }
+    #[test]
+    fn a_ladder_ending_in_an_equality_tail_becomes_a_switch() {
+        // `} else if (ebx == 1) { … }` names the last case; nothing matches below it, so the
+        // switch needs no `default`.
+        let mut lines = snippet(&[
+            "    ebx -= 2;",
+            "    if (ebx == 0) {",
+            "        eax = 0;",
+            "    } else {",
+            "        ebx -= 0xe;",
+            "        if (ebx == 0) {",
+            "            eax = 1;",
+            "        } else if (ebx == 1) {",
+            "            eax = 2;",
+            "        }",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("switch (ebx) {"), "{text}");
+        assert!(text.contains("case 0x11: {"), "{text}");
+        assert!(text.contains("eax = 2;"), "{text}");
+        assert!(!text.contains("default:"), "{text}");
+    }
+    #[test]
+    fn a_ladder_whose_body_breaks_a_loop_is_kept() {
+        let mut lines = snippet(&[
+            "    while (1) {",
+            "        ebx -= 2;",
+            "        if (ebx == 0) {",
+            "            break;",
+            "        } else {",
+            "            ebx -= 0xe;",
+            "            if (ebx == 0) {",
+            "                eax = 1;",
+            "            } else {",
+            "                ebx -= 0x100;",
+            "                if (ebx == 0) {",
+            "                    eax = 2;",
+            "                } else {",
+            "                    return 0;",
+            "                }",
+            "            }",
+            "        }",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        assert!(!joined(&lines).contains("switch ("), "{}", joined(&lines));
     }
     #[test]
     fn nested_single_if_wrappers_collapse_into_one_condition() {
