@@ -167,15 +167,15 @@ void sub_140023f90_l1(void) {
                 }
                 case 0xADDR: {
                     ebx -= 0xADDR;
-                rdx = rsi;
-                sub_1400249b0(rdi);
-                eax = 1;
-                return;
+                    rdx = rsi;
+                    sub_1400249b0(rdi);
+                    eax = 1;
+                    return;
                 }
                 default: {
                     ebx -= 0xADDR;
-                eax = 0;
-                return;
+                    eax = 0;
+                    return;
                 }
             }
         } else if (ebx != 0xADDR) {

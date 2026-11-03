@@ -197,40 +197,49 @@ void sub_14000e950_l1(void) {
             eax = 0;
             return;
         }
-        eax -= 4;
-        if (eax == 0) {
-            sub_14000f2a0(rcx);
-            eax = 0;
-            return;
-        }
-        eax -= 1;
-        if (eax == 0) {
-            esi = 0;
-            if (dword_ADDR == 0) {
+        switch (eax) {
+            case 0xADDR: {
+                eax -= 0xADDR;
+                sub_14000f2a0(rcx);
                 eax = 0;
                 return;
             }
-            r14 >>= 0xADDR;
-            if (r14w == 0) {
+            case 0xADDR: {
+                eax -= 0xADDR;
+                esi = 0;
+                if (dword_ADDR == 0) {
+                    eax = 0;
+                    return;
+                }
+                r14 >>= 0xADDR;
+                if (r14w == 0) {
+                    eax = 0;
+                    return;
+                }
+                EnableMenuItem(qword_ADDR, 0xADDR, (rsi + 3));
                 eax = 0;
                 return;
             }
-            EnableMenuItem(qword_ADDR, 0xADDR, (rsi + 3));
-            eax = 0;
-            return;
-        }
-        eax -= 0xADDR;
-        if (eax == 0) {
-            DefWindowProcW(rcx, rdx, r8, r9);
-            rbx = rax;
-            sub_14000fd5c();
-            rax = rbx;
-        } else if (eax == 4) {
-            DefWindowProcW(rcx, rdx, r8, r9);
-            rbx = rax;
-            sub_14000fd5c();
-            rax = rbx;
-            return;
+            case 0xADDR: {
+                eax -= 0xADDR;
+                DefWindowProcW(rcx, rdx, r8, r9);
+                rbx = rax;
+                sub_14000fd5c();
+                rax = rbx;
+                break;
+            }
+            case 0xADDR: {
+                eax -= 0xADDR;
+                DefWindowProcW(rcx, rdx, r8, r9);
+                rbx = rax;
+                sub_14000fd5c();
+                rax = rbx;
+                return;
+            }
+            default: {
+                eax -= 0xADDR;
+                break;
+            }
         }
     } else if (edx != eax) {
         if (edx > 0xADDR) {
@@ -358,42 +367,51 @@ void sub_14000e950_l1(void) {
                     return;
                 }
             } else {
-                eax -= 1;
-                if (eax == 0) {
-                    di -= 0xADDR;
-                    if (di > 0xADDR) {
+                switch (eax) {
+                    case 0xADDR: {
+                        eax -= 0xADDR;
+                        di -= 0xADDR;
+                        if (di > 0xADDR) {
+                            eax = 0;
+                            return;
+                        }
+                        IsIconic(qword_ADDR);
+                        if (eax != 0) {
+                            eax = 0;
+                            return;
+                        }
+                        GetForegroundWindow();
+                        if (rax != qword_ADDR) {
+                            eax = 0;
+                            return;
+                        }
+                        GetForegroundWindow();
+                        rcx = rax;
+                        SetFocus(rcx);
                         eax = 0;
                         return;
                     }
-                    IsIconic(qword_ADDR);
-                    if (eax != 0) {
+                    case 0xADDR: {
+                        eax -= 0xADDR;
+                        IsIconic(qword_ADDR);
+                        if (eax != 0) {
+                            eax = 0;
+                            return;
+                        }
+                        rcx = qword_ADDR;
+                        break;
+                    }
+                    case 0xADDR: {
+                        eax -= 0xADDR;
+                        rcx = qword_ADDR;
+                        SendMessageW(rcx, rdx, r8, r9);
                         eax = 0;
                         return;
                     }
-                    GetForegroundWindow();
-                    if (rax != qword_ADDR) {
-                        eax = 0;
-                        return;
+                    default: {
+                        eax -= 0xADDR;
+                        break;
                     }
-                    GetForegroundWindow();
-                    rcx = rax;
-                    SetFocus(rcx);
-                    eax = 0;
-                    return;
-                }
-                eax -= 1;
-                if (eax == 0) {
-                    IsIconic(qword_ADDR);
-                    if (eax != 0) {
-                        eax = 0;
-                        return;
-                    }
-                    rcx = qword_ADDR;
-                } else if (eax == 1) {
-                    rcx = qword_ADDR;
-                    SendMessageW(rcx, rdx, r8, r9);
-                    eax = 0;
-                    return;
                 }
             }
         }

@@ -129,7 +129,7 @@ void sub_140010f48_l1(void) {
                         }
                         default: {
                             ecx -= 0xADDR;
-                        if (ecx != 1) goto loc_ADDR;
+                            if (ecx != 1) goto loc_ADDR;
                             break;
                         }
                     }

@@ -7606,6 +7606,9 @@ fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchL
     let mut cases: Vec<DispatchCase> = Vec::new();
     let mut total = 0u64;
     let mut index = start;
+    // How many `else` arms the current level is nested in. A flattened ladder — the arm
+    // leaves with a jump, so the next level is printed as a following statement — resets it.
+    let mut depth = 0usize;
     loop {
         let (name, step) = subtract_step(&lines[index].text)?;
         if name != reg {
@@ -7619,10 +7622,30 @@ fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchL
         cases.push(DispatchCase {
             value: total,
             total,
-            base: ladder_indent + 4 * (cases.len() + 1),
+            base: ladder_indent + 4 * (depth + 1),
             body: lines[index + 2..close].to_vec(),
         });
         let tail = lines[close].text.trim();
+        if tail == "}" {
+            // A flattened ladder: the arm ends with a jump, so the emitter prints the next
+            // level as a following statement instead of an `else` arm.
+            let next = close + 1;
+            let flattened = ends_with_jump(&cases.last()?.body)
+                && leading_spaces(&lines.get(next)?.text) == ladder_indent
+                && lines
+                    .get(next)
+                    .and_then(|line| subtract_step(&line.text))
+                    .is_some_and(|(name, _)| name == reg)
+                && lines
+                    .get(next + 1)
+                    .is_some_and(|line| line.text.trim() == format!("if ({reg} == 0) {{"));
+            if flattened {
+                depth = 0;
+                index = next;
+                continue;
+            }
+            return None;
+        }
         if tail == "} else {" {
             let next = close + 1;
             if lines
@@ -7630,16 +7653,28 @@ fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchL
                 .and_then(|line| subtract_step(&line.text))
                 .is_some_and(|(name, _)| name == reg)
             {
+                depth += 1;
                 index = next;
                 continue;
             }
             let else_close = arm_close(lines, close)?;
+            // The arm has to be the last one: a following `} else if (…)` keeps the chain
+            // going, so it is not the ladder's default.
+            if lines[else_close].text.trim() != "}" {
+                return None;
+            }
             if cases.len() < 3 {
                 return None;
             }
-            let default_base = ladder_indent + 4 * (cases.len() + 1);
+            let default_base = ladder_indent + 4 * (depth + 1);
+            let end = if depth == 0 {
+                // A flattened ladder closes with its own last arm.
+                else_close
+            } else {
+                ladder_close(lines, else_close + 1, ladder_indent)?
+            };
             return Some(DispatchLadder {
-                end: ladder_close(lines, else_close + 1, ladder_indent)?,
+                end,
                 reg,
                 cases,
                 default: Some((total, default_base, lines[close + 1..else_close].to_vec())),
@@ -7654,19 +7689,28 @@ fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchL
             }
             let value = parse_constant(value.trim())?;
             let else_close = arm_close(lines, close)?;
+            // A following `} else if (…)` keeps the chain going; that arm is not the last case.
+            if lines[else_close].text.trim() != "}" {
+                return None;
+            }
             let body = lines[close + 1..else_close].to_vec();
             cases.push(DispatchCase {
                 value: total + value,
                 total,
                 // The arm body sits one level below the `else if` itself.
-                base: ladder_indent + 4 * cases.len(),
+                base: ladder_indent + 4 * (depth + 1),
                 body,
             });
             if cases.len() < 3 {
                 return None;
             }
+            let end = if depth == 0 {
+                else_close
+            } else {
+                ladder_close(lines, else_close + 1, ladder_indent)?
+            };
             return Some(DispatchLadder {
-                end: ladder_close(lines, else_close + 1, ladder_indent)?,
+                end,
                 reg,
                 cases,
                 default: None,
@@ -7681,8 +7725,18 @@ fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchL
         }
         let value = parse_constant(value.trim())?;
         let else_close = arm_close(lines, close)?;
+        // The default arm has to end the chain; a further `} else if (…)` would keep it going
+        // and the trailing statements would no longer belong to one case.
+        if lines[else_close].text.trim() != "}" {
+            return None;
+        }
         let default_body = lines[close + 1..else_close].to_vec();
         if !ends_with_jump(&default_body) {
+            return None;
+        }
+        // A flattened ladder has no enclosing scope to delimit the trailing body, so the
+        // shape is left alone there.
+        if depth == 0 {
             return None;
         }
         // The last case body lives in the *innermost* arm's scope, not the ladder's: it starts
@@ -7698,7 +7752,7 @@ fn parse_dispatch_ladder(lines: &[PseudoLine], start: usize) -> Option<DispatchL
         }
         // The trailing body sits in the innermost `if`'s own scope; the default arm one level
         // deeper.
-        let last_base = ladder_indent + 4 * cases.len();
+        let last_base = ladder_indent + 4 * depth;
         let default_base = last_base + 4;
         cases.push(DispatchCase {
             value: total + value,
@@ -8172,6 +8226,53 @@ mod tests {
         ]);
         fold_dispatch_ladders(&mut lines);
         assert!(!joined(&lines).contains("switch ("), "{}", joined(&lines));
+    }
+    #[test]
+    fn a_ladder_whose_default_is_followed_by_another_arm_is_kept() {
+        // kernel32's `sub_180036084`: the `!=` arm is followed by more `else if` arms, so the
+        // trailing statements are not one case body. Converting it would drop an arm.
+        let mut lines = snippet(&[
+            "    eax -= 4;",
+            "    if (eax == 0) {",
+            "        r12 = \"a\";",
+            "    } else {",
+            "        eax -= 8;",
+            "        if (eax == 0) {",
+            "            r12 = \"b\";",
+            "        } else if (eax != 0x10) {",
+            "            return 0;",
+            "        } else if (rsi != 0) {",
+            "            return 0;",
+            "        }",
+            "        r12 = \"c\";",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        assert!(!joined(&lines).contains("switch ("), "{}", joined(&lines));
+    }
+    #[test]
+    fn a_flattened_ladder_becomes_a_switch() {
+        // The first arm leaves with `goto`, so the emitter prints the next level as a
+        // following statement instead of an `else` arm.
+        let mut lines = snippet(&[
+            "    eax -= 4;",
+            "    if (eax == 0) {",
+            "        r12 = \"a\";",
+            "        goto loc_1000;",
+            "    }",
+            "    eax -= 8;",
+            "    if (eax == 0) {",
+            "        r12 = \"b\";",
+            "    } else if (eax == 0x10) {",
+            "        r12 = \"c\";",
+            "    }",
+        ]);
+        fold_dispatch_ladders(&mut lines);
+        let text = joined(&lines);
+        assert!(text.contains("switch (eax) {"), "{text}");
+        assert!(text.contains("case 0x4: {"), "{text}");
+        assert!(text.contains("case 0xc: {"), "{text}");
+        assert!(text.contains("case 0x1c: {"), "{text}");
     }
     #[test]
     fn nested_single_if_wrappers_collapse_into_one_condition() {

@@ -78,41 +78,42 @@ void sub_14000a630_l1(void) {
     rax = (r8 >> 0xADDR);
     if (ax == 0) {
         ecx = (uint32)(r8w);
-        ecx -= 0xADDR;
-        if (ecx == 0) {
-            sub_14001fd94("ms-windows-store://pdp/?PFN=Microsoft.WindowsNotepad_8wekyb3d8bbwe");
-            eax = 0;
-            return;
-        }
-        ecx -= 1;
-        if (ecx == 0) {
-            rax = qword_ADDR;
-            *(u8*)((rax + 0xADDR)) = 1;
-            sub_1400225a4(qword_ADDR);
-            rdx = qword_ADDR;
-            rdx = *(u64*)((rdx + 0xADDR));
-            sub_1400223a0(&var_38, rdx);
-            rbx = var_38;
-            if (rbx == 0) {
+        switch (ecx) {
+            case 0xADDR: {
+                sub_14001fd94("ms-windows-store://pdp/?PFN=Microsoft.WindowsNotepad_8wekyb3d8bbwe");
                 eax = 0;
                 return;
             }
-            sub_140023c00(rbx);
-            sil = al;
-            if (rbx != 0) {
-                CoTaskMemFree(rbx);
-            }
-            if (sil == 0) {
+            case 0xADDR: {
+                rax = qword_ADDR;
+                *(u8*)((rax + 0xADDR)) = 1;
+                sub_1400225a4(qword_ADDR);
+                rdx = qword_ADDR;
+                rdx = *(u64*)((rdx + 0xADDR));
+                sub_1400223a0(&var_38, rdx);
+                rbx = var_38;
+                if (rbx == 0) {
+                    eax = 0;
+                    return;
+                }
+                sub_140023c00(rbx);
+                sil = al;
+                if (rbx != 0) {
+                    CoTaskMemFree(rbx);
+                }
+                if (sil == 0) {
+                    eax = 0;
+                    return;
+                }
+                PostQuitMessage(0);
                 eax = 0;
                 return;
             }
-            PostQuitMessage(0);
-            eax = 0;
-            return;
-        } else if (ecx == 1) {
-            sub_14000aac4();
-            eax = 0;
-            return;
+            case 0xADDR: {
+                sub_14000aac4();
+                eax = 0;
+                return;
+            }
         }
         DefWindowProcW(rbx, rdx, r8, r9);
         return;

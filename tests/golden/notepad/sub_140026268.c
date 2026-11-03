@@ -26,102 +26,111 @@ void sub_140026268_l1(void) {
                 edx = var_60;
                 rcx = r15;
                 hstring = rcx;
-                edx -= 1;
-                if (edx == 0) {
-                    *(u32*)(rsi) = 1;
-                    WindowsDeleteString(rcx);
-                    rcx = var_58;
-                    hstring = r15;
-                    if (rcx == 0) {
-                        eax = 0;
-                        return;
-                    }
-                    var_58 = r15;
-                    rax = *(u64*)(rcx);
-                    rax = *(u64*)((rax + 0xADDR));
-                    sub_140028010(rcx, rdx);
-                    eax = 0;
-                    return;
-                }
-                edx -= 1;
-                if (edx == 0) {
-                    *(u32*)(rsi) = 3;
-                    WindowsDeleteString(rcx);
-                    rcx = var_58;
-                    hstring = r15;
-                    if (rcx == 0) {
-                        eax = 0;
-                        return;
-                    }
-                    var_58 = r15;
-                    rax = *(u64*)(rcx);
-                    rax = *(u64*)((rax + 0xADDR));
-                    sub_140028010(rcx, rdx);
-                    eax = 0;
-                    return;
-                }
-                edx -= 1;
-                if (edx == 0) {
-                    rbx = var_58;
-                    rax = *(u64*)(rbx);
-                    rdi = *(u64*)((rax + 0xADDR));
-                    WindowsDeleteString(r15);
-                    rax = rdi;
-                    sub_140028010(rbx, &hstring);
-                    ebx = eax;
-                    if (eax >= 0 /* signed */) {
-                        WindowsGetStringRawBuffer(hstring, 0);
-                        r8 = rax;
-                        sub_140008384(r14, 0xADDR);
-                        ebx = eax;
-                        if (eax >= 0 /* signed */) {
-                            rcx = hstring;
-                            *(u32*)(rsi) = 2;
-                            WindowsDeleteString(rcx);
-                            rcx = var_58;
-                            hstring = r15;
-                            if (rcx == 0) {
-                                eax = 0;
-                                return;
-                            }
-                            var_58 = r15;
-                            rax = *(u64*)(rcx);
-                            rax = *(u64*)((rax + 0xADDR));
-                            sub_140028010(rcx, rdx);
+                switch (edx) {
+                    case 0xADDR: {
+                        edx -= 0xADDR;
+                        *(u32*)(rsi) = 1;
+                        WindowsDeleteString(rcx);
+                        rcx = var_58;
+                        hstring = r15;
+                        if (rcx == 0) {
                             eax = 0;
                             return;
                         }
-                        edx = 0xADDR;
-                        r9d = ebx;
-                        sub_140007cf0(var_48, rdx, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
-                        WindowsDeleteString(hstring);
-                        hstring = r15;
-                        rcx = var_58;
-                        if (rcx != 0) {
-                            var_58 = r15;
-                            rax = *(u64*)(rcx);
-                            rax = *(u64*)((rax + 0xADDR));
-                            sub_140028010(rcx, rdx);
-                        }
-                        eax = ebx;
-                    } else {
-                        edx = 0xADDR;
-                    }
-                } else if (edx == 3) {
-                    *(u32*)(rsi) = 1;
-                    WindowsDeleteString(rcx);
-                    rcx = var_58;
-                    hstring = r15;
-                    if (rcx == 0) {
+                        var_58 = r15;
+                        rax = *(u64*)(rcx);
+                        rax = *(u64*)((rax + 0xADDR));
+                        sub_140028010(rcx, rdx);
                         eax = 0;
                         return;
                     }
-                    var_58 = r15;
-                    rax = *(u64*)(rcx);
-                    rax = *(u64*)((rax + 0xADDR));
-                    sub_140028010(rcx, rdx);
-                    eax = 0;
-                    return;
+                    case 0xADDR: {
+                        edx -= 0xADDR;
+                        *(u32*)(rsi) = 3;
+                        WindowsDeleteString(rcx);
+                        rcx = var_58;
+                        hstring = r15;
+                        if (rcx == 0) {
+                            eax = 0;
+                            return;
+                        }
+                        var_58 = r15;
+                        rax = *(u64*)(rcx);
+                        rax = *(u64*)((rax + 0xADDR));
+                        sub_140028010(rcx, rdx);
+                        eax = 0;
+                        return;
+                    }
+                    case 0xADDR: {
+                        edx -= 0xADDR;
+                        rbx = var_58;
+                        rax = *(u64*)(rbx);
+                        rdi = *(u64*)((rax + 0xADDR));
+                        WindowsDeleteString(r15);
+                        rax = rdi;
+                        sub_140028010(rbx, &hstring);
+                        ebx = eax;
+                        if (eax >= 0 /* signed */) {
+                            WindowsGetStringRawBuffer(hstring, 0);
+                            r8 = rax;
+                            sub_140008384(r14, 0xADDR);
+                            ebx = eax;
+                            if (eax >= 0 /* signed */) {
+                                rcx = hstring;
+                                *(u32*)(rsi) = 2;
+                                WindowsDeleteString(rcx);
+                                rcx = var_58;
+                                hstring = r15;
+                                if (rcx == 0) {
+                                    eax = 0;
+                                    return;
+                                }
+                                var_58 = r15;
+                                rax = *(u64*)(rcx);
+                                rax = *(u64*)((rax + 0xADDR));
+                                sub_140028010(rcx, rdx);
+                                eax = 0;
+                                return;
+                            }
+                            edx = 0xADDR;
+                            r9d = ebx;
+                            sub_140007cf0(var_48, rdx, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
+                            WindowsDeleteString(hstring);
+                            hstring = r15;
+                            rcx = var_58;
+                            if (rcx != 0) {
+                                var_58 = r15;
+                                rax = *(u64*)(rcx);
+                                rax = *(u64*)((rax + 0xADDR));
+                                sub_140028010(rcx, rdx);
+                            }
+                            eax = ebx;
+                        } else {
+                            edx = 0xADDR;
+                        }
+                        break;
+                    }
+                    case 0xADDR: {
+                        edx -= 0xADDR;
+                        *(u32*)(rsi) = 1;
+                        WindowsDeleteString(rcx);
+                        rcx = var_58;
+                        hstring = r15;
+                        if (rcx == 0) {
+                            eax = 0;
+                            return;
+                        }
+                        var_58 = r15;
+                        rax = *(u64*)(rcx);
+                        rax = *(u64*)((rax + 0xADDR));
+                        sub_140028010(rcx, rdx);
+                        eax = 0;
+                        return;
+                    }
+                    default: {
+                        edx -= 0xADDR;
+                        break;
+                    }
                 }
             } else {
                 edx = 0xADDR;

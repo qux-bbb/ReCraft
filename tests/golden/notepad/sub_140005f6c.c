@@ -23,33 +23,41 @@ void sub_140005f6c_l1(void) {
         sub_140006d00(edi);
         esi = eax;
     } else {
-        ecx -= 1;
-        if (ecx == 0) {
-            sub_140006e9c(edi);
-            esi = eax;
-            return;
-        }
-        ecx -= 1;
-        if (ecx == 0) {
-            if (edi >= 0 /* signed */) {
-                rax = var_a8;
-                edi = 0xADDR;
-                var_30 = 0xADDR;
-                var_28 = rax;
-                rax = var_a0;
-                var_20 = rax;
-                sub_1400032f0(r10, rdx, r13, r9, var_a0, var_a8, 0xADDR);
-                *(u32*)((rbx + 8)) = 0xADDR;
-                sub_140005cc0(edi);
-                *(u32*)((rbx + 0xADDR)) = eax;
+        switch (ecx) {
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                sub_140006e9c(edi);
+                esi = eax;
+                return;
             }
-            sub_140006e7c(edi);
-            esi = eax;
-            return;
-        } else if (ecx == 1) {
-            sub_140006d20(edi);
-            esi = eax;
-            return;
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                if (edi >= 0 /* signed */) {
+                    rax = var_a8;
+                    edi = 0xADDR;
+                    var_30 = 0xADDR;
+                    var_28 = rax;
+                    rax = var_a0;
+                    var_20 = rax;
+                    sub_1400032f0(r10, rdx, r13, r9, var_a0, var_a8, 0xADDR);
+                    *(u32*)((rbx + 8)) = 0xADDR;
+                    sub_140005cc0(edi);
+                    *(u32*)((rbx + 0xADDR)) = eax;
+                }
+                sub_140006e7c(edi);
+                esi = eax;
+                return;
+            }
+            case 0xADDR: {
+                ecx -= 0xADDR;
+                sub_140006d20(edi);
+                esi = eax;
+                return;
+            }
+            default: {
+                ecx -= 0xADDR;
+                break;
+            }
         }
     }
     edi = 0;
