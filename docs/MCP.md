@@ -1,9 +1,10 @@
 # MCP server（read-only，M2）
 
 ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户端（Claude Desktop、
-Cursor、自研 agent 等）。当前里程碑只实现**只读工具 + 资源**；写操作（`rename`、
-`set_comment`、`set_prototype`、`define_function`、`apply_type`）按设计走
-**propose/apply 两段式**，在 M3 实现。
+Cursor、自研 agent 等）。MCP 侧**只有只读工具 + 资源**；写操作（`rename`、`set_comment`、
+`set_prototype`、`define_function`、`apply_type`）不走 MCP，由 UI/CLI 的
+**propose/apply 两段式**完成——LLM 只产生带证据地址与置信度的 Proposal，人工确认后经命令
+总线写入且可 undo，见 [ADR-008](adr/ADR-008-mcp-propose-apply.md)。
 
 ## 启动
 
@@ -37,7 +38,7 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
   `scripts/e2e.ps1` 会后台启动真实 HTTP 服务（随机端口 + token），断言 `/health`、携带
   token 的 `initialize` 返回 `serverInfo`、无 token 请求返回 401，然后强制结束进程。
 
-客户端配置示例（Claude Desktop 风格）：
+客户端配置示例（Claude Desktop 风格，stdio）：
 
 ```json
 {
@@ -49,6 +50,25 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
   }
 }
 ```
+
+走 HTTP 的客户端填 **URL + Authorization 头**，没有 `command`/`args`（各客户端字段名略有
+差异，下面是最常见的形态）：
+
+```json
+{
+  "mcpServers": {
+    "recraft-http": {
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": { "Authorization": "Bearer demo" }
+    }
+  }
+}
+```
+
+- `url` 指向 `--bind` 地址下的 `/mcp` 端点，header 里的 token 必须与 `--token` 一致；
+  `/health` 只用于探活，不要当 MCP 端点。
+- Claude Desktop 的 `mcpServers` 只接受 `command`/`args`（stdio）；要接 HTTP 需要一个本地
+  桥接（例如 `mcp-remote`），或者直接用上面的 stdio 配置。
 
 ## 协议
 
@@ -123,12 +143,14 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
   resources/read、filter 先于 limit 的回归、伪代码截断上限、恒定时间 token 比较、未知方法与
   未知工具的错误路径）。
 - E2E：`scripts/e2e.ps1` 第 11 步通过管道调用 `serve-mcp` 验证 initialize +
-  `list_functions` + `resources/read`。
+  `list_functions` + `resources/read`，并断言截断契约（`list_functions{limit:1}` 的
+  `count/truncated/total`、`get_pseudocode{maxLines:1}` 的 `total_lines/truncated`）。
 
 ## 限制与后续
 
-- **只读**：所有工具不修改项目；`rename`/注释/类型等写工具在 M3 以
-  Proposal（证据地址 + 置信度）→ 人工确认 → Command 总线实现。
+- **只读**：所有工具不修改项目；写操作也不在这个服务器上——`rename`/注释/类型等由 UI/CLI 的
+  Proposal（证据地址 + 置信度）→ 人工确认 → Command 总线完成，见
+  [ADR-008](adr/ADR-008-mcp-propose-apply.md)。
 - 无资源订阅（`resources/subscribe`）与 MCP 提示词模板（prompts）；HTTP 传输与 bearer
   鉴权已实现（见上）。
 - `search_bytes` 在 1 GiB 段上按需分块扫描，暂无通配符/正则；`callgraph` 基于已持久化
