@@ -14,6 +14,10 @@
 //!
 //! Resources: `recraft://project/{id}/functions|strings|imports` and
 //! `recraft://project/{id}/pseudocode/{func}`.
+//!
+//! Every list-shaped tool reports `total` (matches before the row cap) and `truncated`
+//! (rows were dropped), and filters run before the cap: a filtered query never answers
+//! "no match" just because the match sits past the default window.
 
 #![forbid(unsafe_code)]
 
@@ -171,8 +175,15 @@ impl McpServer {
             .map(str::to_ascii_lowercase);
         let limit = limit_of(arguments, 500);
         let functions = self.session.functions().map_err(|e| e.to_string())?;
+        let total_available = functions.len();
         let mut items = Vec::new();
-        for function in functions.into_iter().take(limit) {
+        let mut matched = 0usize;
+        for function in &functions {
+            // Without a filter the scan stops at the limit; with one it has to reach the end,
+            // because the match may sit anywhere in the (address-ordered) table.
+            if filter.is_none() && items.len() >= limit {
+                break;
+            }
             let name = self
                 .session
                 .name_at(function.start)
@@ -185,14 +196,29 @@ impl McpServer {
             {
                 continue;
             }
-            items.push(json!({
-                "name": name,
-                "start": hex(function.start),
-                "end": hex(function.end),
-                "size": function.end.get().saturating_sub(function.start.get()),
-            }));
+            matched += 1;
+            // The filter runs *before* the limit: `limit` caps returned rows, never the scan,
+            // otherwise a default-500 query silently answers "no match" for later entries.
+            if items.len() < limit {
+                items.push(json!({
+                    "name": name,
+                    "start": hex(function.start),
+                    "end": hex(function.end),
+                    "size": function.end.get().saturating_sub(function.start.get()),
+                }));
+            }
         }
-        Ok(json!({"functions": items, "count": items.len()}))
+        let total = if filter.is_some() {
+            matched
+        } else {
+            total_available
+        };
+        Ok(json!({
+            "functions": items,
+            "count": items.len(),
+            "total": total,
+            "truncated": total > items.len(),
+        }))
     }
 
     fn tool_disassembly(&mut self, arguments: &Value) -> ToolResult {
@@ -264,14 +290,17 @@ impl McpServer {
         let addr = self
             .resolve_address(arguments.get("addr"))
             .map_err(|e| e.to_string())?;
+        let limit = limit_of(arguments, MAX_LIMIT);
         let entries = if incoming {
             self.session.xrefs_to(addr)
         } else {
             self.session.xrefs_from(addr)
         }
         .map_err(|e| e.to_string())?;
+        let total = entries.len();
         let items: Vec<Value> = entries
             .iter()
+            .take(limit)
             .map(|entry| {
                 json!({
                     "from": hex(entry.from),
@@ -280,7 +309,13 @@ impl McpServer {
                 })
             })
             .collect();
-        Ok(json!({"addr": hex(addr), "xrefs": items, "count": items.len()}))
+        Ok(json!({
+            "addr": hex(addr),
+            "xrefs": items,
+            "count": items.len(),
+            "total": total,
+            "truncated": total > items.len(),
+        }))
     }
 
     fn tool_strings(&mut self, arguments: &Value) -> ToolResult {
@@ -290,8 +325,13 @@ impl McpServer {
             .map(str::to_ascii_lowercase);
         let limit = limit_of(arguments, 500);
         let strings = self.session.strings().map_err(|e| e.to_string())?;
+        let total_available = strings.len();
         let mut items = Vec::new();
-        for entry in strings.into_iter().take(limit) {
+        let mut matched = 0usize;
+        for entry in &strings {
+            if filter.is_none() && items.len() >= limit {
+                break;
+            }
             let text = self
                 .session
                 .read_bytes(entry.addr, (entry.len as usize).max(2))
@@ -302,14 +342,28 @@ impl McpServer {
             {
                 continue;
             }
-            items.push(json!({
-                "addr": hex(entry.addr),
-                "length": entry.len,
-                "encoding": if entry.enc == 2 { "utf-16le" } else { "ascii" },
-                "text": text,
-            }));
+            matched += 1;
+            // Same convention as `list_functions`: filtering precedes the row cap.
+            if items.len() < limit {
+                items.push(json!({
+                    "addr": hex(entry.addr),
+                    "length": entry.len,
+                    "encoding": if entry.enc == 2 { "utf-16le" } else { "ascii" },
+                    "text": text,
+                }));
+            }
         }
-        Ok(json!({"strings": items, "count": items.len()}))
+        let total = if filter.is_some() {
+            matched
+        } else {
+            total_available
+        };
+        Ok(json!({
+            "strings": items,
+            "count": items.len(),
+            "total": total,
+            "truncated": total > items.len(),
+        }))
     }
 
     fn tool_imports(&self, _arguments: &Value) -> ToolResult {
@@ -370,6 +424,7 @@ impl McpServer {
                 "to_name": self.session.name_at(functions[to].start).ok().flatten(),
             }));
         }
+        let nodes_truncated = functions.len() > limit;
         let nodes: Vec<Value> = functions
             .iter()
             .take(limit)
@@ -380,7 +435,12 @@ impl McpServer {
                 })
             })
             .collect();
-        Ok(json!({"nodes": nodes, "edges": edges, "truncated": edges.len() >= limit}))
+        Ok(json!({
+            "nodes": nodes,
+            "node_total": functions.len(),
+            "edges": edges,
+            "truncated": edges.len() >= limit || nodes_truncated,
+        }))
     }
 
     fn tool_search(&mut self, arguments: &Value) -> ToolResult {
@@ -713,7 +773,7 @@ fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "list_functions",
-            "description": "List discovered functions with names and ranges.",
+            "description": "List discovered functions with names and ranges. `filter` runs before `limit`; the result reports `total` and `truncated`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -746,25 +806,31 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "xrefs_to",
-            "description": "References pointing at an address.",
+            "description": "References pointing at an address; reports `total`/`truncated` when capped by `limit`.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"addr": {"type": ["integer", "string"]}},
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                },
                 "required": ["addr"],
             },
         }),
         json!({
             "name": "xrefs_from",
-            "description": "References originating at an address.",
+            "description": "References originating at an address; reports `total`/`truncated` when capped by `limit`.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"addr": {"type": ["integer", "string"]}},
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                },
                 "required": ["addr"],
             },
         }),
         json!({
             "name": "list_strings",
-            "description": "Extracted strings with encoding and address.",
+            "description": "Extracted strings with encoding and address. `filter` runs before `limit`; the result reports `total` and `truncated`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1058,6 +1124,19 @@ mod tests {
             .expect("response expected")
     }
 
+    /// Call a tool and parse the JSON payload out of `content[0].text`.
+    fn tool_json(server: &mut McpServer, tool: &str, arguments: Value) -> Value {
+        let response = call(
+            server,
+            "tools/call",
+            json!({"name": tool, "arguments": arguments}),
+        );
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool result text");
+        serde_json::from_str(text).expect("tool result is JSON")
+    }
+
     #[test]
     fn initialize_reports_server_info() {
         let Some(mut server) = notepad_project() else {
@@ -1181,5 +1260,81 @@ mod tests {
             json!({"name": "drop_database", "arguments": {}}),
         );
         assert_eq!(response["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn function_filter_runs_before_the_limit() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let all = tool_json(&mut server, "list_functions", json!({"limit": MAX_LIMIT}));
+        let functions = all["functions"].as_array().unwrap();
+        if functions.len() <= 500 {
+            return;
+        }
+        // A match past the default 500-row window used to disappear entirely.
+        let name = functions.last().unwrap()["name"]
+            .as_str()
+            .expect("analysis names every function")
+            .to_owned();
+        let filtered = tool_json(&mut server, "list_functions", json!({"filter": name}));
+        assert_eq!(filtered["count"], 1, "{filtered}");
+        assert_eq!(filtered["total"], 1, "{filtered}");
+        assert_eq!(filtered["truncated"], false, "{filtered}");
+
+        // The unfiltered default window must admit that it dropped rows.
+        let windowed = tool_json(&mut server, "list_functions", json!({}));
+        assert_eq!(windowed["truncated"], true, "{windowed}");
+        assert_eq!(
+            windowed["total"].as_u64().unwrap(),
+            functions.len() as u64,
+            "{windowed}"
+        );
+    }
+
+    #[test]
+    fn string_filter_runs_before_the_limit() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let all = tool_json(&mut server, "list_strings", json!({"limit": MAX_LIMIT}));
+        let strings = all["strings"].as_array().unwrap();
+        if strings.len() <= 500 {
+            return;
+        }
+        let last_text = strings.last().unwrap()["text"].as_str().unwrap().to_owned();
+        if last_text.is_empty() {
+            return;
+        }
+        let filtered = tool_json(&mut server, "list_strings", json!({"filter": last_text}));
+        assert!(filtered["count"].as_u64().unwrap() >= 1, "{filtered}");
+        assert_eq!(filtered["truncated"], false, "{filtered}");
+
+        let windowed = tool_json(&mut server, "list_strings", json!({}));
+        assert_eq!(windowed["truncated"], true, "{windowed}");
+        assert_eq!(
+            windowed["total"].as_u64().unwrap(),
+            strings.len() as u64,
+            "{windowed}"
+        );
+    }
+
+    #[test]
+    fn xref_lists_report_their_totals() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let empty = tool_json(&mut server, "xrefs_to", json!({"addr": "entry"}));
+        assert_eq!(empty["count"], 0, "{empty}");
+        assert_eq!(empty["total"], 0, "{empty}");
+        assert_eq!(empty["truncated"], false, "{empty}");
+
+        let capped = tool_json(
+            &mut server,
+            "xrefs_from",
+            json!({"addr": "start", "limit": 1}),
+        );
+        assert!(capped["count"].as_u64().unwrap() <= 1, "{capped}");
+        assert!(capped["truncated"].is_boolean(), "{capped}");
     }
 }
