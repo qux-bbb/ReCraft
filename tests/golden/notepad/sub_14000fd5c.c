@@ -20,9 +20,10 @@ void sub_14000fd5c_l1(void) {
     var_38 = xmm0;
     __asm("div ecx");
     ebx = eax;
+    eax = 0;
     var_48 = rax;
     sub_1400083f8(&var_28, (rax + 0xADDR), qword_ADDR, ebx);
-    if (0 >= 0 /* signed */ && qword_ADDR != 0) {
+    if (eax >= 0 /* signed */ && qword_ADDR != 0) {
         SendMessageW(qword_ADDR, 0xADDR, 2, &var_28);
     }
     dword_ADDR = ebx;

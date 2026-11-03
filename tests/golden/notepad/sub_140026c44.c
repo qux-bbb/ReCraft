@@ -114,8 +114,7 @@ void sub_140026c44_l1(void) {
     do {
         rbx += 1;
     } while (*(u16*)((rcx + (rbx * 2))) != si);
-    eax = 0xADDR;
-    if (rbx > rax) {
+    if (rbx > 0xADDR) {
         ebx = 0xADDR;
         r9d = ebx;
         sub_140007cf0(var_68, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");

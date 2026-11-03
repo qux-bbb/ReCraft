@@ -11,9 +11,7 @@ void sub_14002739c_l1(void) {
     sub_140027338(rsi, r9, (rbx + 4));
     al &= 0xADDR;
     al = -(al);
-    eax = 1;
-    edx = ((al != 0) ? 1 : 0);
-    edx += eax;
+    edx = (((al != 0) ? 1 : 0) + 1);
     if ((*(u32*)((rbx + 4)) & edx) != 0) {
         r9 = rdi;
         r8 = r14;

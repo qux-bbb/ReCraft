@@ -1,5 +1,6 @@
 // L1 structure recovery (12 blocks)
 void sub_1400067a8_l1(void) {
+    r15d = 0;
     ebx = r9d;
     ebp = (uint32)(r8w);
     r14d = edx;

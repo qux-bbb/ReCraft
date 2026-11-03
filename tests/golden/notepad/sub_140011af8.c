@@ -255,6 +255,7 @@ void sub_140011af8_l1(void) {
                         var_28 = r8d;
                         var_20 = r8;
                         WideCharToMultiByte(r14d, r15d, rbx, edi, r8, r8d, r8, rax);
+                        ecx = 0;
                         if (var_54 != 0) {
                             var_20 = 0xADDR;
                             sub_14000c3a4(var_58, qword_ADDR, qword_ADDR, *(u64*)(rsi), 0xADDR);

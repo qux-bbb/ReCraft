@@ -1,5 +1,6 @@
 // L1 structure recovery (22 blocks)
 void sub_140004cc4_l1(void) {
+    esi = 0;
     var_60 = rsi;
     var_70 = sil;
     ebx = (rsi + 1);

@@ -30,7 +30,7 @@ void sub_140021e54_l1(void) {
                 *(u16*)(rbx) = r15w;
             } else {
                 rax = (int64)(eax);
-                if (rax <= rdi) {
+                if (rax <= 0xADDR) {
                     if (rax == rdi) {
                         *(u16*)((rbx + (rdi * 2))) = r15w;
                     }

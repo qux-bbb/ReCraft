@@ -62,7 +62,6 @@ void sub_140001010_l1(void) {
         eax = 0;
         return;
     }
-    eax = 0;
     loc_ADDR:
     r8d = (uint32)(*(u8*)(((rax + rdi) + 0xADDR)));
     rcx = rax;
@@ -70,7 +69,7 @@ void sub_140001010_l1(void) {
     edx = (uint32)(*(u8*)(((rsp + r8) + 0xADDR)));
     dl ^= *(u8*)(((rcx + rdi) + 0xADDR));
     dl += r8b;
-    if (dl != *(u8*)(((rax + rdi) + 0xADDR))) {
+    if (dl != *(u8*)(((0 + rdi) + 0xADDR))) {
         sub_140004cc4("[-] Wrong flag. Try again.");
         ebx += 1;
         if (ebx < 3 /* signed */) goto loc_ADDR;

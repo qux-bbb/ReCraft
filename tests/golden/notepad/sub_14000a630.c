@@ -67,8 +67,7 @@ void sub_14000a630_l1(void) {
     } else if (edx != 0xADDR) {
         DefWindowProcW(rbx, rdx, r8, r9);
     } else if (r9 == 0) {
-        eax = 2;
-        if (r8 != rax) {
+        if (r8 != 2) {
             DefWindowProcW(rbx, rdx, r8, r9);
             return;
         }

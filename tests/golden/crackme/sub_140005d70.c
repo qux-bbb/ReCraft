@@ -75,7 +75,6 @@ void sub_140005d70_l1(void) {
                                     } else {
                                         rax = *(u64*)((rdi + 0xADDR));
                                         rcx = *(u64*)(rax);
-                                        eax = 0xADDR;
                                         if ((*(u16*)((rcx + (r8 * 2))) & 0xADDR) != 0) {
                                             rax = *(u64*)((rbx + 0xADDR));
                                             r8 = *(u64*)((rbx + 8));

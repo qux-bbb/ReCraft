@@ -37,10 +37,9 @@ void sub_14000e950_l1(void) {
             } else {
                 eax -= 0xADDR;
                 if (eax == 0) {
-                    rax = r14;
-                    ecx = 0xADDR;
-                    rax >>= 0xADDR;
-                    ax &= cx;
+                    rax = (r14 >> 0xADDR);
+                    r12d = 5;
+                    ax &= 0xADDR;
                     if (ax != 0xADDR) {
                         if (r14 != qword_ADDR) {
                             loc_ADDR:
@@ -60,7 +59,7 @@ void sub_14000e950_l1(void) {
                             if (ax != 0xADDR) {
                                 ecx = 0xADDR;
                                 ebx = 1;
-                                ax -= cx;
+                                ax -= 0xADDR;
                                 if (ax <= 0xADDR) {
                                     if (dword_ADDR != ebx) {
                                         rdx = qword_ADDR;
@@ -207,6 +206,7 @@ void sub_14000e950_l1(void) {
         }
         eax -= 1;
         if (eax == 0) {
+            esi = 0;
             if (dword_ADDR == 0) {
                 eax = 0;
                 return;
@@ -362,9 +362,8 @@ void sub_14000e950_l1(void) {
             } else {
                 eax -= 1;
                 if (eax == 0) {
-                    ebx = 1;
-                    di -= bx;
-                    if (di > bx) {
+                    di -= 0xADDR;
+                    if (di > 0xADDR) {
                         eax = 0;
                         return;
                     }

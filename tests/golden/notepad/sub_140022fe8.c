@@ -1,5 +1,6 @@
 // L1 structure recovery (5 blocks)
 void sub_140022fe8_l1(void) {
+    r11d = 4;
     rbx = rcx;
     if (dword_ADDR > 4) {
         r10 = 0xADDR;

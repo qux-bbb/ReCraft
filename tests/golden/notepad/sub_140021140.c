@@ -2,6 +2,7 @@
 void sub_140021140_l1(void) {
     rsi = rcx;
     rbx = (int64)(edx);
+    r14d = 0;
     var_60 = r14;
     rcx = (((rbx + (rbx * 4)) << 4) + off_1400356e0);
     if (*(u16*)(rcx) != 0xADDR) {

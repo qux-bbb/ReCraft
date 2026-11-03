@@ -7,7 +7,7 @@ void sub_140010c0c_l1(void) {
     edi = edx;
     var_80 = ebx;
     var_40 = ebx;
-    if (var_a0 != ebx) {
+    if (var_a0 != 0) {
         rsi = rbx;
         if (edi != 0xADDR) {
             rsi = &var_80;

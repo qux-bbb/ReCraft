@@ -1,9 +1,8 @@
 // L1 structure recovery (3 blocks)
 void sub_140024d08_l1(void) {
-    edi = 0;
     rbx = rdx;
     rsi = rcx;
-    if (*(u64*)(rcx) != rdi) {
+    if (*(u64*)(rcx) != 0) {
         rcx = *(u64*)(rcx);
         LocalFree(*(u64*)(rcx));
     }

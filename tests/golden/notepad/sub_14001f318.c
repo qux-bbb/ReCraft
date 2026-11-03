@@ -13,15 +13,13 @@ void sub_14001f318_l1(void) {
     eax = -(eax);
     ebx = 0xADDR;
     r9 = ((eax != 0) ? -1 : 0);
-    r9 = ~(r9);
-    r9 &= r8;
+    r9 = (~(r9) & 3);
     SendMessageW(qword_ADDR, ebx, 3, (r9 & r8));
     eax = dword_ADDR;
     r8d = 4;
     eax = -(eax);
     r9 = ((eax != 0) ? -1 : 0);
-    r9 = ~(r9);
-    r9 &= r8;
+    r9 = (~(r9) & 4);
     SendMessageW(qword_ADDR, ebx, 4, (r9 & r8));
     r8d = 0xADDR;
     SendMessageW(qword_ADDR, ebx, 0xADDR, r8d);

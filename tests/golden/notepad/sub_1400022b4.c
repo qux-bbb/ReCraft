@@ -14,6 +14,7 @@ void sub_1400022b4_l1(void) {
             al = 0;
             return;
         }
+        eax = 0xADDR;
         if (*(u16*)((rcx + 0xADDR)) != 0xADDR) {
             al = 0;
             return;

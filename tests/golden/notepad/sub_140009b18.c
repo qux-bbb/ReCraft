@@ -9,8 +9,7 @@ void sub_140009b18_l1(void) {
     do {
         rdx += 1;
     } while (*(u16*)((rcx + (rdx * 2))) != di);
-    eax = 0xADDR;
-    if (rdx > rax) {
+    if (rdx > 0xADDR) {
         sub_14000b320(0xADDR);
     }
     eax = (rdx + 1);

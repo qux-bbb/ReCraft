@@ -192,7 +192,6 @@ void sub_140010f48_l1(void) {
                 } else {
                     rcx = r12;
                     if (*(u16*)(r14) != 0xADDR) {
-                        eax = 0xADDR;
                         if (*(u16*)(r14) != 0xADDR) {
                             rdx = r14;
                             r8d = edi;

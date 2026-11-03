@@ -1,5 +1,6 @@
 // L1 structure recovery (5 blocks)
 void sub_1400253cc_l1(void) {
+    ebx = 0;
     if (*(u8*)((rcx + 0xADDR)) != 0xADDR) {
         *(u8*)((rcx + 0xADDR)) = bl;
         rax = *(u64*)((rcx + 8));

@@ -25,8 +25,7 @@ void sub_140008624_l1(void) {
                 sub_140008748((rbx + 0xADDR), rsi, r15, 0);
                 rax = *(u64*)(rsi);
                 if (rax != 0) {
-                    ecx = 0xADDR;
-                    rax |= rcx;
+                    rax |= 0xADDR;
                     *(u64*)(rsi) = rax;
                 }
                 if (rdi != 0) {

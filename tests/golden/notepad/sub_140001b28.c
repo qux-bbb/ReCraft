@@ -1,6 +1,7 @@
 // L1 structure recovery (16 blocks)
 void sub_140001b28_l1(void) {
     r8 = rcx;
+    eax = 0xADDR;
     if (word_ADDR != 0xADDR) {
         al = 0;
     } else {
@@ -11,6 +12,7 @@ void sub_140001b28_l1(void) {
             al = 0;
             return;
         }
+        eax = 0xADDR;
         if (*(u16*)((rcx + 0xADDR)) != 0xADDR) {
             al = 0;
             return;

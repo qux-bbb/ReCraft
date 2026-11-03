@@ -92,12 +92,11 @@ void sub_140023f90_l1(void) {
                                 }
                                 ecx -= 0xADDR;
                                 if (ecx == 0) {
-                                    eax = 0xADDR;
                                     r8d = (rax - 0xADDR);
                                     r8d = ((r14 != 0xADDR) ? eax : r8d);
                                     sub_140024aec(rdi, rbp, r8, *(u32*)(r15));
                                     SendMessageW(*(u64*)((rbp + 8)), dword_ADDR, 0, rbp);
-                                    if (rax != rsi) {
+                                    if (0xADDR != rsi) {
                                         rax = rsi;
                                         return;
                                     }

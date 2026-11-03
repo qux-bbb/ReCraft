@@ -5,6 +5,7 @@ void sub_14000da7c_l1(void) {
     edi = (uint32)(dx);
     r14 = rdx;
     xmm0 = 0;
+    edx = 0xADDR;
     ebx = esi;
     var_40 = rbx;
     r15 = rcx;

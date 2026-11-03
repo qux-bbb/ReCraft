@@ -4,7 +4,7 @@ void sub_14001ea18_l1(void) {
     var_60 = 1;
     var_50 &= 0;
     rbx = rdx;
-    hKey &= rax;
+    hKey &= 0;
     var_30 = eax;
     var_68 = 4;
     if (rcx == 0) {

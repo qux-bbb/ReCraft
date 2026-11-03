@@ -3,9 +3,8 @@ void sub_140004eac_l1(void) {
     rax = 0xADDR;
     rbp = rcx;
     if (rdx <= 0xADDR) {
-        edi = 0;
         rsi = (rdx + rdx);
-        if (*(u64*)((rcx + 0xADDR)) != rdi) {
+        if (*(u64*)((rcx + 0xADDR)) != 0) {
             if (rsi > *(u64*)((rcx + 0xADDR))) {
                 sub_14000b080(rsi);
                 rbx = rax;

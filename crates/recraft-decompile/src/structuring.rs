@@ -699,84 +699,87 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
             index += 1;
             continue;
         }
-        let mut names = vec![register.clone()];
-        names.extend(narrow_register(&register).into_iter().map(str::to_owned));
-        let Some(use_index) = first_mention_any(lines, index + 1, 9, &names) else {
-            index += 1;
-            continue;
-        };
-        // The fold only holds if the assignment and its use sit in the same block: a use deeper in
-        // a loop body may see a value the loop carried, not the constant above it.
-        if depths[index] != depths[use_index] {
-            index += 1;
-            continue;
+        // Every spelling that still holds the constant: the 32-bit name, its 16/8-bit halves,
+        // and — when the value survives the zero-extension — the 64-bit parent
+        // (`r9d = 0; … (r9 + 2)`). A negative literal stays out: `eax = -1` leaves
+        // `0xffffffff` in rax, which is not `-1`.
+        let wide = wide_register(&register).filter(|_| stays_in_32_bits(&value));
+        let mut family = vec![register.clone()];
+        family.extend(narrow_register(&register).into_iter().map(str::to_owned));
+        if let Some(wide) = wide {
+            family.push(wide.to_owned());
         }
-        let candidate = lines[use_index].text.clone();
-        let trimmed = candidate.trim();
-        let condition = trimmed
-            .strip_prefix("if (")
-            .and_then(|rest| rest.strip_suffix(") {"))
-            .map(str::to_owned);
-        // `rcx += rdx;` with `rdx = 0x140000000` is one arithmetic step: fold the constant into
-        // the compound assignment. Only the right-hand side is a fold site — `rdx += rcx` writes
-        // the register instead of reading it.
-        let compound = if condition.is_none() {
-            compound_operand(trimmed, &register)
-        } else {
-            None
-        };
-        let Some((folded, folded_value)) =
-            Some(match (condition.as_deref(), compound.as_deref()) {
-                (Some(condition), _) => {
-                    // A 16- or 8-bit test reads the low half of the register: `eax = 0x5a4d; … != ax`
-                    // folds the same way once the constant is truncated to the width compared.
-                    if contains_token(condition, &register) {
-                        (register.clone(), value.clone())
-                    } else {
-                        let Some(narrow) = narrow_register(&register).into_iter().find(|narrow| {
-                            contains_token(condition, narrow)
-                                && is_truncated_constant(&value, narrow)
-                        }) else {
-                            index += 1;
-                            continue;
-                        };
-                        (narrow.to_owned(), truncate_constant(&value, narrow))
-                    }
-                }
-                (None, Some(operand)) => {
-                    if operand == register {
-                        (register.clone(), value.clone())
-                    } else {
-                        let Some(narrow) = narrow_register(&register).into_iter().find(|narrow| {
-                            operand == *narrow && is_truncated_constant(&value, narrow)
-                        }) else {
-                            index += 1;
-                            continue;
-                        };
-                        (narrow.to_owned(), truncate_constant(&value, narrow))
-                    }
-                }
-                (None, None) => {
-                    index += 1;
+        // The constant holds until the register is written, so the first *foldable* read is
+        // used; a read that cannot take the constant (`r9d = (rax - 5)`) does not stop the
+        // scan, it only rules itself out. The depth gate keeps a use in a nested loop body
+        // from seeing a loop-carried value instead of the constant above it.
+        let mut fold: Option<(usize, String, String)> = None;
+        for offset in index + 1..(index + 10).min(lines.len()) {
+            let statement = lines[offset].text.trim();
+            let body = statement.trim_end_matches(';');
+            if family.iter().any(|name| assigns_to(body, name)) {
+                break;
+            }
+            // A mention inside a nested block may run more than once and see a value the loop
+            // carried, so it is skipped rather than folded; the write check above still sees
+            // the assignments that happen inside it.
+            if depths[offset] != depths[index] {
+                continue;
+            }
+            let Some(spelling) = family
+                .iter()
+                .find(|name| contains_token(statement, name))
+                .cloned()
+            else {
+                continue;
+            };
+            // The literal in the width the statement reads: a 16/8-bit spelling truncates it,
+            // the 32-bit name and its zero-extended parent keep it.
+            let folded_value = if spelling == register || wide.is_some_and(|wide| wide == spelling)
+            {
+                value.clone()
+            } else {
+                if !is_truncated_constant(&value, &spelling) {
                     continue;
                 }
-            })
-        else {
+                truncate_constant(&value, &spelling)
+            };
+            if let Some(condition) = statement
+                .strip_prefix("if (")
+                .and_then(|rest| rest.strip_suffix(") {"))
+            {
+                // A bare truth test has no comparison to fold into, and folding the only
+                // operand of a comparison would print a constant condition (`if (0 >= 0)`)
+                // that reads worse than the register. Only the comparison itself counts: the
+                // `/* signed */` marker is a comment and a trailing `&& other` keeps the
+                // condition meaningful, so the checked text stops at the first comment.
+                let compared = condition.split("/*").next().unwrap_or(condition);
+                if condition.trim() == spelling
+                    || !has_identifier(&replace_token(compared, &spelling, ""))
+                {
+                    continue;
+                }
+                fold = Some((offset, spelling, folded_value));
+                break;
+            }
+            // `rcx += rdx;` with `rdx = 0x140000000` is one arithmetic step: fold the constant
+            // into the compound assignment. Only the right-hand side is a fold site —
+            // `rdx += rcx` writes the register instead of reading it.
+            if compound_operand(body, &spelling).is_some() {
+                fold = Some((offset, spelling, folded_value));
+                break;
+            }
+        }
+        let Some((use_index, folded, folded_value)) = fold else {
             index += 1;
             continue;
         };
-        if let Some(condition) = condition.as_deref() {
-            // A bare truth test has no comparison to fold into.
-            if condition.trim() == folded {
-                index += 1;
-                continue;
-            }
-            // Comparing two known constants would print a constant condition; the register form
-            // at least keeps the code readable.
-            if !has_identifier(&replace_token(condition, &folded, "")) {
-                index += 1;
-                continue;
-            }
+        let candidate = lines[use_index].text.clone();
+        if let Some(condition) = candidate
+            .trim()
+            .strip_prefix("if (")
+            .and_then(|rest| rest.strip_suffix(") {"))
+        {
             let indent = " ".repeat(leading_spaces(&candidate));
             lines[use_index].text = format!(
                 "{indent}if ({}) {{",
@@ -785,14 +788,20 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         } else {
             lines[use_index].text = replace_token(&candidate, &folded, &folded_value);
         }
-        // The register's next mention decides whether the assignment is dead.
-        let dead = match first_mention(lines, use_index + 1, lines.len() - use_index - 1, &register)
-        {
-            Some(next) => {
-                overwrites_plainly(lines[next].text.trim().trim_end_matches(';'), &register)
+        // The assignment is dead once a full write of the register or its parent comes before
+        // any read: a later `r9` read still sees the zero-extended constant, and a write to
+        // `al` alone leaves the upper bits, so both keep the value alive.
+        let mut dead = true;
+        for line in lines.iter().skip(use_index + 1) {
+            let body = line.text.trim().trim_end_matches(';');
+            if assigns_to(body, &register) || wide.is_some_and(|wide| assigns_to(body, wide)) {
+                break;
             }
-            None => true,
-        };
+            if family.iter().any(|name| contains_token(body, name)) {
+                dead = false;
+                break;
+            }
+        }
         if dead {
             lines.remove(index);
             depths.remove(index);
@@ -817,6 +826,24 @@ fn compound_operand(statement: &str, register: &str) -> Option<String> {
     }
     None
 }
+/// The 64-bit parent of a 32-bit register (`eax` → `rax`, `r8d` → `r8`). A 64-bit name has
+/// no parent of its own.
+fn wide_register(register: &str) -> Option<&'static str> {
+    const BASES: [&str; 16] = [
+        "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12",
+        "r13", "r14", "r15",
+    ];
+    let wide = BASES[usize::from(wide_register_base(register)?)];
+    (wide != register).then_some(wide)
+}
+
+/// Whether a constant survives the zero-extension of a 32-bit write into the parent
+/// register: values up to `0xffffffff` do, a negative literal does not (`eax = -1` puts
+/// `0xffffffff` in rax, not `-1`).
+fn stays_in_32_bits(value: &str) -> bool {
+    parse_constant(value).is_some_and(|number| number <= u64::from(u32::MAX))
+}
+
 /// The 16- and 8-bit names of a 32-bit register (`eax` → `ax`, `al`).
 fn narrow_register(register: &str) -> Vec<&'static str> {
     let pair = match register {
@@ -876,35 +903,6 @@ fn parse_constant(value: &str) -> Option<u64> {
     }
     value.parse::<u64>().ok()
 }
-// The first line at or after `from` that mentions any of `names`, within `limit` lines.
-fn first_mention_any(
-    lines: &[PseudoLine],
-    from: usize,
-    limit: usize,
-    names: &[String],
-) -> Option<usize> {
-    let end = (from + limit).min(lines.len());
-    for (index, line) in lines.iter().enumerate().take(end).skip(from) {
-        if names
-            .iter()
-            .any(|name| contains_token(&line.text, name.as_str()))
-        {
-            return Some(index);
-        }
-    }
-    None
-}
-/// The first line at or after `from` that mentions `name` as a token, within `limit` lines.
-fn first_mention(lines: &[PseudoLine], from: usize, limit: usize, name: &str) -> Option<usize> {
-    let end = (from + limit).min(lines.len());
-    for (index, line) in lines.iter().enumerate().take(end).skip(from) {
-        if contains_token(&line.text, name) {
-            return Some(index);
-        }
-    }
-    None
-}
-
 /// The brace depth before each line, i.e. how many blocks enclose it. Precomputed because the
 /// constant fold asks for it on every candidate.
 fn line_depths(lines: &[PseudoLine]) -> Vec<isize> {
@@ -918,15 +916,6 @@ fn line_depths(lines: &[PseudoLine]) -> Vec<isize> {
     depths
 }
 
-/// Whether the statement overwrites `name` without reading it (`eax = …`). A compound
-/// assignment reads the old value, so it does not make an earlier constant dead.
-fn overwrites_plainly(statement: &str, name: &str) -> bool {
-    let trimmed = statement.trim_start();
-    let Some(rest) = trimmed.strip_prefix(name) else {
-        return false;
-    };
-    rest.trim_start().starts_with('=') && !rest.trim_start().starts_with("==")
-}
 /// Whether `text` holds an identifier (a number such as `0x12a` does not).
 fn has_identifier(text: &str) -> bool {
     let mut chars = text.chars().peekable();
@@ -7620,6 +7609,51 @@ mod tests {
         assert_eq!(
             lines[0].text.trim(),
             "rcx = ((int64)(dword_14000003c) + 0x140000000);"
+        );
+    }
+    #[test]
+    fn a_32_bit_constant_folds_into_its_zero_extended_parent() {
+        // `r9d = 0` clears the upper half of r9, so a later `r9` read sees the same constant.
+        let mut lines = snippet(&["    r9d = 0;", "    if (rdx > r9) {"]);
+        fold_constant_registers(&mut lines);
+        assert_eq!(lines.len(), 1, "{}", joined(&lines));
+        assert_eq!(lines[0].text.trim(), "if (rdx > 0) {");
+    }
+    #[test]
+    fn a_negative_32_bit_constant_does_not_reach_its_parent() {
+        // `eax = -1` leaves `0xffffffff` in rax: folding the literal `-1` into a 64-bit read
+        // would compare against the wrong value.
+        let mut lines = snippet(&["    eax = -1;", "    if (rdx > rax) {"]);
+        fold_constant_registers(&mut lines);
+        assert_eq!(lines.len(), 2, "{}", joined(&lines));
+        assert!(lines[1].text.contains("rax"), "{}", joined(&lines));
+    }
+    #[test]
+    fn the_constant_assignment_survives_a_later_wide_read() {
+        // Removing the write would leave the 64-bit read with whatever r15 held before.
+        let mut lines = snippet(&[
+            "    r15d = 0;",
+            "    if (arg1->field_40 == r15b) {",
+            "    }",
+            "    if (*(u64*)(r14) == r15) {",
+        ]);
+        fold_constant_registers(&mut lines);
+        assert!(joined(&lines).contains("r15d = 0;"), "{}", joined(&lines));
+    }
+    #[test]
+    fn a_read_that_cannot_take_the_constant_does_not_stop_the_fold() {
+        // `r9 = (rax - 5)` reads the constant but is not a fold site; the comparison after it
+        // still is.
+        let mut lines = snippet(&[
+            "    eax = 7;",
+            "    r9 = (rax - 5);",
+            "    if (esi >= eax) {",
+        ]);
+        fold_constant_registers(&mut lines);
+        assert!(
+            joined(&lines).contains("if (esi >= 7) {"),
+            "{}",
+            joined(&lines)
         );
     }
     #[test]

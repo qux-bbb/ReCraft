@@ -52,8 +52,7 @@ void sub_140013154_l1(void) {
             eax = 0;
             return;
         }
-        eax = 0;
-        if (qword_ADDR == rax) {
+        if (qword_ADDR == 0) {
             eax = 0;
             return;
         }
@@ -310,8 +309,7 @@ void sub_140013154_l1(void) {
                 SendMessageW(qword_ADDR, (rdi + 0xADDR), var_194, var_18c);
                 SendMessageW(qword_ADDR, (rdi + 0xADDR), 0, 0);
                 GetKeyboardLayout(0);
-                ecx = 0xADDR;
-                ax &= cx;
+                ax &= 0xADDR;
                 if (ax == 0xADDR) {
                     SendMessageW(qword_ADDR, 0xADDR, r13, r13);
                 }
@@ -754,7 +752,7 @@ void sub_140013154_l1(void) {
                                 if (ebx >= 0 /* signed */) {
                                     rcx = var_1d0;
                                     edi = 1;
-                                    if (rcx >= rdi) {
+                                    if (rcx >= 1) {
                                         sub_140027494(rcx, "WinSta0");
                                         if (eax == 0) {
                                             rcx = var_1d8;
@@ -1105,7 +1103,6 @@ void sub_140013154_l1(void) {
                                                                                                                                                 *(u32*)(rdx) = edi;
                                                                                                                                                 sub_1400274ac(r9, "Security-SPP-GenuineLocalStatus");
                                                                                                                                                 r10d = var_2f0;
-                                                                                                                                                r9d = 1;
                                                                                                                                                 r11d = var_2f4;
                                                                                                                                                 r10d += 1;
                                                                                                                                                 var_2f0 = r10d;
@@ -1140,7 +1137,7 @@ void sub_140013154_l1(void) {
                                                                                                                                     edi = r12d;
                                                                                                                                     if (r13d >= 0 /* signed */) {
                                                                                                                                         r13d = 0;
-                                                                                                                                        if (var_2f8 != r13) {
+                                                                                                                                        if (var_2f8 != 0) {
                                                                                                                                             rdx = var_2f8;
                                                                                                                                             edi = r13d;
                                                                                                                                             if (r10d == 0) {
@@ -1206,7 +1203,7 @@ void sub_140013154_l1(void) {
                                                                                                                                                                                         r11d = 1;
                                                                                                                                                                                         if (var_300 >= 1) {
                                                                                                                                                                                             edi = 0;
-                                                                                                                                                                                            if (var_308 != rdi) {
+                                                                                                                                                                                            if (var_308 != 0) {
                                                                                                                                                                                                 if (var_300 <= edi) {
                                                                                                                                                                                                     loc_ADDR:
                                                                                                                                                                                                     r13d = 0xADDR;
@@ -2229,15 +2226,16 @@ void sub_140013154_l1(void) {
                                         eax = r12d;
                                         __asm("xchg [0xADDR], eax");
                                         sub_1400029dc(&var_810, rdx, (rdx + 0xADDR));
+                                        ecx = 0xADDR;
                                         eax = (esi & 0xADDR);
                                         xmm0 = 0;
                                         var_148 = eax;
                                         edx = 0;
                                         eax = (esi >> 4);
-                                        ax &= cx;
+                                        ax &= 0xADDR;
                                         var_da0 = ax;
                                         eax = (esi >> 8);
-                                        ax &= cx;
+                                        ax &= 0xADDR;
                                         var_da2 = ax;
                                         eax = (esi >> 0xADDR);
                                         ax &= cx;
@@ -2275,7 +2273,7 @@ void sub_140013154_l1(void) {
                                                 sub_140024bf8(rcx);
                                                 sub_140024d58(&var_270, rax);
                                                 eax = 0;
-                                                if (var_270 != rax) {
+                                                if (var_270 != 0) {
                                                     ecx = (var_160 + 1);
                                                     rcx <<= 2;
                                                     sub_140024bf8(rcx);
@@ -3453,7 +3451,6 @@ void sub_140013154_l1(void) {
                                             if (rax == 0) {
                                                 ebx = r12d;
                                                 loc_ADDR:
-                                                eax = 1;
                                                 if (esi != 1) {
                                                     edi = 1;
                                                 } else {
@@ -3551,13 +3548,12 @@ void sub_140013154_l1(void) {
                                                         ecx = var_868;
                                                         r9d = var_850;
                                                         ebx = ((ebx <= eax /* signed */) ? eax : ebx);
-                                                        eax = 0;
                                                         ecx -= r9d;
                                                         var_118 = ebx;
                                                         r10d = eax;
                                                         var_130 = ecx;
                                                         r11d = eax;
-                                                        if (var_810 != eax) {
+                                                        if (var_810 != 0) {
                                                             ecx = edx;
                                                             eax = r8d;
                                                             ecx -= edi;
@@ -5140,7 +5136,7 @@ void sub_140013154_l1(void) {
                                                     eax = ror(eax, 8);
                                                     *(u8*)((r15 - 0xADDR)) = r8b;
                                                     *(u8*)((r15 - 0xADDR)) = al;
-                                                    rcx -= rdi;
+                                                    rcx -= 1;
                                                 } while (rcx != 0);
                                                 r13d = var_d8;
                                                 edx = 0;
@@ -5157,6 +5153,7 @@ void sub_140013154_l1(void) {
                                                 if (rax == *(u64*)("@")) {
                                                     *(u8*)(((rbx + r8) - 1)) = dl;
                                                     sub_1400029dc(off_1400360c0, rdx, 0xADDR);
+                                                    r8d = 0;
                                                     rsi = rbx;
                                                     if (*(u8*)(rbx) == 0xADDR) {
                                                         GetProcessHeap();
@@ -5177,7 +5174,6 @@ void sub_140013154_l1(void) {
                                                             r8d = 0;
                                                             if (eax != 0) {
                                                                 rax = *(u64*)(rdi);
-                                                                ecx = 0xADDR;
                                                                 r12d = r8d;
                                                                 if (*(u16*)(rax) == 0xADDR) {
                                                                     rcx = (int64)(*(u32*)((rax + 0xADDR)));
@@ -5355,8 +5351,9 @@ void sub_140013154_l1(void) {
                                 rbx = r12;
                                 var_80 = eax;
                                 var_b8 = eax;
+                                eax = 0xADDR;
                                 var_70 = rbx;
-                                if (0xADDR >= 0 /* signed */) {
+                                if (eax >= 0 /* signed */) {
                                     loc_ADDR:
                                     GetProcessHeap();
                                     HeapAlloc(rax, edi, rdi);
@@ -5432,7 +5429,7 @@ void sub_140013154_l1(void) {
                                                                                     ecx += 1;
                                                                                     var_340 = ecx;
                                                                                     if (rsi != 0) {
-                                                                                        if (var_348 != r11) {
+                                                                                        if (var_348 != 0) {
                                                                                             rdx = var_348;
                                                                                             edi = r11d;
                                                                                             if (ecx == 0) {
@@ -6542,7 +6539,7 @@ void sub_140013154_l1(void) {
     loc_ADDR:
     r13d = 0xADDR;
     loc_ADDR:
-    if (0xADDR >= 0 /* signed */) {
+    if (r13d >= 0 /* signed */) {
         rax = var_c8;
         loc_ADDR:
         rdi = rax;
@@ -6658,7 +6655,7 @@ void sub_140013154_l1(void) {
     eax = ecx;
     loc_ADDR:
     r13d = 0;
-    if (var_2f8 != r13) {
+    if (var_2f8 != 0) {
         edx = (r13 + 1);
         if (var_2f0 > edx) goto loc_ADDR;
     }
@@ -8651,7 +8648,7 @@ void sub_140013154_l1(void) {
     loc_ADDR:
     r14d = 0xADDR;
     loc_ADDR:
-    if (0xADDR >= 0 /* signed */) {
+    if (r14d >= 0 /* signed */) {
         rax = var_70;
         loc_ADDR:
         rdi = rax;
@@ -8765,7 +8762,7 @@ void sub_140013154_l1(void) {
     eax = ecx;
     loc_ADDR:
     r14d = 0;
-    if (var_348 != r14) {
+    if (var_348 != 0) {
         edx = (r14 + 1);
         if (var_340 > edx) goto loc_ADDR;
     }

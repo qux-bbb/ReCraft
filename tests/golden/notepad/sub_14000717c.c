@@ -39,7 +39,7 @@ void sub_14000717c_l1(void) {
             if (ecx >= 0 /* signed */ && ecx != 0) {
                 rdi = var_30;
                 var_30 = rdi;
-                if (*(u64*)((rbx + 0xADDR)) <= r10) {
+                if (*(u64*)((rbx + 0xADDR)) <= 0) {
                     eax = (uint32)(*(u16*)((rbx + 6)));
                     xmm0 = 0;
                     r14d = var_3c;

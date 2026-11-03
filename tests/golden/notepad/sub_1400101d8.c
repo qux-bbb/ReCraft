@@ -14,7 +14,7 @@ void sub_1400101d8_l1(void) {
     qword_ADDR = r15;
     xmm0 = *(__m128*)((rax - 0xADDR));
     var_70 = xmm0;
-    if (qword_ADDR == r15) {
+    if (qword_ADDR == 0) {
         xmm0 = 0;
         xmmword_ADDR = xmm0;
         EventRegister(&var_70, sub_140001260, off_1400341f8, off_140034218);

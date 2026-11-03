@@ -1,5 +1,6 @@
 // L1 structure recovery (14 blocks)
 void sub_140021b08_l1(void) {
+    ebx = 0;
     edi = -1;
     if (byte_ADDR != 0xADDR) {
         byte_ADDR = bl;

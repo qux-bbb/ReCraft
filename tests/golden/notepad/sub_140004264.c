@@ -45,8 +45,8 @@ void sub_140004264_l1(void) {
                         ebx = 0;
                         *(u64*)((rdi + 0xADDR)) = rax;
                         rax = var_40;
-                        var_38 &= rbx;
-                        var_40 &= rbx;
+                        var_38 &= 0;
+                        var_40 &= 0;
                         *(u32*)(rdi) = 1;
                         var_30 = rbx;
                         *(u64*)((rdi + 0xADDR)) = rax;

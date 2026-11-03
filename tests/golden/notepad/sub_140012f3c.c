@@ -77,8 +77,7 @@ void sub_140012f3c_l1(void) {
         rax = (rcx - 2);
         rdx = off_140035730;
         rax = ((rdx != 0) ? rcx : rax);
-        rcx = qword_ADDR;
-        rcx -= rdx;
+        rcx = (qword_ADDR - off_140035730);
         *(u16*)(rax) = bp;
         rax = (r8 + 0xADDR);
         if (rax == 0) {
@@ -126,8 +125,7 @@ void sub_140012f3c_l1(void) {
         rax = (rcx - 2);
         rdx = off_140035730;
         rax = ((rdx != 0) ? rcx : rax);
-        rcx = qword_ADDR;
-        rcx -= rdx;
+        rcx = (qword_ADDR - off_140035730);
         *(u16*)(rax) = bp;
         rax = (r8 + 0xADDR);
         if (rax == 0) {
@@ -169,8 +167,7 @@ void sub_140012f3c_l1(void) {
         rax = (rcx - 2);
         rdx = off_140035730;
         rax = ((rdx != 0) ? rcx : rax);
-        rcx = qword_ADDR;
-        rcx -= rdx;
+        rcx = (qword_ADDR - off_140035730);
         *(u16*)(rax) = bp;
         rax = (r8 + 0xADDR);
         if (rax == 0) {
@@ -222,8 +219,7 @@ void sub_140012f3c_l1(void) {
         rax = (rcx - 2);
         rdx = off_140035730;
         rax = ((rdx != 0) ? rcx : rax);
-        rcx = qword_ADDR;
-        rcx -= rdx;
+        rcx = (qword_ADDR - off_140035730);
         *(u16*)(rax) = bp;
         rax = (r8 + 0xADDR);
         if (rax == 0) {
@@ -264,8 +260,7 @@ void sub_140012f3c_l1(void) {
     rax = (rcx - 2);
     rdx = off_140035730;
     rax = ((rdx != 0) ? rcx : rax);
-    rcx = qword_ADDR;
-    rcx -= rdx;
+    rcx = (qword_ADDR - off_140035730);
     *(u16*)(rax) = bp;
     loc_ADDR:
     rax = (r8 + 0xADDR);
