@@ -57,7 +57,8 @@ applied 3 proposal(s) through the command bus (undoable)
    （用 `-Keep` 运行演示脚本会打印路径）。**File → Close project**（`Ctrl+W`，或工具栏
    项目路径旁的 `×`）会卸载当前项目并回到欢迎页；正在跑的后台分析会被取消，布局/主题/
    语言/最近项目列表保持不变，之后可直接打开另一个项目。
-2. `F5` 运行分析（后台线程，可取消）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
+2. 导入 PE 后**自动开始分析**（后台线程，可取消；与 IDA 加载即分析一致），需要重跑时走
+   **Options → Analyze functions**（工具栏 Analyze 按钮同效）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
    图标）及其下方 **Graph overview**；右侧**文档标签区**按固定顺序显示 **Disassembly、
@@ -72,10 +73,11 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Default light theme](images/ida-layout.png)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
-   pane 或 Reset layout。快捷键：`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
+   pane 或 Reset layout。快捷键：`F5` 反编译光标所在函数（IDA 同款，切到 Decompile 页签并把
+   当前行居中）、`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
    `F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`X` 打开交叉引用对话框；`Space` 切换
    Disassembly 的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
-   （Text/Decompile/Hex）。
+   （Text/Decompile/Hex）。分析没有独立快捷键（同 IDA）：导入时自动跑，重跑在菜单里。
    **Strings** 采用 IDA 风格四列：**Address（段:地址）/ Length（hex）/ Type（C/C16）/
    String**；按数据库编码解码（UTF-16LE 不再乱码）、不再截断到 64 字节；单击选中并同步
    反汇编光标、双击跳到反汇编；可勾选隐藏 header/节名噪声，过滤框保留。双击字符串会
@@ -87,8 +89,8 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Text mode operand colours](images/text-view.png)
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
-3. 点击函数 → 中间 **Decompile** 页签，直接显示结构化反编译与签名（没有 L0/L1/L2 开关）；**Disassembly**
-   的 **Graph** 模式看 CFG。
+3. 点击函数（或按 **`F5`**）→ 中间 **Decompile** 页签，直接显示结构化反编译与签名（没有 L0/L1/L2 开关）；**Disassembly**
+   的 **Graph** 模式看 CFG。`F5` 会把光标所在函数的伪代码居中显示（同 IDA 的反编译键）。
    反编译与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
    工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在反编译里同步高亮，
    反编译**单击**同步光标；**双击函数名进入该函数**（`Back`/◀ 返回调用方），**双击字符串字面量跳到该字符串的数据**（`db '…',0`），双击其他位置跳到反汇编。

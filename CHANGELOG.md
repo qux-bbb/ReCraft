@@ -60,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`F5` decompiles, like IDA; analysis runs on import.** The key no longer starts the
+  analysis pass. Importing a PE now kicks off the background analysis on its own — the
+  toolbar button, `Options → Analyze functions` and the palette command `Re-run analysis`
+  re-run it — matching IDA's auto-analysis, which has no dedicated hotkey either. `F5`
+  instead shows the pseudo-C of the function under the cursor: it opens/focuses the
+  Decompile pane, decompiles again when the cursor left the previous function, and centres
+  the cursor's line. The scroll request is keyed by address and resolved after the rows
+  exist (`pseudo_scroll_to`), so a re-decompile can never scroll to a stale row, and it is
+  consumed on the first frame that renders it. Hex sync and `F5` now share one
+  `cursor_address` rule (active pseudo-C row, else the disassembly selection). Two tests
+  cover the key binding and the centred scroll, one the import-triggered analysis.
 - **Selection and copy work like a text editor in the code views.** The Disassembly listing
   and the Decompile view now track an anchor/focus pair over the rendered rows, so dragging
   (or Shift+clicking) selects exactly the characters under the pointer across lines and

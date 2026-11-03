@@ -1001,6 +1001,7 @@ const PALETTE_COMMANDS: &[(&str, Action)] = &[
     ("ui_close_project", Action::CloseProject),
     ("palette_import_pe_file", Action::Import),
     ("palette_analyze", Action::Analyze),
+    ("palette_decompile", Action::Decompile),
     ("palette_undo", Action::Undo),
     ("palette_redo", Action::Redo),
     ("palette_toggle_view_mode", Action::ToggleViewMode),
@@ -1020,6 +1021,8 @@ enum Action {
     CloseProject,
     Import,
     Analyze,
+    /// IDA's F5: show the pseudo-C of the function under the cursor in the Decompile pane.
+    Decompile,
     CancelAnalysis,
     Undo,
     Redo,
@@ -1124,6 +1127,9 @@ pub struct ReCraftApp {
     /// Row clicked in the pseudo-C view (0-based line identity). `None` means follow the
     /// disassembly address.
     pseudo_selected_line: Option<usize>,
+    /// Address the Decompile view should centre on the next time it renders. `F5` sets it,
+    /// mirroring IDA's decompile shortcut, which keeps the cursor's line in sight.
+    pseudo_scroll_to: Option<Address>,
     pseudo_dirty: bool,
     /// Pane that owns Ctrl+C, set by the last click or drag inside that pane.
     copy_focus: CopyFocus,
@@ -1242,6 +1248,7 @@ impl Default for ReCraftApp {
             pseudo_literals: Vec::new(),
             literal_data: Vec::new(),
             pseudo_selected_line: None,
+            pseudo_scroll_to: None,
             pseudo_dirty: false,
             copy_focus: CopyFocus::None,
             disasm_sel: None,
@@ -1460,6 +1467,9 @@ impl ReCraftApp {
                 let message = format!("imported {} bytes -> {}", bytes.len(), project.display());
                 self.after_open();
                 self.set_status(message);
+                // IDA runs auto-analysis as soon as a binary is loaded; do the same instead
+                // of waiting for an explicit Analyze, which keeps `F5` free for decompiling.
+                self.start_analysis();
             }
             Err(error) => self.set_error(error),
         }
@@ -1506,6 +1516,7 @@ impl ReCraftApp {
         self.pseudo_literals.clear();
         self.literal_data.clear();
         self.pseudo_selected_line = None;
+        self.pseudo_scroll_to = None;
         self.pseudo_dirty = false;
         self.pseudo_sel = None;
         self.pseudo_drag = false;
@@ -1688,6 +1699,7 @@ impl ReCraftApp {
         self.disasm_scroll_to = Some(0.0);
         self.pseudo_start = entry;
         self.pseudo_dirty = true;
+        self.pseudo_scroll_to = None;
         self.pseudo_literals.clear();
         self.literal_data.clear();
         self.functions_dirty = true;
@@ -2322,7 +2334,25 @@ impl ReCraftApp {
     /// Anchor the hex pane on the current disassembly selection (unless the user picked
     /// an explicit hex position).
     fn sync_hex(&mut self) {
-        let anchor = if self.tab == Tab::Pseudo {
+        let Some(anchor) = self.cursor_address() else {
+            return;
+        };
+        if self.hex_synced == Some(anchor) {
+            return;
+        }
+        self.hex_start = hex_row_start(anchor);
+        self.hex_cursor = Some(anchor);
+        self.hex_synced = Some(anchor);
+        // The dump moved: a byte range picked in the old window no longer means anything.
+        self.hex_sel = None;
+        self.hex_drag = false;
+    }
+
+    /// Address under the cursor: the active pseudo-C row while the Decompile view owns the
+    /// screen, otherwise the disassembly selection. Hex sync and `F5` both anchor on it, so
+    /// the decompile target always matches what the user is looking at.
+    fn cursor_address(&self) -> Option<Address> {
+        if self.tab == Tab::Pseudo {
             // Follow the active pseudo-C row, not the listing's first address.
             self.pseudo
                 .as_ref()
@@ -2337,19 +2367,34 @@ impl ReCraftApp {
             Some(self.pseudo_start)
         } else {
             self.disasm_rows.get(self.selected).map(|line| line.addr)
-        };
-        let Some(anchor) = anchor else {
-            return;
-        };
-        if self.hex_synced == Some(anchor) {
+        }
+    }
+
+    /// Start the background analysis pass for the open project, unless one is running.
+    ///
+    /// IDA analyses a freshly loaded binary on its own, so `F5` is free for the decompiler;
+    /// importing a PE starts this pass and re-running it later is a menu command.
+    fn start_analysis(&mut self) {
+        if self.analysis.is_some() {
             return;
         }
-        self.hex_start = hex_row_start(anchor);
-        self.hex_cursor = Some(anchor);
-        self.hex_synced = Some(anchor);
-        // The dump moved: a byte range picked in the old window no longer means anything.
-        self.hex_sel = None;
-        self.hex_drag = false;
+        let Some(project) = self.project.clone() else {
+            self.set_status(self.t("ui_no_project_2").to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        std::thread::spawn(move || {
+            let message = run_analysis_job(&project, &worker_cancel);
+            let _ = sender.send(message);
+        });
+        self.analysis = Some(AnalysisJob {
+            receiver,
+            cancel,
+            started: Instant::now(),
+        });
+        self.set_status(self.t("ui_analyzing_2").to_owned());
     }
 
     fn poll_analysis(&mut self) {
@@ -3169,6 +3214,17 @@ impl ReCraftApp {
                     }
                 });
                 ui.menu_button(options_menu.as_str(), |ui| {
+                    // Like IDA's "Reanalyze program": analysis has no key of its own, it
+                    // runs when a binary is imported and can be re-run from here.
+                    let can_reanalyze = has_project && self.analysis.is_none();
+                    if ui
+                        .add_enabled(can_reanalyze, egui::Button::new(analyze_label.as_str()))
+                        .clicked()
+                    {
+                        *action = Action::Analyze;
+                        ui.close();
+                    }
+                    ui.separator();
                     ui.menu_button(theme_menu.as_str(), |ui| {
                         if ui
                             .selectable_label(self.theme == ThemeMode::Dark, dark_label.as_str())
@@ -6055,6 +6111,11 @@ impl ReCraftApp {
         let active_line = self.active_pseudo_line(lines);
         // Function whose body this listing shows: its own name is not a jump target.
         let current_function = self.pseudo_function_start();
+        // F5 asks for the cursor's line to be centred. Row indices belong to one listing, so
+        // the pending address is resolved here, once the rows it names exist.
+        let scroll_line = self
+            .pseudo_scroll_to
+            .and_then(|addr| lines.iter().position(|line| line.addr == addr));
         // Fixed line-number gutter. The listing scrolls horizontally underneath the
         // gutter (the text is clipped at its right edge), while the numbers stay put.
         let digits = lines.len().max(1).to_string().len().max(2);
@@ -6089,6 +6150,9 @@ impl ReCraftApp {
                     );
                     first_top.get_or_insert(rect.top());
                     last_bottom = Some(rect.bottom());
+                    if scroll_line == Some(index) {
+                        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                    }
                     if rect.bottom() < viewport.top() || rect.top() > viewport.bottom() {
                         continue;
                     }
@@ -6272,6 +6336,8 @@ impl ReCraftApp {
         if let Some(double_click) = double_clicked {
             *action = double_click;
         }
+        // The scroll request is one-shot: a later re-render must not yank the view back.
+        self.pseudo_scroll_to = None;
     }
 
     // ------------------------------------------------------------- windows --
@@ -6826,9 +6892,11 @@ impl ReCraftApp {
                 action = Action::ZoomReset;
             }
             if input.key_pressed(Key::F5) {
-                action = Action::Analyze;
+                action = Action::Decompile;
             }
-            // IDA-like pane focus shortcuts (F2-F11; F1/F5 are taken).
+            // IDA-like pane focus shortcuts (F2-F11; F1/F5 are taken). Like IDA, analysis
+            // has no key of its own: it runs when the binary is loaded, and re-running it
+            // is a menu command.
             if input.key_pressed(Key::F2) {
                 action = Action::FocusPane(Pane::Functions);
             } else if input.key_pressed(Key::F3) {
@@ -7062,26 +7130,30 @@ impl ReCraftApp {
                 });
             }
             Action::Analyze => {
-                if self.analysis.is_some() {
+                self.start_analysis();
+            }
+            Action::Decompile => {
+                // IDA's F5: decompile the function under the cursor, bring the Decompile
+                // pane to the front and keep the cursor's line in view.
+                if self.session.is_none() {
                     return;
                 }
-                let Some(project) = self.project.clone() else {
-                    self.set_status(self.t("ui_no_project_2").to_owned());
+                let Some(addr) = self.cursor_address() else {
                     return;
                 };
-                let (sender, receiver) = mpsc::channel();
-                let cancel = Arc::new(AtomicBool::new(false));
-                let worker_cancel = cancel.clone();
-                std::thread::spawn(move || {
-                    let message = run_analysis_job(&project, &worker_cancel);
-                    let _ = sender.send(message);
-                });
-                self.analysis = Some(AnalysisJob {
-                    receiver,
-                    cancel,
-                    started: Instant::now(),
-                });
-                self.set_status(self.t("ui_analyzing_2").to_owned());
+                let target = self
+                    .function_containing(addr)
+                    .map(|function| function.start);
+                // Re-decompiling a listing that already shows this function just re-centres
+                // it; only a different function retires the current rows and click anchor.
+                if target != self.pseudo_function_start() {
+                    self.pseudo_dirty = true;
+                    self.pseudo_selected_line = None;
+                }
+                self.pseudo_start = addr;
+                self.pseudo_scroll_to = Some(addr);
+                self.tab = Tab::Pseudo;
+                self.focus_pane(Pane::Pseudo);
             }
             Action::CancelAnalysis => {
                 if let Some(job) = self.analysis.as_ref() {
@@ -9006,6 +9078,139 @@ mod tests {
         app.apply_action(&egui::Context::default(), Action::PaletteCommand(index));
         assert!(app.session.is_none());
         assert!(app.project.is_none());
+    }
+
+    /// IDA's `F5` decompiles the function under the cursor; analysis now starts on import,
+    /// so the key must never start it again.
+    #[test]
+    fn f5_decompiles_instead_of_analyzing() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("f5-key.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut first = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        first.textures_delta.clear();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::F5,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut second = ctx.run_ui(input, |ui| app.update_inner(ui));
+        second.textures_delta.clear();
+        assert!(
+            matches!(app.tab, Tab::Pseudo),
+            "F5 must open the Decompile view"
+        );
+        assert!(
+            app.analysis.is_none(),
+            "F5 must not start analysis; importing already did"
+        );
+    }
+
+    /// `F5` follows the cursor: the pane re-anchors on the cursor's function and the listing
+    /// centres the cursor's line once its rows exist.
+    #[test]
+    fn f5_centres_the_cursor_line_in_the_decompile_view() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("f5-scroll.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        // Text mode puts the cursor on a disassembly row; Graph mode anchors on the graph's
+        // function instead. `cursor_address` covers both.
+        app.view_mode = ViewMode::Text;
+        app.tick();
+        let address = app
+            .disasm_rows
+            .get(1)
+            .expect("the entry listing must have rows")
+            .addr;
+        app.selected = 1;
+        app.apply_action(&egui::Context::default(), Action::Decompile);
+        assert!(matches!(app.tab, Tab::Pseudo));
+        assert_eq!(app.pseudo_start, address, "the pane must follow the cursor");
+        assert_eq!(
+            app.pseudo_scroll_to,
+            Some(address),
+            "F5 must ask the listing to centre the cursor line"
+        );
+        app.tick();
+        assert!(
+            app.pseudo.as_ref().is_some_and(|lines| !lines.is_empty()),
+            "the function under the cursor must be decompiled"
+        );
+        // Rendering consumes the one-shot scroll request.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(
+            app.pseudo_scroll_to.is_none(),
+            "the scroll request is one-shot"
+        );
+    }
+
+    /// IDA analyses a binary as soon as it is loaded, so importing a PE must start the
+    /// background pass without the user pressing anything.
+    #[test]
+    fn importing_a_pe_starts_analysis() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("sample.exe");
+        std::fs::write(&source, &bytes).unwrap();
+        let mut app = ReCraftApp::default();
+        app.open_path(&source);
+        assert!(app.session.is_some() && app.project.is_some());
+        assert!(
+            app.analysis.is_some(),
+            "importing must start analysis, like IDA's auto-analysis"
+        );
+        // Drain the worker so the temporary project outlives its connection.
+        let deadline = Instant::now() + std::time::Duration::from_secs(120);
+        while app.analysis.is_some() && Instant::now() < deadline {
+            app.poll_analysis();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(app.analysis.is_none(), "analysis must finish in time");
+        assert!(
+            app.functions_dirty,
+            "a finished analysis must refresh the derived lists"
+        );
     }
 
     #[test]
