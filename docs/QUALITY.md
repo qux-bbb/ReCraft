@@ -56,7 +56,14 @@ intrinsic instructions: 10 (coverage 97.4%)
 goto fallback functions: 0
 labels:                 0
 inline asm statements:  9
+switch statements:      2
+max nesting depth:      5 (0 functions at 8+ levels)
 ```
+
+最后两行是 2026-11-04 新增的可读性指标：`switch statements` 统计 `switch (...)` 语句数
+（跳表与重建出来的派发阶梯），`max nesting depth` 是全部被测函数里最深的语句缩进
+（按 4 空格一级折算），括号里给出"嵌套 ≥ 8 级"的函数个数——它比单一最大值更能反映整体
+控制流的可读性（notepad 2026-11-04：**14** 个 switch、最深 **52** 级、**27** 个函数 ≥ 8 级）。
 
 下表于 **2026-11-02** 在提交 `9ae2537` 上实测（`recraft-cli metrics`）：
 
@@ -90,7 +97,7 @@ corpus86 + 6 个 go**（三处改动合计，逐条核对：帧基址 9 个、�
 （历史决定：跨 MSVC 版本保持形状稳定），所以常量折叠、case 值这类"数字"变化只能靠人工
 review，快照本身不覆盖。
 
-`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels` 与 `inline asm statements`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
+`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels`、`inline asm statements`、`switch statements` 与 `max nesting depth`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
 `xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是

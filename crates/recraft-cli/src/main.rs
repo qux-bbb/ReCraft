@@ -1223,6 +1223,9 @@ fn cmd_metrics(
             "instructions": report.instructions(),
             "intrinsic_instructions": report.intrinsic_instructions(),
             "coverage": report.coverage(),
+            "switches": report.switches(),
+            "max_nesting": report.max_nesting(),
+            "deeply_nested": report.deeply_nested(),
             "skipped": report.skipped,
             "intrinsic_top": top,
             "unstructured": report
@@ -1262,6 +1265,12 @@ fn cmd_metrics(
     println!("goto histogram:         {}", histogram.join(" "));
     println!("labels:                 {}", report.labels());
     println!("inline asm statements:  {}", report.inline_asm());
+    println!("switch statements:      {}", report.switches());
+    println!(
+        "max nesting depth:      {} ({} functions at 8+ levels)",
+        report.max_nesting(),
+        report.deeply_nested()
+    );
     if report.skipped > 0 {
         println!("skipped (limit):        {}", report.skipped);
     }

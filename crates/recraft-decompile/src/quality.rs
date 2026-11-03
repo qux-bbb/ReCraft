@@ -36,6 +36,10 @@ pub struct FunctionQuality {
     pub labels: usize,
     /// `__asm("...")` statements left in the pseudo-C.
     pub inline_asm: usize,
+    /// `switch (...)` statements in the pseudo-C (jump tables and recovered dispatch ladders).
+    pub switches: usize,
+    /// Deepest statement indentation, in columns (multiples of four).
+    pub max_indent: usize,
     pub structured: bool,
     pub lines: usize,
 }
@@ -79,6 +83,25 @@ impl QualityReport {
 
     pub fn inline_asm(&self) -> usize {
         self.functions.iter().map(|f| f.inline_asm).sum()
+    }
+
+    pub fn switches(&self) -> usize {
+        self.functions.iter().map(|f| f.switches).sum()
+    }
+
+    /// Deepest nesting of any measured function, in levels (four columns each).
+    pub fn max_nesting(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|f| f.max_indent / 4)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Functions nested eight levels or deeper: the ones whose control flow is still hard to
+    /// read, without the single worst outlier hiding the rest.
+    pub fn deeply_nested(&self) -> usize {
+        self.functions.iter().filter(|f| f.max_indent >= 32).count()
     }
 
     pub fn intrinsic_instructions(&self) -> u64 {
@@ -188,6 +211,19 @@ pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
             .iter()
             .filter(|line| line.text.contains("__asm("))
             .count();
+        let switches = code
+            .lines
+            .iter()
+            .filter(|line| line.text.trim_start().starts_with("switch ("))
+            .count();
+        // Indentation is the shape of the control flow: a `switch` keeps a dispatch at one
+        // level while a nested `if` ladder adds one level per case.
+        let max_indent = code
+            .lines
+            .iter()
+            .map(|line| line.text.len() - line.text.trim_start().len())
+            .max()
+            .unwrap_or(0);
         measured.push(FunctionQuality {
             start: function.start,
             name,
@@ -196,6 +232,8 @@ pub fn measure(session: &mut Session, limit: usize) -> Result<QualityReport> {
             fallbacks,
             labels,
             inline_asm,
+            switches,
+            max_indent,
             structured: fallbacks == 0,
             lines: code.lines.len(),
         });
