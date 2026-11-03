@@ -21,6 +21,10 @@
   64 位父寄存器、常量经寄存器写出的存储折成字面量（详见 `docs/REPORT-2026-11-04.md`）。
 - **派发阶梯重建为 `switch`**（2026-11-04）：`sub`/`je` 阶梯（累计余数）识别成 `switch`，
   notepad 14 个函数、crackme 4 个函数受益（含展平阶梯），`sub_140023f90` 的 11 层缩进变 1 层。
+- **去噪与护栏**（2026-11-04）：空 `else` 臂直接闭合、L2 省掉 `void` 函数末尾的 `return;`
+  （89 处）、复合赋值扩到 `*(u64*)(rax)`/`arg1->field_0`（notepad 64 + crackme 26 处）；
+  `metrics` 增 `switch statements` 与 `max nesting depth`，`lint` 增第 7 条不变量
+  「`case`/`default` 恰好在 `switch` 体内缩进一级」（详见 `docs/REPORT-2026-11-04.md`）。
 
 **当前基线**（notepad 502 函数）：L2 **29 442** 行、`goto` 450、结构化 487（97.0%）、
 覆盖率 99.6%、标签 265；crackme 453/493（91.9%）、标签 216；corpus x64/x86 均 100%；Go **3003/3261（92.1%），258 个回退**（全样本，`metrics --max-functions 0`）。
