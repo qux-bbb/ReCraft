@@ -86,6 +86,8 @@ struct Palette {
     name: Color32,
     comment: Color32,
     selected_row: Color32,
+    /// Background of a dragged text selection (distinct from the row cursor).
+    text_selection: Color32,
     hover_row: Color32,
     tab_active_bg: Color32,
     tab_focused_bg: Color32,
@@ -116,6 +118,7 @@ impl Palette {
         name: Color32::from_rgb(0xd7, 0xd7, 0x87),
         comment: Color32::from_rgb(0x6a, 0x99, 0x55),
         selected_row: Color32::from_rgb(0x26, 0x4f, 0x78),
+        text_selection: Color32::from_rgb(0x39, 0x6d, 0xa8),
         hover_row: Color32::from_rgb(0x2a, 0x30, 0x38),
         tab_active_bg: Color32::from_rgb(0x2a, 0x2a, 0x2a),
         tab_focused_bg: Color32::from_rgb(0x33, 0x33, 0x33),
@@ -146,6 +149,7 @@ impl Palette {
         name: Color32::from_rgb(0x80, 0x50, 0x00),
         comment: Color32::from_rgb(0x00, 0x78, 0x00),
         selected_row: Color32::from_rgb(0xcc, 0xe4, 0xff),
+        text_selection: Color32::from_rgb(0xa6, 0xcf, 0xf2),
         hover_row: Color32::from_rgb(0xee, 0xf3, 0xf8),
         tab_active_bg: Color32::from_rgb(0xff, 0xff, 0xff),
         tab_focused_bg: Color32::from_rgb(0xe4, 0xec, 0xf4),
@@ -181,6 +185,189 @@ enum HexUnit {
 /// Start of the 16-byte hex row containing `addr`.
 fn hex_row_start(addr: Address) -> Address {
     Address::new(addr.get() & !0xf)
+}
+
+/// One end of an editor-style text selection in a custom-painted listing: the row index
+/// inside the view's rows plus a character index into that row's text.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct TextPoint {
+    row: usize,
+    char: usize,
+}
+
+/// Editor-style text selection: `anchor` is where the drag started, `focus` is where the
+/// pointer is now. Either end may be the earlier one, so every use goes through
+/// [`Self::ordered`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct TextSelection {
+    anchor: TextPoint,
+    focus: TextPoint,
+}
+
+impl TextSelection {
+    /// A caret: both ends on the same character, so nothing is highlighted.
+    fn collapsed(point: TextPoint) -> Self {
+        Self {
+            anchor: point,
+            focus: point,
+        }
+    }
+
+    /// The selection with the earlier end first.
+    fn ordered(&self) -> (TextPoint, TextPoint) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.anchor == self.focus
+    }
+
+    /// Character range `[from, to)` this selection covers in `row`, or `None` when the row
+    /// lies outside it. Fully covered rows run from their first to their last character.
+    fn row_range(&self, row: usize, char_count: usize) -> Option<(usize, usize)> {
+        let (start, end) = self.ordered();
+        if row < start.row || row > end.row {
+            return None;
+        }
+        let from = if row == start.row {
+            start.char.min(char_count)
+        } else {
+            0
+        };
+        let to = if row == end.row {
+            end.char.min(char_count)
+        } else {
+            char_count
+        };
+        Some((from.min(to), to))
+    }
+}
+
+/// The text a text selection covers, one listing row per line, with the column padding
+/// the views paint on the right trimmed off.
+fn selected_text(selection: TextSelection, rows: &[String]) -> Option<String> {
+    let (start, end) = selection.ordered();
+    if rows.is_empty() || start.row >= rows.len() {
+        return None;
+    }
+    let end_row = end.row.min(rows.len() - 1);
+    let mut lines = Vec::with_capacity(end_row - start.row + 1);
+    for (row, text) in rows.iter().enumerate().take(end_row + 1).skip(start.row) {
+        let chars: Vec<char> = text.chars().collect();
+        let (from, to) = selection
+            .row_range(row, chars.len())
+            .unwrap_or((0, chars.len()));
+        let piece: String = chars[from..to].iter().collect();
+        lines.push(piece.trim_end().to_owned());
+    }
+    Some(lines.join("\n"))
+}
+
+/// Re-find a text selection in a reloaded listing by address, so paging (or an undo that
+/// re-renders the same addresses) keeps the highlight on the same instructions. `None`
+/// when either end has scrolled out of the new window.
+fn remap_selection(
+    selection: TextSelection,
+    previous: &[DisasmLine],
+    rows: &[DisasmLine],
+) -> Option<TextSelection> {
+    let remap = |point: TextPoint| {
+        let addr = previous.get(point.row)?.addr;
+        rows.iter()
+            .position(|line| line.addr == addr)
+            .map(|row| TextPoint {
+                row,
+                char: point.char,
+            })
+    };
+    remap(selection.anchor)
+        .zip(remap(selection.focus))
+        .map(|(anchor, focus)| TextSelection { anchor, focus })
+}
+
+/// Address under a pointer in a single-row galley painted at `origin`.
+fn galley_char_at(galley: &egui::Galley, origin: egui::Pos2, pos: egui::Pos2) -> usize {
+    let local = pos - origin;
+    usize::from(galley.cursor_from_pos(local).index)
+}
+
+/// Paint the highlight of a text selection behind a row's text. `range` is the
+/// `[from, to)` character range from [`TextSelection::row_range`].
+fn paint_text_selection(
+    painter: &egui::Painter,
+    color: Color32,
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    (from, to): (usize, usize),
+) {
+    if from >= to {
+        return;
+    }
+    let count = galley.text().chars().count();
+    let x0 = if from == 0 {
+        0.0
+    } else {
+        galley
+            .pos_from_cursor(egui::text::CCursor::new(from))
+            .left()
+    };
+    let x1 = if to >= count {
+        galley.size().x
+    } else {
+        galley.pos_from_cursor(egui::text::CCursor::new(to)).left()
+    };
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(origin.x + x0, origin.y),
+            egui::pos2(origin.x + x1.max(x0 + 1.0), origin.y + galley.size().y),
+        ),
+        0.0,
+        color,
+    );
+}
+
+/// Inclusive byte range picked in the Hex view.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct HexSelection {
+    anchor: Address,
+    focus: Address,
+}
+
+impl HexSelection {
+    /// The range with the lower address first.
+    fn range(&self) -> (Address, Address) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+
+    fn contains(&self, addr: Address) -> bool {
+        let (start, end) = self.range();
+        addr >= start && addr <= end
+    }
+
+    fn len(&self) -> u64 {
+        let (start, end) = self.range();
+        end.get().saturating_sub(start.get()).saturating_add(1)
+    }
+}
+
+/// Pane that owns Ctrl+C, set by the last click or drag inside that pane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum CopyFocus {
+    #[default]
+    None,
+    Disasm,
+    Pseudo,
+    Hex,
+    /// A dock list (Strings, Imports, Exports, Functions, Names, Segments).
+    List(Pane),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -865,6 +1052,10 @@ enum Action {
     },
     Forward,
     ApplyData(DataOp),
+    /// Put the focused pane's current selection (or current row) on the clipboard.
+    Copy,
+    /// Select everything the focused pane can copy (Ctrl+A).
+    SelectAll,
     EditPrototype,
     ShowStructs,
     FocusPane(Pane),
@@ -931,6 +1122,23 @@ pub struct ReCraftApp {
     /// disassembly address.
     pseudo_selected_line: Option<usize>,
     pseudo_dirty: bool,
+    /// Pane that owns Ctrl+C, set by the last click or drag inside that pane.
+    copy_focus: CopyFocus,
+    /// Dragged text selection in the disassembly listing (indices into `disasm_rows`).
+    disasm_sel: Option<TextSelection>,
+    /// `true` while the pointer is still down on a disassembly text selection.
+    disasm_drag: bool,
+    /// Dragged text selection in the Decompile view (indices into `pseudo`).
+    pseudo_sel: Option<TextSelection>,
+    /// `true` while the pointer is still down on a pseudo-C text selection.
+    pseudo_drag: bool,
+    /// Byte range picked in the Hex view.
+    hex_sel: Option<HexSelection>,
+    /// `true` while the pointer is still down on a hex selection.
+    hex_drag: bool,
+    /// Row picked in a dock list, keyed by the address it shows so a refresh keeps the
+    /// highlight on the same item.
+    list_sel: Option<(Pane, u64)>,
     functions: Vec<FunctionInfo>,
     /// Names parallel to `functions` (for the side list), refreshed with it.
     function_labels: Vec<String>,
@@ -1032,6 +1240,14 @@ impl Default for ReCraftApp {
             literal_data: Vec::new(),
             pseudo_selected_line: None,
             pseudo_dirty: false,
+            copy_focus: CopyFocus::None,
+            disasm_sel: None,
+            disasm_drag: false,
+            pseudo_sel: None,
+            pseudo_drag: false,
+            hex_sel: None,
+            hex_drag: false,
+            list_sel: None,
             functions: Vec::new(),
             function_labels: Vec::new(),
             functions_dirty: false,
@@ -1614,6 +1830,286 @@ impl ReCraftApp {
         ROW_HEIGHT * self.mono_zoom
     }
 
+    // ------------------------------------------------------------ clipboard --
+
+    /// Text Ctrl+C puts on the clipboard for the focused pane, plus how many units it
+    /// covers (rows, or bytes for the Hex view).
+    fn clipboard_payload(&mut self) -> Option<(String, usize)> {
+        match self.copy_focus {
+            CopyFocus::Disasm => {
+                if let Some(selection) = self.disasm_sel.filter(|selection| !selection.is_empty()) {
+                    let rows: Vec<String> = self
+                        .disasm_rows
+                        .iter()
+                        .map(|line| self.disasm_line_text(line))
+                        .collect();
+                    if let Some(text) = selected_text(selection, &rows) {
+                        let count = text.lines().count().max(1);
+                        return Some((text, count));
+                    }
+                }
+                let line = self.disasm_rows.get(self.selected)?;
+                Some((self.disasm_line_copy_text(line), 1))
+            }
+            CopyFocus::Pseudo => {
+                let lines = self.pseudo.as_ref()?;
+                if let Some(selection) = self.pseudo_sel.filter(|selection| !selection.is_empty()) {
+                    let rows: Vec<String> = lines.iter().map(|line| line.text.clone()).collect();
+                    let text = selected_text(selection, &rows)?;
+                    let count = text.lines().count().max(1);
+                    return Some((text, count));
+                }
+                let index = self.active_pseudo_line(lines)?;
+                Some((lines.get(index)?.text.trim_end().to_owned(), 1))
+            }
+            CopyFocus::Hex => {
+                let (start, count) = match self.hex_sel {
+                    Some(selection) => (selection.range().0, selection.len().min(256) as usize),
+                    None => (self.hex_cursor?, 1),
+                };
+                let bytes = self.hex_selection_bytes(start, count);
+                if bytes.is_empty() {
+                    return None;
+                }
+                let len = bytes.len();
+                Some((Self::hex_dump_text(&bytes, false), len))
+            }
+            CopyFocus::List(pane) => {
+                let (_, key) = self.list_sel.filter(|(selected, _)| *selected == pane)?;
+                Some((self.list_row_text(pane, key)?, 1))
+            }
+            CopyFocus::None => None,
+        }
+    }
+
+    /// Pane Ctrl+C and Ctrl+A act on: the last pane the user clicked in, or the view being
+    /// read when nothing was clicked yet.
+    fn effective_copy_focus(&self) -> CopyFocus {
+        if self.copy_focus != CopyFocus::None {
+            return self.copy_focus;
+        }
+        if self.tab == Tab::Pseudo && self.pseudo.is_some() {
+            CopyFocus::Pseudo
+        } else {
+            CopyFocus::Disasm
+        }
+    }
+
+    /// Copy the focused pane's selection (or its current row) to the clipboard.
+    fn copy_focused(&mut self, ctx: &egui::Context) {
+        self.copy_focus = self.effective_copy_focus();
+        let Some((text, count)) = self
+            .clipboard_payload()
+            .filter(|(text, _)| !text.is_empty())
+        else {
+            self.set_status(self.t("ui_nothing_to_copy").to_owned());
+            return;
+        };
+        let message = if self.copy_focus == CopyFocus::Hex {
+            self.t_args("ui_copied_bytes", &[("count", &count.to_string())])
+        } else {
+            self.t_args("ui_copied_lines", &[("count", &count.to_string())])
+        };
+        ctx.copy_text(text);
+        self.set_status(message);
+    }
+
+    /// Ctrl+A: select everything the focused pane can copy.
+    fn select_all_in_focus(&mut self) {
+        match self.effective_copy_focus() {
+            CopyFocus::Disasm => {
+                let Some(last) = self.disasm_rows.len().checked_sub(1) else {
+                    return;
+                };
+                let end = self
+                    .disasm_line_text(&self.disasm_rows[last])
+                    .chars()
+                    .count();
+                self.disasm_sel = Some(TextSelection {
+                    anchor: TextPoint { row: 0, char: 0 },
+                    focus: TextPoint {
+                        row: last,
+                        char: end,
+                    },
+                });
+            }
+            CopyFocus::Pseudo => {
+                let Some(lines) = self.pseudo.as_ref() else {
+                    return;
+                };
+                let Some(last) = lines.len().checked_sub(1) else {
+                    return;
+                };
+                let end = lines[last].text.chars().count();
+                self.pseudo_sel = Some(TextSelection {
+                    anchor: TextPoint { row: 0, char: 0 },
+                    focus: TextPoint {
+                        row: last,
+                        char: end,
+                    },
+                });
+            }
+            CopyFocus::Hex => {
+                let start = self.hex_start;
+                let count = self.hex_selection_bytes(start, 256).len();
+                if count > 0 {
+                    self.hex_sel = Some(HexSelection {
+                        anchor: start,
+                        focus: Address::new(start.get() + count as u64 - 1),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Bytes at `start`, at most `count`, read straight from the session.
+    fn hex_selection_bytes(&mut self, start: Address, count: usize) -> Vec<u8> {
+        let Some(session) = self.session.as_mut() else {
+            return Vec::new();
+        };
+        let mut buffer = vec![0u8; count.max(1)];
+        let read = session.read_at(start, &mut buffer).unwrap_or(0);
+        buffer.truncate(read);
+        buffer
+    }
+
+    /// Hex or ASCII text of `bytes`, 16 per line (the Hex view's copy commands).
+    fn hex_dump_text(bytes: &[u8], ascii: bool) -> String {
+        bytes
+            .chunks(16)
+            .map(|chunk| {
+                if ascii {
+                    chunk
+                        .iter()
+                        .map(|byte| {
+                            if (0x20..=0x7e).contains(byte) {
+                                *byte as char
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect::<String>()
+                } else {
+                    chunk
+                        .iter()
+                        .map(|byte| format!("{byte:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Text of one dock-list row as Ctrl+C copies it: the visible columns, tab separated.
+    fn list_row_text(&self, pane: Pane, key: u64) -> Option<String> {
+        match pane {
+            Pane::Strings => {
+                let row = self.strings.iter().find(|row| row.addr.get() == key)?;
+                let address = if row.segment.is_empty() {
+                    format!("{:016x}", row.addr.get())
+                } else {
+                    format!("{}:{:016x}", row.segment, row.addr.get())
+                };
+                let encoding = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+                    "C16"
+                } else {
+                    "C"
+                };
+                Some(format!(
+                    "{address}\t{:08x}\t{encoding}\t{}",
+                    row.len, row.text
+                ))
+            }
+            Pane::Imports => {
+                let import = self.imports.iter().find(|import| import.iat.get() == key)?;
+                Some(format!(
+                    "{}!{}\t{}\t×{}",
+                    import.module, import.api, import.category, import.refs
+                ))
+            }
+            Pane::Exports => {
+                let (name, address, forwarder) = self
+                    .exports()
+                    .into_iter()
+                    .find(|(_, address, _)| address.get() == key)?;
+                Some(format!(
+                    "{name}\t{:#x}\t{}",
+                    address.get(),
+                    forwarder.unwrap_or_default()
+                ))
+            }
+            Pane::Names => {
+                let (address, name) = self
+                    .names
+                    .iter()
+                    .find(|(address, _)| address.get() == key)?;
+                Some(format!("{:#012x}\t{name}", address.get()))
+            }
+            Pane::Functions => {
+                let index = self
+                    .functions
+                    .iter()
+                    .position(|function| function.start.get() == key)?;
+                let name = self
+                    .function_labels
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("sub_{key:x}"));
+                let segment = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.segment_containing(self.functions[index].start))
+                    .map(|segment| segment.name.clone())
+                    .unwrap_or_default();
+                Some(format!("{name}\t{segment}\t{key:#012x}"))
+            }
+            Pane::Segments => {
+                let segment = self
+                    .session
+                    .as_ref()?
+                    .segments()
+                    .iter()
+                    .find(|segment| segment.range.start.get() == key)?;
+                Some(format!(
+                    "{}\t{:#012x}..{:#012x}\t{}",
+                    segment.name,
+                    segment.range.start.get(),
+                    segment.range.end.get(),
+                    if segment.perm.is_executable() {
+                        "X"
+                    } else if segment.perm.is_readable() {
+                        "R"
+                    } else {
+                        "W"
+                    }
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// PE exports as (name, address, forwarder), shared by the Exports view and copy.
+    fn exports(&self) -> Vec<(String, Address, Option<String>)> {
+        let Some(session) = self.session.as_ref() else {
+            return Vec::new();
+        };
+        let image = session.image();
+        image
+            .exports
+            .iter()
+            .map(|export| {
+                let va = image.image_base.get().saturating_add(u64::from(export.rva));
+                let name = export
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("#{}", export.ordinal));
+                (name, Address::new(va), export.forwarder.clone())
+            })
+            .collect()
+    }
+
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let pal = self.palette();
         let mut visuals = match self.theme {
@@ -1760,6 +2256,9 @@ impl ReCraftApp {
         self.hex_start = hex_row_start(anchor);
         self.hex_cursor = Some(anchor);
         self.hex_synced = Some(anchor);
+        // The dump moved: a byte range picked in the old window no longer means anything.
+        self.hex_sel = None;
+        self.hex_drag = false;
     }
 
     fn poll_analysis(&mut self) {
@@ -2187,8 +2686,14 @@ impl ReCraftApp {
             self.refresh_strings();
         }
         let start = self.disasm_start;
+        // A text selection survives a reload (paging, undo) by address: its row indices are
+        // window-relative, so they must be re-found in the new rows.
+        let previous = std::mem::take(&mut self.disasm_rows);
         self.disasm_rows = self.data_rows(start, DISASM_ROWS).unwrap_or_default();
         self.disasm_dirty = false;
+        if let Some(selection) = self.disasm_sel {
+            self.disasm_sel = remap_selection(selection, &previous, &self.disasm_rows);
+        }
         if self.selected >= self.disasm_rows.len() {
             self.selected = self.disasm_rows.len().saturating_sub(1);
         }
@@ -2197,6 +2702,8 @@ impl ReCraftApp {
     fn refresh_pseudo(&mut self) {
         // Line identities only make sense for the listing that produced them.
         self.pseudo_selected_line = None;
+        self.pseudo_sel = None;
+        self.pseudo_drag = false;
         let Some(session) = self.session.as_mut() else {
             self.pseudo = None;
             self.pseudo_literals.clear();
@@ -2767,13 +3274,25 @@ impl ReCraftApp {
         let follow_label = self.t("ui_follow_selection");
         let empty_label = self.t("ui_no_readable_bytes_here");
         let address_label = self.t("ui_address");
+        let copy_hex = self.t("ui_copy_hex");
+        let copy_ascii = self.t("ui_copy_ascii");
         let mut unit = self.hex_unit;
+        let mut hex_sel = self.hex_sel;
+        let mut hex_drag = self.hex_drag;
+        let mut copy = None;
         ui.horizontal(|ui| {
             ui.strong(self.t("ui_hex"));
             ui.selectable_value(&mut unit, HexUnit::Byte, byte_label);
             ui.selectable_value(&mut unit, HexUnit::Word, word_label);
             ui.separator();
             ui.weak(format!("{:#x}", self.hex_start.get()));
+            if let Some(selection) = hex_sel {
+                ui.separator();
+                ui.weak(self.t_args(
+                    "ui_bytes_selected",
+                    &[("count", &selection.len().to_string())],
+                ));
+            }
             if ui.button(follow_label).clicked() {
                 self.hex_synced = None;
                 self.sync_hex();
@@ -2798,6 +3317,7 @@ impl ReCraftApp {
         let rows = buffer.len().div_ceil(16);
         let mut clicked = None;
         let mut navigated = None;
+        let mut cells: Vec<(egui::Rect, Address, u64)> = Vec::new();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2832,17 +3352,32 @@ impl ReCraftApp {
                                             let address =
                                                 Address::new(row_addr.get() + column as u64);
                                             if let Some(byte) = buffer.get(row * 16 + column) {
+                                                let selected = hex_sel.is_some_and(|selection| {
+                                                    selection.contains(address)
+                                                }) || (hex_sel.is_none()
+                                                    && cursor == Some(address));
                                                 let response = ui.selectable_label(
-                                                    cursor == Some(address),
+                                                    selected,
                                                     RichText::new(format!("{byte:02X}"))
                                                         .monospace(),
                                                 );
+                                                cells.push((response.rect, address, 1));
                                                 if response.clicked() {
                                                     clicked = Some(address);
                                                 }
                                                 if response.double_clicked() {
                                                     navigated = Some(address);
                                                 }
+                                                let _ = response.context_menu(|ui| {
+                                                    if ui.button(copy_hex.as_str()).clicked() {
+                                                        copy = Some(false);
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(copy_ascii.as_str()).clicked() {
+                                                        copy = Some(true);
+                                                        ui.close();
+                                                    }
+                                                });
                                             } else {
                                                 ui.label(RichText::new("  ").monospace());
                                             }
@@ -2857,21 +3392,38 @@ impl ReCraftApp {
                                                 (buffer.get(index), buffer.get(index + 1))
                                             {
                                                 let value = u16::from_le_bytes([*low, *high]);
-                                                let selected = cursor.is_some_and(|cursor| {
-                                                    cursor.get() >= address.get()
-                                                        && cursor.get() < address.get() + 2
-                                                });
+                                                let selected = hex_sel.is_some_and(|selection| {
+                                                    selection.contains(address)
+                                                        || selection.contains(Address::new(
+                                                            address.get() + 1,
+                                                        ))
+                                                }) || (hex_sel.is_none()
+                                                    && cursor.is_some_and(|cursor| {
+                                                        cursor.get() >= address.get()
+                                                            && cursor.get() < address.get() + 2
+                                                    }));
                                                 let response = ui.selectable_label(
                                                     selected,
                                                     RichText::new(format!("{value:04X}"))
                                                         .monospace(),
                                                 );
+                                                cells.push((response.rect, address, 2));
                                                 if response.clicked() {
                                                     clicked = Some(address);
                                                 }
                                                 if response.double_clicked() {
                                                     navigated = Some(address);
                                                 }
+                                                let _ = response.context_menu(|ui| {
+                                                    if ui.button(copy_hex.as_str()).clicked() {
+                                                        copy = Some(false);
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(copy_ascii.as_str()).clicked() {
+                                                        copy = Some(true);
+                                                        ui.close();
+                                                    }
+                                                });
                                             } else {
                                                 ui.label(RichText::new("    ").monospace());
                                             }
@@ -2906,6 +3458,79 @@ impl ReCraftApp {
         if let Some(address) = navigated {
             self.hex_synced = None;
             *action = Action::NavigateToDisasm(address);
+        }
+        // Byte-range selection: a press anchors it on the cell under the pointer, and
+        // keeping the button down while moving extends it across cells.
+        let (pressed, secondary_pressed, released, down, pointer) = ui.input(|input| {
+            (
+                input.pointer.primary_pressed(),
+                input.pointer.secondary_pressed(),
+                input.pointer.primary_released(),
+                input.pointer.primary_down(),
+                input.pointer.latest_pos(),
+            )
+        });
+        let cell_at = |pos: egui::Pos2| {
+            cells
+                .iter()
+                .find(|(rect, _, _)| rect.contains(pos))
+                .map(|(_, address, len)| (*address, *len))
+        };
+        if (pressed || secondary_pressed)
+            && let Some(pos) = pointer
+            && let Some((address, len)) = cell_at(pos)
+        {
+            hex_sel = Some(HexSelection {
+                anchor: address,
+                focus: Address::new(address.get() + len.saturating_sub(1)),
+            });
+            hex_drag = pressed;
+            self.copy_focus = CopyFocus::Hex;
+        } else if hex_drag
+            && down
+            && let Some(pos) = pointer
+        {
+            let target = cell_at(pos).or_else(|| {
+                let first = cells.first()?;
+                let last = cells.last()?;
+                if pos.y < first.0.top() {
+                    return Some((first.1, first.2));
+                }
+                if pos.y > last.0.bottom() {
+                    return Some((last.1, last.2));
+                }
+                // Beside a cell or between two of them: take the nearest one.
+                cells
+                    .iter()
+                    .min_by(|a, b| {
+                        (a.0.center() - pos)
+                            .length_sq()
+                            .total_cmp(&(b.0.center() - pos).length_sq())
+                    })
+                    .map(|(_, address, len)| (*address, *len))
+            });
+            if let (Some((address, len)), Some(selection)) = (target, hex_sel.as_mut()) {
+                selection.focus = Address::new(address.get() + len.saturating_sub(1));
+            }
+        }
+        if released {
+            hex_drag = false;
+        }
+        self.hex_sel = hex_sel;
+        self.hex_drag = hex_drag;
+        if let Some(ascii) = copy {
+            let (start, count) = match self.hex_sel {
+                Some(selection) => (selection.range().0, selection.len().min(256) as usize),
+                None => (self.hex_cursor.unwrap_or(start), 1),
+            };
+            let bytes = self.hex_selection_bytes(start, count);
+            if bytes.is_empty() {
+                self.set_status(self.t("ui_nothing_to_copy").to_owned());
+            } else {
+                let len = bytes.len();
+                ui.ctx().copy_text(Self::hex_dump_text(&bytes, ascii));
+                self.set_status(self.t_args("ui_copied_bytes", &[("count", &len.to_string())]));
+            }
         }
     }
 
@@ -3080,6 +3705,12 @@ impl ReCraftApp {
             ui.weak(self.t("ui_no_project_2"));
             return;
         };
+        let picked = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Segments)
+            .map(|(_, key)| key);
+        let copy_row = self.t("ui_copy_row");
+        let mut picked_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3097,39 +3728,45 @@ impl ReCraftApp {
                             "W"
                         }
                     );
-                    let response = ui.selectable_label(false, label);
+                    let key = segment.range.start.get();
+                    let response = ui.selectable_label(picked == Some(key), label);
                     if response.clicked() || response.double_clicked() {
                         *action = Action::NavigateToDisasm(segment.range.start);
                     }
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(key);
+                    }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button(copy_row.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
+                        }
+                    });
                 }
             });
+        if let Some(key) = picked_now {
+            self.list_sel = Some((Pane::Segments, key));
+            self.copy_focus = CopyFocus::List(Pane::Segments);
+        }
     }
 
     /// PE exports list (document tab, like IDA's Exports window).
     fn exports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        let exports: Vec<(String, Address, Option<String>)> = {
-            let Some(session) = self.session.as_ref() else {
-                ui.weak(self.t("ui_no_project_2"));
-                return;
-            };
-            let image = session.image();
-            image
-                .exports
-                .iter()
-                .map(|export| {
-                    let va = image.image_base.get().saturating_add(u64::from(export.rva));
-                    let name = export
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("#{}", export.ordinal));
-                    (name, Address::new(va), export.forwarder.clone())
-                })
-                .collect()
-        };
+        if self.session.is_none() {
+            ui.weak(self.t("ui_no_project_2"));
+            return;
+        }
+        let exports = self.exports();
         if exports.is_empty() {
             ui.weak(self.t("ui_no_exports"));
             return;
         }
+        let picked = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Exports)
+            .map(|(_, key)| key);
+        let copy_row = self.t("ui_copy_row");
+        let mut picked_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3143,16 +3780,30 @@ impl ReCraftApp {
                         ui.label(RichText::new(self.t("ui_forwarder")).strong());
                         ui.end_row();
                         for (name, address, forwarder) in &exports {
-                            let response = ui.selectable_label(false, name);
+                            let key = address.get();
+                            let response = ui.selectable_label(picked == Some(key), name);
                             ui.label(RichText::new(format!("{:#x}", address.get())).monospace());
                             ui.label(RichText::new(forwarder.as_deref().unwrap_or("")).weak());
                             ui.end_row();
                             if response.clicked() || response.double_clicked() {
                                 *action = Action::NavigateToDisasm(*address);
                             }
+                            if response.clicked() || response.secondary_clicked() {
+                                picked_now = Some(key);
+                            }
+                            let _ = response.context_menu(|ui| {
+                                if ui.button(copy_row.as_str()).clicked() {
+                                    *action = Action::Copy;
+                                    ui.close();
+                                }
+                            });
                         }
                     });
             });
+        if let Some(key) = picked_now {
+            self.list_sel = Some((Pane::Exports, key));
+            self.copy_focus = CopyFocus::List(Pane::Exports);
+        }
     }
 
     /// Miniature CFG map under the Functions window (IDA's "Graph overview").
@@ -3298,6 +3949,12 @@ impl ReCraftApp {
                 .collect()
         };
         let mut shown = 0usize;
+        let picked = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Functions)
+            .map(|(_, key)| key);
+        let copy_row = self.t("ui_copy_row");
+        let mut picked_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3321,11 +3978,14 @@ impl ReCraftApp {
                             }
                             shown += 1;
                             ui.label(RichText::new("ƒ").color(pal.name));
-                            let response = ui.selectable_label(false, name).on_hover_text(format!(
-                                "{:#012x} .. {:#012x}",
-                                function.start.get(),
-                                function.end.get()
-                            ));
+                            let key = function.start.get();
+                            let response = ui
+                                .selectable_label(picked == Some(key), name)
+                                .on_hover_text(format!(
+                                    "{:#012x} .. {:#012x}",
+                                    function.start.get(),
+                                    function.end.get()
+                                ));
                             ui.label(
                                 RichText::new(
                                     segment_names.get(index).cloned().unwrap_or_default(),
@@ -3340,12 +4000,25 @@ impl ReCraftApp {
                             if response.double_clicked() {
                                 *action = Action::NavigateToDisasm(function.start);
                             }
+                            if response.clicked() || response.secondary_clicked() {
+                                picked_now = Some(key);
+                            }
+                            let _ = response.context_menu(|ui| {
+                                if ui.button(copy_row.as_str()).clicked() {
+                                    *action = Action::Copy;
+                                    ui.close();
+                                }
+                            });
                         }
                     });
                 if shown == 0 && !self.functions.is_empty() {
                     ui.weak(self.t("ui_no_match"));
                 }
             });
+        if let Some(key) = picked_now {
+            self.list_sel = Some((Pane::Functions, key));
+            self.copy_focus = CopyFocus::List(Pane::Functions);
+        }
     }
 
     fn strings_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -3398,6 +4071,12 @@ impl ReCraftApp {
             );
         }
         let mut shown = 0usize;
+        let picked = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Strings)
+            .map(|(_, key)| key);
+        let copy_row = self.t("ui_copy_row");
+        let mut picked_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3412,7 +4091,8 @@ impl ReCraftApp {
                         ui.weak(self.t("ui_first_2000_matches"));
                         break;
                     }
-                    let is_selected = row.addr == selected;
+                    let key = row.addr.get();
+                    let is_selected = row.addr == selected || picked == Some(key);
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
                     if is_selected {
@@ -3468,16 +4148,35 @@ impl ReCraftApp {
                     if response.double_clicked() {
                         *action = Action::NavigateToDisasm(row.addr);
                     }
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(key);
+                    }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button(copy_row.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
+                        }
+                    });
                     shown += 1;
                     let _ = index;
                 }
             });
+        if let Some(key) = picked_now {
+            self.list_sel = Some((Pane::Strings, key));
+            self.copy_focus = CopyFocus::List(Pane::Strings);
+        }
     }
 
     fn imports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         if self.imports.is_empty() {
             ui.weak(self.t("ui_no_imports_or_open_a_project_first"));
         }
+        let picked = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Imports)
+            .map(|(_, key)| key);
+        let copy_row = self.t("ui_copy_row");
+        let mut picked_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3486,7 +4185,8 @@ impl ReCraftApp {
                         "{}!{}  [{}]  ×{}",
                         import.module, import.api, import.category, import.refs
                     );
-                    let response = ui.selectable_label(false, label);
+                    let key = import.iat.get();
+                    let response = ui.selectable_label(picked == Some(key), label);
                     let target = import.first_from.unwrap_or(import.iat);
                     if response.clicked() {
                         *action = Action::Navigate(target);
@@ -3494,8 +4194,21 @@ impl ReCraftApp {
                     if response.double_clicked() {
                         *action = Action::NavigateToDisasm(target);
                     }
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(key);
+                    }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button(copy_row.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
+                        }
+                    });
                 }
             });
+        if let Some(key) = picked_now {
+            self.list_sel = Some((Pane::Imports, key));
+            self.copy_focus = CopyFocus::List(Pane::Imports);
+        }
     }
 
     fn names_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -3512,6 +4225,12 @@ impl ReCraftApp {
             );
         });
         let filter = self.names_filter.to_lowercase();
+        let picked = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Names)
+            .map(|(_, key)| key);
+        let copy_row = self.t("ui_copy_row");
+        let mut picked_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3523,12 +4242,25 @@ impl ReCraftApp {
                         continue;
                     }
                     let label = format!("{:#012x}  {name}", addr.get());
-                    let response = ui.selectable_label(false, label);
+                    let response = ui.selectable_label(picked == Some(addr.get()), label);
                     if response.clicked() || response.double_clicked() {
                         *action = Action::NavigateToDisasm(*addr);
                     }
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(addr.get());
+                    }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button(copy_row.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
+                        }
+                    });
                 }
             });
+        if let Some(key) = picked_now {
+            self.list_sel = Some((Pane::Names, key));
+            self.copy_focus = CopyFocus::List(Pane::Names);
+        }
     }
     /// Structures window: list user layouts, define one, bind it to a function argument.
     fn structs_panel(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
@@ -4623,6 +5355,47 @@ impl ReCraftApp {
         ui.weak(self.t("ui_shortcuts_ctrl_p_palette_g_goto_n_rename_comment_x_xrefs_spac"));
     }
 
+    /// Column text of one disassembly row exactly as the listing paints it. Text selection
+    /// and copy both run off this, so they cannot drift from the rendering.
+    fn disasm_columns(&self, line: &DisasmLine) -> (String, String, String, String, String) {
+        let bytes = line
+            .bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x} "))
+            .collect::<String>();
+        (
+            format!("{:#012x}  ", line.addr.get()),
+            format!("{bytes:<46}"),
+            format!("{:<9}", line.mnemonic),
+            format!("{:<36}", line.operands),
+            line.comment.clone().unwrap_or_default(),
+        )
+    }
+
+    /// One disassembly row as the listing paints it (address, bytes, mnemonic, operands,
+    /// comment).
+    fn disasm_line_text(&self, line: &DisasmLine) -> String {
+        let (address, bytes, mnemonic, operands, comment) = self.disasm_columns(line);
+        format!("{address}{bytes}{mnemonic}{operands}{comment}")
+    }
+
+    /// Instruction text of one row, without the address/bytes columns: what Ctrl+C copies
+    /// when the user did not drag a text selection.
+    fn disasm_line_copy_text(&self, line: &DisasmLine) -> String {
+        let mut text = format!("{} {}", line.mnemonic, line.operands);
+        text.truncate(text.trim_end().len());
+        if let Some(comment) = line
+            .comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|comment| !comment.is_empty())
+        {
+            text.push_str("  ; ");
+            text.push_str(comment.trim_start_matches(';').trim_start());
+        }
+        text
+    }
+
     fn disasm_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Disasm;
         let pal = self.palette();
@@ -4636,10 +5409,22 @@ impl ReCraftApp {
         let comment_menu = self.t("ui_comment");
         let xrefs_menu = self.t("ui_cross_references");
         let copy_menu = self.t("ui_copy_address");
+        let copy_text_menu = self.t("ui_copy");
         let undo_menu = self.t("ui_undo");
         let redo_menu = self.t("ui_redo");
         let mut clicked_row = None;
+        let mut drag_row = None;
+        let mut took_focus = false;
         let mut follow = false;
+        // Editor-style text selection over the listing, kept across frames so the highlight
+        // survives repaints while the pointer moves.
+        let mut text_sel = self.disasm_sel;
+        let mut dragging = self.disasm_drag;
+        let pointer = ui.input(|input| input.pointer.latest_pos());
+        let primary_down = ui.input(|input| input.pointer.primary_down());
+        let extend_selection = ui.input(|input| input.modifiers.shift);
+        let mut first_top: Option<f32> = None;
+        let mut last_bottom: Option<f32> = None;
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         if let Some(offset) = self.disasm_scroll_to.take() {
             area = area.vertical_scroll_offset(offset);
@@ -4669,9 +5454,12 @@ impl ReCraftApp {
                 let label_height = self.disasm_label_height(line);
                 let row_height = self.row_height() + label_height;
                 // One full-row hit area, like IDA: the whole line is selectable and
-                // double-click follows the operand instead of only the address cell.
+                // double-click follows the operand instead of only the address cell. The
+                // drag sense is what turns the listing into selectable text.
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click());
+                    ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click_and_drag());
+                first_top.get_or_insert(rect.top());
+                last_bottom = Some(rect.bottom());
                 if index == self.selected {
                     ui.painter().rect_filled(rect, 1.0, pal.selected_row);
                 } else if response.hovered() {
@@ -4686,47 +5474,88 @@ impl ReCraftApp {
                         pal.name,
                     );
                 }
-                let bytes = line
-                    .bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02x} "))
-                    .collect::<String>();
+                let (address, byte_column, mnemonic, operands, comment) = self.disasm_columns(line);
                 let mut job = LayoutJob::default();
-                append(
-                    &mut job,
-                    &format!("{:#012x}  ", line.addr.get()),
-                    pal.addr,
-                    &mono,
-                );
-                append(&mut job, &format!("{bytes:<46}"), pal.bytes, &mono);
-                append(
-                    &mut job,
-                    &format!("{:<9}", line.mnemonic),
-                    pal.mnemonic,
-                    &mono,
-                );
-                let operands = format!("{:<36}", line.operands);
+                append(&mut job, &address, pal.addr, &mono);
+                append(&mut job, &byte_column, pal.bytes, &mono);
+                append(&mut job, &mnemonic, pal.mnemonic, &mono);
                 append_operands(&mut job, &operands, pal, &mono);
-                append(
-                    &mut job,
-                    line.comment.as_deref().unwrap_or(""),
-                    pal.comment,
-                    &mono,
-                );
+                append(&mut job, &comment, pal.comment, &mono);
                 let galley = ui.painter().layout_job(job);
-                ui.painter().galley(
-                    rect.left_top() + egui::vec2(4.0, label_height + 1.0),
-                    galley,
-                    Color32::WHITE,
-                );
+                let text_origin = rect.left_top() + egui::vec2(4.0, label_height + 1.0);
+                // The dragged selection sits behind the glyphs so the code stays readable.
+                if let Some(selection) = text_sel
+                    && let Some(range) = selection.row_range(index, galley.text().chars().count())
+                {
+                    paint_text_selection(
+                        ui.painter(),
+                        pal.text_selection,
+                        &galley,
+                        text_origin,
+                        range,
+                    );
+                }
+                ui.painter()
+                    .galley(text_origin, galley.clone(), Color32::WHITE);
+                // Text selection: a press anchors it, a drag extends it across rows, and a
+                // plain click collapses it to a caret where it landed (Shift extends).
+                if response.drag_started()
+                    && let Some(pos) = ui.input(|input| input.pointer.press_origin())
+                {
+                    let point = TextPoint {
+                        row: index,
+                        char: galley_char_at(&galley, text_origin, pos),
+                    };
+                    text_sel = Some(TextSelection {
+                        anchor: point,
+                        focus: point,
+                    });
+                    dragging = true;
+                    drag_row = Some(index);
+                }
+                if dragging
+                    && primary_down
+                    && let Some(pos) = pointer
+                    && pos.y >= rect.top()
+                    && pos.y <= rect.bottom()
+                {
+                    let point = TextPoint {
+                        row: index,
+                        char: galley_char_at(&galley, text_origin, pos),
+                    };
+                    if let Some(selection) = text_sel.as_mut() {
+                        selection.focus = point;
+                    }
+                }
+                if response.clicked()
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
+                    let point = TextPoint {
+                        row: index,
+                        char: galley_char_at(&galley, text_origin, pos),
+                    };
+                    text_sel = Some(match text_sel {
+                        Some(selection) if extend_selection => TextSelection {
+                            focus: point,
+                            ..selection
+                        },
+                        _ => TextSelection::collapsed(point),
+                    });
+                }
                 if response.clicked() || response.secondary_clicked() {
                     clicked_row = Some(index);
+                    took_focus = true;
                 }
                 if response.double_clicked() {
                     clicked_row = Some(index);
                     follow = true;
                 }
                 response.context_menu(|ui| {
+                    if ui.button(copy_text_menu.as_str()).clicked() {
+                        *action = Action::Copy;
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button(follow_menu.as_str()).clicked() {
                         *action = Action::Follow;
                         ui.close();
@@ -4793,8 +5622,41 @@ impl ReCraftApp {
             }
         });
         self.follow_disasm_scroll(ui, &scroll);
-        if let Some(index) = clicked_row {
+        // Dragging above or below the window keeps selecting to that edge.
+        if dragging
+            && primary_down
+            && let Some(pos) = pointer
+        {
+            if first_top.is_some_and(|top| pos.y < top) {
+                if let Some(selection) = text_sel.as_mut() {
+                    selection.focus = TextPoint { row: 0, char: 0 };
+                }
+            } else if last_bottom.is_some_and(|bottom| pos.y > bottom)
+                && let Some(last) = self.disasm_rows.len().checked_sub(1)
+            {
+                let end = self
+                    .disasm_line_text(&self.disasm_rows[last])
+                    .chars()
+                    .count();
+                if let Some(selection) = text_sel.as_mut() {
+                    selection.focus = TextPoint {
+                        row: last,
+                        char: end,
+                    };
+                }
+            }
+        }
+        if !primary_down {
+            dragging = false;
+        }
+        self.disasm_sel = text_sel;
+        self.disasm_drag = dragging;
+        if let Some(index) = clicked_row.or(drag_row) {
             self.selected = index;
+            self.copy_focus = CopyFocus::Disasm;
+        }
+        if took_focus {
+            self.copy_focus = CopyFocus::Disasm;
         }
         if follow {
             *action = Action::Follow;
@@ -5095,6 +5957,16 @@ impl ReCraftApp {
         let gutter = number_width + 12.0;
         let mut clicked = None;
         let mut double_clicked = None;
+        let mut took_focus = false;
+        let copy_menu = self.t("ui_copy");
+        // Editor-style text selection over the pseudo-C rows (the gutter stays out of it).
+        let mut text_sel = self.pseudo_sel;
+        let mut dragging = self.pseudo_drag;
+        let drag_pointer = ui.input(|input| input.pointer.latest_pos());
+        let primary_down = ui.input(|input| input.pointer.primary_down());
+        let extend_selection = ui.input(|input| input.modifiers.shift);
+        let mut first_top: Option<f32> = None;
+        let mut last_bottom: Option<f32> = None;
         let width = gutter + ui.available_width().max(1100.0);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
@@ -5102,8 +5974,12 @@ impl ReCraftApp {
                 let viewport = ui.clip_rect();
                 ui.spacing_mut().item_spacing.y = 1.0;
                 for (index, line) in lines.iter().enumerate() {
-                    let (rect, response) = ui
-                        .allocate_exact_size(egui::vec2(width, self.row_height()), Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(width, self.row_height()),
+                        Sense::click_and_drag(),
+                    );
+                    first_top.get_or_insert(rect.top());
+                    last_bottom = Some(rect.bottom());
                     if rect.bottom() < viewport.top() || rect.top() > viewport.bottom() {
                         continue;
                     }
@@ -5129,11 +6005,69 @@ impl ReCraftApp {
                     let mut job = LayoutJob::default();
                     append_pseudo_line(&mut job, &line.text, pal, &mono);
                     let galley = ui.painter().layout_job(job);
+                    if let Some(selection) = text_sel
+                        && let Some(range) =
+                            selection.row_range(index, galley.text().chars().count())
+                    {
+                        paint_text_selection(
+                            ui.painter(),
+                            pal.text_selection,
+                            &galley,
+                            text_pos,
+                            range,
+                        );
+                    }
                     ui.painter().with_clip_rect(text_clip).galley(
                         text_pos,
                         galley.clone(),
                         pal.text,
                     );
+                    // A press anchors a text selection, a drag extends it across rows and a
+                    // plain click collapses it to a caret (Shift extends the last one).
+                    if response.drag_started()
+                        && let Some(pos) = ui.input(|input| input.pointer.press_origin())
+                    {
+                        let point = TextPoint {
+                            row: index,
+                            char: galley_char_at(&galley, text_pos, pos),
+                        };
+                        text_sel = Some(TextSelection {
+                            anchor: point,
+                            focus: point,
+                        });
+                        dragging = true;
+                        took_focus = true;
+                    }
+                    if dragging
+                        && primary_down
+                        && let Some(pos) = drag_pointer
+                        && pos.y >= rect.top()
+                        && pos.y <= rect.bottom()
+                    {
+                        let point = TextPoint {
+                            row: index,
+                            char: galley_char_at(&galley, text_pos, pos),
+                        };
+                        if let Some(selection) = text_sel.as_mut() {
+                            selection.focus = point;
+                        }
+                    }
+                    if response.clicked()
+                        && let Some(pos) = response.interact_pointer_pos()
+                    {
+                        let point = TextPoint {
+                            row: index,
+                            char: galley_char_at(&galley, text_pos, pos),
+                        };
+                        text_sel = Some(match text_sel {
+                            Some(selection) if extend_selection => TextSelection {
+                                focus: point,
+                                ..selection
+                            },
+                            _ => TextSelection::collapsed(point),
+                        });
+                        took_focus = true;
+                    }
                     // Symbol under the pointer, so callee names can advertise the
                     // double-click that opens their body. A word inside a string literal
                     // is data, not a call, so it keeps the plain address tooltip.
@@ -5167,8 +6101,13 @@ impl ReCraftApp {
                         }
                         _ => response,
                     };
-                    if response.clicked() {
+                    // Shift+click only extends the text selection; syncing the row would
+                    // re-anchor the listing and drop it again.
+                    if response.clicked() && !extend_selection {
                         clicked = Some((index, line.addr));
+                    }
+                    if response.secondary_clicked() {
+                        took_focus = true;
                     }
                     if response.double_clicked() {
                         double_clicked = Some(match char_index {
@@ -5178,8 +6117,43 @@ impl ReCraftApp {
                             None => Action::NavigateToDisasm(line.addr),
                         });
                     }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button(copy_menu.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
+                        }
+                    });
                 }
             });
+        // Dragging above or below the listing keeps selecting to that edge.
+        if dragging
+            && primary_down
+            && let Some(pos) = drag_pointer
+        {
+            if first_top.is_some_and(|top| pos.y < top) {
+                if let Some(selection) = text_sel.as_mut() {
+                    selection.focus = TextPoint { row: 0, char: 0 };
+                }
+            } else if last_bottom.is_some_and(|bottom| pos.y > bottom)
+                && let Some(last) = lines.len().checked_sub(1)
+            {
+                let end = lines[last].text.chars().count();
+                if let Some(selection) = text_sel.as_mut() {
+                    selection.focus = TextPoint {
+                        row: last,
+                        char: end,
+                    };
+                }
+            }
+        }
+        if !primary_down {
+            dragging = false;
+        }
+        self.pseudo_sel = text_sel;
+        self.pseudo_drag = dragging;
+        if took_focus {
+            self.copy_focus = CopyFocus::Pseudo;
+        }
         // Single click selects that exact row and syncs the disassembly cursor without
         // leaving pseudo-C; double-click opens a callee's body, and otherwise jumps into
         // the disassembly tab.
@@ -5405,6 +6379,7 @@ impl ReCraftApp {
         let mut open = true;
         let mut close = false;
         let mut follow = None;
+        let mut copied = false;
         // IDA's dialog opens centered; a user-moved position is remembered per id.
         let default_size = egui::vec2(760.0, 380.0);
         let default_pos = ctx.content_rect().center() - default_size / 2.0;
@@ -5435,6 +6410,19 @@ impl ReCraftApp {
                     && !visible.contains(&dialog.selected)
                 {
                     dialog.selected = first;
+                }
+                // Ctrl+C copies the selected row while the search box does not own the keys.
+                if !typing
+                    && ui.input(|input| {
+                        input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Copy))
+                    })
+                    && let Some(row) = dialog.rows.get(dialog.selected)
+                {
+                    ctx.copy_text(xref_row_text(row, up_label.as_str(), down_label.as_str()));
+                    copied = true;
                 }
                 // IDA's keys: arrows move the cursor, Enter is OK, Esc is Cancel. The
                 // search box owns the arrows/Enter while it is being typed into.
@@ -5631,6 +6619,9 @@ impl ReCraftApp {
         } else {
             self.xref_dialog = None;
         }
+        if copied {
+            self.set_status(self.t_args("ui_copied_lines", &[("count", "1")]));
+        }
     }
 
     // ------------------------------------------------------------- actions --
@@ -5658,6 +6649,40 @@ impl ReCraftApp {
         }
         if self.edit.is_some() || self.goto.is_some() || ctx.egui_wants_keyboard_input() {
             return Action::None;
+        }
+        // The desktop integration turns Ctrl+C into `Event::Copy`. A selected label (the AI
+        // panel, the Output log, the hint lines) owns it through egui's own copy, so the code
+        // views only claim the event when no label text is selected.
+        let label_selection = ctx
+            .plugin_opt::<egui::text_selection::LabelSelectionState>()
+            .is_some_and(|plugin| plugin.lock().has_selection());
+        if !label_selection
+            && ctx.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::Copy))
+            })
+        {
+            return Action::Copy;
+        }
+        // Ctrl+A selects the focused pane's whole text. The chord is read off the key event
+        // itself, so it also works when the platform does not resend the modifier state.
+        let select_all = ctx.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: Key::A,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.command
+                )
+            })
+        });
+        if select_all {
+            return Action::SelectAll;
         }
         let mut action = Action::None;
         ctx.input(|input| {
@@ -5751,6 +6776,12 @@ impl ReCraftApp {
     fn apply_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::None => {}
+            Action::Copy => {
+                self.copy_focused(ctx);
+            }
+            Action::SelectAll => {
+                self.select_all_in_focus();
+            }
             Action::Open => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("ReCraft project", &["rcraft"])
@@ -6970,6 +8001,18 @@ fn elide_chars(text: &str, max_chars: usize) -> String {
     let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
     out.push('…');
     out
+}
+
+/// One xref row as Ctrl+C copies it: direction, type, address label and the text at the
+/// other end, tab separated like IDA's dialog columns.
+fn xref_row_text(row: &XrefRow, up: &str, down: &str) -> String {
+    format!(
+        "{}\t{}\t{}\t{}",
+        if row.up { up } else { down },
+        row.kind,
+        row.label,
+        row.text
+    )
 }
 
 /// Indices of the rows matching the dialog's search text, which (like IDA's Search)
@@ -10351,5 +11394,548 @@ mod tests {
             run_analysis_job(&project, &cancel),
             AnalysisMessage::Cancelled
         ));
+    }
+
+    /// A minimal instruction row for the selection tests (no session needed).
+    fn synthetic_line(addr: u64, mnemonic: &str, operands: &str) -> DisasmLine {
+        DisasmLine {
+            addr: Address::new(addr),
+            len: 2,
+            raw: [0x90; 15],
+            mnemonic: mnemonic.to_owned(),
+            operands: operands.to_owned(),
+            name: None,
+            comment: None,
+            flags: Flags::code(),
+        }
+    }
+
+    fn synthetic_disassembly() -> ReCraftApp {
+        ReCraftApp {
+            disasm_start: Address::new(0x140001000),
+            disasm_rows: vec![
+                synthetic_line(0x140001000, "mov", "rax, rbx"),
+                synthetic_line(0x140001003, "test", "rax, rax"),
+                synthetic_line(0x140001006, "ret", ""),
+            ],
+            ..ReCraftApp::default()
+        }
+    }
+
+    const TEST_SCREEN: egui::Vec2 = egui::vec2(1200.0, 700.0);
+
+    fn test_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, TEST_SCREEN)),
+            ..egui::RawInput::default()
+        }
+    }
+
+    fn press(pos: egui::Pos2) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn release(pos: egui::Pos2) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// Text the last `copy_text` produced, read back from the context's output commands.
+    fn copied_text(ctx: &egui::Context) -> Option<String> {
+        ctx.output(|output| {
+            output.commands.iter().find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+        })
+    }
+
+    #[test]
+    fn a_text_selection_copies_exactly_the_dragged_characters() {
+        let rows = vec!["alpha  ; note".to_owned(), "beta".to_owned()];
+        let selection = TextSelection {
+            anchor: TextPoint { row: 0, char: 3 },
+            focus: TextPoint { row: 1, char: 2 },
+        };
+        assert_eq!(
+            selected_text(selection, &rows).as_deref(),
+            Some("ha  ; note\nbe"),
+            "one line per row, interior padding kept, trailing padding trimmed"
+        );
+        let reversed = TextSelection {
+            anchor: selection.focus,
+            focus: selection.anchor,
+        };
+        assert_eq!(
+            selected_text(reversed, &rows),
+            selected_text(selection, &rows)
+        );
+
+        // A caret selects nothing; the view then copies its current row instead.
+        let caret = TextSelection::collapsed(TextPoint { row: 1, char: 4 });
+        assert!(caret.is_empty());
+        assert_eq!(selected_text(caret, &rows).as_deref(), Some(""));
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn ctrl_c_and_ctrl_a_reach_the_focused_pane() {
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp::default();
+        let run = |app: &mut ReCraftApp, events: Vec<egui::Event>| -> Action {
+            let mut action = Action::None;
+            let input = egui::RawInput {
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let _ = ui;
+                action = app.handle_keys(&ctx);
+            });
+            output.textures_delta.clear();
+            action
+        };
+        assert_eq!(run(&mut app, vec![egui::Event::Copy]), Action::Copy);
+        assert_eq!(
+            run(
+                &mut app,
+                vec![egui::Event::Key {
+                    key: Key::A,
+                    physical_key: Some(Key::A),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                }]
+            ),
+            Action::SelectAll
+        );
+        // A plain `A` still marks the bytes as a string in the listing.
+        app.tab = Tab::Disasm;
+        assert_eq!(
+            run(
+                &mut app,
+                vec![egui::Event::Key {
+                    key: Key::A,
+                    physical_key: Some(Key::A),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]
+            ),
+            Action::ApplyData(DataOp::Ascii)
+        );
+    }
+
+    #[test]
+    fn a_text_selection_follows_the_rows_when_the_window_reloads() {
+        let rows: Vec<DisasmLine> = (0..5)
+            .map(|index| synthetic_line(0x140001000 + index * 3, "nop", ""))
+            .collect();
+        // A window holding the last three rows, selected from its first to its last line.
+        let window = rows[2..].to_vec();
+        let selection = TextSelection {
+            anchor: TextPoint { row: 0, char: 4 },
+            focus: TextPoint { row: 2, char: 7 },
+        };
+        // Paging up loads the two rows above: the same addresses are now at 2 and 4.
+        let remapped = remap_selection(selection, &window, &rows).expect("both ends are visible");
+        assert_eq!(remapped.anchor, TextPoint { row: 2, char: 4 });
+        assert_eq!(remapped.focus, TextPoint { row: 4, char: 7 });
+
+        // An end that scrolled out of the window drops the whole selection.
+        let scrolled_away = rows[..2].to_vec();
+        assert_eq!(remap_selection(selection, &window, &scrolled_away), None);
+    }
+
+    /// Dragging across the listing selects the characters under the pointer, and Ctrl+C
+    /// copies exactly that text (the report: "selection and copy need work").
+    #[test]
+    fn dragging_across_the_listing_selects_and_copies_text() {
+        let mut app = synthetic_disassembly();
+        let ctx = egui::Context::default();
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(test_input(), |ui| app.disasm_view(ui, &mut action));
+        output.textures_delta.clear();
+        let first = app.disasm_line_text(&app.disasm_rows[0]);
+        let last = app.disasm_line_text(&app.disasm_rows[2]);
+        // Start just before the "mov" mnemonic (column 60: address 14 + bytes 46) and end
+        // after the "ret" of the third row.
+        let start = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, &first, 59))
+            .expect("the first row is on screen");
+        let end = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, &last, 63))
+            .expect("the last row is on screen");
+
+        let mut frame = 0.0f64;
+        let mut step = |events: Vec<egui::Event>, app: &mut ReCraftApp| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                time: Some(frame / 60.0),
+                events,
+                ..test_input()
+            };
+            let mut action = Action::None;
+            let mut output = ctx.run_ui(input, |ui| app.disasm_view(ui, &mut action));
+            output.textures_delta.clear();
+            output
+        };
+        step(vec![egui::Event::PointerMoved(start)], &mut app);
+        step(vec![press(start)], &mut app);
+        step(vec![egui::Event::PointerMoved(end)], &mut app);
+        let painted_output = step(vec![release(end)], &mut app);
+
+        let selection = app.disasm_sel.expect("a drag must build a text selection");
+        let (from, to) = selection.ordered();
+        assert_eq!((from.row, to.row), (0, 2), "the selection spans both rows");
+        assert!(
+            painted_output.shapes.iter().any(|clipped| {
+                matches!(
+                    &clipped.shape,
+                    egui::Shape::Rect(rect) if rect.fill == app.palette().text_selection
+                )
+            }),
+            "the dragged selection must be painted"
+        );
+
+        app.apply_action(&ctx, Action::Copy);
+        let copied = copied_text(&ctx).expect("Ctrl+C must fill the clipboard");
+        let rows: Vec<String> = app
+            .disasm_rows
+            .iter()
+            .map(|line| app.disasm_line_text(line))
+            .collect();
+        assert_eq!(
+            copied,
+            selected_text(selection, &rows).expect("the selection has text"),
+            "the clipboard must hold exactly the dragged characters"
+        );
+        assert!(
+            copied.contains("mov") && copied.contains("test") && copied.ends_with("ret"),
+            "the copy must cover every row the drag crossed, got {copied:?}"
+        );
+    }
+
+    #[test]
+    fn dragging_in_the_decompile_view_selects_code() {
+        let start = Address::new(0x140001000);
+        let mut app = ReCraftApp {
+            pseudo_start: start,
+            pseudo: Some(vec![
+                PseudoLine {
+                    addr: start,
+                    text: "int main()".to_owned(),
+                },
+                PseudoLine {
+                    addr: start,
+                    text: "{".to_owned(),
+                },
+                PseudoLine {
+                    addr: start,
+                    text: "return 0;".to_owned(),
+                },
+                PseudoLine {
+                    addr: start,
+                    text: "}".to_owned(),
+                },
+            ]),
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(test_input(), |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        let anchor = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "int main()", 4))
+            .expect("the first pseudo line is on screen");
+        let end = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "return 0;", 8))
+            .expect("the last pseudo line is on screen");
+
+        let mut frame = 0.0f64;
+        let mut step = |events: Vec<egui::Event>, app: &mut ReCraftApp| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                time: Some(frame / 60.0),
+                events,
+                ..test_input()
+            };
+            let mut action = Action::None;
+            let mut output = ctx.run_ui(input, |ui| app.pseudo_view(ui, &mut action));
+            output.textures_delta.clear();
+            output
+        };
+        step(vec![egui::Event::PointerMoved(anchor)], &mut app);
+        step(vec![press(anchor)], &mut app);
+        step(vec![egui::Event::PointerMoved(end)], &mut app);
+        step(vec![release(end)], &mut app);
+
+        let selection = app.pseudo_sel.expect("a drag must build a text selection");
+        assert_eq!(selection.ordered().0.row, 0);
+        assert_eq!(selection.ordered().1.row, 2);
+        app.apply_action(&ctx, Action::Copy);
+        assert_eq!(
+            copied_text(&ctx).as_deref(),
+            Some("main()\n{\nreturn 0;"),
+            "the copy must be the dragged pseudo-C, without line numbers"
+        );
+    }
+
+    /// Hex bytes are picked as a range and copied as a dump, not one byte at a time.
+    #[test]
+    fn dragging_in_the_hex_view_copies_a_byte_range() {
+        let Some((mut app, ctx, _input)) = headless_disassembly() else {
+            return;
+        };
+        let base = app.session.as_ref().unwrap().image().image_base;
+        app.hex_start = Address::new(base.get());
+        app.hex_cursor = Some(app.hex_start);
+        app.hex_synced = Some(app.hex_start);
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(test_input(), |ui| app.hex_view(ui, &mut action));
+        output.textures_delta.clear();
+        // The MZ header: the first two byte cells are "4D" and "5A".
+        let first = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "4D", 0))
+            .map(|pos| pos + egui::vec2(2.0, 2.0))
+            .expect("the first byte cell is on screen");
+        let second = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "5A", 0))
+            .map(|pos| pos + egui::vec2(2.0, 2.0))
+            .expect("the second byte cell is on screen");
+        let pitch = second.x - first.x;
+        let end = egui::pos2(first.x + pitch * 3.0, first.y);
+
+        let mut frame = 0.0f64;
+        let mut step = |events: Vec<egui::Event>, app: &mut ReCraftApp| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                time: Some(frame / 60.0),
+                events,
+                ..test_input()
+            };
+            let mut action = Action::None;
+            let mut output = ctx.run_ui(input, |ui| app.hex_view(ui, &mut action));
+            output.textures_delta.clear();
+            output
+        };
+        step(vec![egui::Event::PointerMoved(first)], &mut app);
+        step(vec![press(first)], &mut app);
+        step(vec![egui::Event::PointerMoved(end)], &mut app);
+        step(vec![release(end)], &mut app);
+
+        let selection = app.hex_sel.expect("a drag must pick a byte range");
+        assert_eq!(
+            selection.len(),
+            4,
+            "four bytes from the anchor to the pointer"
+        );
+        app.apply_action(&ctx, Action::Copy);
+        assert_eq!(
+            copied_text(&ctx).as_deref(),
+            Some("4D 5A 90 00"),
+            "the clipboard must hold the selected bytes"
+        );
+    }
+
+    #[test]
+    fn list_rows_copy_their_visible_columns() {
+        let mut app = ReCraftApp {
+            strings: vec![StringRow {
+                addr: Address::new(0x140010000),
+                len: 12,
+                enc: 0,
+                kind: 0,
+                segment: ".rdata".to_owned(),
+                text: "hello".to_owned(),
+                raw: vec![b'h', b'e', b'l', b'l', b'o'],
+                name: None,
+            }],
+            names: vec![(Address::new(0x140001000), "main".to_owned())],
+            imports: vec![ImportRow {
+                module: "KERNEL32.dll".to_owned(),
+                api: "CreateFileW".to_owned(),
+                category: "file",
+                iat: Address::new(0x140020000),
+                refs: 2,
+                first_from: None,
+            }],
+            ..ReCraftApp::default()
+        };
+        assert_eq!(
+            app.list_row_text(Pane::Strings, 0x140010000).as_deref(),
+            Some(".rdata:0000000140010000\t0000000c\tC\thello")
+        );
+        assert_eq!(
+            app.list_row_text(Pane::Names, 0x140001000).as_deref(),
+            Some("0x0140001000\tmain")
+        );
+        assert_eq!(
+            app.list_row_text(Pane::Imports, 0x140020000).as_deref(),
+            Some("KERNEL32.dll!CreateFileW\tfile\t×2")
+        );
+
+        // Ctrl+C over the list emits the picked row.
+        app.list_sel = Some((Pane::Names, 0x140001000));
+        app.copy_focus = CopyFocus::List(Pane::Names);
+        let ctx = egui::Context::default();
+        app.copy_focused(&ctx);
+        assert_eq!(copied_text(&ctx).as_deref(), Some("0x0140001000\tmain"));
+
+        // Nothing picked: no stale row from another list is copied.
+        app.copy_focus = CopyFocus::List(Pane::Strings);
+        app.copy_focused(&ctx);
+        assert_eq!(
+            copied_text(&ctx).as_deref(),
+            Some("0x0140001000\tmain"),
+            "the older clipboard text must survive an empty copy"
+        );
+        assert_eq!(app.status, app.t("ui_nothing_to_copy"));
+    }
+
+    /// End to end through the dock: drag over two rows in the real Code View, then press
+    /// Ctrl+C, and the selection must land on the clipboard.
+    #[test]
+    fn headless_ctrl_c_copies_the_dragged_disassembly_text() {
+        let Some((mut app, ctx, mut input)) = headless_disassembly() else {
+            return;
+        };
+        let mut frame = 0.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        let output = step(&mut input, &mut app);
+        let visible: Vec<(u64, egui::Pos2)> = painted_rows(&output)
+            .into_iter()
+            .filter(|(_, pos)| pos.y > 200.0 && pos.y < 700.0 && pos.x > 100.0)
+            .collect();
+        assert!(visible.len() > 3, "expected several visible rows");
+        let start = visible[0].1 + egui::vec2(200.0, 4.0);
+        let end = visible[2].1 + egui::vec2(200.0, 4.0);
+
+        input.events.push(egui::Event::PointerMoved(start));
+        step(&mut input, &mut app);
+        input.events.push(press(start));
+        step(&mut input, &mut app);
+        input.events.push(egui::Event::PointerMoved(end));
+        step(&mut input, &mut app);
+        input.events.push(release(end));
+        step(&mut input, &mut app);
+
+        let selection = app
+            .disasm_sel
+            .expect("the drag must select disassembly text");
+        let (from, to) = selection.ordered();
+        assert_eq!(to.row - from.row, 2, "three rows are selected");
+
+        input.events.push(egui::Event::Copy);
+        let output = step(&mut input, &mut app);
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .expect("Ctrl+C must fill the clipboard");
+        assert_eq!(
+            copied.lines().count(),
+            3,
+            "one line per selected row, got {copied:?}"
+        );
+        assert!(
+            copied.contains("0x"),
+            "the copied rows are the displayed text, got {copied:?}"
+        );
+    }
+
+    /// A text selection inside a plain label (the AI panel, the Output log) keeps Ctrl+C:
+    /// the code views must not hijack it with their own, older selection.
+    #[test]
+    fn ctrl_c_leaves_a_selected_label_to_egui() {
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 240.0));
+        let mut frame = 0.0f64;
+        let mut step = |events: Vec<egui::Event>| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(frame / 60.0),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.label("hello world");
+            });
+            output.textures_delta.clear();
+            output
+        };
+        let output = step(vec![]);
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "hello world", 1))
+            .expect("the label is on screen");
+        step(vec![egui::Event::PointerMoved(label)]);
+        step(vec![press(label)]);
+        step(vec![egui::Event::PointerMoved(
+            label + egui::vec2(60.0, 0.0),
+        )]);
+        step(vec![release(label + egui::vec2(60.0, 0.0))]);
+
+        let mut action = Action::Copy;
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![egui::Event::Copy],
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            action = app.handle_keys(&ctx);
+            ui.label("hello world");
+        });
+        output.textures_delta.clear();
+        assert_eq!(
+            action,
+            Action::None,
+            "a selected label must keep the clipboard"
+        );
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .expect("egui's label selection must copy its text");
+        assert!(copied.contains("hello"), "got {copied:?}");
     }
 }

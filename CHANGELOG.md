@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Selection and copy work like a text editor in the code views.** The Disassembly listing
+  and the Decompile view now track an anchor/focus pair over the rendered rows, so dragging
+  (or Shift+clicking) selects exactly the characters under the pointer across lines and
+  paints them behind the glyphs; a plain click collapses the selection to a caret, and a
+  drag never navigates. `Ctrl+C` (the desktop integration's `Event::Copy`) copies the
+  selection — or the current row when nothing is dragged — through `copy_focused`, and
+  `Ctrl+A` selects the whole view. Row text is built once by `disasm_columns` /
+  `disasm_line_text`, so hit-testing, painting and copy cannot drift from the rendering.
+  The Hex view picks an inclusive byte range (drag, Shift-click or the cursor) and copies it
+  as a hex or ASCII dump from its right-click menu or `Ctrl+C`, and its header shows the
+  selected byte count. The dock lists (Strings, Imports, Exports, Functions, Names,
+  Segments) keep a picked row keyed by address and copy their visible columns
+  tab-separated via `Ctrl+C` or “Copy row”; the `xrefs to …` dialog copies its selected row
+  with `Ctrl+C`. A text selection inside a plain label (the AI panel, the Output log) keeps
+  `Ctrl+C`: the code views only claim the event when no label text is selected. Nine new
+  tests cover the character math, the paging remap, the Copy/SelectAll chords, a drag in
+  each of the three views, the end-to-end dock gesture, the list row formatting and the
+  label-selection precedence.
 - **If/else packaging survives an arm that cannot continue** (`may_post_dominators`). When one
   path through a branch ended in a `ret`/`int3`/noreturn call, strict post-dominance reported
   "no reconvergence", so the other arm was emitted as an early exit and the surviving path ran
