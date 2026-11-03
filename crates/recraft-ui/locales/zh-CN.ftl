@@ -3,6 +3,8 @@
 ui_analysis_cancelled = 分析已取消
 ui_open_project = 打开项目…
 ui_import_pe = 导入 PE…
+ui_close_project = 关闭项目
+ui_close_project_ctrl_w = 关闭项目	Ctrl+W
 ui_undo = 撤销
 ui_redo = 重做
 ui_go_to_address = 跳转到地址…
@@ -201,6 +203,7 @@ pane_graph_overview = 图形概览
 pane_output = 输出
 ui_error_prefix = 错误：{ $error }
 ui_loaded_path = 已加载 { $path }
+ui_closed_path = 已关闭 { $path }
 ui_cannot_read_path = 无法读取 { $path }
 ui_data_op_at = { $op } 于 { $addr }
 ui_op_code = 代码

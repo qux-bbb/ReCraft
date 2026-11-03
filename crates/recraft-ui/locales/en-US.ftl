@@ -3,6 +3,8 @@
 ui_analysis_cancelled = analysis cancelled
 ui_open_project = Open project…
 ui_import_pe = Import PE…
+ui_close_project = Close project
+ui_close_project_ctrl_w = Close project	Ctrl+W
 ui_undo = Undo
 ui_redo = Redo
 ui_go_to_address = Go to address…
@@ -201,6 +203,7 @@ pane_graph_overview = Graph overview
 pane_output = Output
 ui_error_prefix = error: { $error }
 ui_loaded_path = loaded { $path }
+ui_closed_path = closed { $path }
 ui_cannot_read_path = cannot read { $path }
 ui_data_op_at = { $op } at { $addr }
 ui_op_code = code

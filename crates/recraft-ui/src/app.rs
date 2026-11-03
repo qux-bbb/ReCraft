@@ -998,6 +998,7 @@ struct PaletteState {
 /// Commands offered by the palette, in display order.
 const PALETTE_COMMANDS: &[(&str, Action)] = &[
     ("ui_open_project", Action::Open),
+    ("ui_close_project", Action::CloseProject),
     ("palette_import_pe_file", Action::Import),
     ("palette_analyze", Action::Analyze),
     ("palette_undo", Action::Undo),
@@ -1015,6 +1016,8 @@ const PALETTE_COMMANDS: &[(&str, Action)] = &[
 enum Action {
     None,
     Open,
+    /// Unload the current project and go back to the welcome screen.
+    CloseProject,
     Import,
     Analyze,
     CancelAnalysis,
@@ -1467,6 +1470,94 @@ impl ReCraftApp {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         push_recent(&mut self.recent, &path);
         save_recent(&self.recent);
+    }
+
+    /// Unload the open project and return to the welcome screen.
+    ///
+    /// Edits are written to the project as they are made, so closing has nothing to save.
+    /// A running analysis owns a second SQLite connection, so it is cancelled before the
+    /// session is dropped and its result is discarded with the job. Everything derived
+    /// from the old project (listing, decompile, lists, history, AI results) is cleared;
+    /// layout, theme, language, provider settings and the recent-project list survive
+    /// because they are not project state.
+    fn close_project(&mut self) {
+        let Some(path) = self.project.clone() else {
+            return;
+        };
+        if let Some(job) = self.analysis.as_ref() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+        self.analysis = None;
+        self.ai_job = None;
+        self.session = None;
+        self.project = None;
+
+        self.tab = Tab::Disasm;
+        self.disasm_start = Address::ZERO;
+        self.disasm_rows.clear();
+        self.selected = 0;
+        self.disasm_dirty = false;
+        self.disasm_offset = 0.0;
+        self.disasm_scroll_to = Some(0.0);
+        self.disasm_sel = None;
+        self.disasm_drag = false;
+        self.pseudo_start = Address::ZERO;
+        self.pseudo = None;
+        self.pseudo_literals.clear();
+        self.literal_data.clear();
+        self.pseudo_selected_line = None;
+        self.pseudo_dirty = false;
+        self.pseudo_sel = None;
+        self.pseudo_drag = false;
+        self.hex_start = Address::ZERO;
+        self.hex_cursor = None;
+        self.hex_synced = None;
+        self.hex_sel = None;
+        self.hex_drag = false;
+        self.list_sel = None;
+
+        self.functions.clear();
+        self.function_labels.clear();
+        self.functions_dirty = false;
+        self.function_filter.clear();
+        self.strings.clear();
+        self.strings_dirty = false;
+        self.string_filter.clear();
+        self.names.clear();
+        self.names_filter.clear();
+        self.imports.clear();
+        self.imports_dirty = false;
+        self.xref_dialog = None;
+
+        self.cfg = None;
+        self.cfg_for = None;
+        self.cfg_dirty = false;
+        self.graph_visible = None;
+
+        self.history.clear();
+        self.history_pos = 0;
+        self.edit = None;
+        self.goto = None;
+
+        self.ai_proposals.clear();
+        self.ai_selected = None;
+        self.ai_status.clear();
+        self.ai_query.clear();
+        self.ai_answer = None;
+        self.ai_explanation = None;
+        self.ai_result_kind = AiResultKind::Prose;
+        self.ai_reasoning.clear();
+        self.ai_reasoning_open = false;
+        self.ai_cache = recraft_ai::PromptCache::new();
+        self.ai_cache_fingerprint = None;
+
+        self.struct_name.clear();
+        self.struct_size = 16;
+        self.struct_fields.clear();
+        self.struct_slot = 0;
+
+        let message = self.t_args("ui_closed_path", &[("path", &path.display().to_string())]);
+        self.set_status(message);
     }
 
     /// Resolve the first mapped address referenced by an instruction's operand text.
@@ -2967,6 +3058,9 @@ impl ReCraftApp {
     fn top_bar(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let open_label = self.t("ui_open_project");
         let import_label = self.t("ui_import_pe");
+        let close_label = self.t("ui_close_project");
+        let close_shortcut_label = self.t("ui_close_project_ctrl_w");
+        let has_project = self.project.is_some();
         let undo_label = self.t("ui_undo");
         let redo_label = self.t("ui_redo");
         let goto_label = self.t("ui_go_to_address");
@@ -3002,6 +3096,17 @@ impl ReCraftApp {
                     }
                     if ui.button(import_label).clicked() {
                         *action = Action::Import;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(
+                            has_project,
+                            egui::Button::new(close_shortcut_label.as_str()),
+                        )
+                        .clicked()
+                    {
+                        *action = Action::CloseProject;
                         ui.close();
                     }
                 });
@@ -3194,12 +3299,16 @@ impl ReCraftApp {
                 {
                     *action = Action::ToggleLang;
                 }
+                let path_text = self
+                    .project
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| no_project.to_owned());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let path_text = self
-                        .project
-                        .as_ref()
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_else(|| no_project.to_owned());
+                    if has_project && ui.button("×").on_hover_text(close_label.as_str()).clicked()
+                    {
+                        *action = Action::CloseProject;
+                    }
                     ui.weak(path_text);
                 });
             });
@@ -6699,6 +6808,9 @@ impl ReCraftApp {
             if input.modifiers.command && input.key_pressed(Key::O) {
                 action = Action::Open;
             }
+            if input.modifiers.command && input.key_pressed(Key::W) {
+                action = Action::CloseProject;
+            }
             if input.modifiers.command && input.key_pressed(Key::T) {
                 action = Action::ToggleTheme;
             }
@@ -6790,6 +6902,7 @@ impl ReCraftApp {
                     self.open_path(&path);
                 }
             }
+            Action::CloseProject => self.close_project(),
             Action::Import => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Windows executable", &["exe", "dll", "sys"])
@@ -8715,6 +8828,184 @@ mod tests {
         let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
         output.textures_delta.clear();
         assert!(app.session.is_none());
+    }
+
+    #[test]
+    fn closing_a_project_unloads_it_and_returns_to_the_welcome_screen() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("close.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project.clone()),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.names = vec![(app.disasm_start, "kept_name".to_owned())];
+        app.pseudo = Some(vec![PseudoLine {
+            addr: app.disasm_start,
+            text: "int main(void)".to_owned(),
+        }]);
+        app.cfg_for = Some(app.disasm_start);
+        app.history.push(Address::new(0x140001234));
+        app.ai_explanation = Some("stale answer".to_owned());
+        app.ai_proposals = vec![recraft_ai::Proposal {
+            kind: recraft_ai::ProposalKind::Rename,
+            target: app.disasm_start,
+            value: "stale".to_owned(),
+            confidence: 1.0,
+            rationale: "old project".to_owned(),
+            evidence: Vec::new(),
+        }];
+        assert!(!app.disasm_rows.is_empty());
+        assert!(!app.history.is_empty());
+
+        app.apply_action(&egui::Context::default(), Action::CloseProject);
+
+        assert!(app.session.is_none(), "the session must be dropped");
+        assert!(app.project.is_none(), "no project stays open");
+        assert!(app.disasm_rows.is_empty(), "the listing is cleared");
+        assert!(app.pseudo.is_none(), "the decompile view is cleared");
+        assert!(app.names.is_empty(), "stored names are cleared");
+        assert!(app.history.is_empty(), "navigation history is cleared");
+        assert_eq!(app.history_pos, 0);
+        assert!(app.cfg_for.is_none());
+        assert!(app.ai_explanation.is_none());
+        assert!(app.ai_proposals.is_empty());
+        assert!(!app.is_error, "closing is not an error");
+        assert!(
+            app.status.contains(&project.display().to_string()),
+            "the status bar should name the closed project: {}",
+            app.status
+        );
+
+        // The next frame must render the welcome screen without touching a stale session.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(app.session.is_none());
+        assert!(app.disasm_rows.is_empty());
+    }
+
+    #[test]
+    fn closing_a_project_cancels_the_background_analysis() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("close-analysis.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let (_sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            analysis: Some(AnalysisJob {
+                receiver,
+                cancel: cancel.clone(),
+                started: Instant::now(),
+            }),
+            ..ReCraftApp::default()
+        };
+
+        app.apply_action(&egui::Context::default(), Action::CloseProject);
+
+        assert!(
+            cancel.load(Ordering::Relaxed),
+            "the worker must be told to stop before its connection is orphaned"
+        );
+        assert!(
+            app.analysis.is_none(),
+            "the finished job must not report into the next project"
+        );
+        assert!(app.session.is_none());
+    }
+
+    #[test]
+    fn closing_without_a_project_keeps_the_status() {
+        let mut app = ReCraftApp::default();
+        app.set_status("welcome");
+        app.close_project();
+        assert_eq!(app.status, "welcome");
+    }
+
+    #[test]
+    fn ctrl_w_closes_the_open_project() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ctrl-w.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut first = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        first.textures_delta.clear();
+        let command = egui::Modifiers {
+            command: true,
+            ..egui::Modifiers::NONE
+        };
+        input.events.push(egui::Event::ModifiersChanged(command));
+        input.events.push(egui::Event::Key {
+            key: egui::Key::W,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: command,
+        });
+        let mut second = ctx.run_ui(input, |ui| app.update_inner(ui));
+        second.textures_delta.clear();
+        assert!(
+            app.session.is_none() && app.project.is_none(),
+            "Ctrl+W must close the project"
+        );
+        assert!(app.disasm_rows.is_empty());
+    }
+
+    #[test]
+    fn palette_close_project_command_closes_the_project() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("palette-close.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let index = PALETTE_COMMANDS
+            .iter()
+            .position(|(_, action)| *action == Action::CloseProject)
+            .expect("the palette offers Close project");
+        app.apply_action(&egui::Context::default(), Action::PaletteCommand(index));
+        assert!(app.session.is_none());
+        assert!(app.project.is_none());
     }
 
     #[test]

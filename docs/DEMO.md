@@ -54,7 +54,9 @@ applied 3 proposal(s) through the command bus (undoable)
 ## GUI 走查（1–2 分钟）
 
 1. 启动 `recraft.exe`，**File → Open/Import** 选择 `%TEMP%\recraft-demo-*\demo.rcraft`
-   （用 `-Keep` 运行演示脚本会打印路径）。
+   （用 `-Keep` 运行演示脚本会打印路径）。**File → Close project**（`Ctrl+W`，或工具栏
+   项目路径旁的 `×`）会卸载当前项目并回到欢迎页；正在跑的后台分析会被取消，布局/主题/
+   语言/最近项目列表保持不变，之后可直接打开另一个项目。
 2. `F5` 运行分析（后台线程，可取消）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数

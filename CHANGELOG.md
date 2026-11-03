@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **File → Close project (`Ctrl+W`) unloads the open project** and returns to the welcome
+  screen, so switching projects no longer needs a restart. Closing first cancels a running
+  background analysis (its worker owns a second SQLite connection) and drops the AI job,
+  then clears everything derived from the project: the listing, decompile view, Functions/
+  Strings/Names/Imports lists, xrefs dialog, graph, navigation history and AI results.
+  Layout, theme, language, provider settings and the recent-project list are not project
+  state and stay as they are. The command is also in the palette (`Ctrl+P`) and as a `×`
+  button beside the project path; it is disabled when no project is open. Five tests cover
+  the full unload, the analysis cancellation, the no-project no-op, the `Ctrl+W` chord and
+  the palette command.
 - **A WiX v5 MSI installer** (`packaging/wix/recraft.wxs`,
   `dist/recraft-v<version>-windows-x64.msi`) replaces the NSIS setup as the project's only
   installer. Its layout follows the PhotoCraft installer (`storytold/photocraft`): install to
