@@ -1158,19 +1158,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Scrolling a string window in the Disassembly view keeps the literals as data.** A window
-  anchored on a stored string is a row list of literals, but paging it went through
+- **Scrolling a string window in the Disassembly view follows the address space.** A window
+  anchored on a stored string showed it as a data row, but paging it went through
   `Session::rewind`/`advance`, which walk instruction boundaries: one wheel notch up from a
-  literal lands in the padding *before* it (notepad's `.rdata` literals are separated by two
-  zero bytes, which decode as `add [rax], al`), and the next refresh then decoded the literal
-  bytes as code — the report "double-click a string, scroll up, the strings vanished and the
-  whole view became disassembly". `ReCraftApp::disasm_data_window` records that the loaded
-  rows are a data listing, and `step_data_window` pages the literal list instead for the wheel
-  (`extend_disasm_window`), PageUp/PageDown and the arrow keys at the window edges. A data
-  window stops at the first/last literal instead of decoding past it; code windows are
-  unchanged. Regression test `scrolling_a_string_window_keeps_the_literals_as_data` replays
-  the reported gesture on notepad and fails on the old code ("scrolling left the data
-  window").
+  literal landed in the padding *before* it (notepad's `.rdata` literals are separated by zero
+  bytes that decode as `add [rax], al`), so the next refresh decoded the literals as
+  instructions — the report "double-click a string, scroll up, the strings vanished and the
+  whole view became disassembly". Paging the literal list instead kept the data but stopped at
+  the first literal, so the view could no longer scroll up at all (second report).
+  The listing is now one row walk over the address space: instructions in executable segments,
+  stored literals as `db '…',0`, and the bytes between them as raw `db` rows, continuing
+  across section boundaries. `ReCraftApp::data_rows` renders that walk and `step_listing` pages
+  it for the wheel (`extend_disasm_window`), PageUp/PageDown and the arrow keys at the window
+  edges; `string_row_at` is a binary search so the per-row lookup stays cheap. Raw rows keep
+  names and `; DATA XREF` comments, and an unmapped start still shows an empty view.
+  Regression tests `scrolling_a_data_window_follows_the_address_space` (notepad: one row up is
+  the padding rendered as data, the wheel walks to the section start and crosses into `.text`),
+  `scrolling_up_from_the_first_byte_of_a_section_crosses_into_the_previous_one` (corpus: its
+  first literal sits on the section start) and `headless_wheel_scrolls_a_string_window_up`
+  (the reported gesture end to end) pin the behaviour.
 - A user-set prototype is now authoritative for the parameter list. Stack slots the body reads
   beyond it keep their `var_…` names and are reported in a
   `// stack args (not in the prototype): var_b0 (incoming #5, int64*)` comment, instead of

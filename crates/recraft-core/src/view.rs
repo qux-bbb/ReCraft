@@ -40,7 +40,7 @@ pub struct FunctionInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringEntry {
     pub addr: Address,
-    /// Length in bytes (including the terminator when present).
+    /// Length of the literal's text in bytes (the terminator is not counted).
     pub len: u32,
     /// Encoding: see `recraft_analysis` string encoding constants.
     pub enc: i64,

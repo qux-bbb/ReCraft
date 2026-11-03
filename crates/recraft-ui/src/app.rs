@@ -7,6 +7,7 @@
 //! status), keyboard-first commands. All state changes go through `recraft-core`
 //! commands, so undo/redo behave exactly like the CLI.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -30,6 +31,11 @@ const DISASM_ROWS: usize = 400;
 const DISASM_SCROLL_ROWS: usize = 50;
 /// Distance from a window edge (in rows) at which the wheel loads the next page.
 const DISASM_SCROLL_MARGIN_ROWS: f32 = 3.0;
+/// Bytes one raw data row covers in a data window (the listing's `raw` buffer holds 15).
+const DATA_ROW_BYTES: u64 = 8;
+/// Cap on row-boundary steps when a data window is paged backwards, so a huge segment
+/// cannot stall the UI.
+const DATA_WALK_LIMIT: usize = 200_000;
 const MONO_SIZE: f32 = 12.5;
 const ROW_HEIGHT: f32 = 15.0;
 const ZOOM_MIN: f32 = 0.75;
@@ -406,17 +412,42 @@ fn decode_string(bytes: &[u8], enc: i64) -> String {
 ///
 /// A literal does not have to start a stored string: compiler string pooling makes
 /// `"===="` a suffix of an `"O====…"` run, so an address inside a run still names a
-/// string. Exact starts win over containing runs because extracted ranges can overlap,
-/// and the nearest preceding start wins when several runs cover the address.
+/// string. The store reads the literals in address order (`ORDER BY addr`) and drops
+/// overlaps, so the only candidate is the last literal that starts at or before `addr`;
+/// a binary search keeps the disassembly's data walk (which asks once per row) cheap.
 fn string_row_at(strings: &[StringRow], addr: Address) -> Option<(usize, u32)> {
-    if let Some(index) = strings.iter().position(|row| row.addr == addr) {
-        return Some((index, 0));
+    let after = strings.partition_point(|row| row.addr <= addr);
+    let index = after.checked_sub(1)?;
+    let row = strings.get(index)?;
+    let offset = addr.get().checked_sub(row.addr.get())?;
+    (offset < u64::from(row.len)).then_some((index, offset as u32))
+}
+
+/// Bytes a literal occupies beyond its text: UTF-16LE literals end in two NUL bytes.
+fn string_terminator_len(enc: i64) -> u64 {
+    if enc == recraft_analysis::STRING_ENC_UTF16LE {
+        2
+    } else {
+        1
     }
-    strings.iter().enumerate().rev().find_map(|(index, row)| {
-        let end = row.addr.get().checked_add(u64::from(row.len))?;
-        (addr.get() > row.addr.get() && addr.get() < end)
-            .then(|| (index, (addr.get() - row.addr.get()) as u32))
-    })
+}
+
+/// `; DATA XREF: …` comment for a data row (the first three referencing sites).
+fn data_xref_comment(session: &Session, addr: Address) -> Option<String> {
+    let xrefs = session.xrefs_to(addr).ok()?;
+    if xrefs.is_empty() {
+        return None;
+    }
+    let mut from = Vec::new();
+    for xref in xrefs.iter().take(3) {
+        let name = session
+            .name_at(xref.from)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| format!("{:#x}", xref.from.get()));
+        from.push(name);
+    }
+    Some(format!("; DATA XREF: {}", from.join(", ")))
 }
 
 /// Header/section-name strings that IDA's default list does not surface.
@@ -879,10 +910,6 @@ pub struct ReCraftApp {
     disasm_rows: Vec<DisasmLine>,
     selected: usize,
     disasm_dirty: bool,
-    /// Whether `disasm_rows` is a data listing (stored strings / literals) instead of
-    /// decoded instructions. A data window is a row list, so paging it must step through
-    /// that list rather than ask the code walker for instruction boundaries.
-    disasm_data_window: bool,
     /// Vertical scroll offset of the disassembly view, as reported by the scroll area.
     disasm_offset: f32,
     /// One-shot scroll offset to apply on the next frame (keeps rows in place when the
@@ -996,7 +1023,6 @@ impl Default for ReCraftApp {
             disasm_rows: Vec::new(),
             selected: 0,
             disasm_dirty: false,
-            disasm_data_window: false,
             disasm_offset: 0.0,
             disasm_scroll_to: None,
             key_pass: None,
@@ -1842,186 +1868,329 @@ impl ReCraftApp {
         }
     }
 
-    /// When the cursor sits on a known string (or inside one), render the surrounding
-    /// strings as data lines (`db '…',0`) like IDA's data view instead of decoding bytes as
-    /// code.
-    fn string_data_rows(&mut self, count: usize) -> Option<Vec<DisasmLine>> {
-        let start = self.disasm_start;
-        let (index, offset) = string_row_at(&self.strings, start)?;
-        let mut rows: Vec<StringRow> = Vec::with_capacity(count.min(self.strings.len()));
-        rows.push(self.strings.get(index)?.clone());
-        rows.extend(
-            self.strings
-                .iter()
-                .skip(index + 1)
-                .take(count.saturating_sub(1))
-                .cloned(),
-        );
-        let session = self.session.as_mut()?;
-        let mut lines = Vec::with_capacity(rows.len());
-        for (position, mut row) in rows.into_iter().enumerate() {
-            let mut raw = [0u8; 15];
-            if position == 0 && offset > 0 {
-                // The literal points inside a longer run: show the tail that starts at
-                // the requested address, not the run's own (earlier) start.
-                let text = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
-                    if offset % 2 != 0 {
-                        return None;
-                    }
-                    let skip = usize::try_from(offset / 2).ok()?;
-                    row.text.chars().skip(skip).collect()
-                } else {
-                    row.text.get(usize::try_from(offset).ok()?..)?.to_owned()
-                };
-                row.addr = start;
-                row.len = row.len.saturating_sub(offset);
-                row.text = text;
-                row.name = session.name_at(row.addr).ok().flatten();
-                session.read_at(row.addr, &mut raw).unwrap_or(0);
-            } else {
-                let copied = row.raw.len().min(15);
-                raw[..copied].copy_from_slice(&row.raw[..copied]);
-            }
-            let comment = match session.xrefs_to(row.addr) {
-                Ok(xrefs) if !xrefs.is_empty() => {
-                    let mut from = Vec::new();
-                    for xref in xrefs.iter().take(3) {
-                        let name = session
-                            .name_at(xref.from)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| format!("{:#x}", xref.from.get()));
-                        from.push(name);
-                    }
-                    Some(format!("; DATA XREF: {}", from.join(", ")))
-                }
-                _ => None,
-            };
-            let escaped = row.text.replace('\\', "\\\\").replace('\'', "\\'");
-            let (mnemonic, operands) = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
-                ("dw", format!("'{escaped}',0"))
-            } else {
-                ("db", format!("'{escaped}',0"))
-            };
-            lines.push(DisasmLine {
-                addr: row.addr,
-                len: row.len.min(254) as u8,
-                raw,
-                mnemonic: mnemonic.to_owned(),
-                operands,
-                name: row.name.clone(),
-                comment,
-                flags: Flags::data(),
-            });
-        }
-        Some(lines)
-    }
-
-    /// Step a string data window by `rows` literals, returning the address to re-anchor on.
+    /// Data row for the stored string at `index`, starting at `addr`.
     ///
-    /// The window shows one row per stored string, and literals are separated by padding
-    /// (`int3`, zero fill) and vary in length. Paging it through the code walker therefore
-    /// lands in that padding — one wheel notch up from a string used to anchor two bytes
-    /// before it, and the next refresh decoded the literals as instructions. A data window
-    /// must page its own list instead.
-    fn step_data_window(&self, rows: i32) -> Option<Address> {
-        if rows == 0 {
-            return None;
+    /// `addr` is usually the literal's own start; when a literal points inside a longer
+    /// run the row shows the tail from the requested address, like IDA's data view, not
+    /// the run's own (earlier) start.
+    fn string_data_row(&mut self, index: usize, addr: Address) -> Option<DisasmLine> {
+        let mut row = self.strings.get(index)?.clone();
+        let offset = addr.get().checked_sub(row.addr.get())?;
+        let session = self.session.as_mut()?;
+        let mut raw = [0u8; 15];
+        if offset > 0 {
+            let text = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+                if offset % 2 != 0 {
+                    return None;
+                }
+                let skip = usize::try_from(offset / 2).ok()?;
+                row.text.chars().skip(skip).collect()
+            } else {
+                row.text.get(usize::try_from(offset).ok()?..)?.to_owned()
+            };
+            row.addr = addr;
+            row.len = row.len.saturating_sub(offset as u32);
+            row.text = text;
+            row.name = session.name_at(row.addr).ok().flatten();
+            session.read_at(row.addr, &mut raw).unwrap_or(0);
+        } else {
+            let copied = row.raw.len().min(15);
+            raw[..copied].copy_from_slice(&row.raw[..copied]);
         }
-        let (index, _) = string_row_at(&self.strings, self.disasm_start)?;
-        let target = i64::try_from(index).ok()? + i64::from(rows);
-        if target < 0 || target >= i64::try_from(self.strings.len()).ok()? {
-            return None;
-        }
-        let addr = self.strings.get(usize::try_from(target).ok()?)?.addr;
-        (addr != self.disasm_start).then_some(addr)
+        let comment = data_xref_comment(session, row.addr);
+        let escaped = row.text.replace('\\', "\\\\").replace('\'', "\\'");
+        let (mnemonic, operands) = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
+            ("dw", format!("'{escaped}',0"))
+        } else {
+            ("db", format!("'{escaped}',0"))
+        };
+        Some(DisasmLine {
+            addr: row.addr,
+            len: row.len.min(254) as u8,
+            raw,
+            mnemonic: mnemonic.to_owned(),
+            operands,
+            name: row.name.clone(),
+            comment,
+            flags: Flags::data(),
+        })
     }
 
-    /// Data row for a literal reached from the decompile view that no stored string
-    /// covers. Short strings (`"\r\n"`, `")"`) fall below the extraction minimum but
-    /// still name data, so their quoted text is enough to show the row.
-    fn literal_data_rows(&self) -> Option<Vec<DisasmLine>> {
-        let start = self.disasm_start;
+    /// Quoted literal cached for `addr`, with the bytes the decompiler's escapes name.
+    fn literal_data_bytes(&self, addr: Address) -> Option<(&str, Vec<u8>)> {
         let (_, literal) = self
             .literal_data
             .iter()
             .rev()
-            .find(|(address, _)| *address == start)?;
+            .find(|(known, _)| *known == addr)?;
         let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
         let bytes = c_literal_bytes(inner)?;
-        if bytes.is_empty() {
-            return None;
-        }
+        (!bytes.is_empty()).then_some((literal.as_str(), bytes))
+    }
+
+    /// Data row for a short literal reached from the decompile view that no stored string
+    /// covers. Such literals (`"\r\n"`, `")"`) fall below the extraction minimum but still
+    /// name data, so their quoted text is enough to show the row.
+    fn literal_data_row(&self, addr: Address) -> Option<DisasmLine> {
+        let (literal, bytes) = self.literal_data_bytes(addr)?;
         let session = self.session.as_ref()?;
         let mut raw = [0u8; 15];
         let copied = bytes.len().min(15);
         raw[..copied].copy_from_slice(&bytes[..copied]);
-        let comment = match session.xrefs_to(start) {
-            Ok(xrefs) if !xrefs.is_empty() => {
-                let mut from = Vec::new();
-                for xref in xrefs.iter().take(3) {
-                    let name = session
-                        .name_at(xref.from)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| format!("{:#x}", xref.from.get()));
-                    from.push(name);
-                }
-                Some(format!("; DATA XREF: {}", from.join(", ")))
-            }
-            _ => None,
-        };
-        Some(vec![DisasmLine {
-            addr: start,
+        Some(DisasmLine {
+            addr,
             len: (bytes.len() + 1).min(254) as u8,
             raw,
             mnemonic: "db".to_owned(),
             operands: format!("{literal},0"),
-            name: session.name_at(start).ok().flatten(),
-            comment,
+            name: session.name_at(addr).ok().flatten(),
+            comment: data_xref_comment(session, addr),
             flags: Flags::data(),
-        }])
+        })
+    }
+
+    /// Next row boundary after `addr` in the listing's address walk.
+    ///
+    /// The walk is the one [`Self::data_rows`] renders: one row per stored literal, raw
+    /// rows of at most [`DATA_ROW_BYTES`] for the bytes between literals, and instructions
+    /// in executable segments. Reaching the end of a segment continues at the next mapped
+    /// address, so the listing can scroll across section boundaries.
+    fn next_row_start(&mut self, addr: Address) -> Option<Address> {
+        let segment = self.session.as_ref()?.segment_containing(addr)?.clone();
+        let end = segment.range.end;
+        if addr >= end {
+            return self.next_segment_start(addr);
+        }
+        let next = if let Some((index, _)) = string_row_at(&self.strings, addr) {
+            let row = self.strings.get(index)?;
+            row.addr.get() + u64::from(row.len) + string_terminator_len(row.enc)
+        } else if let Some((_, bytes)) = self.literal_data_bytes(addr) {
+            addr.get() + bytes.len() as u64 + 1
+        } else if segment.perm.is_executable() {
+            self.session
+                .as_mut()?
+                .insn_at(addr)
+                .ok()??
+                .next_addr()
+                .get()
+        } else {
+            let next_literal = self
+                .strings
+                .get(self.strings.partition_point(|row| row.addr <= addr))
+                .map(|row| row.addr.get())
+                .unwrap_or(end.get());
+            (addr.get() + DATA_ROW_BYTES).min(next_literal)
+        };
+        if next >= end.get() {
+            return self.next_segment_start(addr);
+        }
+        (next > addr.get()).then(|| Address::new(next))
+    }
+
+    /// First mapped address after `addr` (crossing the gap between two segments).
+    fn next_segment_start(&self, addr: Address) -> Option<Address> {
+        self.session
+            .as_ref()?
+            .segments()
+            .iter()
+            .map(|segment| segment.range.start)
+            .filter(|start| *start > addr)
+            .min()
+    }
+
+    /// Raw `db` row covering the bytes at `addr` up to the next row boundary.
+    fn raw_data_row(&mut self, addr: Address) -> Option<DisasmLine> {
+        let end = self.session.as_ref()?.segment_containing(addr)?.range.end;
+        let next = self.next_row_start(addr)?.min(end);
+        let len = next
+            .get()
+            .saturating_sub(addr.get())
+            .min(u64::from(u8::MAX)) as u8;
+        let session = self.session.as_mut()?;
+        let mut raw = [0u8; 15];
+        let read = session.read_at(addr, &mut raw).unwrap_or(0);
+        let shown = read.min(usize::from(len));
+        let operands = raw[..shown]
+            .iter()
+            .map(|byte| format!("{byte:#04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(DisasmLine {
+            addr,
+            len,
+            raw,
+            mnemonic: "db".to_owned(),
+            operands,
+            name: session.name_at(addr).ok().flatten(),
+            comment: data_xref_comment(session, addr),
+            flags: Flags::data(),
+        })
+    }
+
+    /// Build the listing from `start`: instructions in executable segments, stored literals
+    /// as `db '…',0` rows, and the bytes between them as raw `db` rows.
+    ///
+    /// The window follows the address space instead of listing only one kind of row, so
+    /// paging into the padding around a literal shows data rather than decoding the
+    /// literal's bytes as instructions (the report "scroll up from a string and the strings
+    /// vanish"), the first literal of a section still has its preceding bytes above it, and
+    /// the listing stays continuous when it crosses a section boundary.
+    fn data_rows(&mut self, start: Address, count: usize) -> Option<Vec<DisasmLine>> {
+        let mut rows = Vec::with_capacity(count.min(DISASM_ROWS));
+        let mut addr = start;
+        while rows.len() < count {
+            let Some(segment) = self.session.as_ref()?.segment_containing(addr).cloned() else {
+                // Between two segments: continue at the next mapped address, or stop. An
+                // unmapped start still shows nothing, as before.
+                if rows.is_empty() {
+                    break;
+                }
+                match self.next_segment_start(addr) {
+                    Some(next) => addr = next,
+                    None => break,
+                }
+                continue;
+            };
+            let end = segment.range.end;
+            if let Some((index, _)) = string_row_at(&self.strings, addr) {
+                let Some(row) = self.string_data_row(index, addr) else {
+                    break;
+                };
+                rows.push(row);
+            } else if let Some(row) = self.literal_data_row(addr) {
+                rows.push(row);
+            } else if segment.perm.is_executable() {
+                let remaining = count - rows.len();
+                let Ok(mut lines) = self.session.as_mut()?.disasm(addr, remaining) else {
+                    break;
+                };
+                lines.retain(|line| line.addr < end);
+                let Some(last) = lines.last() else { break };
+                addr = Address::new(last.addr.get() + u64::from(last.len));
+                rows.append(&mut lines);
+                continue;
+            } else {
+                let Some(row) = self.raw_data_row(addr) else {
+                    break;
+                };
+                rows.push(row);
+            }
+            match self.next_row_start(addr) {
+                Some(next) => addr = next,
+                None => break,
+            }
+        }
+        (!rows.is_empty()).then_some(rows)
+    }
+
+    /// Step the listing by `rows` rows of its address walk, returning the new anchor.
+    ///
+    /// Forward steps follow [`Self::next_row_start`] from the current anchor. Backward
+    /// steps walk the row boundaries from the nearest function start (or section start),
+    /// so they land on the rows the view renders instead of on instruction boundaries
+    /// inside a literal's padding, and they keep going into the previous section.
+    fn step_listing(&mut self, rows: i32) -> Option<Address> {
+        if rows == 0 {
+            return None;
+        }
+        if rows > 0 {
+            let mut addr = self.disasm_start;
+            let mut moved = false;
+            for _ in 0..rows {
+                match self.next_row_start(addr) {
+                    Some(next) if next > addr => {
+                        addr = next;
+                        moved = true;
+                    }
+                    _ => break,
+                }
+            }
+            return moved.then_some(addr);
+        }
+        let mut remaining = rows.unsigned_abs() as usize;
+        let mut cursor = self.disasm_start;
+        let mut result = None;
+        // Each pass covers one anchor..cursor span; crossing a section needs the next
+        // anchor, hence the (bounded) loop.
+        for _ in 0..64 {
+            let Some(anchor) = self.backward_anchor(cursor) else {
+                break;
+            };
+            if anchor >= cursor {
+                break;
+            }
+            let mut starts: VecDeque<Address> = VecDeque::with_capacity(remaining.min(64));
+            let mut probe = anchor;
+            let mut steps = 0usize;
+            while probe < cursor && steps < DATA_WALK_LIMIT {
+                starts.push_back(probe);
+                if starts.len() > remaining {
+                    starts.pop_front();
+                }
+                match self.next_row_start(probe) {
+                    Some(next) if next > probe => probe = next,
+                    _ => break,
+                }
+                steps += 1;
+            }
+            let Some(first) = starts.front().copied() else {
+                break;
+            };
+            remaining = remaining.saturating_sub(starts.len());
+            result = Some(first);
+            cursor = first;
+            if remaining == 0 {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Where a backward row walk starts: the nearest function start (or the section start)
+    /// before `addr`, or — when `addr` already sits on it — the last function of the
+    /// preceding section, so scrolling up can cross into earlier code the way IDA does.
+    fn backward_anchor(&mut self, addr: Address) -> Option<Address> {
+        let segments = self.session.as_ref()?.segments();
+        let index = segments
+            .iter()
+            .position(|segment| addr >= segment.range.start && addr < segment.range.end)?;
+        let current = segments.get(index)?;
+        if addr > current.range.start {
+            if !current.perm.is_executable() {
+                return Some(current.range.start);
+            }
+            let functions = self.session.as_ref()?.functions().ok()?;
+            return functions
+                .iter()
+                .filter(|function| function.start >= current.range.start && function.start < addr)
+                .map(|function| function.start)
+                .max()
+                .or(Some(current.range.start));
+        }
+        let previous = segments.get(index.checked_sub(1)?)?;
+        if !previous.perm.is_executable() {
+            return Some(previous.range.start);
+        }
+        let functions = self.session.as_ref()?.functions().ok()?;
+        functions
+            .iter()
+            .filter(|function| {
+                function.start >= previous.range.start && function.start < previous.range.end
+            })
+            .map(|function| function.start)
+            .max()
+            .or(Some(previous.range.start))
     }
 
     fn refresh_disasm(&mut self) {
         if self.strings_dirty {
             self.refresh_strings();
         }
-        if let Some(rows) = self.string_data_rows(DISASM_ROWS) {
-            self.disasm_rows = rows;
-            self.disasm_dirty = false;
-            self.disasm_data_window = true;
-            if self.selected >= self.disasm_rows.len() {
-                self.selected = self.disasm_rows.len().saturating_sub(1);
-            }
-            return;
-        }
-        if let Some(rows) = self.literal_data_rows() {
-            self.disasm_rows = rows;
-            self.disasm_dirty = false;
-            self.disasm_data_window = true;
-            self.selected = self.selected.min(self.disasm_rows.len().saturating_sub(1));
-            return;
-        }
-        self.disasm_data_window = false;
-        let Some(session) = self.session.as_mut() else {
-            self.disasm_rows.clear();
-            self.disasm_dirty = false;
-            return;
-        };
-        match session.disasm(self.disasm_start, DISASM_ROWS) {
-            Ok(rows) => {
-                self.disasm_rows = rows;
-                self.disasm_dirty = false;
-                if self.selected >= self.disasm_rows.len() {
-                    self.selected = self.disasm_rows.len().saturating_sub(1);
-                }
-            }
-            Err(error) => {
-                self.disasm_rows.clear();
-                self.disasm_dirty = false;
-                self.set_error(error);
-            }
+        let start = self.disasm_start;
+        self.disasm_rows = self.data_rows(start, DISASM_ROWS).unwrap_or_default();
+        self.disasm_dirty = false;
+        if self.selected >= self.disasm_rows.len() {
+            self.selected = self.disasm_rows.len().saturating_sub(1);
         }
     }
 
@@ -4697,20 +4866,11 @@ impl ReCraftApp {
         }
     }
 
-    /// Load one page of instructions above (`-1`) or below (`+1`) the window and return the
-    /// scroll offset that keeps the visible rows in place.
+    /// Load one page of rows above (`-1`) or below (`+1`) the window and return the scroll
+    /// offset that keeps the visible rows in place.
     fn extend_disasm_window(&mut self, ui: &egui::Ui, direction: i32) -> Option<f32> {
         let anchor = self.disasm_start;
-        let target = if self.disasm_data_window {
-            self.step_data_window(direction * DISASM_SCROLL_ROWS as i32)?
-        } else {
-            let session = self.session.as_mut()?;
-            if direction < 0 {
-                session.rewind(anchor, DISASM_SCROLL_ROWS).ok()?
-            } else {
-                session.advance(anchor, DISASM_SCROLL_ROWS).ok()?
-            }
-        };
+        let target = self.step_listing(direction * DISASM_SCROLL_ROWS as i32)?;
         if target == anchor {
             // Already at the start/end of the image.
             return None;
@@ -6074,47 +6234,20 @@ impl ReCraftApp {
         let _ = ctx;
     }
 
-    /// Move the loaded window by `rows` instructions (negative = earlier code).
+    /// Move the loaded window by `rows` listing rows (negative = earlier code).
     ///
-    /// Stepping is done on real instruction boundaries: the old implementation subtracted
-    /// `rows * first_row.len()` bytes, which landed inside instructions and made the view
-    /// decode garbage as soon as the instruction sizes varied.
+    /// Stepping follows the listing's own row boundaries (see [`Self::step_listing`]): the
+    /// old implementation subtracted `rows * first_row.len()` bytes, which landed inside
+    /// instructions and made the view decode garbage as soon as the instruction sizes
+    /// varied, and paging a string window through the instruction walker decoded the
+    /// literals as code.
     fn shift_window(&mut self, rows: i32) {
         if self.session.is_none() || rows == 0 {
             return;
         }
-        if self.disasm_data_window {
-            // A data window is a row list of literals: step it directly. `rewind`/`advance`
-            // would land in the padding between literals and decode them as code.
-            if let Some(next) = self.step_data_window(rows) {
-                self.disasm_start = next;
-                self.refresh_disasm();
-                self.selected = self.selected.min(self.disasm_rows.len().saturating_sub(1));
-            }
+        let Some(next) = self.step_listing(rows) else {
             return;
-        }
-        let anchor = self.disasm_start;
-        let next = {
-            let Some(session) = self.session.as_mut() else {
-                return;
-            };
-            let result = if rows < 0 {
-                session.rewind(anchor, rows.unsigned_abs() as usize)
-            } else {
-                session.advance(anchor, rows as usize)
-            };
-            match result {
-                Ok(addr) => addr,
-                Err(error) => {
-                    self.set_error(error);
-                    return;
-                }
-            }
         };
-        if next == anchor {
-            // Already at the start/end of the image.
-            return;
-        }
         self.disasm_start = next;
         self.refresh_disasm();
         // Keep the cursor index so it stays on the same screen line, like IDA paging.
@@ -7679,15 +7812,18 @@ mod tests {
         assert!(line.flags.is_data());
     }
 
-    /// Scrolling a string data window must keep the literals as data.
+    /// Scrolling a data window follows the address space and never decodes data as code.
     ///
-    /// Bug report: double-click a string in the Strings view, then turn the wheel up — the
-    /// strings vanished and the whole window became disassembly. The window anchored on a
-    /// literal was paged with `Session::rewind`, which walks instruction boundaries: one
-    /// notch up from a literal lands in the padding *before* it (notepad's strings are
-    /// preceded by two zero bytes), so the next refresh decoded the literal bytes as code.
+    /// Two reports: (1) double-clicking a string in the Strings view showed it as a data
+    /// row, but one wheel notch up anchored the window in the padding *before* the literal
+    /// (notepad's `.rdata` literals are separated by zero bytes that decode as
+    /// `add [rax], al`), so the next refresh decoded the literals as instructions; (2)
+    /// paging the literal list instead stopped at the first literal, so the view could not
+    /// scroll up at all. The window is now a row walk over the address space — literals,
+    /// the bytes between them, and code once it reaches an executable segment — and paging
+    /// moves along that walk.
     #[test]
-    fn scrolling_a_string_window_keeps_the_literals_as_data() {
+    fn scrolling_a_data_window_follows_the_address_space() {
         let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
             return;
         };
@@ -7704,24 +7840,28 @@ mod tests {
         app.after_open();
         app.tick();
         app.refresh_strings();
-        // A literal that follows other literals and whose predecessor byte is not part of
-        // a stored string: the padding that used to swallow the anchor.
-        let (index, row) = app
+        // The first literal the Strings pane shows is the top of its list — the place the
+        // second report scrolled up from and found nothing above.
+        let row = app
             .strings
             .iter()
-            .enumerate()
-            .filter(|(_, row)| !is_string_noise(&row.segment, &row.text))
-            .find(|(index, row)| {
-                *index >= 80
-                    && string_row_at(&app.strings, Address::new(row.addr.get() - 1)).is_none()
-            })
-            .map(|(index, row)| (index, row.clone()))
-            .expect("notepad has a padded literal");
-        let previous = app.strings[index - 1].addr;
+            .find(|row| !is_string_noise(&row.segment, &row.text))
+            .cloned()
+            .expect("notepad has a visible literal");
+        let segment = app
+            .session
+            .as_ref()
+            .unwrap()
+            .segment_containing(row.addr)
+            .cloned()
+            .expect("the literal is mapped");
+        assert!(
+            segment.range.start < row.addr,
+            "notepad has data above its first visible literal"
+        );
         // The old path: the instruction walker cannot stop on the literal, it stops in the
         // padding right before it, where no string covers the address.
-        let session = app.session.as_mut().unwrap();
-        let walked = session.rewind(row.addr, 1).unwrap();
+        let walked = app.session.as_mut().unwrap().rewind(row.addr, 1).unwrap();
         assert_ne!(walked, row.addr, "the walker must move off the literal");
         assert!(
             string_row_at(&app.strings, walked).is_none(),
@@ -7734,45 +7874,47 @@ mod tests {
             Action::NavigateToDisasm(row.addr),
         );
         app.tick();
-        assert!(app.disasm_data_window, "a string address is a data window");
+        assert!(
+            app.disasm_rows
+                .first()
+                .is_some_and(|line| line.flags.is_data()),
+            "a string address shows a data row"
+        );
         assert_eq!(
             app.disasm_rows.first().map(|line| line.addr),
             Some(row.addr)
         );
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.mnemonic.as_str()),
+            Some("db")
+        );
 
-        // One wheel notch up (the report's gesture): stay on the literal list.
+        // One row up is the padding before the literal, rendered as data — the exact row
+        // that used to come back as `add [rax], al`.
         app.shift_window(-1);
-        assert!(app.disasm_data_window, "scrolling left the data window");
         assert!(
             app.disasm_rows.iter().all(|line| line.flags.is_data()),
-            "scrolling up decoded data as code: {:?}",
-            app.disasm_rows.first()
+            "scrolling left the data rows"
         );
+        let first = app.disasm_rows.first().cloned().expect("rows");
+        assert!(
+            first.addr < row.addr,
+            "one row up must move above the literal"
+        );
+        assert!(first.flags.is_data(), "padding decoded as code: {first:?}");
         assert_eq!(
-            app.disasm_rows.first().map(|line| line.addr),
-            Some(previous),
-            "one row up must show the previous literal"
+            first.addr.get() + u64::from(first.len),
+            row.addr.get(),
+            "the raw row must end where the literal starts"
         );
         assert!(
             app.disasm_rows.iter().any(|line| line.addr == row.addr),
             "the literal that was on screen must stay in the window"
         );
 
-        // A page up and the wheel path (`extend_disasm_window`) behave the same way.
-        app.shift_window(1);
-        assert_eq!(
-            app.disasm_rows.first().map(|line| line.addr),
-            Some(row.addr),
-            "one row down must return to the literal"
-        );
-        app.shift_window(-20);
-        assert_eq!(
-            app.disasm_rows.first().map(|line| line.addr),
-            app.strings.get(index - 20).map(|row| row.addr),
-            "PageUp must move by literals, not by bytes"
-        );
-        assert!(app.disasm_rows.iter().all(|line| line.flags.is_data()));
-
+        // The wheel walks the same rows (`extend_disasm_window`), keeps scrolling up through
+        // the section instead of stopping at the first literal, and crosses into the
+        // preceding section rather than stopping at the section start.
         let ctx = egui::Context::default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -7781,34 +7923,171 @@ mod tests {
             )),
             ..egui::RawInput::default()
         };
-        let mut offset = None;
-        let mut output = ctx.run_ui(input, |ui| {
-            offset = app.extend_disasm_window(ui, -1);
-        });
-        output.textures_delta.clear();
-        assert!(offset.is_some(), "the wheel must load earlier literals");
+        let wheel_up = |app: &mut ReCraftApp| {
+            let mut offset = None;
+            let mut output = ctx.run_ui(input.clone(), |ui| {
+                offset = app.extend_disasm_window(ui, -1);
+            });
+            output.textures_delta.clear();
+            offset
+        };
+        let mut moved = 0usize;
+        let mut crossed = false;
+        for _ in 0..400 {
+            let before = app.disasm_start;
+            if wheel_up(&mut app).is_none() {
+                break;
+            }
+            assert!(app.disasm_start < before, "the wheel must move upwards");
+            if app.disasm_start >= segment.range.start {
+                assert!(
+                    app.disasm_rows.iter().all(|line| line.flags.is_data()),
+                    "the wheel decoded data as code at {:#x}",
+                    app.disasm_start.get()
+                );
+            } else {
+                crossed = true;
+                break;
+            }
+            moved += 1;
+        }
+        assert!(moved > 0, "the wheel must scroll up from the first literal");
         assert!(
-            app.disasm_rows.iter().all(|line| line.flags.is_data()),
-            "the wheel path decoded data as code"
+            crossed,
+            "scrolling up must reach the start of the section and cross into the code above it"
         );
-        assert_eq!(
-            app.disasm_rows.first().map(|line| line.addr),
-            app.strings
-                .get(index - 20 - DISASM_SCROLL_ROWS)
-                .map(|row| row.addr),
-            "the wheel must move by literals, not by bytes"
+        assert!(
+            app.disasm_start < segment.range.start,
+            "the window must have crossed the section start, got {:#x}",
+            app.disasm_start.get()
+        );
+        assert!(
+            app.disasm_rows.iter().any(|line| !line.flags.is_data()),
+            "the section above the data must decode as instructions"
         );
 
-        // At the last literal the window stays data and simply stops (no code decode).
-        let last = app.strings.last().cloned().expect("strings");
-        app.navigate(last.addr);
+        // PageUp walks the same rows and lands on the literal again on the way down.
+        app.navigate(row.addr);
         app.tick();
-        app.shift_window(1);
-        assert!(app.disasm_data_window);
+        app.shift_window(-20);
+        assert!(app.disasm_start < row.addr);
         assert!(app.disasm_rows.iter().all(|line| line.flags.is_data()));
+        app.shift_window(20);
         assert_eq!(
             app.disasm_rows.first().map(|line| line.addr),
-            Some(last.addr)
+            Some(row.addr),
+            "a page down must return to the literal"
+        );
+
+        // Past the last literal the window keeps walking data instead of decoding it.
+        let last = app
+            .strings
+            .iter()
+            .rev()
+            .find(|row| !is_string_noise(&row.segment, &row.text))
+            .cloned()
+            .expect("a last literal");
+        app.navigate(last.addr);
+        app.tick();
+        let before = app.disasm_start;
+        app.shift_window(1);
+        assert!(app.disasm_start > before, "the window must move down");
+        assert!(app.disasm_rows.iter().all(|line| line.flags.is_data()));
+    }
+
+    /// A literal that sits on the first byte of its section has nothing above it *inside*
+    /// the section, so scrolling up must cross into the section before it (the corpus's
+    /// first literal is exactly there — the report's "cannot scroll up" case).
+    #[test]
+    fn scrolling_up_from_the_first_byte_of_a_section_crosses_into_the_previous_one() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("section-start.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        app.refresh_strings();
+        // A literal whose address is the first byte of a section that follows code.
+        let Some(row) = app
+            .strings
+            .iter()
+            .find(|row| {
+                app.session
+                    .as_ref()
+                    .and_then(|session| session.segment_containing(row.addr))
+                    .is_some_and(|segment| segment.range.start == row.addr)
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let segment = app
+            .session
+            .as_ref()
+            .unwrap()
+            .segment_containing(row.addr)
+            .cloned()
+            .expect("mapped");
+        let previous = app
+            .session
+            .as_ref()
+            .unwrap()
+            .segments()
+            .iter()
+            .filter(|candidate| candidate.range.end <= segment.range.start)
+            .max_by_key(|candidate| candidate.range.end)
+            .cloned();
+        let Some(previous) = previous else {
+            return;
+        };
+        if !previous.perm.is_executable() {
+            return;
+        }
+        app.apply_action(
+            &egui::Context::default(),
+            Action::NavigateToDisasm(row.addr),
+        );
+        app.tick();
+        assert!(
+            app.disasm_rows
+                .first()
+                .is_some_and(|line| line.flags.is_data()),
+            "a string address shows a data row"
+        );
+        assert_eq!(
+            app.disasm_rows.first().map(|line| line.addr),
+            Some(row.addr)
+        );
+
+        app.shift_window(-1);
+        assert!(
+            app.disasm_start < row.addr,
+            "the first byte of the section must still scroll up"
+        );
+        assert!(
+            app.disasm_rows
+                .first()
+                .is_some_and(|line| !line.flags.is_data()),
+            "the window must cross into the code section above it"
+        );
+        assert!(
+            app.disasm_rows.iter().any(|line| !line.flags.is_data()),
+            "the section above must decode as instructions"
+        );
+        assert!(
+            app.disasm_start >= previous.range.start,
+            "the window must stay inside the preceding section"
         );
     }
 
@@ -9865,6 +10144,94 @@ mod tests {
         );
         // Seamless: only the wheel itself moved the text, not the page that was loaded.
         let after_y = y_of(&output).expect("row still painted after re-anchoring");
+        assert!(
+            (after_y - base_y).abs() < 2.0 * app.row_height(),
+            "re-anchoring moved the text by {} px",
+            after_y - base_y
+        );
+    }
+
+    /// The report's gesture, end to end: double-click the first string, then turn the wheel
+    /// up over the disassembly. The window must load the bytes above the literal (as data),
+    /// not stop dead at the top of the literal list.
+    #[test]
+    fn headless_wheel_scrolls_a_string_window_up() {
+        let Some((mut app, ctx, mut input)) = headless_disassembly() else {
+            return;
+        };
+        {
+            let session = app.session.as_mut().unwrap();
+            let strings = recraft_analysis::extract_strings(session, 4, 200_000).unwrap();
+            recraft_analysis::persist_strings(session, &strings).unwrap();
+        }
+        app.refresh_strings();
+        let row = app
+            .strings
+            .iter()
+            .find(|row| !is_string_noise(&row.segment, &row.text))
+            .cloned()
+            .expect("notepad has a visible literal");
+        app.apply_action(&ctx, Action::NavigateToDisasm(row.addr));
+        let mut frame = 0.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        let output = step(&mut input, &mut app);
+        assert!(
+            app.disasm_rows
+                .first()
+                .is_some_and(|line| line.flags.is_data()),
+            "the literal opens a data row"
+        );
+        let (_, pos) = painted_rows(&output)
+            .into_iter()
+            .find(|(_, pos)| pos.y > 200.0 && pos.y < 700.0 && pos.x > 100.0)
+            .expect("a visible data row");
+        input
+            .events
+            .push(egui::Event::PointerMoved(pos + egui::vec2(200.0, 4.0)));
+        let output = step(&mut input, &mut app);
+        let anchor = app.disasm_start;
+        let base_y = painted_rows(&output)
+            .iter()
+            .find(|(addr, _)| *addr == anchor.get())
+            .map(|(_, pos)| pos.y)
+            .expect("the literal row is painted");
+
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 8.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut output = output;
+        for _ in 0..40 {
+            output = step(&mut input, &mut app);
+        }
+        assert!(
+            app.disasm_start < anchor,
+            "the wheel did not load the bytes above the first literal: start stayed {:#x}",
+            app.disasm_start.get()
+        );
+        assert!(
+            app.disasm_rows.iter().all(|line| line.flags.is_data()),
+            "the wheel decoded data as code"
+        );
+        assert!(
+            app.disasm_rows.iter().any(|line| line.addr == anchor),
+            "the literal must stay in the window"
+        );
+        // The text on screen does not jump: only the wheel moved it.
+        let after_y = painted_rows(&output)
+            .iter()
+            .find(|(addr, _)| *addr == anchor.get())
+            .map(|(_, pos)| pos.y)
+            .expect("the literal row is still painted");
         assert!(
             (after_y - base_y).abs() < 2.0 * app.row_height(),
             "re-anchoring moved the text by {} px",
