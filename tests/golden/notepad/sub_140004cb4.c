@@ -16,7 +16,6 @@ void sub_140004cb4_l1(void) {
             rcx = (rax + 0xADDR);
             rax = -(rax);
             rdi = ((rax != 0) ? rcx : 0);
-        } else {
         }
         rsi = (rbx + 0xADDR);
         AcquireSRWLockExclusive(rsi);

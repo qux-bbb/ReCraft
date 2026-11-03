@@ -479,6 +479,10 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // already settled the subtracted immediates, and nothing after this point rewrites the
     // arm bodies in a way that would break the `case` labels.
     fold_dispatch_ladders(&mut lines);
+    if info.is_some() {
+        // The typed view is the one people read; the raw L1 view keeps the explicit epilogue.
+        drop_trailing_void_return(&mut lines);
+    }
     mark("text passes");
     normalize_infinite_loops(&mut lines);
     mark("  norm loops");
@@ -987,6 +991,14 @@ fn drop_noop_statements(lines: &mut Vec<PseudoLine>) {
             index = index.saturating_sub(1);
             continue;
         }
+        // `} else {` + `}` is an arm that does nothing: closing the `if` there is the same
+        // program and one nesting level less.
+        if text == "} else {" && lines[index + 1].text.trim() == "}" {
+            let indent = leading_spaces(&lines[index].text);
+            lines[index].text = format!("{}}}", " ".repeat(indent));
+            lines.remove(index + 1);
+            continue;
+        }
         index += 1;
     }
     let mut references: HashMap<String, usize> = HashMap::new();
@@ -1011,6 +1023,39 @@ fn drop_noop_statements(lines: &mut Vec<PseudoLine>) {
             continue;
         }
         index += 1;
+    }
+}
+
+/// A `void` function does not need the `return;` that closes it: the epilogue is implicit, and
+/// every other decompiler leaves it out.
+fn drop_trailing_void_return(lines: &mut Vec<PseudoLine>) {
+    let signature = lines
+        .iter()
+        .find(|line| !line.text.trim_start().starts_with("//"));
+    let Some(signature) = signature else {
+        return;
+    };
+    if !signature.text.trim_start().starts_with("void ") {
+        return;
+    }
+    // Walk back over the closing brace to the last statement of the body. The pipeline pushes
+    // that brace after the text passes, so it may not be there yet.
+    let mut index = lines.len();
+    let mut skipped_brace = false;
+    while index > 0 {
+        index -= 1;
+        let text = lines[index].text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if text == "}" && !skipped_brace {
+            skipped_brace = true;
+            continue;
+        }
+        if text == "return;" {
+            lines.remove(index);
+        }
+        return;
     }
 }
 
@@ -8273,6 +8318,39 @@ mod tests {
         assert!(text.contains("case 0x4: {"), "{text}");
         assert!(text.contains("case 0xc: {"), "{text}");
         assert!(text.contains("case 0x1c: {"), "{text}");
+    }
+    #[test]
+    fn an_empty_else_arm_closes_the_if() {
+        let mut lines = snippet(&[
+            "    if (eax == 0) {",
+            "        rsi = arg1;",
+            "    } else {",
+            "    }",
+            "    return 0;",
+        ]);
+        drop_noop_statements(&mut lines);
+        let text = joined(&lines);
+        assert!(!text.contains("else"), "{text}");
+        assert!(text.contains("    }"), "{text}");
+        assert_eq!(lines.len(), 4, "{text}");
+    }
+    #[test]
+    fn a_void_function_drops_its_trailing_return() {
+        let mut lines = snippet(&[
+            "void sub_1000(void) {",
+            "    qword_1000 = off_2000;",
+            "    return;",
+            "}",
+        ]);
+        drop_trailing_void_return(&mut lines);
+        assert!(!joined(&lines).contains("return;"), "{}", joined(&lines));
+        assert_eq!(lines.len(), 3);
+    }
+    #[test]
+    fn a_function_with_a_value_keeps_its_trailing_return() {
+        let mut lines = snippet(&["int64 sub_1000(void) {", "    eax = 1;", "    return;", "}"]);
+        drop_trailing_void_return(&mut lines);
+        assert!(joined(&lines).contains("return;"), "{}", joined(&lines));
     }
     #[test]
     fn nested_single_if_wrappers_collapse_into_one_condition() {
