@@ -1176,6 +1176,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP `filter` now runs before `limit`.** `list_functions` and `list_strings` applied the row
+  cap while scanning and filtered afterwards, so a match past the default 500-row window came
+  back as `count: 0`: on the Go sample `filter: "main"` reported nothing at all, and notepad's
+  `filter: "%"` returned 3 of 67 strings. Both tools now filter the whole table, cap only the
+  rows they return, and report `total`/`truncated` so nothing is dropped silently; `xrefs_to`
+  and `xrefs_from` gained the same `limit`/`total`/`truncated` reporting. Three tests cover the
+  late-match, truncation and xref cases.
+- **`get_pseudocode` caps its response.** One L2 function (notepad `sub_140013154`) renders
+  9 855 lines / 1.5 MB, which exceeds what most MCP clients accept as a single tool result. The
+  tool now defaults to `maxLines: 2000` / `maxBytes: 256 KiB` (raisable to 100 000 lines /
+  8 MiB) and reports `truncated`, `total_lines` and a `hint` instead of overflowing the client.
+- **MCP `initialize` negotiates the protocol version and carries `instructions`.** It echoes the
+  client's `protocolVersion` when it is `2024-11-05` or `2025-06-18` (falling back otherwise),
+  and returns an instructions string stating the read-only contract and truncation convention.
+- **MCP HTTP token check is constant-time** (`bytes_equal_ct` over the `Bearer` header) instead
+  of a short-circuiting `!=`, so a wrong token cannot be inferred from response timing;
+  `callgraph` now also reports `truncated: true` when the node list, not just the edge list, is
+  capped. `docs/MCP.md` documents the new fields, caps and version negotiation.
 - **Scrolling a string window in the Disassembly view follows the address space.** A window
   anchored on a stored string showed it as a data row, but paging it went through
   `Session::rewind`/`advance`, which walk instruction boundaries: one wheel notch up from a

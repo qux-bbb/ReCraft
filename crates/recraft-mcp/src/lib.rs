@@ -31,6 +31,22 @@ use recraft_core::Session;
 use serde_json::{Value, json};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+/// Protocol revisions this server speaks; `initialize` echoes the client's choice when it is
+/// one of these, and falls back to [`PROTOCOL_VERSION`] otherwise.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2024-11-05", "2025-06-18"];
+/// Server instructions. Clients copy this into the system prompt, so it states the read-only
+/// contract and the truncation convention rather than describing the project.
+const SERVER_INSTRUCTIONS: &str = "ReCraft serves one read-only reverse-engineering project. \
+Start with list_functions (its filter is a case-insensitive name substring), then \
+function_summary or get_pseudocode for one function; addresses accept 0x hex, decimal, a \
+symbol name, or 'entry'. Large payloads report truncated:true together with the untruncated \
+size; narrow the query or raise maxLines/maxBytes instead of assuming the result is complete.";
+/// Default `get_pseudocode` caps. A single L2 function in notepad.exe renders 9 855 lines
+/// (~1.5 MB), which exceeds what most MCP clients accept as one tool result.
+const DEFAULT_PSEUDOCODE_MAX_LINES: usize = 2000;
+const DEFAULT_PSEUDOCODE_MAX_BYTES: usize = 256 * 1024;
+const MAX_PSEUDOCODE_LINES: usize = 100_000;
+const MAX_PSEUDOCODE_BYTES: usize = 8 * 1024 * 1024;
 const XREF_CALL: i64 = 1;
 const XREF_DATA: i64 = 3;
 const MAX_LIMIT: usize = 5000;
@@ -105,14 +121,24 @@ impl McpServer {
         let params = message.get("params").cloned().unwrap_or(Value::Null);
 
         let outcome: std::result::Result<Value, (i64, String)> = match method {
-            "initialize" => Ok(json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {
-                    "tools": {"listChanged": false},
-                    "resources": {"subscribe": false, "listChanged": false},
-                },
-                "serverInfo": {"name": "recraft", "version": env!("CARGO_PKG_VERSION")},
-            })),
+            "initialize" => {
+                // Echo the revision the client asked for when we speak it, so a 2025-06-18
+                // client does not have to downgrade to the oldest revision we know.
+                let version = params
+                    .get("protocolVersion")
+                    .and_then(Value::as_str)
+                    .filter(|version| SUPPORTED_PROTOCOL_VERSIONS.contains(version))
+                    .unwrap_or(PROTOCOL_VERSION);
+                Ok(json!({
+                    "protocolVersion": version,
+                    "capabilities": {
+                        "tools": {"listChanged": false},
+                        "resources": {"subscribe": false, "listChanged": false},
+                    },
+                    "serverInfo": {"name": "recraft", "version": env!("CARGO_PKG_VERSION")},
+                    "instructions": SERVER_INSTRUCTIONS,
+                }))
+            }
             "notifications/initialized" | "notifications/cancelled" => return None,
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tools()})),
@@ -272,18 +298,52 @@ impl McpServer {
         }
         .map_err(|e| e.to_string())?;
         let name = self.session.name_at(function).map_err(|e| e.to_string())?;
-        let lines: Vec<Value> = code
-            .lines
-            .iter()
-            .map(|line| json!({"addr": hex(line.addr), "text": line.text}))
-            .collect();
-        Ok(json!({
+        // Cap the response: one huge L2 function otherwise returns megabytes over the wire and
+        // can exceed the client's tool-result budget outright.
+        let max_lines = cap_of(
+            arguments,
+            "maxLines",
+            DEFAULT_PSEUDOCODE_MAX_LINES,
+            1,
+            MAX_PSEUDOCODE_LINES,
+        );
+        let max_bytes = cap_of(
+            arguments,
+            "maxBytes",
+            DEFAULT_PSEUDOCODE_MAX_BYTES,
+            1024,
+            MAX_PSEUDOCODE_BYTES,
+        );
+        let total_lines = code.lines.len();
+        let mut lines = Vec::new();
+        let mut text = String::new();
+        for line in &code.lines {
+            if lines.len() >= max_lines
+                || (!lines.is_empty() && text.len() + line.text.len() + 1 > max_bytes)
+            {
+                break;
+            }
+            text.push_str(&line.text);
+            text.push('\n');
+            lines.push(json!({"addr": hex(line.addr), "text": line.text}));
+        }
+        let kept = lines.len();
+        let truncated = kept < total_lines;
+        let mut payload = json!({
             "function": hex(function),
             "name": name,
             "level": level,
             "lines": lines,
-            "text": code.text(),
-        }))
+            "text": text,
+            "total_lines": total_lines,
+            "truncated": truncated,
+        });
+        if truncated {
+            payload["hint"] = json!(format!(
+                "truncated to {kept} of {total_lines} lines; raise maxLines/maxBytes, or export the full text with `recraft-cli decompile --out`"
+            ));
+        }
+        Ok(payload)
     }
 
     fn tool_xrefs(&self, arguments: &Value, incoming: bool) -> ToolResult {
@@ -635,11 +695,28 @@ impl McpServer {
         match result {
             Ok(value) => {
                 let text = if mime == "text/plain" {
-                    value
+                    let mut text = value
                         .get("text")
                         .and_then(Value::as_str)
                         .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string())
+                        .unwrap_or_else(|| value.to_string());
+                    // A resource has no `truncated` field to read, so keep the cut visible as a
+                    // trailing pseudo-C comment instead of serving a silently short document.
+                    if value.get("truncated").and_then(Value::as_bool) == Some(true) {
+                        let total = value
+                            .get("total_lines")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        let kept = value
+                            .get("lines")
+                            .and_then(Value::as_array)
+                            .map(Vec::len)
+                            .unwrap_or(0);
+                        text.push_str(&format!(
+                            "// truncated: {kept} of {total} lines; raise maxLines/maxBytes\n"
+                        ));
+                    }
+                    text
                 } else {
                     value.to_string()
                 };
@@ -703,6 +780,35 @@ fn limit_of(arguments: &Value, default: usize) -> usize {
         .and_then(Value::as_u64)
         .map(|limit| (limit as usize).clamp(1, MAX_LIMIT))
         .unwrap_or(default)
+}
+
+/// Read an integer cap (`maxLines`, `maxBytes`) and clamp it into range.
+fn cap_of(arguments: &Value, key: &str, default: usize, min: usize, max: usize) -> usize {
+    arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| (value as usize).clamp(min, max))
+        .unwrap_or(default)
+}
+
+/// Constant-time bearer-token check so a wrong token cannot be guessed from response timing.
+fn bearer_matches(authorization: Option<&str>, token: &str) -> bool {
+    let expected = format!("Bearer {token}");
+    bytes_equal_ct(
+        authorization.unwrap_or_default().as_bytes(),
+        expected.as_bytes(),
+    )
+}
+
+fn bytes_equal_ct(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (a, b) in left.iter().zip(right) {
+        difference |= a ^ b;
+    }
+    difference == 0
 }
 
 fn xref_kind_name(kind: i64) -> &'static str {
@@ -795,12 +901,14 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "get_pseudocode",
-            "description": "Pseudo-C for the function containing an address (L0/L1/L2).",
+            "description": "Pseudo-C for the function containing an address (L0/L1/L2). Long functions are capped; check `truncated`/`total_lines` and raise `maxLines`/`maxBytes` for more.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "addr": {"type": ["integer", "string"]},
                     "level": {"type": "string", "enum": ["l0", "l1", "l2"]},
+                    "maxLines": {"type": "integer", "minimum": 1, "maximum": MAX_PSEUDOCODE_LINES},
+                    "maxBytes": {"type": "integer", "minimum": 1024, "maximum": MAX_PSEUDOCODE_BYTES},
                 },
             },
         }),
@@ -922,7 +1030,7 @@ fn handle_http_connection(
         (405, r#"{"error":"method not allowed"}"#.to_owned())
     } else if request.path != "/mcp" {
         (404, r#"{"error":"not found"}"#.to_owned())
-    } else if request.authorization.as_deref() != Some(&format!("Bearer {token}")) {
+    } else if !bearer_matches(request.authorization.as_deref(), token) {
         (
             401,
             r#"{"error":"missing or invalid bearer token"}"#.to_owned(),
@@ -1236,6 +1344,51 @@ mod tests {
     }
 
     #[test]
+    fn xref_lists_report_their_totals() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let empty = tool_json(&mut server, "xrefs_to", json!({"addr": "entry"}));
+        assert_eq!(empty["count"], 0, "{empty}");
+        assert_eq!(empty["total"], 0, "{empty}");
+        assert_eq!(empty["truncated"], false, "{empty}");
+
+        let capped = tool_json(
+            &mut server,
+            "xrefs_from",
+            json!({"addr": "start", "limit": 1}),
+        );
+        assert!(capped["count"].as_u64().unwrap() <= 1, "{capped}");
+        assert!(capped["truncated"].is_boolean(), "{capped}");
+    }
+
+    #[test]
+    fn pseudocode_resource_marks_its_truncation() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let project_id = server.project_id.clone();
+        let all = tool_json(&mut server, "list_functions", json!({"limit": MAX_LIMIT}));
+        let biggest = all["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .max_by_key(|function| function["size"].as_u64().unwrap_or(0))
+            .unwrap()["start"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let uri = format!("recraft://project/{project_id}/pseudocode/{biggest}");
+        let response = call(&mut server, "resources/read", json!({"uri": uri}));
+        let text = response["result"]["contents"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("// truncated:"),
+            "resource served a silently short document ({} bytes)",
+            text.len()
+        );
+    }
+
+    #[test]
     fn unknown_method_is_an_error_and_notifications_are_silent() {
         let Some(mut server) = notepad_project() else {
             return;
@@ -1320,21 +1473,84 @@ mod tests {
     }
 
     #[test]
-    fn xref_lists_report_their_totals() {
+    fn pseudocode_reports_and_bounds_truncation() {
         let Some(mut server) = notepad_project() else {
             return;
         };
-        let empty = tool_json(&mut server, "xrefs_to", json!({"addr": "entry"}));
-        assert_eq!(empty["count"], 0, "{empty}");
-        assert_eq!(empty["total"], 0, "{empty}");
-        assert_eq!(empty["truncated"], false, "{empty}");
-
-        let capped = tool_json(
+        let limited = tool_json(
             &mut server,
-            "xrefs_from",
-            json!({"addr": "start", "limit": 1}),
+            "get_pseudocode",
+            json!({"addr": "entry", "level": "l1", "maxLines": 2}),
         );
-        assert!(capped["count"].as_u64().unwrap() <= 1, "{capped}");
-        assert!(capped["truncated"].is_boolean(), "{capped}");
+        assert_eq!(limited["truncated"], true, "{limited}");
+        assert_eq!(limited["lines"].as_array().unwrap().len(), 2);
+        assert!(limited["total_lines"].as_u64().unwrap() > 2);
+        assert!(limited["hint"].as_str().unwrap().contains("maxLines"));
+        assert_eq!(limited["text"].as_str().unwrap().lines().count(), 2);
+
+        // The largest function must stay inside the default byte/line caps.
+        let all = tool_json(&mut server, "list_functions", json!({"limit": MAX_LIMIT}));
+        let biggest = all["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .max_by_key(|function| function["size"].as_u64().unwrap_or(0))
+            .unwrap()["start"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let full = tool_json(
+            &mut server,
+            "get_pseudocode",
+            json!({"addr": biggest, "level": "l2"}),
+        );
+        let text = full["text"].as_str().unwrap();
+        assert!(
+            text.len() <= DEFAULT_PSEUDOCODE_MAX_BYTES,
+            "L2 payload not capped: {} bytes",
+            text.len()
+        );
+        let kept = full["lines"].as_array().unwrap().len();
+        assert!(kept <= DEFAULT_PSEUDOCODE_MAX_LINES);
+        assert_eq!(
+            full["truncated"],
+            (kept as u64) < full["total_lines"].as_u64().unwrap()
+        );
+    }
+
+    #[test]
+    fn initialize_echoes_supported_protocol_version() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let echoed = call(
+            &mut server,
+            "initialize",
+            json!({"protocolVersion": "2025-06-18"}),
+        );
+        assert_eq!(echoed["result"]["protocolVersion"], "2025-06-18");
+        let fallback = call(
+            &mut server,
+            "initialize",
+            json!({"protocolVersion": "2099-01-01"}),
+        );
+        assert_eq!(fallback["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert!(
+            fallback["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("read-only"),
+            "{fallback}"
+        );
+    }
+
+    #[test]
+    fn bearer_comparison_is_exact() {
+        assert!(bearer_matches(Some("Bearer s3cret"), "s3cret"));
+        assert!(!bearer_matches(None, "s3cret"));
+        assert!(!bearer_matches(Some("Bearer s3cret"), "s3cret2"));
+        assert!(!bearer_matches(Some("Bearer s3cret2"), "s3cret"));
+        assert!(!bearer_matches(Some("Basic s3cret"), "s3cret"));
+        assert!(bytes_equal_ct(b"", b""));
     }
 }
