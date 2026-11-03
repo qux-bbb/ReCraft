@@ -200,7 +200,10 @@ Go 1959→1899）。其余类别或涉及原子性、或涉及双寄存器结果
 
 结构化发射之后，`structuring.rs` 依次执行一组保守的文本级折叠；每一步都必须保持
 **每个 `goto` 都有同名标签**、**花括号平衡**、**条件非空**这三条不变量（corpus 上由
-`generated_gotos_always_have_a_label` 与 `generated_output_has_balanced_braces` 断言）：
+`generated_gotos_always_have_a_label` 与 `generated_output_has_balanced_braces` 断言）；
+`recraft-cli lint` 另外还检查**标签唯一**、**签名声明的 `argN` 齐全**、**`loc_` 不出现在
+签名之上**、**`case`/`default` 恰好在 `switch` 体内缩进一级**（2026-11-04 新增：文本层挪动
+臂/阶梯时最容易把标签留在错的列上）：
 
 | 处理 | 作用 |
 |---|---|

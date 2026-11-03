@@ -260,6 +260,8 @@ pub enum LintKind {
     UndeclaredArgument,
     /// A `loc_` label printed above the signature line.
     LabelAboveSignature,
+    /// A `case`/`default` label that is not one level inside its `switch`.
+    MisplacedCaseLabel,
 }
 
 impl LintKind {
@@ -271,6 +273,7 @@ impl LintKind {
             LintKind::EmptyCondition => "empty condition",
             LintKind::UndeclaredArgument => "undeclared argument",
             LintKind::LabelAboveSignature => "label above signature",
+            LintKind::MisplacedCaseLabel => "misplaced case label",
         }
     }
 }
@@ -431,6 +434,7 @@ fn lint_text(text: &str) -> Vec<(LintKind, String)> {
     if depth != 0 {
         findings.push((LintKind::UnbalancedBraces, format!("depth {depth}")));
     }
+    findings.extend(misplaced_case_labels(&lines));
     // The signature must declare every argument the body uses.
     let signature = lines
         .iter()
@@ -473,6 +477,57 @@ fn lint_text(text: &str) -> Vec<(LintKind, String)> {
                 LintKind::UndeclaredArgument,
                 format!("arg{used} > {declared}"),
             ));
+        }
+    }
+    findings
+}
+
+/// Every `case`/`default` label must sit exactly one level inside the `switch` it belongs to.
+/// A text pass that moves a ladder or an arm can leave a label at the wrong column, which reads
+/// as if the arm were outside the switch (and is how one unbalanced-brace bug started).
+fn misplaced_case_labels(lines: &[&str]) -> Vec<(LintKind, String)> {
+    let mut findings = Vec::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut depth = 0isize;
+    // (brace depth right after the `switch` opened, its indentation)
+    let mut switches: Vec<(isize, usize)> = Vec::new();
+    for line in lines {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        let label = (trimmed.starts_with("case ")
+            && (trimmed.ends_with(':') || trimmed.ends_with('{')))
+            || trimmed == "default:"
+            || trimmed == "default: {";
+        if let Some(&(_, switch_indent)) = switches.last()
+            && label
+            && indent != switch_indent + 4
+        {
+            findings.push((
+                LintKind::MisplacedCaseLabel,
+                format!(
+                    "{} at column {indent}, switch at {switch_indent}",
+                    trimmed.trim_end_matches(" {")
+                ),
+            ));
+        }
+        for ch in line.chars() {
+            match ch {
+                '"' if !escaped => quoted = !quoted,
+                '\\' if quoted => escaped = !escaped,
+                '{' if !quoted => depth += 1,
+                '}' if !quoted => depth -= 1,
+                _ => escaped = false,
+            }
+        }
+        if trimmed.starts_with("switch (") && trimmed.ends_with('{') {
+            switches.push((depth, indent));
+        }
+        while switches
+            .last()
+            .is_some_and(|&(open_depth, _)| depth < open_depth)
+        {
+            switches.pop();
         }
     }
     findings
@@ -961,6 +1016,27 @@ mod tests {
         assert!(
             kinds("loc_10:\nint32 sub_1(int64 arg1) {\n}\n")
                 .contains(&LintKind::LabelAboveSignature)
+        );
+        // A `case` label that escaped its switch body.
+        assert!(
+            kinds(
+                "int32 sub_1(int32 arg1) {\n    switch (arg1) {\n        case 0x1: {\n        break;\n        }\n    case 0x2: {\n        break;\n    }\n    }\n}\n"
+            )
+            .contains(&LintKind::MisplacedCaseLabel)
+        );
+        // The same switch with both labels one level inside is clean.
+        assert!(
+            kinds(
+                "int32 sub_1(int32 arg1) {\n    switch (arg1) {\n        case 0x1: {\n            break;\n        }\n        default: {\n            break;\n        }\n    }\n}\n"
+            )
+            .is_empty()
+        );
+        // A nested switch judges its labels against its own column.
+        assert!(
+            kinds(
+                "int32 sub_1(int32 arg1) {\n    switch (arg1) {\n        case 0x1: {\n            switch (arg1) {\n                case 0x2: {\n                    break;\n                }\n            }\n            break;\n        }\n    }\n}\n"
+            )
+            .is_empty()
         );
     }
     #[test]
