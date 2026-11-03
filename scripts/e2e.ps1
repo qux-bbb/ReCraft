@@ -197,12 +197,27 @@ try {
     $mcpLines = @(
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
         '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":3}}}',
-        '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"recraft://project/sample/functions"}}'
+        '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"recraft://project/sample/functions"}}',
+        '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":1}}}',
+        '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_pseudocode","arguments":{"addr":"entry","level":"l1","maxLines":1}}}'
     )
     $mcp = ($mcpLines | & $Recraft serve-mcp $project | Out-String -Width 4096)
     Assert-Contains $mcp '"serverInfo"' 'MCP initialize'
     Assert-Contains $mcp 'recraft' 'MCP server name'
     Assert-Contains $mcp 'recraft://project/sample/functions' 'MCP functions resource'
+
+    # Truncation contract: a capped result must say so instead of looking complete.
+    $mcpResponses = @($mcp -split '\r?\n' | Where-Object { $_.Trim().Length -gt 0 })
+    $cappedRows = @($mcpResponses | Where-Object { $_.StartsWith('{"id":4,') })
+    if ($cappedRows.Count -ne 1) { throw "MCP list_functions(limit=1) response missing or duplicated`n--- output ---`n$mcp" }
+    Assert-Contains $cappedRows[0] '\"count\":1' 'MCP list_functions honours the row cap'
+    Assert-Contains $cappedRows[0] '\"truncated\":true' 'MCP list_functions flags dropped rows'
+    Assert-Contains $cappedRows[0] '\"total\":' 'MCP list_functions reports the untruncated total'
+
+    $cappedPseudo = @($mcpResponses | Where-Object { $_.StartsWith('{"id":5,') })
+    if ($cappedPseudo.Count -ne 1) { throw "MCP get_pseudocode(maxLines=1) response missing or duplicated`n--- output ---`n$mcp" }
+    Assert-Contains $cappedPseudo[0] '\"total_lines\":' 'MCP get_pseudocode reports total_lines'
+    Assert-Contains $cappedPseudo[0] '\"truncated\":true' 'MCP get_pseudocode honours maxLines'
 
     Write-Host '[+] MCP HTTP transport (bearer token)'
     # The HTTP server is killed at the end of the step; run it against a copy so a
