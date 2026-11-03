@@ -3,8 +3,8 @@ void sub_14000647c_l1(void) {
     rbp = rcx;
     rsi = rdx;
     AcquireSRWLockShared(rdx);
-    rdi = var_30;
-    rdi -= var_28;
+    rdi = *(u64*)((rbp + 0xADDR));
+    rdi -= *(u64*)((rbp + 0xADDR));
     rdi >>= 4;
     if (rsi != 0) {
         ReleaseSRWLockShared(rsi);

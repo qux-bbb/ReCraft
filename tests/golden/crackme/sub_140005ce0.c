@@ -6,7 +6,7 @@ void sub_140005ce0_l1(void) {
     rdi = rdx;
     rcx = &var_40;
     rax -= 1;
-    rbx = var_2c;
+    rbx = *(u64*)((rbp + 0xADDR));
     r9b = 1;
     var_40 = rax;
     sub_140004f54(rbp, (r11 - 0xADDR), 0xADDR);

@@ -15,7 +15,7 @@ void sub_1400225a4_l1(void) {
     rcx = var_128;
     if (eax != 0) {
         if (rcx != 0) {
-            RegCloseKey(rcx);
+            RegCloseKey(*(u64*)((rbp + 0xADDR)));
         }
         al = 0;
     } else {
@@ -26,7 +26,7 @@ void sub_1400225a4_l1(void) {
         var_28 = ebx;
         var_20 = r15d;
         hKey = r15;
-        RegCreateKeyExW(var_6f, *(u64*)((r13 + 0xADDR)), 0, 0, r15d, ebx, r15, &hKey, r15);
+        RegCreateKeyExW(*(u64*)((rbp + 0xADDR)), *(u64*)((r13 + 0xADDR)), 0, 0, r15d, ebx, r15, &hKey, r15);
         if (eax != 0) {
             loc_ADDR:
             rcx = hKey;

@@ -13,14 +13,14 @@ void sub_1400229e8_l1(void) {
     rcx = var_68;
     if (eax != 0) {
         if (rcx != 0) {
-            RegCloseKey(var_n11);
+            RegCloseKey(rcx);
         }
         al = 0;
     } else {
         rax = &var_70;
         var_20 = rax;
         var_70 = r12;
-        RegOpenKeyExW(var_n11, *(u64*)((rbx + 0xADDR)), 0, edi, &var_70);
+        RegOpenKeyExW(*(u64*)((rbp - 0xADDR)), *(u64*)((rbx + 0xADDR)), 0, edi, &var_70);
         rcx = var_70;
         if (eax != 0) {
             if (rcx != 0) {

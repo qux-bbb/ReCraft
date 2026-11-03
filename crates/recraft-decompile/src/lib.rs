@@ -1847,9 +1847,9 @@ impl Printer<'_> {
     }
 
     /// Render a stack reference: a recovered x86 argument name, otherwise `var_XX` for
-    /// rsp slots and frame-pointer locals. Positive `[rbp+...]` stays a raw pointer while
-    /// rbp is the incoming frame (it may be the return address / caller frame); once the
-    /// function assigns rbp itself, positive offsets are locals of the rebuilt frame.
+    /// rsp slots and frame-pointer locals. `[rbp + ...]` is only a frame slot while rbp
+    /// really is the frame base; a `rbp` that merely holds a pointer (`rbp = [rax + 8]`)
+    /// addresses a structure, and `[rbp + 0x18]` must stay `*(u32*)((rbp + 0x18))`.
     fn stack_reference(&self, base: Reg, offset: i64) -> Option<String> {
         if let Some(name) = self.args.and_then(|args| args.name_for_stack(base, offset)) {
             return Some(name.to_owned());
@@ -1863,8 +1863,14 @@ impl Printer<'_> {
         if let Some(from_entry) = self.pointer_offsets.get(&base) {
             return Some(Self::stack_name(offset + from_entry - self.frame_base));
         }
-        let rebuilt_frame = base == Reg::Rbp && self.written.contains(&Reg::Rbp);
-        if offset < 0 || rebuilt_frame {
+        // `[rbp ± N]` is a frame slot only when something established rbp as the frame
+        // base: the prologue's `mov rbp, rsp` (tracked as the frame alias) or a `lea` out
+        // of a stack address (pointer_offsets, handled above). A register that was merely
+        // written somewhere — `rbp = [rax + 8]`, a pointer into the heap — addresses a
+        // structure, and naming its fields `var_XX` would misattribute them to the frame.
+        // An untouched rbp still names the caller's slots (x86 arguments live above it).
+        let rebuilt_frame = base == Reg::Rbp && self.frame_reg == Some(Reg::Rbp);
+        if rebuilt_frame || (offset < 0 && !self.written.contains(&Reg::Rbp)) {
             return Some(Self::stack_name(offset));
         }
         None
@@ -2401,6 +2407,61 @@ mod tests {
             quote_c_string("a\"b\\c\n\t"),
             "\"a\\\"b\\\\c\\n\\t\"",
             "quotes, backslashes and control characters must be escaped"
+        );
+    }
+
+    /// `[rbp + disp]` names a frame slot only while `rbp` really is the frame base. A
+    /// register that merely holds a pointer addresses a structure: `rbp = [rax + 8]` then
+    /// `[rbp + 0x18]` is a field read, not the local at `var_18`.
+    #[test]
+    fn rbp_is_a_frame_base_only_after_it_was_established_as_one() {
+        let exprs: Vec<Expr> = Vec::new();
+        let names: HashMap<u64, String> = HashMap::new();
+        let labels: BTreeSet<u64> = BTreeSet::new();
+        let arg_structs: BTreeMap<Reg, StructDef> = BTreeMap::new();
+        let call_protos: HashMap<u64, crate::l2::ProtoSig> = HashMap::new();
+        let call_arg_counts: HashMap<u64, usize> = HashMap::new();
+        let literals: HashMap<u64, String> = HashMap::new();
+        let imports: HashMap<u64, String> = HashMap::new();
+        let mut printer = Printer {
+            exprs: &exprs,
+            names: &names,
+            start: Address::new(0x1000),
+            end: Address::new(0x1100),
+            labels: &labels,
+            args: None,
+            arg_structs: &arg_structs,
+            call_protos: &call_protos,
+            call_arg_counts: &call_arg_counts,
+            literals: &literals,
+            imports: &imports,
+            written: HashSet::new(),
+            frame_reg: None,
+            arg_values: [None, None, None, None],
+            arg_aliases: BTreeMap::new(),
+            entry_aliases: BTreeMap::new(),
+            stack_delta: Some(-0x40),
+            frame_base: 0,
+            pointer_offsets: BTreeMap::new(),
+            stack_args: BTreeMap::new(),
+            last_values: BTreeMap::new(),
+        };
+        printer.written.insert(Reg::Rbp);
+        assert_eq!(printer.stack_reference(Reg::Rbp, 0x18), None);
+        assert_eq!(printer.stack_reference(Reg::Rbp, -0x80), None);
+        // `mov rbp, rsp` re-establishes the frame base for the rest of the block.
+        printer.frame_reg = Some(Reg::Rbp);
+        assert_eq!(
+            printer.stack_reference(Reg::Rbp, 0x18).as_deref(),
+            Some("var_18")
+        );
+        // A `lea` out of a stack address carries its displacement, so the access keeps the
+        // same normalised slot name as the `[rsp + ...]` spelling of the same address.
+        printer.frame_reg = None;
+        printer.pointer_offsets.insert(Reg::Rbp, -0x40);
+        assert_eq!(
+            printer.stack_reference(Reg::Rbp, 0x18).as_deref(),
+            Some("var_n28")
         );
     }
 

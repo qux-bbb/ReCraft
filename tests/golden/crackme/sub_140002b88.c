@@ -7,7 +7,7 @@ void sub_140002b88_l1(void) {
     rbp = rcx;
     sub_14000217c(rcx);
     *(u64*)((rax + 0xADDR)) = rbx;
-    rbx = var_38;
+    rbx = *(u64*)((rbp + 0xADDR));
     sub_14000217c(rcx);
     *(u64*)((rax + 0xADDR)) = rbx;
     sub_14000217c(rcx);

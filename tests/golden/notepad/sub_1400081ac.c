@@ -4,7 +4,7 @@ void sub_1400081ac_l1(void) {
     ebp = 0;
     rsi = rdx;
     rbx = rcx;
-    r14d = &var_50;
+    r14d = (rbp + 0xADDR);
     if (*(u64*)((rcx + 0xADDR)) == rbp && edi != 0) {
         sub_140006634((rbp + 8), 0xADDR);
         *(u64*)((rbx + 0xADDR)) = rax;

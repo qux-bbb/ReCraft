@@ -86,13 +86,13 @@ void sub_14000accc_l1(void) {
         } while (*(u16*)((rdx + (rbp * 2))) != r15w);
         GetTextExtentPoint32W(rbx, rdx, rbp, off_140035500);
         ebp = 0xADDR;
-        MulDiv(&var_n58, edi, ebp);
+        MulDiv((rbp - 0xADDR), edi, ebp);
         edx = rect.left;
         dword_ADDR = eax;
         dword_ADDR = r15d;
         eax = (rdx + (rax * 2));
         dword_ADDR = eax;
-        MulDiv(&var_n45, edi, ebp);
+        MulDiv((rbp - 0xADDR), edi, ebp);
         dword_ADDR = eax;
         if (rbx != 0) {
             DeleteDC(rbx);

@@ -3,7 +3,7 @@ void sub_14000cec0_l1(void) {
     ebp = 0xADDR;
     rdi = r8;
     rbx = rcx;
-    esi = &var_n42;
+    esi = (rbp - 0xADDR);
     if (dl != 0) {
         rax = qword_ADDR;
         *(u64*)((r11 - 0xADDR)) = rax;

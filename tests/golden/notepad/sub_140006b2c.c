@@ -8,7 +8,7 @@ void sub_140006b2c_l1(void) {
     if (rax >= 0xADDR) {
         ebp = 1;
         r15d = 0xADDR;
-        r14d = &var_1;
+        r14d = (rbp + 1);
         while (rbx != rsi) {
             r9 = *(u64*)((rbx + 8));
             r10d = *(u32*)(rbx);
