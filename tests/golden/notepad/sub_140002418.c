@@ -21,7 +21,7 @@ void sub_140002418_l1(void) {
     if (r10d != 0) {
         r8d = dword_ADDR;
     } else {
-        qword_ADDR = (qword_ADDR | -1);
+        qword_ADDR = -1;
         eax &= 0xADDR;
         qword_ADDR = 0xADDR;
         if (eax == 0xADDR) {
@@ -76,7 +76,7 @@ void sub_140002418_l1(void) {
                         rax = var_20;
                         al &= 0xADDR;
                         if (al == 0xADDR) {
-                            dword_ADDR = (dword_ADDR | 0xADDR);
+                            dword_ADDR |= 0xADDR;
                             dword_ADDR = ebx;
                         }
                     }

@@ -72,7 +72,7 @@ void sub_140009508_l1(void) {
                             }
                         }
                         eax = *(u32*)((r8 + 8));
-                        *(u32*)((rcx + 8)) = (*(u32*)((rcx + 8)) + eax);
+                        *(u32*)((rcx + 8)) += eax;
                         r9d = var_40;
                     }
                     r8 += 0xADDR;

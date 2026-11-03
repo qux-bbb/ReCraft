@@ -29,10 +29,10 @@ void sub_14002048c_l1(void) {
             rax = rbx;
         }
     } else {
-        dword_ADDR = (dword_ADDR | 0xADDR);
+        dword_ADDR |= 0xADDR;
         sub_14000f5b8(off_140035550);
         rcx = qword_ADDR;
-        dword_ADDR = (dword_ADDR & 0xADDR);
+        dword_ADDR &= 0xADDR;
         if (rcx == 0) {
             MessageBoxW(qword_ADDR, qword_ADDR, qword_ADDR, 0xADDR);
             eax = 0;

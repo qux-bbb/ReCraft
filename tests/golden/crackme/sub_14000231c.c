@@ -7,7 +7,7 @@ void sub_14000231c_l1(void) {
         rcx = (rbx + (rbx * 4));
         rcx = (rax + (rcx * 8));
         DeleteCriticalSection((rax + (rcx * 8)));
-        dword_ADDR = (dword_ADDR - 1);
+        dword_ADDR -= 1;
     }
     al = 1;
     return;

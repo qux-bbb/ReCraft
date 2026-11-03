@@ -22,7 +22,7 @@ void sub_14000925c_l1(void) {
             rax -= rcx;
             rdx = ((rcx < *(u64*)((rbx + 0xADDR))) ? rax : 0);
             sub_1400096fc(*(u64*)(rsi), rdx, r14);
-            *(u64*)(rdi) = (*(u64*)(rdi) + rbp);
+            *(u64*)(rdi) += rbp;
             al = 1;
         }
     } else {
@@ -33,7 +33,7 @@ void sub_14000925c_l1(void) {
         rax -= rcx;
         rdx = ((rcx < *(u64*)((rbx + 0xADDR))) ? rax : 0);
         sub_1400096fc(*(u64*)(rsi), rdx, r14);
-        *(u64*)(rdi) = (*(u64*)(rdi) + rbp);
+        *(u64*)(rdi) += rbp;
         al = 1;
         return;
     }

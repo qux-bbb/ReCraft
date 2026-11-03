@@ -34,7 +34,7 @@ void sub_1400046a4_l1(void) {
                         r9 = &var_28;
                         sub_140004608(&var_88, &var_30, &var_40);
                     } else {
-                        *(u32*)(rdx) = (*(u32*)(rdx) + 1);
+                        *(u32*)(rdx) += 1;
                     }
                 }
             }

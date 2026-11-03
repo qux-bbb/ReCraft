@@ -22,7 +22,7 @@ void sub_140005814_l1(void) {
             r9d >>= 3;
             al += 0xADDR;
             *(u8*)(r8) = al;
-            *(u64*)((rcx + 0xADDR)) = (*(u64*)((rcx + 0xADDR)) - 1);
+            *(u64*)((rcx + 0xADDR)) -= 1;
             r8 = *(u64*)((rcx + 0xADDR));
             continue;
         }

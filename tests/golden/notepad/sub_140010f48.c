@@ -36,7 +36,7 @@ void sub_140010f48_l1(void) {
         sub_140010d60(*(u64*)(r14), &var_b0);
         if (ebx == 0) {
             CloseHandle(qword_ADDR);
-            qword_ADDR = (qword_ADDR | -1);
+            qword_ADDR = -1;
         } else if (r13d >= 0xADDR) {
             var_20 = 0xADDR;
             sub_14000c3a4(qword_ADDR, qword_ADDR, qword_ADDR, *(u64*)(r14), 0xADDR);
@@ -44,7 +44,7 @@ void sub_140010f48_l1(void) {
             var_20 = 0xADDR;
             sub_14000c3a4(qword_ADDR, qword_ADDR, qword_ADDR, *(u64*)(r14), 0xADDR);
             CloseHandle(qword_ADDR);
-            qword_ADDR = (qword_ADDR | -1);
+            qword_ADDR = -1;
             al = 0;
             r11 = &var_300;
             return;
@@ -78,7 +78,7 @@ void sub_140010f48_l1(void) {
             }
         }
         CloseHandle(qword_ADDR);
-        qword_ADDR = (qword_ADDR | -1);
+        qword_ADDR = -1;
         if (r14 != 0) {
             rax = r14;
             var_40 = rax;

@@ -2,9 +2,9 @@
 void sub_140020598_l1(void) {
     rbx = qword_ADDR;
     if (rbx == 0) {
-        dword_ADDR = (dword_ADDR | 0xADDR);
+        dword_ADDR |= 0xADDR;
         sub_14000f5b8(off_140035550);
-        dword_ADDR = (dword_ADDR & 0xADDR);
+        dword_ADDR &= 0xADDR;
         rbx = qword_ADDR;
     }
     edx = 0;
@@ -26,17 +26,17 @@ void sub_140020598_l1(void) {
     if (eax == 0 && var_a4 == 1) {
         rbx = var_40;
         if (qword_ADDR == 0) {
-            dword_ADDR = (dword_ADDR | 0xADDR);
+            dword_ADDR |= 0xADDR;
             sub_14000f5b8(off_140035550);
-            dword_ADDR = (dword_ADDR & 0xADDR);
+            dword_ADDR &= 0xADDR;
         }
         qword_ADDR = var_30;
         qword_ADDR = var_38;
     } else if (var_a4 == 2) {
         if (qword_ADDR == 0) {
-            dword_ADDR = (dword_ADDR | 0xADDR);
+            dword_ADDR |= 0xADDR;
             sub_14000f5b8(off_140035550);
-            dword_ADDR = (dword_ADDR & 0xADDR);
+            dword_ADDR &= 0xADDR;
         }
         qword_ADDR = var_30;
         qword_ADDR = var_38;

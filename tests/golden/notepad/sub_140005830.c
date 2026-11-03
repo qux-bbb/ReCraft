@@ -67,7 +67,7 @@ void sub_140005830_l1(void) {
                 al = 0;
                 return;
             }
-            *(u32*)(r14) = (*(u32*)(r14) & eax);
+            *(u32*)(r14) &= eax;
             al = 0;
             return;
         }

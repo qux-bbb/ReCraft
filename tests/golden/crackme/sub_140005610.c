@@ -30,7 +30,7 @@ void sub_140005610_l1(void) {
                 *(u32*)((rbx + 0xADDR)) = 1;
             }
             if (rsi == 0) {
-                *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) & -0xADDR);
+                *(u32*)((rbx + 0xADDR)) &= -0xADDR;
             }
             *(u8*)((rbx + 0xADDR)) = 0;
             r8b = bpl;
@@ -43,17 +43,17 @@ void sub_140005610_l1(void) {
             eax = (*(u32*)((rbx + 0xADDR)) >> 7);
             if ((al & 1) != 0) {
                 if (*(u32*)((rbx + 0xADDR)) == 0) {
-                    *(u64*)((rbx + 0xADDR)) = (*(u64*)((rbx + 0xADDR)) - 1);
+                    *(u64*)((rbx + 0xADDR)) -= 1;
                     rcx = *(u64*)((rbx + 0xADDR));
                     *(u8*)(rcx) = 0xADDR;
-                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + 1);
+                    *(u32*)((rbx + 0xADDR)) += 1;
                 } else {
                     rax = *(u64*)((rbx + 0xADDR));
                     if (*(u8*)(rax) != 0xADDR) {
-                        *(u64*)((rbx + 0xADDR)) = (*(u64*)((rbx + 0xADDR)) - 1);
+                        *(u64*)((rbx + 0xADDR)) -= 1;
                         rcx = *(u64*)((rbx + 0xADDR));
                         *(u8*)(rcx) = 0xADDR;
-                        *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + 1);
+                        *(u32*)((rbx + 0xADDR)) += 1;
                         al = 1;
                         return;
                     }

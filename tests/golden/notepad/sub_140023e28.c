@@ -47,7 +47,7 @@ void sub_140023e28_l1(void) {
                     CreateDialogIndirectParamW(qword_ADDR, rbp, *(u64*)((rbx + 8)), sub_140023f90, rdi);
                     rbx = rax;
                     if (rax == 0) {
-                        qword_ADDR = (qword_ADDR & rax);
+                        qword_ADDR &= rax;
                         LocalFree(rdi);
                     }
                     rax = rbx;
@@ -81,7 +81,7 @@ void sub_140023e28_l1(void) {
                     CreateDialogIndirectParamW(qword_ADDR, rbp, *(u64*)((rbx + 8)), sub_140023f90, rdi);
                     rbx = rax;
                     if (rax == 0) {
-                        qword_ADDR = (qword_ADDR & rax);
+                        qword_ADDR &= rax;
                         LocalFree(rdi);
                     }
                     rax = rbx;

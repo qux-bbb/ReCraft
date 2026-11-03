@@ -11,7 +11,7 @@ void sub_140003ec4_l1(void) {
     sub_140002c10(r15, rbx, rsi);
     edi = eax;
     sub_14000217c(rcx);
-    *(u32*)((rax + 0xADDR)) = (*(u32*)((rax + 0xADDR)) + 1);
+    *(u32*)((rax + 0xADDR)) += 1;
     while (edi != -1) {
         if (edi <= r12d /* signed */) break;
         sub_140002b30(rcx);
@@ -60,7 +60,7 @@ void sub_140003ec4_l1(void) {
     sub_14000217c(rcx);
     if (*(u32*)((rax + 0xADDR)) > 0 /* signed */) {
         sub_14000217c(rcx);
-        *(u32*)((rax + 0xADDR)) = (*(u32*)((rax + 0xADDR)) - 1);
+        *(u32*)((rax + 0xADDR)) -= 1;
     }
     if (edi == -1) {
         r8d = edi;

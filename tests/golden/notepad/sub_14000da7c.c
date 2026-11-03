@@ -18,12 +18,12 @@ void sub_14000da7c_l1(void) {
         if (ecx == 0) {
             if (di != dx) {
                 if (di != r8w) {
-                    word_ADDR = (word_ADDR + r12w);
+                    word_ADDR += r12w;
                 } else {
-                    word_ADDR = (word_ADDR + r12w);
+                    word_ADDR += r12w;
                 }
             } else {
-                word_ADDR = (word_ADDR + r12w);
+                word_ADDR += r12w;
             }
             var_48 = esi;
             var_40 = esi;
@@ -35,14 +35,14 @@ void sub_14000da7c_l1(void) {
                 r14 = rax;
                 eax = 0xADDR;
                 if (r14w == 0xADDR) {
-                    word_ADDR = (word_ADDR + r12w);
+                    word_ADDR += r12w;
                     if (dword_ADDR == esi) {
                         edx = 0;
                         sub_1400029dc(rbp, 0, 0xADDR);
                         sub_140025fb8(rbp);
                         if (eax >= 0 /* signed */ && var_100 != si) {
                             sub_14000f610(rbp);
-                            word_ADDR = (word_ADDR + r12w);
+                            word_ADDR += r12w;
                         }
                     }
                 }
@@ -149,7 +149,7 @@ void sub_14000da7c_l1(void) {
                     }
                 }
             } else if (edi == 0xADDR) {
-                word_ADDR = (word_ADDR + r12w);
+                word_ADDR += r12w;
                 edi = 0xADDR;
                 edx = 0;
                 r8d = 0xADDR;
@@ -255,7 +255,7 @@ void sub_14000da7c_l1(void) {
                     if (dword_ADDR == esi) {
                         dword_ADDR = r12d;
                         if (edi == 0xADDR) {
-                            word_ADDR = (word_ADDR + r12w);
+                            word_ADDR += r12w;
                         }
                         rcx = qword_ADDR;
                         if (rcx != 0) {
@@ -308,7 +308,7 @@ void sub_14000da7c_l1(void) {
         } else if (edi == 0xADDR) {
             r8 = qword_ADDR;
             rcx = qword_ADDR;
-            word_ADDR = (word_ADDR + r12w);
+            word_ADDR += r12w;
             var_20 = rsi;
             DialogBoxParamW(qword_ADDR, 0xADDR, qword_ADDR, sub_14000cc40, rsi);
             if (rax != 0) {
@@ -361,14 +361,14 @@ void sub_14000da7c_l1(void) {
                 }
                 ecx -= r12d;
                 if (ecx == 0) {
-                    word_ADDR = (word_ADDR + r12w);
+                    word_ADDR += r12w;
                     edx = 0xADDR;
                 } else {
                     ecx -= 5;
                     if (ecx == 0) {
                         dword_ADDR = r12d;
                         if (edi == 0xADDR) {
-                            word_ADDR = (word_ADDR + r12w);
+                            word_ADDR += r12w;
                         }
                         rcx = qword_ADDR;
                         if (rcx != 0) {
@@ -406,7 +406,7 @@ void sub_14000da7c_l1(void) {
                             r11 = &var_310;
                             return;
                         }
-                        word_ADDR = (word_ADDR + r12w);
+                        word_ADDR += r12w;
                         rcx = qword_ADDR;
                         dword_ADDR = r12d;
                         if (rcx != 0) {
@@ -447,7 +447,7 @@ void sub_14000da7c_l1(void) {
         ecx = edi;
         ecx -= r12d;
         if (ecx == 0) {
-            word_ADDR = (word_ADDR + r12w);
+            word_ADDR += r12w;
             sub_1400118a0(r12d);
             eax = r12d;
             r11 = &var_310;
@@ -507,13 +507,13 @@ void sub_14000da7c_l1(void) {
         }
         ecx -= r12d;
         if (ecx == 0) {
-            word_ADDR = (word_ADDR + r12w);
+            word_ADDR += r12w;
             eax = dword_ADDR;
             dword_ADDR = eax;
             if (dword_ADDR != esi) {
                 eax = 4;
                 if (di == 0xADDR) {
-                    word_ADDR = (word_ADDR + r12w);
+                    word_ADDR += r12w;
                 }
                 rbx = "*.txt";
                 rdx = rbx;
@@ -559,7 +559,7 @@ void sub_14000da7c_l1(void) {
             if (ecx == 0) {
                 eax = 4;
                 if (di == 0xADDR) {
-                    word_ADDR = (word_ADDR + r12w);
+                    word_ADDR += r12w;
                 }
                 rbx = "*.txt";
                 rdx = rbx;
@@ -684,7 +684,7 @@ void sub_14000da7c_l1(void) {
                 r11 = &var_310;
                 return;
             }
-            word_ADDR = (word_ADDR + r12w);
+            word_ADDR += r12w;
             SetThreadDpiAwarenessContext((rsi - 2));
             ecx = 0;
             rbx = rax;

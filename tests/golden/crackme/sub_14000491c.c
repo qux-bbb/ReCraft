@@ -32,7 +32,7 @@ void sub_14000491c_l1(void) {
     }
     if (var_48 == 2) {
         rax = var_20;
-        *(u32*)((rax + 0xADDR)) = (*(u32*)((rax + 0xADDR)) & -0xADDR);
+        *(u32*)((rax + 0xADDR)) &= -0xADDR;
     }
     if (var_50 != 0) {
         ebx = var_4c;

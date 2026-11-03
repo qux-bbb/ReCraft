@@ -12,7 +12,7 @@ void sub_1400065a0_l1(void) {
             ecx = -(ecx);
             rcx = *(u64*)((rax + 8));
             edx = (((ecx != 0) ? 0xADDR : 0) + 0xADDR);
-            *(u32*)(rcx) = (*(u32*)(rcx) & edx);
+            *(u32*)(rcx) &= edx;
             rax += 0xADDR;
             continue;
         }

@@ -50,7 +50,7 @@ void sub_140011af8_l1(void) {
         if (rax == 0) {
             SetCursor(qword_ADDR);
             CloseHandle(qword_ADDR);
-            qword_ADDR = (qword_ADDR | -1);
+            qword_ADDR = -1;
             if (r12 != 0) {
                 LocalUnlock(r12);
             }
@@ -94,7 +94,7 @@ void sub_140011af8_l1(void) {
                             sub_140010f48(rsi, (r12 + 1), 0);
                         }
                         CloseHandle(qword_ADDR);
-                        qword_ADDR = (qword_ADDR | -1);
+                        qword_ADDR = -1;
                         edx = 0;
                         sub_1400029dc(&var_60, 0, 0xADDR);
                         r15d = (uint32)(var_40);
@@ -300,7 +300,7 @@ void sub_140011af8_l1(void) {
             r8d = 0;
             sub_140010f48(rsi, dword_ADDR, 0);
         }
-        word_ADDR = (word_ADDR + r14w);
+        word_ADDR += r14w;
         goto loc_ADDR;
         loc_ADDR:
         if (var_280 == r12w) {

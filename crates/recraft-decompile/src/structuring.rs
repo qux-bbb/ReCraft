@@ -474,6 +474,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         fold_constant_registers(&mut lines);
         merge_accumulations(&mut lines);
     }
+    fold_compound_assignments(&mut lines);
     drop_noop_statements(&mut lines);
     // The dispatch ladder is rebuilt from the final text: the constant folds above have
     // already settled the subtracted immediates, and nothing after this point rewrites the
@@ -5205,9 +5206,10 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
 }
 
 /// Fold `x = (x + y);` into `x += y;`. Compiler-generated pseudo-code spells every
-/// arithmetic update as a load and a separate write of the destination register; the
-/// compound form matches the original source and removes one temporary write per update.
-// `rax = &var_38; rax += 8;` is one step in the source: fold an accumulation into the
+/// arithmetic update as a load and a separate write of the destination; the compound form
+/// matches the original source and removes one temporary write per update.
+///
+/// `rax = &var_38; rax += 8;` is one step in the source: fold an accumulation into the
 /// assignment that produced its input. Only adjacent statements about the same target qualify,
 /// the right-hand side must be a constant and the input must be side-effect free, so no call is
 /// moved across the merge. A cast to a narrower type is left alone: the register add is 64-bit
@@ -5350,7 +5352,12 @@ fn fold_compound_assignments(lines: &mut [PseudoLine]) {
             continue;
         };
         let lhs = lhs.trim();
-        if !is_identifier(lhs) {
+        // A register, slot or global is a plain identifier; a store through a pointer or into a
+        // struct field is a place too, but then the address is evaluated twice in the
+        // assignment form, so the value may not call anything.
+        let memory_place = !is_identifier(lhs)
+            && (lhs.starts_with('*') || lhs.contains("->") || is_data_symbol(lhs));
+        if !is_identifier(lhs) && !memory_place {
             continue;
         }
         let rhs = rhs.trim();
@@ -5381,6 +5388,9 @@ fn fold_compound_assignments(lines: &mut [PseudoLine]) {
         if value.is_empty() {
             continue;
         }
+        if memory_place && has_call(value) {
+            continue;
+        }
         // `x = (x + -0x30)` -> `x -= 0x30`; `x |= -1` sets every bit, i.e. assigns -1.
         let mut operator = operator;
         if let Some(stripped) = value.strip_prefix('-') {
@@ -5403,6 +5413,17 @@ fn fold_compound_assignments(lines: &mut [PseudoLine]) {
         }
         line.text = format!("{indent}{lhs} {operator}= {value};");
     }
+}
+
+/// A named global (`qword_140036648`) is a place: the absolute address is part of the name.
+fn is_data_symbol(text: &str) -> bool {
+    const PREFIXES: [&str; 7] = [
+        "xmmword_", "qword_", "dword_", "byte_", "word_", "flt_", "dbl_",
+    ];
+    PREFIXES.iter().any(|prefix| {
+        text.strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_hexdigit()))
+    })
 }
 
 /// Rewrite `if (!(x == 0)) {` as `if ((x != 0)) {`. A negated comparison is harder to
@@ -10504,6 +10525,25 @@ mod tests {
         fold_compound_assignments(&mut lines);
         assert_eq!(lines[0].text, "    eax -= 0x30;");
         assert_eq!(lines[1].text, "    ecx = -1;");
+    }
+
+    #[test]
+    fn compound_updates_reach_pointer_and_field_stores() {
+        let mut lines = vec![
+            test_line("    *(u64*)(rax) = (*(u64*)(rax) | 4);"),
+            test_line("    arg1->field_0 = (arg1->field_0 & eax);"),
+            test_line("    qword_140035620 = (qword_140035620 + 1);"),
+            // The address would be evaluated twice, so a call on the right blocks the fold.
+            test_line("    *(u64*)(rbx) = (*(u64*)(rbx) | sub_140001000());"),
+        ];
+        fold_compound_assignments(&mut lines);
+        assert_eq!(lines[0].text, "    *(u64*)(rax) |= 4;");
+        assert_eq!(lines[1].text, "    arg1->field_0 &= eax;");
+        assert_eq!(lines[2].text, "    qword_140035620 += 1;");
+        assert_eq!(
+            lines[3].text,
+            "    *(u64*)(rbx) = (*(u64*)(rbx) | sub_140001000());"
+        );
     }
 
     #[test]

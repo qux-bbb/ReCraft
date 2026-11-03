@@ -53,10 +53,10 @@ void sub_14000468c_l1(void) {
                         sub_1400039e4((rdi + 0xADDR));
                         rsi = (rdi + 0xADDR);
                         InitializeCriticalSectionEx(rsi, 0, 0);
-                        *(u64*)((rsi + 0xADDR)) = (*(u64*)((rsi + 0xADDR)) & rbx);
-                        *(u64*)((rsi + 0xADDR)) = (*(u64*)((rsi + 0xADDR)) & rbx);
-                        *(u64*)((rsi + 0xADDR)) = (*(u64*)((rsi + 0xADDR)) & rbx);
-                        *(u64*)((rsi + 0xADDR)) = (*(u64*)((rsi + 0xADDR)) & rbx);
+                        *(u64*)((rsi + 0xADDR)) &= rbx;
+                        *(u64*)((rsi + 0xADDR)) &= rbx;
+                        *(u64*)((rsi + 0xADDR)) &= rbx;
+                        *(u64*)((rsi + 0xADDR)) &= rbx;
                         *(u64*)(r15) = rdi;
                         sub_140003fa0(&var_38);
                         loc_ADDR:

@@ -69,7 +69,7 @@ void sub_1400052e0_l1(void) {
             }
             dword_ADDR = 0;
         }
-        dword_ADDR = (dword_ADDR - 1);
+        dword_ADDR -= 1;
     }
     return;
 }

@@ -95,7 +95,7 @@ void sub_140001a34_l1(void) {
                         al &= dl;
                         if (al == dl) {
                             rax = qword_ADDR;
-                            dword_ADDR = (dword_ADDR | 0xADDR);
+                            dword_ADDR |= 0xADDR;
                             rax &= -0xADDR;
                             dword_ADDR = 6;
                             qword_ADDR = rax;
@@ -131,7 +131,7 @@ void sub_140001a34_l1(void) {
         if (((r10d >> 0xADDR) & 1) != 0) {
             rax = var_20;
             if (((rax >> 0xADDR) & 1) != 0) {
-                qword_ADDR = (qword_ADDR & -0xADDR);
+                qword_ADDR &= -0xADDR;
             }
         }
     }

@@ -37,15 +37,15 @@ void sub_140006300_l1(void) {
     *(u32*)((rbx + 0xADDR)) = eax;
     switch (ecx) {
         case 0xADDR: {
-            *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 1);
+            *(u32*)((rbx + 4)) |= 1;
             break;
         }
         case 0xADDR: {
-            *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 2);
+            *(u32*)((rbx + 4)) |= 2;
             break;
         }
         case 0xADDR: {
-            *(u32*)((rbx + 4)) = (*(u32*)((rbx + 4)) | 4);
+            *(u32*)((rbx + 4)) |= 4;
             break;
         }
     }

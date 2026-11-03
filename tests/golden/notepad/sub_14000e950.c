@@ -329,7 +329,7 @@ void sub_14000e950_l1(void) {
                     return;
                 }
                 sub_14000f610(&var_50);
-                word_ADDR = (word_ADDR + bx);
+                word_ADDR += bx;
             }
         } else if (edx == 0xADDR) {
             sub_14001eee0(rcx);

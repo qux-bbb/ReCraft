@@ -21,10 +21,10 @@ void sub_140004608_l1(void) {
                         sub_14000491c(rcx);
                         if (eax == -1) {
                             rax = *(u64*)((rbx + 0xADDR));
-                            *(u32*)(rax) = (*(u32*)(rax) | -1);
+                            *(u32*)(rax) = -1;
                         } else {
                             rax = *(u64*)((rbx + 8));
-                            *(u32*)(rax) = (*(u32*)(rax) + 1);
+                            *(u32*)(rax) += 1;
                         }
                     } else {
                         rax = *(u64*)(rbx);
@@ -32,7 +32,7 @@ void sub_140004608_l1(void) {
                         eax = (*(u32*)((rcx + 0xADDR)) >> 1);
                     }
                 } else {
-                    *(u32*)(rdx) = (*(u32*)(rdx) + 1);
+                    *(u32*)(rdx) += 1;
                 }
             }
         }

@@ -78,7 +78,7 @@ void sub_140004cc4_l1(void) {
     }
     if (var_88 == 2) {
         rcx = var_60;
-        *(u32*)((rcx + 0xADDR)) = (*(u32*)((rcx + 0xADDR)) & -0xADDR);
+        *(u32*)((rcx + 0xADDR)) &= -0xADDR;
     }
     if (var_90 != sil) {
         ebx = var_8c;

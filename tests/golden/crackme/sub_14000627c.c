@@ -82,7 +82,7 @@ void sub_14000627c_l1(void) {
                                         rax = *(u64*)((rbx + 0xADDR));
                                     }
                                 }
-                                *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | -1);
+                                *(u32*)((rbx + 0xADDR)) = -1;
                             }
                         }
                         r14 = (rbx + 0xADDR);
@@ -96,7 +96,7 @@ void sub_14000627c_l1(void) {
                         } else {
                             rax = *(u64*)(r14);
                             if (*(u64*)((rax + 8)) == r13) {
-                                *(u32*)(rsi) = (*(u32*)(rsi) + edi);
+                                *(u32*)(rsi) += edi;
                             }
                         }
                         ecx = *(u32*)((rbx + 0xADDR));
@@ -125,7 +125,7 @@ void sub_14000627c_l1(void) {
                                             rax = *(u64*)(r14);
                                         }
                                     }
-                                    *(u32*)(rsi) = (*(u32*)(rsi) | -1);
+                                    *(u32*)(rsi) = -1;
                                 }
                             }
                         }
@@ -143,7 +143,7 @@ void sub_14000627c_l1(void) {
                             } else {
                                 rax = *(u64*)(r10);
                                 if (*(u64*)((rax + 8)) == r13) {
-                                    *(u32*)(r9) = (*(u32*)(r9) + r8d);
+                                    *(u32*)(r9) += r8d;
                                 }
                             }
                         } else if (*(u32*)((rbx + 0xADDR)) > r13d /* signed */) {
@@ -177,13 +177,13 @@ void sub_14000627c_l1(void) {
                                         } else {
                                             rax = *(u64*)(r14);
                                             if (*(u64*)((rax + 8)) == r13) {
-                                                *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + r8d);
+                                                *(u32*)((rbx + 0xADDR)) += r8d;
                                             }
                                         }
                                         edi += 1;
                                         if (edi != *(u32*)((rbx + 0xADDR))) continue;
                                     }
-                                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | -1);
+                                    *(u32*)((rbx + 0xADDR)) = -1;
                                 }
                             } else {
                                 var_38 = r13;
@@ -206,13 +206,13 @@ void sub_14000627c_l1(void) {
                                         } else {
                                             rax = *(u64*)(r14);
                                             if (*(u64*)((rax + 8)) == r13) {
-                                                *(u32*)(rdi) = (*(u32*)(rdi) + r8d);
+                                                *(u32*)(rdi) += r8d;
                                             }
                                         }
                                         esi += 1;
                                         if (esi != *(u32*)((rbx + 0xADDR))) continue;
                                     }
-                                    *(u32*)(rdi) = (*(u32*)(rdi) | -1);
+                                    *(u32*)(rdi) = -1;
                                 }
                             }
                         }
@@ -240,7 +240,7 @@ void sub_14000627c_l1(void) {
                                             rax = *(u64*)((rbx + 0xADDR));
                                         }
                                     }
-                                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | -1);
+                                    *(u32*)((rbx + 0xADDR)) = -1;
                                 }
                             }
                         }
@@ -285,7 +285,7 @@ void sub_14000627c_l1(void) {
             if (ecx != 0) {
                 ecx -= 2;
                 if (ecx == 0) {
-                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 0xADDR);
+                    *(u32*)((rbx + 0xADDR)) |= 0xADDR;
                 } else if (ecx != 5) {
                     al = 0;
                     r11 = &var_60;

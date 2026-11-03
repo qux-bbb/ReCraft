@@ -27,9 +27,9 @@ void sub_140004890_l1(void) {
             eax = 0;
             return;
         }
-        *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) & -0xADDR);
+        *(u32*)((rbx + 0xADDR)) &= -0xADDR;
     } else {
-        *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 0xADDR);
+        *(u32*)((rbx + 0xADDR)) |= 0xADDR;
         eax = -1;
     }
     return;

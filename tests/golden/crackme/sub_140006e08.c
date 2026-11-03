@@ -52,7 +52,7 @@ void sub_140006e08_l1(void) {
     }
     if (var_58 == 2) {
         rcx = var_30;
-        *(u32*)((rcx + 0xADDR)) = (*(u32*)((rcx + 0xADDR)) & -0xADDR);
+        *(u32*)((rcx + 0xADDR)) &= -0xADDR;
     }
     if (var_60 != 0) {
         ebx = var_5c;

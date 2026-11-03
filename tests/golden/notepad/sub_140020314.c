@@ -20,9 +20,9 @@ void sub_140020314_l1(void) {
             var_20 = eax;
             GetPrinterDriverW(*(u64*)((rbp + 0xADDR)), 0, edi, rbx, var_40, &var_40);
             if (eax != 0) {
-                dword_ADDR = (dword_ADDR | 0xADDR);
+                dword_ADDR |= 0xADDR;
                 sub_14000f5b8(off_140035550);
-                dword_ADDR = (dword_ADDR & 0xADDR);
+                dword_ADDR &= 0xADDR;
                 CreateDCW(*(u64*)(rbx), off_140035850, 0, 0);
                 rdi = rax;
                 LocalFree(rbx);

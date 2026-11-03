@@ -36,7 +36,7 @@ void sub_140005a24_l1(void) {
                 al += cl;
             }
             *(u8*)(r10) = al;
-            *(u64*)((r9 + 0xADDR)) = (*(u64*)((r9 + 0xADDR)) - 1);
+            *(u64*)((r9 + 0xADDR)) -= 1;
             r10 = *(u64*)((r9 + 0xADDR));
             continue;
         }

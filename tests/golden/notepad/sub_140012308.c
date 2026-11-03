@@ -12,7 +12,7 @@ void sub_140012308_l1(void) {
     sub_140010a74(rsi, &var_30);
     r14d = 1;
     if (eax < 0 /* signed */) {
-        word_ADDR = (word_ADDR + r14w);
+        word_ADDR += r14w;
         ecx = r14d;
         sub_14000c980(rcx);
         if (var_30 != 0) {
@@ -28,7 +28,7 @@ void sub_140012308_l1(void) {
                 var_20 = 0xADDR;
                 sub_14000c3a4(qword_ADDR, qword_ADDR, qword_ADDR, rsi, 0xADDR);
                 CloseHandle(qword_ADDR);
-                qword_ADDR = (qword_ADDR | -1);
+                qword_ADDR = -1;
                 dword_ADDR = 0;
                 if (var_30 != 0) {
                     CoTaskMemFree(var_30);
@@ -39,7 +39,7 @@ void sub_140012308_l1(void) {
                 if (ecx != 0) {
                     ecx -= r14d;
                     if (ecx == 0) {
-                        word_ADDR = (word_ADDR + r14w);
+                        word_ADDR += r14w;
                         if (dword_ADDR == 0) {
                             sub_14000f610(&var_40);
                         } else if (edi == 0) {

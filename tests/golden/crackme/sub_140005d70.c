@@ -63,7 +63,7 @@ void sub_140005d70_l1(void) {
                                             if (eax == ebp) {
                                                 *(u32*)((rbx + 0xADDR)) = ebp;
                                             } else {
-                                                *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + 1);
+                                                *(u32*)((rbx + 0xADDR)) += 1;
                                             }
                                         } else {
                                             rax = *(u64*)((rbx + 0xADDR));
@@ -84,7 +84,7 @@ void sub_140005d70_l1(void) {
                                                 if (eax == ebp) {
                                                     *(u32*)((rbx + 0xADDR)) = ebp;
                                                 } else {
-                                                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + 1);
+                                                    *(u32*)((rbx + 0xADDR)) += 1;
                                                 }
                                             } else {
                                                 rax = *(u64*)((rbx + 0xADDR));
@@ -119,7 +119,7 @@ void sub_140005d70_l1(void) {
                                                 eax = *(u32*)(rcx);
                                                 *(u32*)((rbx + 0xADDR)) = eax;
                                                 if (eax < 0 /* signed */) {
-                                                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 4);
+                                                    *(u32*)((rbx + 0xADDR)) |= 4;
                                                     eax = -(eax);
                                                     *(u32*)((rbx + 0xADDR)) = eax;
                                                 }
@@ -181,21 +181,21 @@ void sub_140005d70_l1(void) {
                             if (r8b != 0xADDR) {
                                 if (r8b != 0xADDR) {
                                     if (r8b != 0xADDR) goto loc_ADDR;
-                                    *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 8);
+                                    *(u32*)((rbx + 0xADDR)) |= 8;
                                     goto loc_ADDR;
                                 }
-                                *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 4);
+                                *(u32*)((rbx + 0xADDR)) |= 4;
                                 goto loc_ADDR;
                             }
-                            *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 1);
+                            *(u32*)((rbx + 0xADDR)) |= 1;
                             goto loc_ADDR;
                         }
-                        *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 0xADDR);
+                        *(u32*)((rbx + 0xADDR)) |= 0xADDR;
                         goto loc_ADDR;
                         loc_ADDR:
-                        *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) | 2);
+                        *(u32*)((rbx + 0xADDR)) |= 2;
                         goto loc_ADDR;
-                        *(u32*)((rbx + 0xADDR)) = (*(u32*)((rbx + 0xADDR)) + 1);
+                        *(u32*)((rbx + 0xADDR)) += 1;
                     } while (*(u32*)((rbx + 0xADDR)) != 2);
                 }
             } else {

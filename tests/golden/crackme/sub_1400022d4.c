@@ -8,7 +8,7 @@ void sub_1400022d4_l1(void) {
         rcx = (rdx + (rcx * 8));
         sub_1400025d0(rcx, 0xADDR, 0);
         if (eax == 0) break;
-        dword_ADDR = (dword_ADDR + 1);
+        dword_ADDR += 1;
         ebx += 1;
         if (ebx < 1) continue;
     }

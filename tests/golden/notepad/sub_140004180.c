@@ -6,8 +6,7 @@ void sub_140004180_l1(void) {
     rax = *(u64*)(rax);
     if (*(u64*)(r10) < rax) {
         rcx = *(u64*)((rbx + 8));
-        edx = 1;
-        *(u64*)(rcx) = (*(u64*)(rcx) + rdx);
+        *(u64*)(rcx) += 1;
     } else {
         rax = var_68;
         r9 = *(u64*)(r9);
@@ -24,7 +23,7 @@ void sub_140004180_l1(void) {
         if (al != 0) {
             rcx = *(u64*)((rbx + 8));
             edx = 1;
-            *(u64*)(rcx) = (*(u64*)(rcx) + rdx);
+            *(u64*)(rcx) += 1;
             al = dl;
             return;
         }

@@ -97,7 +97,7 @@ void sub_14000c520_l1(void) {
                     edx = dword_ADDR;
                 }
             }
-            word_ADDR = (word_ADDR + si);
+            word_ADDR += si;
         }
         dil = (uint8)((r12d != 2));
         eax = edi;

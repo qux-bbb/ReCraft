@@ -10,11 +10,11 @@ void sub_14000846c_l1(void) {
         if (esi == 0) {
             ebx = -(ebx);
             eax = (((ebx != 0) ? 0xADDR : 0) + 0xADDR);
-            *(u32*)(rdi) = (*(u32*)(rdi) & eax);
+            *(u32*)(rdi) &= eax;
         } else if (esi != eax) {
             ebx = -(ebx);
             eax = (((ebx != 0) ? 0xADDR : 0) + 0xADDR);
-            *(u32*)(rdi) = (*(u32*)(rdi) & eax);
+            *(u32*)(rdi) &= eax;
             ReleaseSRWLockExclusive(off_140034c40);
             return;
         }
@@ -25,7 +25,7 @@ void sub_14000846c_l1(void) {
         if (al == 0) {
             ebx = -(ebx);
             eax = (((ebx != 0) ? 0xADDR : 0) + 0xADDR);
-            *(u32*)(rdi) = (*(u32*)(rdi) & eax);
+            *(u32*)(rdi) &= eax;
             ReleaseSRWLockExclusive(off_140034c40);
             return;
         }
