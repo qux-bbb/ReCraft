@@ -6,75 +6,79 @@
 
 | 文件 | 说明 |
 |---|---|
-| `dist/ReCraft-<version>/` | 绿色目录：`recraft.exe`（GUI）、`recraft-cli.exe`（命令行）、`LICENSE`、`README.md`、`CHANGELOG.md`、`VERSION.txt`、`docs/*.md` |
-| `dist/recraft-v<version>-windows-x64.zip` | 便携 zip（约 10.3 MiB；含 rustls/ureq TLS 与 docs/adr） |
-| `dist/SHA256SUMS.txt` | zip、两个 exe 与安装器（若生成）的 SHA-256 |
-| `dist/recraft-<version>-setup.exe` | NSIS 安装器（检测到 `makensis` 时生成；CI installer job 必建） |
+| `dist/ReCraft-<version>/` | 绿色目录：`recraft.exe`（GUI）、`recraft-cli.exe`（命令行）、`LICENSE`、`NOTICE.md`、`README.md`、`CHANGELOG.md`、`VERSION.txt`、`docs/`（含 `adr/`、`cases/`） |
+| `dist/recraft-v<version>-windows-x64.zip` | 便携 zip（约 13.9 MiB；含 rustls/ureq TLS 与整棵 docs） |
+| `dist/SHA256SUMS.txt` | zip、两个 exe 与 MSI（若生成）的 SHA-256 |
+| `dist/recraft-v<version>-windows-x64.msi` | WiX v5 MSI 安装器（仓库内固定 WiX 5.0.2 可用时生成；CI msi job 必建） |
 
 ```powershell
-pwsh -File scripts/package.ps1                 # release build + zip +（检测到 NSIS 时）安装器
+pwsh -File scripts/package.ps1                 # release build + zip +（检测到 WiX 时）MSI
 pwsh -File scripts/package.ps1 -NoBuild        # 复用 target\release
-pwsh -File scripts/package.ps1 -NoInstaller    # 仅 zip（无 NSIS 的 CI/机器）
-pwsh -File scripts/package.ps1 -RequireInstaller  # makensis 缺失则失败（CI installer job）
-pwsh -File scripts/verify-installer.ps1        # 安装→CLI/GUI→卸载 全自动验证
+pwsh -File scripts/package.ps1 -NoMsi          # 仅 zip（无 dotnet/WiX 的机器；CI package job）
+pwsh -File scripts/package.ps1 -RequireMsi     # WiX 5 缺失则失败（CI msi job）
+pwsh -File scripts/verify-package.ps1          # zip + MSI 的哈希/条目/包内二进制
+pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸载（需提权提示符）
 ```
 
-版本来自 workspace `Cargo.toml` 的 `version`；可用 `-Version` 覆盖。
+版本来自 workspace `Cargo.toml` 的 `version`；可用 `-Version` 覆盖。`dist` 里上一次运行的
+`setup.exe` / `*.msi` 会在构建前清掉，避免留下 `SHA256SUMS.txt` 没有覆盖的陈旧产物。
 
-## 安装器
+## MSI 安装器
 
-`packaging/installer.nsi`（NSIS 3.x）：
+`packaging/wix/recraft.wxs`（WiX v5）：布局参考 [storytold/photocraft](https://github.com/storytold/photocraft)
+的 `packaging/windows/photocraft.wxs`（自有向导横幅/背景图、开始菜单快捷方式、
+“应用和功能”登记项、文件关联、安装结束可选启动），按本仓库的双 exe 结构重写。
 
-- **每用户安装**（`RequestExecutionLevel user`，无需 UAC）：默认 `%LOCALAPPDATA%\ReCraft`，
-  `/D=<dir>` 可覆盖；开始菜单快捷方式；HKCU 卸载登记项（`DisplayName`/`DisplayVersion`/
-  `Publisher`/`DisplayIcon`/`InstallLocation`/`UninstallString`/`QuietUninstallString`）。
-- 生成：先装 NSIS（`winget install NSIS.NSIS` 或 `choco install nsis -y`），
-  `scripts/package.ps1` 会自动在 `Program Files (x86)\NSIS` 找到 `makensis`；
-  也可直接手动调用：
+- **按机器安装**（`Scope="perMachine"`）：默认 `%ProgramFiles%\ReCraft`，一次 UAC 提示；
+  开始菜单快捷方式、HKLM 卸载登记项；`.rcraft` 工程关联（GUI 接受 argv[1]，见
+  `crates/recraft-ui/src/main.rs`）、`recraft.exe` 的 App Paths（Win+R 输入 `recraft`）。
+  免提权的按用户安装由便携 zip 承担——Windows Installer 的 per-user 模式在管理员账户下
+  会被改判为 per-machine，为此专门做一套 ALLUSERS 策略不值得。
+- 启动条件会检查 `%SystemRoot%\System32\vcruntime140.dll`：GUI 动态链接 MSVC 运行时，
+  缺 VC++ 2015–2022 可再发行组件时安装会直接给出下载地址，而不是装完打不开。
+- 生成：仓库内固定 WiX **5.0.2**（`.config/dotnet-tools.json`，`dotnet tool restore`），
+  用 `dotnet wix` 调用；WiX 6/7 需要接受 OSMF EULA，故不采用。UI/Util 扩展由
+  `scripts/package.ps1` 自动 `wix extension add -g`。也可手动：
   ```powershell
-  makensis /DVERSION=0.1.0 /DSTAGE="dist\ReCraft-0.1.0" /DOUT="dist\recraft-0.1.0-setup.exe" packaging\installer.nsi
+  dotnet wix build packaging\wix\recraft.wxs -arch x64 `
+    -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
+    -d MsiVersion=0.1.0 -d DisplayVersion=0.1.0 -d BinDir=dist\ReCraft-0.1.0 `
+    -d DocsDir=docs -d IconPath=assets\recraft.ico `
+    -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
   ```
-- 静默安装/卸载：`recraft-0.1.0-setup.exe /S [/D=目录]`；`<安装目录>\uninstall.exe /S`。
-- 安装器本身是 PEG（PE GUI）自解压包，`scripts/verify-package.ps1` 会校验其 SHA-256 与
-  MZ/PE 头。
+- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>]`；
+  `msiexec /x {ProductCode} /qn`（ProductCode 见“应用和功能”登记项）。
+- `scripts/verify-msi.ps1` 总是检查结构与载荷（per-machine 标记、`.rcraft` 关联、
+  快捷方式、`MajorUpgrade`、运行时启动条件；`msiexec /a` 解包后与 `dist/ReCraft-<version>/`
+  逐字节比对），`-SkipInstall` 用于免提权环境；完整安装→CLI→卸载流程需要提权提示符。
+- `wix msi validate -ice ICE50` 由 `scripts/package.ps1` 顺带跑，仅告警不拦截。
 
 ## CI
 
-- `package` job（windows-latest）：release 构建 → `scripts/package.ps1 -NoInstaller` →
+- `package` job（windows-latest）：release 构建 → `scripts/package.ps1 -NoMsi` →
   `verify-package.ps1` → 上传 `recraft-windows-x64`（zip + SHA256SUMS）。
-- `installer` job（windows-latest）：`choco install nsis` → `scripts/package.ps1
-  -RequireInstaller` → `verify-package.ps1`（含安装器哈希）→ `verify-installer.ps1`
-  （静默安装、CLI/GUI 启动、卸载清理）→ 上传 `recraft-windows-x64-installer`。
+- `msi` job（windows-latest，runner 自身已提权）：release 构建 → `scripts/package.ps1
+  -RequireMsi`（`dotnet tool restore` 还原 WiX 5.0.2）→ `verify-package.ps1` →
+  `verify-msi.ps1`（结构/载荷 + 安装→CLI→卸载）→ 上传 `recraft-windows-x64-msi`。
 
-## 本机验证（2026-10-24，安装器补齐后重建）
+## 本机验证（2026-11-03，改为 MSI 单安装包后重跑）
 
 ```
-[package] zip: dist\recraft-v0.1.0-windows-x64.zip (10.3 MiB, 33 entries incl. docs/adr)
-[package] installer: dist\recraft-0.1.0-setup.exe (10.3 MiB)
+[package] zip: dist\recraft-v0.1.0-windows-x64.zip (13.9 MiB)
+[package] msi: dist\recraft-v0.1.0-windows-x64.msi (12.6 MiB)
 [package] SHA256: dist\SHA256SUMS.txt
 [verify] SHA256SUMS matches recraft-v0.1.0-windows-x64.zip
-[verify] installer SHA256 + PE header OK (recraft-0.1.0-setup.exe, 10.3 MiB)
+[verify] MSI SHA256 + compound-file header OK (recraft-v0.1.0-windows-x64.msi, 12.6 MiB)
 [verify] analyze/decompile/AI/metrics OK (functions=502)
 [verify] PACKAGE PASS
-[release demo] dist\ReCraft-0.1.0\recraft-cli.exe → DEMO PASS
-[release metrics] notepad: 502 functions, coverage 99.4%, structured 432/502 (86.1%)
-[installer] PASS：silent install → files/shortcut/registry → installed CLI（502 函数、
-            覆盖率 99.4%）→ GUI 启动（窗口标题 ReCraft）→ silent uninstall →
-            安装目录/快捷方式/注册表全部移除（无残留）
+[msi] structure OK (8 table checks, per-machine)
+[msi] payload OK (10 files + 33 docs, byte-identical to dist\ReCraft-0.1.0)
+[msi] PASS (structure + payload)          # -SkipInstall：本机提示符未提权
 ```
 
-`scripts/verify-installer.ps1` 在临时目录执行上述全流程并在 `finally` 中兜底清理；
-本机（Windows 10、无提权提示）与默认 `%LOCALAPPDATA%\ReCraft` 路径均验证通过。
-CI installer job 运行同一脚本。注意：这是开发机验证，发布前仍建议在干净 Win10/Win11
-虚拟机各跑一次（脚本一条命令可复现）。
-
-## 安装器验证记录（2026-10-24）
-
-- NSIS 3.13 通过 `winget install NSIS.NSIS` 安装成功（此前会话因 UAC 取消失败，本轮环境
-  允许）；`makensis` 位于 `C:\Program Files (x86)\NSIS\makensis.exe`。
-- 安装器无需提权即可安装到 `%LOCALAPPDATA%`，HKCU 卸载项 + 开始菜单快捷方式齐全；
-  卸载后目录、快捷方式、注册表键均被删除。
-- 仍缺：**干净虚拟机复验**与**代码签名**（见限制）。
+MSI 的安装→CLI→卸载流程需要提权的提示符：本机普通提示符下 msiexec 返回 1603，因此只跑了
+`-SkipInstall` 的结构/载荷两段；提权后执行 `powershell -File scripts/verify-msi.ps1` 与 CI
+的 msi job 覆盖完整流程（此前 NSIS 安装器的同流程验证记录见 git 历史与 CHANGELOG）。
 
 ## 签名决定（v0.1：暂不签名）
 
@@ -89,22 +93,21 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 - 在此之前以 `SHA256SUMS.txt` 作为完整性凭据，并在 README/Release Notes 说明 SmartScreen
   操作（更多信息 → 仍要运行）。
 
-签名恢复时需：`signtool` 签 `recraft-cli.exe`、`recraft.exe`、`setup.exe`，NSIS 卸载器用
-`!uninstfinalize` 一并签，然后重打 zip/安装器并更新校验和；本仓库打包脚本无需改动。
+签名恢复时需：`signtool` 签 `recraft-cli.exe`、`recraft.exe` 和 `dist\*.msi`（MSI 可直接
+签名，无需额外步骤），然后重打 zip/MSI 并更新校验和；本仓库打包脚本无需改动。
 
 ## 发布清单
 
 1. `cargo test --workspace`、`scripts/e2e.ps1`、`scripts/bench-large.ps1` 全绿。
 2. 更新 `CHANGELOG.md` 与 `docs/M*.md` 状态。
-3. `pwsh -File scripts/package.ps1`（安装器需先装 NSIS；CI installer job 自动完成）。
-4. `scripts/verify-package.ps1` + `scripts/verify-installer.ps1` 全过；
-   校验 `SHA256SUMS.txt`；上传 zip/安装器/校验和。
+3. `pwsh -File scripts/package.ps1`（MSI 需要 `dotnet tool restore`；CI msi job 自动完成）。
+4. `scripts/verify-package.ps1` + 提权提示符下的 `scripts/verify-msi.ps1` 全过；
+   校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
 5. 明确 AGPL-3.0-only 与商业许可入口（`LICENSE`/`README`），**不包含**任何样本二进制。
 6. 代码签名后，在干净 Win10/Win11 虚拟机各复跑一次安装→启动 UI→卸载。
 
 ## 限制
 
 - 未做代码签名（需证书）；SmartScreen 会提示。
-- 未做增量/自动更新；未做 MSI/MSIX。
-- 安装器为 NSIS 生成，跨 NSIS 版本可能有布局细节差异；发布前用 CI installer job 或
-  `verify-installer.ps1` 复验。
+- 未做增量/自动更新；未做 MSIX。安装包只有 MSI 一种（按机器安装，需管理员）。
+- MSI 依赖固定的 WiX 5.0.2；发布前用 CI msi job 或 `verify-msi.ps1` 复验。

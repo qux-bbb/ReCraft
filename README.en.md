@@ -168,15 +168,17 @@ cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ### Packaging
 
 ```powershell
-pwsh -File scripts/package.ps1 -NoInstaller   # release build + green zip + SHA256SUMS
+pwsh -File scripts/package.ps1 -NoMsi         # release build + green zip + SHA256SUMS
 # dist/recraft-v0.1.0-windows-x64.zip, dist/ReCraft-0.1.0/, dist/SHA256SUMS.txt
-pwsh -File scripts/package.ps1                # also builds the NSIS installer if makensis exists
-# dist/recraft-0.1.0-setup.exe (per-user install to %LOCALAPPDATA%\ReCraft)
-pwsh -File scripts/verify-installer.ps1       # install -> CLI/GUI -> uninstall, fully scripted
+pwsh -File scripts/package.ps1                # also builds the MSI when the WiX toolchain is there
+# dist/recraft-v0.1.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+pwsh -File scripts/verify-msi.ps1             # MSI: structure + payload + install/uninstall (elevated)
 ```
 
-See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip,
-the NSIS installer (installer job) and checksums as artifacts.
+The MSI uses the WiX 5.0.2 tool pinned in `.config/dotnet-tools.json` (`dotnet tool
+restore`); machines without dotnet/WiX pass `-NoMsi` and get the zip only. See
+[`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip
+(package job), the MSI (msi job) and checksums as artifacts.
 
 ### Installing (unsigned preview builds)
 
@@ -184,15 +186,16 @@ v0.1 preview binaries are **not code-signed** (a deliberate decision; see
 [`docs/RELEASE.md`](docs/RELEASE.md)). Windows SmartScreen will show "Unknown publisher"
 until the project adopts a trusted OSS signing service:
 
-1. Download `recraft-v0.1.0-windows-x64.zip` or `recraft-0.1.0-setup.exe` together with
-   `SHA256SUMS.txt`.
+1. Download `recraft-v0.1.0-windows-x64.zip` or `recraft-v0.1.0-windows-x64.msi` together
+   with `SHA256SUMS.txt`.
 2. Verify the download before running:
    ```powershell
-   Get-FileHash .\recraft-0.1.0-setup.exe -Algorithm SHA256
+   Get-FileHash .\recraft-v0.1.0-windows-x64.msi -Algorithm SHA256
    # compare with the matching line in SHA256SUMS.txt
    ```
-3. If SmartScreen appears: **More info → Run anyway**. The installer is per-user
-   (`%LOCALAPPDATA%\ReCraft`, no elevation) and the portable zip needs no installation.
+3. If SmartScreen appears: **More info → Run anyway**. The MSI installs per-machine into
+   `%ProgramFiles%\ReCraft` and asks for administrator permission once; unzip the portable
+   zip instead if you would rather not install anything.
 
 Signed builds (and the exact certificate identity) will be announced when available;
 until then checksums are the integrity reference.

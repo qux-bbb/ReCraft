@@ -494,7 +494,7 @@ CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质�
 
 - 仓库：GitHub 公开；分支 `main` + PR 流程；`CONTRIBUTING.md`（含 CLA）
 - CI（GitHub Actions）：`windows-latest` 构建/测试/clippy/fmt/deny；后续 `ubuntu-latest`
-- 产物：绿色版 zip（解压即用）+ Inno Setup 安装包（可选文件关联 `.exe`/`.rcraft`）
+- 产物：绿色版 zip（解压即用）+ WiX MSI 安装包（按机器、需管理员，可选文件关联 `.rcraft`）
 - 版本：SemVer；`CHANGELOG.md`
 - 更新：v1 手动下载（自动更新后置）；崩溃报告默认关闭（opt-in）
 - 文档：README（截图/GIF）、快速上手、设计文档、安全说明（不执行样本）

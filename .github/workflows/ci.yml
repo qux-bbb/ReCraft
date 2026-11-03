@@ -76,7 +76,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: release build + package
         shell: pwsh
-        run: pwsh -NoProfile -File scripts/package.ps1 -NoInstaller
+        run: pwsh -NoProfile -File scripts/package.ps1 -NoMsi
       - name: verify package (hashes, entries, packaged binaries)
         shell: pwsh
         run: pwsh -NoProfile -File scripts/verify-package.ps1
@@ -89,31 +89,31 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
-  installer:
-    name: windows installer (NSIS)
+  msi:
+    name: windows installer (MSI)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: install NSIS
+      # package.ps1 restores the WiX 5.0.2 pinned in .config/dotnet-tools.json and adds the
+      # UI/Util extensions itself; dotnet ships with the windows-latest image.
+      - name: release build + package (MSI)
         shell: pwsh
-        run: choco install nsis -y --no-progress
-      - name: release build + package (installer required)
-        shell: pwsh
-        run: pwsh -NoProfile -File scripts/package.ps1 -RequireInstaller
-      - name: verify package (zip + installer hashes/entries/binaries)
+        run: pwsh -NoProfile -File scripts/package.ps1 -RequireMsi
+      - name: verify package (zip + MSI hashes/entries/binaries)
         shell: pwsh
         run: pwsh -NoProfile -File scripts/verify-package.ps1
-      - name: verify installer (install -> CLI/GUI -> uninstall)
+      # The runner is elevated, so the per-machine MSI installs, runs and uninstalls silently.
+      - name: verify MSI (structure + payload + install -> CLI -> uninstall)
         shell: pwsh
-        run: pwsh -NoProfile -File scripts/verify-installer.ps1
-      - name: upload installer artifact
+        run: pwsh -NoProfile -File scripts/verify-msi.ps1
+      - name: upload MSI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: recraft-windows-x64-installer
+          name: recraft-windows-x64-msi
           path: |
-            dist/*-setup.exe
+            dist/*.msi
             dist/SHA256SUMS.txt
           if-no-files-found: error
 

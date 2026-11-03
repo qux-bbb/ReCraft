@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright (c) 2026 ReCraft contributors -->
+<!--
+  WiX v5 source for the ReCraft MSI built by scripts/package.ps1.
+
+  Layout and conventions follow the PhotoCraft installer (storytold/photocraft,
+  packaging/windows/photocraft.wxs): an installed wizard with the project's own
+  banner/dialog art, a Start-menu shortcut, an Apps & Features entry, an optional "launch
+  after setup" step, and a .rcraft project association that the GUI can open
+  (crates/recraft-ui main.rs takes the project or PE path as argv[1]).
+
+  Scope is per-machine (one UAC prompt, files under %ProgramFiles%\ReCraft, entry under
+  HKLM); the portable zip is the no-install, no-elevation path. This MSI is the only
+  installer the project ships.
+
+    dotnet wix build packaging\wix\recraft.wxs -arch x64 ^
+      -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext ^
+      -d MsiVersion=0.1.0 -d DisplayVersion=0.1.0 -d BinDir=dist\ReCraft-0.1.0 ^
+      -d DocsDir=docs -d IconPath=assets\recraft.ico ^
+      -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
+
+  VERSION is the numeric MSI ProductVersion (prerelease tags are dropped, so 1.2.3-rc.1
+  and 1.2.3-rc.2 both install as 1.2.3); DISPLAYVERSION is what the wizard shows.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <?ifndef DisplayVersion ?>
+  <?define DisplayVersion = "$(var.MsiVersion)" ?>
+  <?endif?>
+  <Package Name="ReCraft"
+           Manufacturer="ReCraft contributors"
+           Version="$(var.MsiVersion)"
+           UpgradeCode="48ADE8C5-F79B-49EE-87BF-DB0FB7ED25A3"
+           Scope="perMachine"
+           Compressed="yes"
+           Language="1033">
+    <SummaryInformation Description="ReCraft $(var.DisplayVersion) - reverse engineering workbench (GUI + CLI)"
+                        Manufacturer="ReCraft contributors" />
+
+    <!-- A fresh ProductCode per build, so MajorUpgrade replaces the previous install in
+         place; same-version upgrades let 0.1.0 rebuilds replace each other. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of ReCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Apps & Features / Add or remove programs. -->
+    <Icon Id="ReCraftIcon.exe" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="ReCraftIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/qux-bbb/ReCraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/qux-bbb/ReCraft/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/qux-bbb/ReCraft/tree/main/docs" />
+
+    <!-- The GUI links the dynamic MSVC runtime (VCRUNTIME140.dll), which is not part of
+         Windows: without the VC++ 2015-2022 redistributable the app would fail to start
+         after a successful install, so refuse early with a message that says what to do. -->
+    <Property Id="VCRUNTIME140">
+      <DirectorySearch Id="SystemSearch" Path="[System64Folder]">
+        <FileSearch Id="VCRuntimeFileSearch" Name="vcruntime140.dll" />
+      </DirectorySearch>
+    </Property>
+    <Launch Condition="Installed OR VCRUNTIME140"
+            Message="ReCraft needs the Microsoft Visual C++ 2015-2022 Redistributable (x64). Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and run this setup again." />
+
+    <!-- Per-machine scope: files land in %ProgramFiles%\ReCraft and setup asks for
+         administrator permission once (msiexec's own elevation). The no-install path stays
+         the portable zip; a per-user MSI would need the ALLUSERS/MSIINSTALLPERUSER dance that
+         Windows Installer only honours for non-elevated interactive installs, which is not
+         worth the extra moving parts here.
+         INSTALLFOLDER can still be overridden on the directory page or silently. -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="ReCraft">
+        <Directory Id="DocsFolder" Name="docs" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="ReCraft" Level="1">
+      <ComponentGroupRef Id="RecraftBinaries" />
+      <ComponentGroupRef Id="RecraftDocuments" />
+      <ComponentGroupRef Id="RecraftDocs" />
+    </Feature>
+
+    <!-- The setup wizard: WixUI_InstallDir without its license page (the code is
+         AGPL-3.0-only and LICENSE ships with the install; a later NewDialog on the same
+         button wins, which skips LicenseAgreementDlg). -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" Condition="NOT Installed" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchReCraft" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
+    <!-- Our own art, generated by scripts/package.ps1 from assets/recraft.png (not WiX's
+         stock bitmaps). -->
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.BannerBmp)" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.DialogBmp)" />
+
+    <!-- Finish page: say what was installed and offer to start the GUI. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="ReCraft $(var.DisplayVersion) is installed. The GUI is on the Start menu; the command line tool is recraft-cli.exe in the install folder." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch ReCraft" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#RecraftExe]" />
+    <!-- Runs in the wizard's own (unelevated) process, so the app starts as the user. -->
+    <CustomAction Id="LaunchReCraft" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec" Impersonate="yes" Return="ignore" />
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="RecraftBinaries" Directory="INSTALLFOLDER">
+      <Component Id="RecraftApp" Guid="B1E1F0B8-6B4C-4E1C-9A4B-2C1D3F5A7E01">
+        <File Id="RecraftExe" Source="$(var.BinDir)\recraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="ProgramMenuFolder"
+                    Name="ReCraft"
+                    Description="ReCraft reverse engineering workbench"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="ReCraftIcon.exe" />
+        </File>
+
+        <!-- .rcraft projects: the GUI opens the path given as its first argument. -->
+        <ProgId Id="ReCraft.Project" Description="ReCraft project" Icon="RecraftExe" IconIndex="0">
+          <Extension Id="rcraft" ContentType="application/x-recraft-project">
+            <Verb Id="open" Command="Open" TargetFile="RecraftExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+
+        <!-- "Open with" app list and the Run dialog (Win+R "recraft"). PEs are offered,
+             never claimed: ReCraft must not become the default handler for .exe/.dll. -->
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\recraft.exe" Name="FriendlyAppName" Value="ReCraft" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\recraft.exe\shell\open\command" Value="&quot;[#RecraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\recraft.exe\SupportedTypes" Name=".rcraft" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\recraft.exe\SupportedTypes" Name=".exe" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\recraft.exe\SupportedTypes" Name=".dll" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\recraft.exe" Value="[#RecraftExe]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+
+      <Component Id="RecraftCli" Guid="C2F2A1C9-7D5E-4F2D-8B6C-3D2E4A6B8F02">
+        <File Id="RecraftCliExe" Source="$(var.BinDir)\recraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="RecraftDocuments" Directory="INSTALLFOLDER">
+      <Component Id="RecraftTopLevelDocuments" Guid="D3A3B2DA-8E6F-4A3E-9C7D-4E3F5B7C9A03">
+        <File Id="LicenseFile" Source="$(var.BinDir)\LICENSE" KeyPath="yes" />
+        <File Id="ReadmeFile" Source="$(var.BinDir)\README.md" />
+        <File Id="ChangelogFile" Source="$(var.BinDir)\CHANGELOG.md" />
+        <File Id="NoticeFile" Source="$(var.BinDir)\NOTICE.md" />
+        <File Id="VersionFile" Source="$(var.BinDir)\VERSION.txt" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Offline documentation, the same tree the portable zip carries (docs\*.md plus
+         docs\adr\*.md); `Files **` keeps the subdirectory structure. -->
+    <ComponentGroup Id="RecraftDocs" Directory="DocsFolder">
+      <Files Include="$(var.DocsDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

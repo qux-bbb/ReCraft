@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A WiX v5 MSI installer** (`packaging/wix/recraft.wxs`,
+  `dist/recraft-v<version>-windows-x64.msi`) replaces the NSIS setup as the project's only
+  installer. Its layout follows the PhotoCraft installer (`storytold/photocraft`): install to
+  `%ProgramFiles%\ReCraft` with one UAC prompt, a Start-menu shortcut, an Apps & Features
+  entry, a `.rcraft` project association (the GUI already takes the project or PE path as
+  `argv[1]`), App Paths for Win+R, wizard art drawn from `assets/recraft.png`, and an
+  optional "launch ReCraft" on the finish page. A launch condition stops setup early when
+  `vcruntime140.dll` is missing, since the GUI links the dynamic MSVC runtime, and major
+  upgrades replace same-version rebuilds. `scripts/package.ps1` builds it with the
+  repo-pinned WiX 5.0.2 (`dotnet tool restore`, `.config/dotnet-tools.json`; WiX 6/7 need
+  the OSMF EULA), covers it in `SHA256SUMS.txt`, and `scripts/verify-msi.ps1` checks the
+  tables and the extracted payload (`msiexec /a`, byte-identical to the staged tree) plus
+  the install/CLI/uninstall cycle from an elevated prompt. The portable zip stays the
+  per-user, no-install path.
+- The staged `docs/` tree now copies all of `docs/` (including `docs/cases/`) instead of
+  only `docs/*.md` and `docs/adr/`, so the zip, the MSI payload and the repository
+  documentation are the same set.
 - The Decompile view colours its pseudo-C like Hex-Rays: keywords and type names blue,
   registers purple, function/label/global names gold, numbers take the immediate
   colour, and string literals and comments green, while locals, punctuation and
@@ -1173,6 +1190,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-anchored/re-rendered on click, and an address group that used to highlight several
   rows at once now highlights only the clicked row (or its first row when the selection
   comes from another view). Hovering a row shows its address.
+
+### Removed
+
+- **The NSIS installer** (`packaging/installer.nsi`, `dist/recraft-<version>-setup.exe`,
+  `scripts/verify-installer.ps1`, the CI `installer` job and the `-NoInstaller` /
+  `-RequireInstaller` switches). Shipping two installers meant two sources, two verification
+  scripts, two CI jobs and two documentation sections for the same product; the MSI covers
+  the installed case (with `.rcraft` association, App Paths and standard MSI uninstall /
+  upgrade) and the portable zip covers the no-install case. Per-user, no-elevation installs
+  are the one capability that went away with it, because Windows Installer promotes them to
+  per-machine on administrator accounts.
 
 ### Fixed
 

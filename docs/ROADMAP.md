@@ -9,7 +9,7 @@
 | M1 | 函数发现 + 字符串/xref/API 标签、CLI/UI 基线、undo/redo | ✅ 完成 |
 | M2 | IR/lifter 语义覆盖、L1 结构化、L2 签名/ABI/类型、MCP 只读工具 | ✅ 完成（corpus 覆盖 97.4%、结构化 100%；notepad 覆盖 99.4%、结构化 86.1%） |
 | M3 | 质量门禁/golden、AI（解释/命名/摘要/UI propose-apply/http(s) provider/prompt 评测/缓存审计）、1 GiB 性能门禁、打包 | ✅ 完成 |
-| M4 | 覆盖率冲刺、安装包验证、文档/演示、公开技术预览 | ✅ 完成；zip + NSIS 安装器 + SHA256SUMS 为正式产物，安装/启动/卸载已脚本化验证；代码签名待证书 |
+| M4 | 覆盖率冲刺、安装包验证、文档/演示、公开技术预览 | ✅ 完成；zip + MSI 安装器 + SHA256SUMS 为正式产物，MSI 结构/载荷已脚本化验证；安装/卸载复验与代码签名待发布前完成 |
 | M5+（预览后） | 动态调试、ELF/ARM64、插件/脚本 API、团队协作 | 规划中 |
 
 ## DESIGN 差距清单（v0.1 预览前）
@@ -30,9 +30,9 @@
 
 仍存在的外部/已知差距（不阻塞代码完成）：
 
-1. **安装器**：NSIS 3.13 安装器已生成并在本机通过安装→CLI/GUI 启动→卸载全流程
-   （`scripts/verify-installer.ps1`，CI installer job）；发布前用同一脚本在干净
-   Win10/Win11 复验（不再需要提权，安装为 per-user）。
+1. **安装器**：WiX 5 MSI 已生成，结构与载荷由 `scripts/verify-msi.ps1` 校验（`msiexec /a`
+   解包逐字节比对）；安装→CLI→卸载流程需提权提示符或 CI msi job，发布前在干净
+   Win10/Win11 各复验一次（按机器安装，需要一次管理员权限）。
 2. **代码签名**：v0.1 决定暂不签名（SHA-256 校验 + SmartScreen 操作说明）；后续可申请
    SignPath Foundation（免费 OSS）或购买 OV 证书，再重打发布产物。
 4. **UI 渲染快照 / README 截图**：无头 egui 交互测试已覆盖，截图类素材尚未生成。

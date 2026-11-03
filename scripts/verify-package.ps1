@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 ReCraft contributors
 #
-# Verifies a packaged release without needing NSIS:
+# Verifies a packaged release without needing the WiX toolchain:
 #   - dist/*.zip exists and matches SHA256SUMS.txt
+#   - the optional MSI is listed and hash-clean, with an OLE compound-file header
 #   - expected files are inside the zip (both exes, LICENSE, docs, VERSION.txt)
 #   - the extracted binaries actually run: PE info, import + analyze + decompile,
 #     AI provider defaults offline, metrics JSON.
@@ -51,23 +52,25 @@ try {
     if ($expected -ne $zipHash) { throw "zip hash mismatch: $expected != $zipHash" }
     Write-Host "[verify] SHA256SUMS matches $(Split-Path -Leaf $Zip)"
 
-    # Optional NSIS installer: when present it must be listed and hash-clean too.
-    $setup = Get-ChildItem -LiteralPath $dist -Filter 'recraft-*-setup.exe' -File -ErrorAction SilentlyContinue |
+    # Optional MSI: same rule, plus the OLE compound-file signature a Windows Installer
+    # package starts with (D0 CF 11 E0 A1 B1 1A E1).
+    $msi = Get-ChildItem -LiteralPath $dist -Filter 'recraft-v*-windows-x64.msi' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
-    if ($setup) {
-        $setupHash = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash
-        $setupLine = Get-Content -LiteralPath $sumFile | Where-Object { $_ -match [regex]::Escape($setup.Name) }
-        if (-not $setupLine) { throw 'installer hash not listed in SHA256SUMS.txt' }
-        $expectedSetup = ($setupLine -split '\s+')[0]
-        if ($expectedSetup -ne $setupHash) {
-            throw "installer hash mismatch: $expectedSetup != $setupHash"
+    if ($msi) {
+        $msiHash = (Get-FileHash -LiteralPath $msi.FullName -Algorithm SHA256).Hash
+        $msiLine = Get-Content -LiteralPath $sumFile | Where-Object { $_ -match [regex]::Escape($msi.Name) }
+        if (-not $msiLine) { throw 'MSI hash not listed in SHA256SUMS.txt' }
+        $expectedMsi = ($msiLine -split '\s+')[0]
+        if ($expectedMsi -ne $msiHash) { throw "MSI hash mismatch: $expectedMsi != $msiHash" }
+        $magic = [System.IO.File]::ReadAllBytes($msi.FullName)[0..7]
+        $ole = @(0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1)
+        for ($i = 0; $i -lt $ole.Count; $i++) {
+            if ($magic[$i] -ne $ole[$i]) { throw 'the MSI is not an OLE compound file' }
         }
-        $magic = [System.IO.File]::ReadAllBytes($setup.FullName)[0..1]
-        if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw 'installer is not a PE executable' }
-        Write-Host "[verify] installer SHA256 + PE header OK ($($setup.Name), $([math]::Round($setup.Length / 1MB, 1)) MiB)"
+        Write-Host "[verify] MSI SHA256 + compound-file header OK ($($msi.Name), $([math]::Round($msi.Length / 1MB, 1)) MiB)"
     } else {
-        Write-Host '[verify] no installer in dist (zip-only build)'
+        Write-Host '[verify] no MSI in dist (zip-only build)'
     }
 
     $extract = Join-Path $work 'pkg'

@@ -165,15 +165,16 @@ cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ### 打包
 
 ```powershell
-pwsh -File scripts/package.ps1 -NoInstaller   # release build + green zip + SHA256SUMS
+pwsh -File scripts/package.ps1 -NoMsi         # release build + green zip + SHA256SUMS
 # dist/recraft-v0.1.0-windows-x64.zip, dist/ReCraft-0.1.0/, dist/SHA256SUMS.txt
-pwsh -File scripts/package.ps1                # also builds the NSIS installer if makensis exists
-# dist/recraft-0.1.0-setup.exe (per-user install to %LOCALAPPDATA%\ReCraft)
-pwsh -File scripts/verify-installer.ps1       # install -> CLI/GUI -> uninstall, fully scripted
+pwsh -File scripts/package.ps1                # also builds the MSI when the WiX toolchain is there
+# dist/recraft-v0.1.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+pwsh -File scripts/verify-msi.ps1             # MSI: structure + payload + install/uninstall (elevated)
 ```
 
-发布清单见 [`docs/RELEASE.md`](docs/RELEASE.md)；CI 会上传 zip、NSIS 安装程序
-（installer job）和校验和作为构建产物。
+MSI 需要 `dotnet tool restore` 还原仓库内固定的 WiX 5.0.2（见 `.config/dotnet-tools.json`）；
+没有 dotnet/WiX 的机器用 `-NoMsi` 只出 zip。发布清单见 [`docs/RELEASE.md`](docs/RELEASE.md)；
+CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产物。
 
 ### 安装（未签名预览版）
 
@@ -181,15 +182,16 @@ v0.1 预览二进制**没有代码签名**（这是刻意决定；见
 [`docs/RELEASE.md`](docs/RELEASE.md)）。在项目采用可信的开源签名服务之前，Windows
 SmartScreen 会显示“未知发布者”：
 
-1. 下载 `recraft-v0.1.0-windows-x64.zip` 或 `recraft-0.1.0-setup.exe`，以及
+1. 下载 `recraft-v0.1.0-windows-x64.zip` 或 `recraft-v0.1.0-windows-x64.msi`，以及
    `SHA256SUMS.txt`。
 2. 运行前先校验下载：
    ```powershell
-   Get-FileHash .\recraft-0.1.0-setup.exe -Algorithm SHA256
+   Get-FileHash .\recraft-v0.1.0-windows-x64.msi -Algorithm SHA256
    # 与 SHA256SUMS.txt 中对应行比较
    ```
-3. 如果出现 SmartScreen：**更多信息 → 仍要运行**。安装程序按用户安装
-   （`%LOCALAPPDATA%\ReCraft`，无需提权），便携 zip 无需安装。
+3. 如果出现 SmartScreen：**更多信息 → 仍要运行**。MSI 安装到
+   `%ProgramFiles%\ReCraft`，会请求一次管理员权限；不想装就直接解压 zip 用，
+   无需提权、无需安装。
 
 签名构建（以及确切的证书身份）将在可用时公布；在此之前，校验和就是完整性依据。
 
