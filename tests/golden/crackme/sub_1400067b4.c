@@ -15,7 +15,7 @@ void sub_1400067b4_l1(void) {
             eax = 6;
             *(u64*)((rcx + 0xADDR)) = rdx;
             *(u8*)((rcx + 0xADDR)) = 0;
-            *(u32*)((rcx + 0xADDR)) = eax;
+            *(u32*)((rcx + 0xADDR)) = 6;
             al = 1;
             return;
         }

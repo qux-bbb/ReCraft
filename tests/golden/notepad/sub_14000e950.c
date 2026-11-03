@@ -87,13 +87,12 @@ void sub_14000e950_l1(void) {
                     eax -= 0xADDR;
                     if (eax == 0) {
                         GetKeyboardLayout(0);
-                        esi = 0;
                         ax &= cx;
                         edx = 0xADDR;
                         ecx = (rsi + 0xADDR);
                         r8d = (rcx - 0xADDR);
                         sil = (uint8)((ax == cx));
-                        r9 = rsi;
+                        r9 = 0;
                         rcx = qword_ADDR;
                         SendMessageW(rcx, rdx, r8, r9);
                         eax = 0;
@@ -281,12 +280,11 @@ void sub_14000e950_l1(void) {
                 }
                 *(u8*)((rax + 0xADDR)) = bl;
                 sub_1400225a4(qword_ADDR);
-                eax = 0;
                 return;
             } else if (ebp == 0xADDR) {
                 GetDpiForWindow(qword_ADDR);
                 MulDiv(0xADDR, eax, 0xADDR);
-                *(u32*)((r14 + 0xADDR)) = eax;
+                *(u32*)((r14 + 0xADDR)) = 0;
                 eax = 0;
                 return;
             } else if (ebp == 0xADDR) {

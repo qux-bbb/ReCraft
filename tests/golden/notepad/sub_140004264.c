@@ -6,7 +6,7 @@ void sub_140004264_l1(void) {
     GetCurrentProcessId();
     esi = 0xADDR;
     var_28 = rbx;
-    var_20 = esi;
+    var_20 = 0xADDR;
     sub_1400083f8(&var_50, 0xADDR, "Local\\SM0:%lu:%lu:%hs", eax, 0xADDR, rcx);
     var_30 = 0;
     CreateMutexExW(0, &var_50, 0, 0xADDR);
@@ -48,7 +48,7 @@ void sub_140004264_l1(void) {
                         var_38 &= 0;
                         var_40 &= 0;
                         *(u32*)(rdi) = 1;
-                        var_30 = rbx;
+                        var_30 = 0;
                         *(u64*)((rdi + 0xADDR)) = rax;
                         sub_1400029dc((rdi + 0xADDR), 0, (rbx + 0xADDR));
                         *(u16*)((rdi + 0xADDR)) = 0xADDR;
@@ -96,9 +96,9 @@ void sub_140004264_l1(void) {
                     }
                 }
                 esi = 0xADDR;
-                r9d = esi;
+                r9d = 0xADDR;
                 sub_140007cf0(var_298, 0xADDR, "wil");
-                r9d = esi;
+                r9d = 0xADDR;
                 sub_140007cf0(var_298, 0xADDR, "wil");
                 if (r14 == 0) {
                     if (rbx == 0) {

@@ -11,7 +11,7 @@ void sub_1400101d8_l1(void) {
     CoCreateGuid(off_140036178);
     rax = qword_ADDR;
     r15d = 0;
-    qword_ADDR = r15;
+    qword_ADDR = 0;
     xmm0 = *(__m128*)((rax - 0xADDR));
     var_70 = xmm0;
     if (qword_ADDR == 0) {

@@ -4,8 +4,8 @@ void sub_140007570_l1(void) {
     rbp = &var_100;
     r15d = 0;
     r13 = (rcx + (rdx * 8));
-    r12d = r15d;
-    var_c8 = r15;
+    r12d = 0;
+    var_c8 = 0;
     rdi = r8;
     rsi = rcx;
     do {

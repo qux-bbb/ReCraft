@@ -2,9 +2,8 @@
 void sub_14000f1d0_l1(void) {
     if (edx == 0xADDR) {
         if (*(u32*)((r9 + 0xADDR)) == 0xADDR) {
-            r8d = 0;
             edx = 0xADDR;
-            var_20 = r8;
+            var_20 = 0;
             SendDlgItemMessageW(rcx, 0xADDR, (rdx + 0xADDR), 0, 0);
             eax += 1;
             dword_ADDR = eax;

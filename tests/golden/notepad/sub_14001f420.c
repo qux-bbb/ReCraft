@@ -3,8 +3,8 @@ void sub_14001f420_l1(void) {
     r14d = ecx;
     MonitorFromWindow(qword_ADDR, 2);
     esi = 0;
-    var_20 = esi;
-    var_24 = esi;
+    var_20 = 0;
+    var_24 = 0;
     GetDpiForMonitor(rax, 0, &var_20, &var_24);
     ebx = (rsi + 0xADDR);
     MulDiv(ebx, var_20, (rsi + 0xADDR));

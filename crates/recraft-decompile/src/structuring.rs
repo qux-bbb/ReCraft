@@ -769,6 +769,18 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
                 fold = Some((offset, spelling, folded_value));
                 break;
             }
+            // `var_30 = rax;` with `rax = 0` is a constant store written through a register.
+            // Only a full-width write is folded: a narrow spelling (`var_8 = al`,
+            // `var_4c0 = r13w`) also tells the reader the store width, and a vector register
+            // (`xmm0 = 0; xmmword_X = xmm0;`) prints a block clear rather than an integer.
+            if wide_register_base(&register).is_some()
+                && (spelling == register || wide.is_some_and(|wide| wide == spelling))
+                && plain_assignment(statement)
+                    .is_some_and(|(target, source)| source == spelling && target != spelling)
+            {
+                fold = Some((offset, spelling, folded_value));
+                break;
+            }
         }
         let Some((use_index, folded, folded_value)) = fold else {
             index += 1;
@@ -7655,6 +7667,28 @@ mod tests {
             "{}",
             joined(&lines)
         );
+    }
+    #[test]
+    fn a_constant_store_through_a_register_folds_into_the_slot() {
+        let mut lines = snippet(&["    esi = 0x78;", "    var_20 = esi;"]);
+        fold_constant_registers(&mut lines);
+        assert_eq!(lines.len(), 1, "{}", joined(&lines));
+        assert_eq!(lines[0].text.trim(), "var_20 = 0x78;");
+    }
+    #[test]
+    fn a_narrow_store_keeps_its_register_width() {
+        // `var_20 = dil` is a one-byte store; folding it to `var_20 = 0` would hide that.
+        let mut lines = snippet(&["    dil = 0;", "    var_20 = dil;"]);
+        fold_constant_registers(&mut lines);
+        assert_eq!(lines.len(), 2, "{}", joined(&lines));
+        assert!(lines[1].text.contains("dil"), "{}", joined(&lines));
+    }
+    #[test]
+    fn a_vector_block_clear_keeps_its_register() {
+        let mut lines = snippet(&["    xmm0 = 0;", "    xmmword_1400342b0 = xmm0;"]);
+        fold_constant_registers(&mut lines);
+        assert_eq!(lines.len(), 2, "{}", joined(&lines));
+        assert!(lines[1].text.contains("xmm0"), "{}", joined(&lines));
     }
     #[test]
     fn nested_single_if_wrappers_collapse_into_one_condition() {

@@ -36,7 +36,7 @@ void sub_140006e08_l1(void) {
             edi = -1;
         } else {
             rax = &var_d0;
-            var_70 = rdx;
+            var_70 = 0;
             var_80 = rax;
             r9 = &var_70;
             rax = &var_30;

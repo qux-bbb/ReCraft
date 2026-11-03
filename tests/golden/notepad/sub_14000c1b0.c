@@ -1,8 +1,7 @@
 // L1 structure recovery (3 blocks)
 void sub_14000c1b0_l1(void) {
-    rax = off_140029090;
     rbx = rcx;
-    *(u64*)(rcx) = rax;
+    *(u64*)(rcx) = off_140029090;
     if ((dl & 1) != 0) {
         sub_140001c84(rcx, 0xADDR);
     }

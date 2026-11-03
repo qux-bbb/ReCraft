@@ -4,7 +4,7 @@ void sub_14001278c_l1(void) {
     r14 = rcx;
     ecx = (uint32)(*(u16*)(rcx));
     rsi = -1;
-    var_20 = r13;
+    var_20 = 0;
     r12 = rdx;
     if (cx == 0xADDR) {
         r14 += 2;

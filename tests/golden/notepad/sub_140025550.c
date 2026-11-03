@@ -1,11 +1,9 @@
 // L1 structure recovery (5 blocks)
 void sub_140025550_l1(void) {
-    rax = off_140029528;
     rbx = rcx;
-    *(u64*)(rcx) = rax;
+    *(u64*)(rcx) = off_140029528;
     edi = edx;
-    rax = off_140029440;
-    *(u64*)((rcx + 8)) = rax;
+    *(u64*)((rcx + 8)) = off_140029440;
     rcx = *(u64*)((rcx + 0xADDR));
     CloseHandle(*(u64*)((rcx + 0xADDR)));
     *(u32*)((rbx + 0xADDR)) = 0xADDR;

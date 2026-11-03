@@ -12,8 +12,7 @@ void sub_140004e74_l1(void) {
         }
         rcx = *(u64*)(rsi);
         if (rcx != 0) {
-            rax = 0xADDR;
-            var_30 = rax;
+            var_30 = 0xADDR;
             SetThreadpoolTimer(*(u64*)(rsi), &var_30, 0, 0xADDR);
             *(u8*)((rdi + 0xADDR)) = 1;
         }

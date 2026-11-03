@@ -24,7 +24,7 @@ void sub_140020260_l1(void) {
         eax = dword_ADDR;
         if (eax != 0) {
             ebx = 0;
-            eax = ebx;
+            eax = 0;
             return;
         }
     }

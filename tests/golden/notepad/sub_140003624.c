@@ -31,10 +31,9 @@ void sub_140003624_l1(void) {
     var_58 = r14;
     var_40 = eax;
     xmm1 = 0;
-    eax = 0;
     var_60 = esi;
-    var_98 = rax;
-    var_80 = rax;
+    var_98 = 0;
+    var_80 = 0;
     rax = qword_ADDR;
     var_64 = ebx;
     var_48 = r12;

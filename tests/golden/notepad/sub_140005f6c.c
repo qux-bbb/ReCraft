@@ -11,7 +11,7 @@ void sub_140005f6c_l1(void) {
     ebp = var_b0;
     r12 = r9;
     r14 = var_d0;
-    esi = r8d;
+    esi = 0;
     ecx = ebp;
     *(u16*)(r14) = r8w;
     *(u8*)(rax) = r8b;
@@ -34,12 +34,12 @@ void sub_140005f6c_l1(void) {
             if (edi >= 0 /* signed */) {
                 rax = var_a8;
                 edi = 0xADDR;
-                var_30 = edi;
+                var_30 = 0xADDR;
                 var_28 = rax;
                 rax = var_a0;
                 var_20 = rax;
                 sub_1400032f0(r10, rdx, r13, r9, var_a0, var_a8, 0xADDR);
-                *(u32*)((rbx + 8)) = edi;
+                *(u32*)((rbx + 8)) = 0xADDR;
                 sub_140005cc0(edi);
                 *(u32*)((rbx + 0xADDR)) = eax;
             }
@@ -54,7 +54,7 @@ void sub_140005f6c_l1(void) {
     }
     edi = 0;
     *(u32*)(rbx) = ebp;
-    *(u32*)((rbx + 4)) = edi;
+    *(u32*)((rbx + 4)) = 0;
     if (*(u32*)((r15 + 8)) == 1) {
         *(u32*)((rbx + 4)) = 8;
     }
@@ -76,14 +76,13 @@ void sub_140005f6c_l1(void) {
     *(u64*)((rbx + 0xADDR)) = var_a8;
     rax = var_80;
     *(u64*)((rbx + 0xADDR)) = rax;
-    eax = 0;
     *(u32*)((rbx + 0xADDR)) = esi;
     *(u64*)((rbx + 0xADDR)) = r12;
     *(u64*)((rbx + 0xADDR)) = rdi;
     *(__m128*)((rbx + 0xADDR)) = xmm0;
-    *(u64*)((rbx + 0xADDR)) = rax;
+    *(u64*)((rbx + 0xADDR)) = 0;
     *(__m128*)((rbx + 0xADDR)) = xmm0;
-    *(u64*)((rbx + 0xADDR)) = rax;
+    *(u64*)((rbx + 0xADDR)) = 0;
     rax = qword_ADDR;
     if (rax == 0) {
         rax = rdi;
@@ -154,8 +153,7 @@ void sub_140005f6c_l1(void) {
     if (ebp != 3) {
         sub_1400091d4();
     }
-    ecx = 0xADDR;
-    *(u32*)((rbx + 8)) = ecx;
+    *(u32*)((rbx + 8)) = 0xADDR;
     sub_140005cc0(0xADDR);
     *(u32*)((rbx + 0xADDR)) = eax;
 }

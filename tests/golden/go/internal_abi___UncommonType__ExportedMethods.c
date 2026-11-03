@@ -14,7 +14,6 @@ void internal/abi.(*UncommonType).ExportedMethods_l1(void) {
         return;
     }
     eax = 0;
-    ebx = 0;
-    rcx = rbx;
+    rcx = 0;
     return;
 }

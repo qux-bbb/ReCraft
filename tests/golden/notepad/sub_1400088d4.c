@@ -3,8 +3,8 @@ void sub_1400088d4_l1(void) {
     r15d = 0;
     rax = &var_30;
     esi = 0xADDR;
-    *(u64*)(r8) = r15;
-    r9d = esi;
+    *(u64*)(r8) = 0;
+    r9d = 0xADDR;
     rdx = &var_30;
     rcx -= rax;
     r14 = r8;

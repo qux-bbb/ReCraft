@@ -2,7 +2,7 @@
 void sub_1400256d8_l1(void) {
     rsi = rdx;
     r14d = 0;
-    var_20 = r14;
+    var_20 = 0;
     sub_1400258d4(rcx, &var_20);
     ebx = eax;
     if (eax >= 0 /* signed */) {

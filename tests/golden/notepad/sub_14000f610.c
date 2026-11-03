@@ -4,8 +4,8 @@ void sub_14000f610_l1(void) {
     var_30 = rcx;
     rsi = rcx;
     var_20 = r14b;
-    var_28 = r14;
-    hstring = r14;
+    var_28 = 0;
+    hstring = 0;
     WindowsCreateStringReference("Windows.Security.EnterpriseData.ProtectionPolicyManager", (r14 + 0xADDR), &hstringHeader, &hstring, 0, 0, rcx);
     if (eax < 0 /* signed */) {
         ecx = eax;

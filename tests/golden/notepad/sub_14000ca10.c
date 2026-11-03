@@ -34,9 +34,8 @@ void sub_14000ca10_l1(void) {
                             eax = -(eax);
                             ebx = (((eax != 0) ? 4 : 0) + 1);
                         } else if (var_44 != 2) {
-                            ebx = 2;
                             CloseHandle(rsi);
-                            eax = ebx;
+                            eax = 2;
                             r11 = &var_460;
                             return;
                         } else if (edi < 0xADDR /* signed */) {
@@ -50,7 +49,7 @@ void sub_14000ca10_l1(void) {
                         }
                         ebx = 2;
                         CloseHandle(rsi);
-                        eax = ebx;
+                        eax = 2;
                         r11 = &var_460;
                         return;
                     }

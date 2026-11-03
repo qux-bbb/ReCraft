@@ -32,10 +32,9 @@ void sub_14001e5ac_l1(void) {
         rax += 2;
         if (edi != 0) {
             rbx = var_70;
-            r8d = 3;
             var_30 = r14;
             var_28 = 0xADDR;
-            var_20 = r8d;
+            var_20 = 3;
             CreateFileW(rbx, 0xADDR, 3, 0, 3, 0xADDR, r14);
             qword_ADDR = rax;
             if (rax != -1) {
@@ -124,10 +123,9 @@ void sub_14001e5ac_l1(void) {
     rax += 2;
     if (edi != 0) {
         rbx = var_70;
-        r8d = 3;
         var_30 = r14;
         var_28 = 0xADDR;
-        var_20 = r8d;
+        var_20 = 3;
         CreateFileW(rbx, 0xADDR, 3, 0, 3, 0xADDR, r14);
         qword_ADDR = rax;
         if (rax != -1) {

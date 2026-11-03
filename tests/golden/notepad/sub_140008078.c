@@ -9,7 +9,7 @@ void sub_140008078_l1(void) {
     }
     rsi = *(u64*)((rcx + 0xADDR));
     r15d = 0;
-    *(u64*)((rcx + 0xADDR)) = r15;
+    *(u64*)((rcx + 0xADDR)) = 0;
     if (rsi != 0) {
         GetProcessHeap();
         HeapFree(rax, 0, rsi);

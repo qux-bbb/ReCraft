@@ -5,9 +5,9 @@ void sub_140010f48_l1(void) {
     r14 = rcx;
     var_70 = rcx;
     esi = 0;
-    edi = esi;
-    var_78 = rsi;
-    var_54 = esi;
+    edi = 0;
+    var_78 = 0;
+    var_54 = 0;
     r12d = esi;
     var_38 = esi;
     xmm0 = 0;
@@ -15,7 +15,7 @@ void sub_140010f48_l1(void) {
     var_2c0 = xmm0;
     var_2d0 = xmm0;
     var_2e0 = xmm0;
-    var_2f0 = eax;
+    var_2f0 = 0;
     var_80 = rsi;
     r15d = esi;
     sub_1400233ec(rcx);
@@ -88,8 +88,7 @@ void sub_140010f48_l1(void) {
                     ecx -= 1;
                     if (ecx == 0) {
                         loc_ADDR:
-                        ebx = 1;
-                        var_30 = ebx;
+                        var_30 = 1;
                         var_48 = esi;
                         r15d = esi;
                         loc_ADDR:
@@ -97,15 +96,13 @@ void sub_140010f48_l1(void) {
                     } else {
                         ecx -= 1;
                         if (ecx == 0) {
-                            ebx = 2;
                             eax = 0xADDR;
-                            r12d = 1;
-                            var_4c = r12d;
+                            var_4c = 1;
                             edi = r13d;
-                            var_30 = ebx;
+                            var_30 = 2;
                             edi >>= 1;
                             var_34 = edi;
-                            var_38 = r12d;
+                            var_38 = 1;
                             if (*(u16*)(r14) != ax) goto loc_ADDR;
                         } else {
                             ecx -= 1;
@@ -116,7 +113,7 @@ void sub_140010f48_l1(void) {
                                 ecx -= 1;
                                 if (ecx == 0) {
                                     r15d = 0xADDR;
-                                    var_48 = r15d;
+                                    var_48 = 0xADDR;
                                     var_30 = ebx;
                                     if (r13d > 2) {
                                         if (*(u16*)(r14) == 0xADDR && *(u8*)((r14 + 2)) == 0xADDR) {
@@ -312,9 +309,8 @@ void sub_140010f48_l1(void) {
     r11 = &var_300;
     return;
     loc_ADDR:
-    r12d = 1;
-    var_4c = r12d;
-    var_38 = r12d;
+    var_4c = 1;
+    var_38 = 1;
     var_30 = ebx;
     edi = (r13d >> 1);
     while (1) {
@@ -325,20 +321,16 @@ void sub_140010f48_l1(void) {
             loc_ADDR:
             ebx = 2;
             goto loc_ADDR;
-            ebx = 2;
-            var_30 = ebx;
+            var_30 = 2;
             edi = (r13d >> 1);
         }
         loc_ADDR:
         sub_140023ae0(r14, r13d);
         if (eax == 0) goto loc_ADDR;
-        ebx = 5;
-        var_30 = ebx;
-        r15d = 0xADDR;
-        var_48 = r15d;
+        var_30 = 5;
+        var_48 = 0xADDR;
         goto loc_ADDR;
-        r15d = 0xADDR;
-        var_48 = r15d;
+        var_48 = 0xADDR;
         ebx = (rcx + 4);
         var_30 = ebx;
         goto loc_ADDR;

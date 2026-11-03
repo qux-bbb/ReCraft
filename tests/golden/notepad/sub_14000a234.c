@@ -2,7 +2,7 @@
 void sub_14000a234_l1(void) {
     eax = (uint32)(cl);
     esi = 0;
-    var_68 = rsi;
+    var_68 = 0;
     ebx = (rax + 0xADDR);
     edi = (rax + 0xADDR);
     LoadStringW(qword_ADDR, 0xADDR, &var_68, 0);
@@ -28,15 +28,13 @@ void sub_14000a234_l1(void) {
     if (rcx != 0) {
         CoTaskMemFree(var_60);
     }
-    ebx = 0xADDR;
-    r8d = ebx;
+    r8d = 0xADDR;
     edx = 0;
     sub_1400029dc(&var_80);
     var_98 = qword_ADDR;
-    rax = sub_14000a630;
-    var_80 = ebx;
+    var_80 = 0xADDR;
     rbx = "BannerClass";
-    var_88 = rax;
+    var_88 = 0xADDR;
     var_c0 = rbx;
     RegisterClassExW(&var_80);
     rax = qword_ADDR;
@@ -87,13 +85,12 @@ void sub_14000a234_l1(void) {
     var_48 = rsi;
     var_40 = rax;
     eax = 0xADDR;
-    var_38 = eax;
-    var_30 = eax;
-    var_28 = eax;
+    var_38 = 0xADDR;
+    var_30 = 0xADDR;
+    var_28 = 0xADDR;
     var_20 = eax;
     CreateWindowExW(0, "tooltips_class32", 0, 0xADDR, 0xADDR, 0xADDR, 0xADDR, 0xADDR, qword_ADDR, rsi, qword_ADDR, rsi);
-    edi = 0xADDR;
-    r8d = edi;
+    r8d = 0xADDR;
     edx = 0;
     rbx = rax;
     sub_1400029dc(&var_d0);
@@ -101,7 +98,7 @@ void sub_14000a234_l1(void) {
     var_e0 = qword_ADDR;
     rcx = qword_ADDR;
     var_100 = rcx;
-    var_d0 = edi;
+    var_d0 = 0xADDR;
     var_d4 = 0xADDR;
     SendMessageW(rbx, 0xADDR, 0, &var_d0);
     sub_14000accc();

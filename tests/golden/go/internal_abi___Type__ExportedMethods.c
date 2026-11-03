@@ -7,8 +7,7 @@ void internal/abi.(*Type).ExportedMethods_l1(void) {
     internal/abi.(*Type).Uncommon();
     if (rax == 0) {
         eax = 0;
-        ebx = 0;
-        rcx = rbx;
+        rcx = 0;
         return;
     }
     internal/abi.(*UncommonType).ExportedMethods();

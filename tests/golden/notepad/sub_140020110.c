@@ -31,16 +31,14 @@ void sub_140020110_l1(void) {
         if (edx == 0) {
             rcx = qword_ADDR;
             ebx = 1;
-            dword_ADDR = ebx;
+            dword_ADDR = 1;
             EnableWindow(qword_ADDR, ebx);
             DestroyWindow(qword_ADDR);
-            edi = 0;
-            qword_ADDR = rdi;
-            rax = rbx;
+            qword_ADDR = 0;
+            rax = 1;
         } else if (edx == 5) {
-            ebx = 1;
             EnableMenuItem(qword_ADDR, 0xADDR, ebx);
-            rax = rbx;
+            rax = 1;
             return;
         }
         eax = 0;

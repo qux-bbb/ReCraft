@@ -28,7 +28,7 @@ void sub_140021020_l1(void) {
     }
     ebx = 0xADDR;
     rbp = off_1400356e0;
-    edi = ebx;
+    edi = 0xADDR;
     do {
         var_20 = 0;
         SendDlgItemMessageW(rsi, edi, 0xADDR, 0xADDR, 0);

@@ -4,7 +4,7 @@ void sub_140005830_l1(void) {
     rsi = r9;
     ecx = 0;
     rbx = r8;
-    var_20 = rcx;
+    var_20 = 0;
     r14 = rdx;
     if (rdi == 0) {
         if (r14 != 0) {

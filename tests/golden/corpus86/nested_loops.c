@@ -5,7 +5,7 @@ void nested_loops_l1(void) {
     esi = var_20;
     edx = 0;
     ebp = 0;
-    var_10 = edx;
+    var_10 = 0;
     if (esi <= 0 /* signed */) {
         esi = var_8;
         eax = edx;

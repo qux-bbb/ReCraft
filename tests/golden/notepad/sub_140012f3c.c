@@ -65,7 +65,7 @@ void sub_140012f3c_l1(void) {
         rcx = off_1400356e0;
         r8d = 0xADDR;
         r9 -= off_1400356e0;
-        edx = r8d;
+        edx = 0xADDR;
         rax = (rdx + 0xADDR);
         if (rax == 0) goto loc_ADDR;
         eax = (uint32)(*(u16*)((r9 + rcx)));
@@ -118,7 +118,7 @@ void sub_140012f3c_l1(void) {
     rcx = off_1400356e0;
     r8d = 0xADDR;
     r9 -= off_1400356e0;
-    edx = r8d;
+    edx = 0xADDR;
     loc_ADDR:
     rax = (rdx + 0xADDR);
     if (rax == 0) {

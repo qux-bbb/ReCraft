@@ -71,9 +71,8 @@ void sub_140004f54_l1(void) {
             }
             r8 = *(u64*)(rbx);
             edx = 0;
-            eax = -1;
             __asm("div ebp");
-            r9d = eax;
+            r9d = -1;
             while (1) {
                 ecx = (rsi - 0xADDR);
                 if (cl > 9) {

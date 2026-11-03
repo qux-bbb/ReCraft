@@ -11,13 +11,12 @@ void sub_14001e1dc_l1(void) {
     var_28 = 0;
     r9d = 0xADDR;
     var_50 = rax;
-    var_20 = r9d;
+    var_20 = 0xADDR;
     LoadImageW(rbx, (r9 - 0xADDR), (r9 - 0xADDR), 0xADDR, 0xADDR, 0);
     var_68 = 1;
     var_78 = rax;
     var_70 = "Notepad";
-    rax = 0xADDR;
-    var_38 = rax;
+    var_38 = 0xADDR;
     var_48 = rdi;
     var_60 = 6;
     RegisterClassExW(&var_30);

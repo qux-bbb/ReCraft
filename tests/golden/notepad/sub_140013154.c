@@ -5,9 +5,9 @@ void sub_140013154_l1(void) {
     xmm1 = 0;
     eax = 0;
     rdi = rcx;
-    var_990 = rax;
+    var_990 = 0;
     xmm0 = 0;
-    var_998 = eax;
+    var_998 = 0;
     r12d = r9d;
     rect = xmm0;
     rsi = r8;
@@ -21,7 +21,7 @@ void sub_140013154_l1(void) {
         eax = 0;
     } else {
         RegisterWindowMessageW("commdlg_help");
-        dword_ADDR = eax;
+        dword_ADDR = 0;
         if (eax == 0) {
             eax = 0;
             return;
@@ -65,20 +65,18 @@ void sub_140013154_l1(void) {
         dword_ADDR = 0xADDR;
         xmmword_ADDR = xmm0;
         qword_ADDR = r14;
-        qword_ADDR = rax;
+        qword_ADDR = sub_140021020;
         qword_ADDR = 0xADDR;
         GetLocaleInfoW(0xADDR, (rbx + 0xADDR), &var_198, ebx);
         if (var_198 != 0xADDR) {
-            eax = 0xADDR;
             dword_ADDR = 0xADDR;
-            dword_ADDR = eax;
-            dword_ADDR = eax;
+            dword_ADDR = 0xADDR;
+            dword_ADDR = 0xADDR;
             eax = 0xADDR;
         } else {
-            eax = 0xADDR;
             dword_ADDR = 0xADDR;
-            dword_ADDR = eax;
-            dword_ADDR = eax;
+            dword_ADDR = 0xADDR;
+            dword_ADDR = 0xADDR;
             eax = 0xADDR;
         }
         dword_ADDR = eax;
@@ -91,7 +89,7 @@ void sub_140013154_l1(void) {
         sub_140012a2c();
         sub_1400221ac(&var_2b8);
         rdx = off_14002a790;
-        rdi = rax;
+        rdi = 0;
         sub_140001c90(0xADDR);
         if (rax != 0) {
             sub_140021fc4(rax, rdi);
@@ -147,16 +145,15 @@ void sub_140013154_l1(void) {
         sub_14000c980(0);
         sub_140026ee8();
         if (eax < 0 /* signed */) {
-            eax = 0;
-            qword_ADDR = rax;
+            qword_ADDR = 0;
         }
         if (dword_ADDR != 0xADDR && dword_ADDR != 0xADDR) {
             eax = 0;
             xmm0 = 0;
-            var_990 = rax;
+            var_990 = 0;
             var_980 = xmm0;
             edi = (rax + 0xADDR);
-            var_998 = eax;
+            var_998 = 0;
             var_970 = edi;
             GetWindowPlacement(qword_ADDR, &var_970);
             if (eax != 0) {
@@ -296,13 +293,13 @@ void sub_140013154_l1(void) {
             if (*(u16*)(rsi) == 0xADDR) {
                 loc_ADDR:
                 edi = 0xADDR;
-                r8d = edi;
+                r8d = 0xADDR;
                 edx = 0;
                 sub_1400029dc(off_1400355d0);
                 rax = qword_ADDR;
                 rcx = qword_ADDR;
                 qword_ADDR = rax;
-                dword_ADDR = edi;
+                dword_ADDR = 0xADDR;
                 var_194 = r14d;
                 var_18c = r14d;
                 SendMessageW(qword_ADDR, (rdi + 0xADDR), &var_194, &var_18c);
@@ -325,9 +322,8 @@ void sub_140013154_l1(void) {
                 } while (dword_ADDR != eax);
                 eax = dword_ADDR;
                 r12 = off_140029260;
-                edi = -1;
                 rsi = off_140034000;
-                var_154 = edi;
+                var_154 = -1;
                 ebx = 0xADDR;
                 if (eax != 0) {
                     eax += r13d;
@@ -343,7 +339,7 @@ void sub_140013154_l1(void) {
                     if (rbx == 0) {
                         ebx = 4;
                         r13 = off_1400360c0;
-                        rdi = r13;
+                        rdi = off_1400360c0;
                         r14d = 0;
                         eax = (rbx - 3);
                         do {
@@ -608,9 +604,9 @@ void sub_140013154_l1(void) {
                         } while (r14 != 0);
                         r14d = var_150;
                         edx = 0;
-                        eax = edx;
+                        eax = 0;
                         cl = dl;
-                        r13d = edx;
+                        r13d = 0;
                         r8d = 0xADDR;
                         edi = (rdx + 1);
                         do {
@@ -696,9 +692,8 @@ void sub_140013154_l1(void) {
                                 }
                             }
                         }
-                        r14d = 0;
                         var_1d0 = rdi;
-                        var_1e0 = r14;
+                        var_1e0 = 0;
                         loc_ADDR:
                         sub_140024c8c(&var_1e0);
                         if (ebx >= 0 /* signed */) {
@@ -744,7 +739,7 @@ void sub_140013154_l1(void) {
                                 }
                                 r14d = 0;
                                 var_1d8 = rdi;
-                                var_1e8 = r14;
+                                var_1e8 = 0;
                                 loc_ADDR:
                                 r12d = 0xADDR;
                                 loc_ADDR:
@@ -760,7 +755,7 @@ void sub_140013154_l1(void) {
                                                 sub_140027494(rcx, "Default");
                                                 if (eax == 0) {
                                                     eax = 0;
-                                                    var_168 = eax;
+                                                    var_168 = 0;
                                                     GetCurrentProcess();
                                                     GetProcessMitigationPolicy(rax, (rdi + 0xADDR), &var_168, (rdi + 3));
                                                     if (eax != 0) {
@@ -768,7 +763,7 @@ void sub_140013154_l1(void) {
                                                         esi = (((var_168 & al) == 0) ? edi : esi);
                                                     } else {
                                                         GetLastError();
-                                                        ebx = eax;
+                                                        ebx = 0xADDR;
                                                         if (eax > 0 /* signed */) {
                                                             ebx = (uint32)(ax);
                                                             ebx |= r13d;
@@ -911,7 +906,7 @@ void sub_140013154_l1(void) {
                                         var_d8 = r13d;
                                         if (eax >= ecx) {
                                             edi = 0;
-                                            var_1f8 = rdi;
+                                            var_1f8 = 0;
                                             sub_140024e6c(rcx, rdx, &var_1f8);
                                             if (eax >= 0 /* signed */) {
                                                 rax = var_1f8;
@@ -941,7 +936,7 @@ void sub_140013154_l1(void) {
                                                     if (eax >= r11d) {
                                                         eax = (rdx + 8);
                                                         r11d = -1;
-                                                        ecx = r11d;
+                                                        ecx = -1;
                                                         ecx = ((eax >= edx) ? eax : ecx);
                                                         r13d = ((eax < edx) ? r8d : 0);
                                                         r13d += r9d;
@@ -961,12 +956,12 @@ void sub_140013154_l1(void) {
                                                                 r13d = 0;
                                                                 if (rax == 0) {
                                                                     eax = 0xADDR;
-                                                                    r13d = eax;
-                                                                    var_d8 = eax;
+                                                                    r13d = 0xADDR;
+                                                                    var_d8 = 0xADDR;
                                                                 } else {
-                                                                    var_2f8 = rax;
-                                                                    r10d = r13d;
-                                                                    var_2f0 = r13d;
+                                                                    var_2f8 = 0xADDR;
+                                                                    r10d = 0xADDR;
+                                                                    var_2f0 = 0xADDR;
                                                                     edx = var_78;
                                                                     r9 = (rax + 4);
                                                                     edi = var_118;
@@ -975,7 +970,7 @@ void sub_140013154_l1(void) {
                                                                     if (r9 < rax) {
                                                                         r13d = 0xADDR;
                                                                         loc_ADDR:
-                                                                        var_d8 = r13d;
+                                                                        var_d8 = 0xADDR;
                                                                         goto loc_ADDR;
                                                                     }
                                                                     ecx = var_2f4;
@@ -991,11 +986,10 @@ void sub_140013154_l1(void) {
                                                                         if (rbx != 0) {
                                                                             if (edi == 0) {
                                                                                 loc_ADDR:
-                                                                                r13d = 0xADDR;
                                                                                 goto loc_ADDR;
                                                                             } else if (var_2f8 != r13) {
                                                                                 r8 = var_2f8;
-                                                                                r9d = r13d;
+                                                                                r9d = 0xADDR;
                                                                                 if (r10d == 0) {
                                                                                     r10 = (r8 + 4);
                                                                                     var_78 = edx;
@@ -1078,14 +1072,13 @@ void sub_140013154_l1(void) {
                                                                                                                                     var_200 = rdi;
                                                                                                                                     edi += edi;
                                                                                                                                     if (edi == 0) {
-                                                                                                                                        r13d = 0xADDR;
                                                                                                                                         loc_ADDR:
                                                                                                                                         r9d = 1;
                                                                                                                                         loc_ADDR:
-                                                                                                                                        var_d8 = r13d;
+                                                                                                                                        var_d8 = 0xADDR;
                                                                                                                                     } else if (var_2f8 != r13) {
                                                                                                                                         rdx = var_2f8;
-                                                                                                                                        r9d = r13d;
+                                                                                                                                        r9d = 0xADDR;
                                                                                                                                         if (r10d == 0) {
                                                                                                                                             r9 = (rdx + 4);
                                                                                                                                             if (r9 < rdx) {
@@ -1255,8 +1248,8 @@ void sub_140013154_l1(void) {
                                                                                                                                                                                     if (rdx < r12) {
                                                                                                                                                                                         eax = 0;
                                                                                                                                                                                         var_c8 = r12;
-                                                                                                                                                                                        r12d = eax;
-                                                                                                                                                                                        var_f8 = rax;
+                                                                                                                                                                                        r12d = 0;
+                                                                                                                                                                                        var_f8 = 0;
                                                                                                                                                                                         var_c0 = rbx;
                                                                                                                                                                                         r13d = 0xADDR;
                                                                                                                                                                                         var_120 = rsi;
@@ -1276,22 +1269,20 @@ void sub_140013154_l1(void) {
                                                                                                                                                                                                 if (r12 != 0) {
                                                                                                                                                                                                     GetProcessHeap();
                                                                                                                                                                                                     HeapFree(rax, 0, r12);
-                                                                                                                                                                                                    r12d = 0;
-                                                                                                                                                                                                    *(u64*)((rdi + 8)) = r12;
+                                                                                                                                                                                                    *(u64*)((rdi + 8)) = 0;
                                                                                                                                                                                                 }
                                                                                                                                                                                                 r12 = *(u64*)((rdi + 0xADDR));
                                                                                                                                                                                                 if (r12 != 0) {
                                                                                                                                                                                                     GetProcessHeap();
                                                                                                                                                                                                     HeapFree(rax, 0, r12);
-                                                                                                                                                                                                    r12d = 0;
-                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = r12;
+                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = 0;
                                                                                                                                                                                                 }
                                                                                                                                                                                                 r12 = *(u64*)((rdi + 0xADDR));
                                                                                                                                                                                                 if (r12 != 0) {
                                                                                                                                                                                                     GetProcessHeap();
                                                                                                                                                                                                     HeapFree(rax, 0, r12);
                                                                                                                                                                                                     eax = 0;
-                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = rax;
+                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = 0;
                                                                                                                                                                                                 }
                                                                                                                                                                                                 GetProcessHeap();
                                                                                                                                                                                                 HeapFree(rax, 0, rdi);
@@ -1312,22 +1303,20 @@ void sub_140013154_l1(void) {
                                                                                                                                                                                                 if (r12 != 0) {
                                                                                                                                                                                                     GetProcessHeap();
                                                                                                                                                                                                     HeapFree(rax, 0, r12);
-                                                                                                                                                                                                    r12d = 0;
-                                                                                                                                                                                                    *(u64*)((rdi + 8)) = r12;
+                                                                                                                                                                                                    *(u64*)((rdi + 8)) = 0;
                                                                                                                                                                                                 }
                                                                                                                                                                                                 r12 = *(u64*)((rdi + 0xADDR));
                                                                                                                                                                                                 if (r12 != 0) {
                                                                                                                                                                                                     GetProcessHeap();
                                                                                                                                                                                                     HeapFree(rax, 0, r12);
-                                                                                                                                                                                                    r12d = 0;
-                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = r12;
+                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = 0;
                                                                                                                                                                                                 }
                                                                                                                                                                                                 r12 = *(u64*)((rdi + 0xADDR));
                                                                                                                                                                                                 if (r12 != 0) {
                                                                                                                                                                                                     GetProcessHeap();
                                                                                                                                                                                                     HeapFree(rax, 0, r12);
                                                                                                                                                                                                     eax = 0;
-                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = rax;
+                                                                                                                                                                                                    *(u64*)((rdi + 0xADDR)) = 0;
                                                                                                                                                                                                 }
                                                                                                                                                                                                 GetProcessHeap();
                                                                                                                                                                                                 HeapFree(rax, 0, rdi);
@@ -1337,8 +1326,7 @@ void sub_140013154_l1(void) {
                                                                                                                                                                                         } else {
                                                                                                                                                                                             eax = edi;
                                                                                                                                                                                             loc_ADDR:
-                                                                                                                                                                                            ecx = 0;
-                                                                                                                                                                                            var_c8 = rcx;
+                                                                                                                                                                                            var_c8 = 0;
                                                                                                                                                                                             if (r12 != 0) {
                                                                                                                                                                                                 r13d = eax;
                                                                                                                                                                                                 var_f0 = r13;
@@ -1513,8 +1501,7 @@ void sub_140013154_l1(void) {
                     if (r12 != 0) {
                         GetProcessHeap();
                         HeapFree(rax, 0, r12);
-                        r12d = 0;
-                        var_2f8 = r12;
+                        var_2f8 = 0;
                     }
                     var_300 = 0;
                     r12 = var_308;
@@ -1522,7 +1509,7 @@ void sub_140013154_l1(void) {
                         GetProcessHeap();
                         HeapFree(rax, 0, r12);
                         r12d = 0;
-                        var_308 = r12;
+                        var_308 = 0;
                     }
                     if (rbx != 0) {
                         GetProcessHeap();
@@ -1557,13 +1544,12 @@ void sub_140013154_l1(void) {
                                         sub_1400029dc(&var_810, 0, (rdx + 0xADDR));
                                         xmm0 = 0;
                                         var_110 = r12;
-                                        eax = 0;
                                         var_100 = r12;
                                         var_310 = xmm0;
                                         var_a30 = r12d;
                                         var_a34 = xmm0;
                                         edx = (rax + 1);
-                                        var_a54 = rax;
+                                        var_a54 = 0;
                                         var_a44 = xmm0;
                                         var_98 = r12;
                                         do {
@@ -1575,9 +1561,8 @@ void sub_140013154_l1(void) {
                                             eax += edx;
                                             dword_ADDR = eax;
                                         } else {
-                                            edi = 0;
                                             var_78 = r12d;
-                                            var_a8 = edi;
+                                            var_a8 = 0;
                                             var_108 = r12d;
                                             sub_140024bf8(0xADDR);
                                             var_68 = rax;
@@ -1852,7 +1837,7 @@ void sub_140013154_l1(void) {
                                                 esi = var_f0;
                                                 edx = 0;
                                                 r13d = var_d8;
-                                                eax = edx;
+                                                eax = 0;
                                                 rbx = var_68;
                                                 cl = dl;
                                                 r12d = var_108;
@@ -1897,10 +1882,10 @@ void sub_140013154_l1(void) {
                                         var_a8 = r12d;
                                         xmm0 = 0;
                                         r12d = 0;
-                                        var_da0 = ecx;
-                                        var_118 = r12d;
-                                        var_130 = r12d;
-                                        var_238 = r12;
+                                        var_da0 = 0;
+                                        var_118 = 0;
+                                        var_130 = 0;
+                                        var_238 = 0;
                                         var_68 = r12;
                                         var_90 = r12;
                                         var_88 = r12;
@@ -1980,7 +1965,7 @@ void sub_140013154_l1(void) {
                                                 eax = 0;
                                                 r15 = off_14002da82;
                                                 r13d = r12d;
-                                                r11d = eax;
+                                                r11d = 0;
                                                 esi = (rax + 0xADDR);
                                                 ebx = (rax + 1);
                                                 do {
@@ -2186,7 +2171,7 @@ void sub_140013154_l1(void) {
                                                 esi = var_f0;
                                                 r12d = 0;
                                                 r13d = var_d8;
-                                                eax = r12d;
+                                                eax = 0;
                                                 rbx = var_80;
                                                 cl = r12b;
                                                 r14 = 0xADDR;
@@ -2250,7 +2235,7 @@ void sub_140013154_l1(void) {
                                             eax = 0;
                                             var_f8 = r12d;
                                             xmm0 = 0;
-                                            var_158 = eax;
+                                            var_158 = 0;
                                             rbx = r12;
                                             var_258 = r12;
                                             var_250 = rbx;
@@ -2638,7 +2623,7 @@ void sub_140013154_l1(void) {
                                                     esi = var_f0;
                                                     r10d = 0;
                                                     r13d = var_d8;
-                                                    ecx = r10d;
+                                                    ecx = 0;
                                                     r11 = var_e8;
                                                     al = r10b;
                                                     r14 = 0xADDR;
@@ -2685,13 +2670,12 @@ void sub_140013154_l1(void) {
                                                         if (rbx == 0) {
                                                             r12d = 0xADDR;
                                                         } else {
-                                                            ecx = 0;
                                                             var_c0 = r10d;
                                                             rax = rdi;
                                                             var_e8 = rbx;
                                                             xmm0 = 0;
                                                             *(__m128*)(rbx) = xmm0;
-                                                            *(u64*)((rbx + 0xADDR)) = rcx;
+                                                            *(u64*)((rbx + 0xADDR)) = 0;
                                                             r11d = (r10 + 1);
                                                             rcx = &var_da0;
                                                             var_260 = rax;
@@ -2770,13 +2754,12 @@ void sub_140013154_l1(void) {
                                                             r10 = var_a0;
                                                             rcx = rdi;
                                                             r9 = var_b8;
-                                                            ecx = 3;
                                                             r11 = var_e0;
                                                             r8 = r10;
                                                             eax = (rcx - 2);
                                                             var_90 = r10;
                                                             r10d = 0;
-                                                            var_b8 = rcx;
+                                                            var_b8 = 3;
                                                             var_88 = r11;
                                                             var_68 = r9;
                                                             var_260 = rdi;
@@ -2843,8 +2826,7 @@ void sub_140013154_l1(void) {
                                                 rax = *(u64*)((rax + 8));
                                                 var_820 = rax;
                                                 __asm("if (jne short 0xADDR /* unmodelled flags */) goto 0xADDR");
-                                                edi = 0;
-                                                eax = edi;
+                                                eax = 0;
                                                 rax = *(u64*)((rax + 0xADDR));
                                                 r9d = 0;
                                                 var_828 = rax;
@@ -2869,14 +2851,13 @@ void sub_140013154_l1(void) {
                                                             var_78 = 0xADDR;
                                                             goto loc_ADDR;
                                                         } else if (ecx == 1) {
-                                                            r12d = 0xADDR;
-                                                            var_78 = r12d;
-                                                            var_108 = r12d;
+                                                            var_78 = 0xADDR;
+                                                            var_108 = 0xADDR;
                                                         }
                                                     }
                                                     edi = 0xADDR;
                                                     edx = 0;
-                                                    var_c0 = edi;
+                                                    var_c0 = 0xADDR;
                                                     r12d = (rdi + 0xADDR);
                                                     r8d = r12d;
                                                     sub_1400029dc(&var_bb0);
@@ -2939,9 +2920,8 @@ void sub_140013154_l1(void) {
                                                             rbx = ((ebx == eax) ? var_68 : rbx);
                                                             edx = 0;
                                                             sub_1400029dc(&var_af0, 0, (rax + 0xADDR));
-                                                            eax = 0;
                                                             edx = 0;
-                                                            r12d = eax;
+                                                            r12d = 0;
                                                             ecx = 0;
                                                             rax = qword_ADDR;
                                                             sub_140028010(0, 0, 0xADDR);
@@ -3001,7 +2981,7 @@ void sub_140013154_l1(void) {
                                                                             eax = var_328;
                                                                             ebx = ((rdx + rax) >> 2);
                                                                             r8d = 0;
-                                                                            edx = r8d;
+                                                                            edx = 0;
                                                                         } else {
                                                                             if (ecx != 1) goto loc_ADDR;
                                                                         }
@@ -3010,9 +2990,8 @@ void sub_140013154_l1(void) {
                                                                     var_31c = edx;
                                                                     ecx = (edi - 1);
                                                                     if (ecx == 0) {
-                                                                        eax = 0xADDR;
                                                                         var_118 = 0xADDR;
-                                                                        var_a8 = eax;
+                                                                        var_a8 = 0xADDR;
                                                                         var_130 = 0xADDR;
                                                                     } else {
                                                                         ecx -= 1;
@@ -3033,8 +3012,7 @@ void sub_140013154_l1(void) {
                                                                     sub_140028010(var_80, var_830);
                                                                     var_68 = rax;
                                                                     r8d = -1;
-                                                                    eax = 0;
-                                                                    var_28 = rax;
+                                                                    var_28 = 0;
                                                                     rax = qword_ADDR;
                                                                     var_20 = 0xADDR;
                                                                     sub_140028010(var_80, rdi, r8, &var_84c, 0xADDR, 0);
@@ -3055,8 +3033,7 @@ void sub_140013154_l1(void) {
                                                                         sub_140028010(var_80, var_838);
                                                                         var_68 = rax;
                                                                         r8d = -1;
-                                                                        eax = 0;
-                                                                        var_28 = rax;
+                                                                        var_28 = 0;
                                                                         rax = qword_ADDR;
                                                                         var_20 = 0xADDR;
                                                                         sub_140028010(var_80, rdi, r8, &var_85c, 0xADDR, 0);
@@ -3111,14 +3088,12 @@ void sub_140013154_l1(void) {
                                                                                 var_c0 = eax;
                                                                                 edi -= 1;
                                                                                 if (edi == 0) {
-                                                                                    edi = 0;
-                                                                                    var_310 = rdi;
+                                                                                    var_310 = 0;
                                                                                 } else {
                                                                                     edi -= 1;
                                                                                     if (edi == 0) {
-                                                                                        eax = 0;
                                                                                         xmm0 = 0;
-                                                                                        var_940 = rax;
+                                                                                        var_940 = 0;
                                                                                         edx = ecx;
                                                                                         rax = qword_ADDR;
                                                                                         ecx = 0;
@@ -3170,9 +3145,8 @@ void sub_140013154_l1(void) {
                                                                                     } else if (edi != 1) {
                                                                                         edi = 0;
                                                                                     } else {
-                                                                                        eax = 0;
                                                                                         xmm0 = 0;
-                                                                                        var_968 = rax;
+                                                                                        var_968 = 0;
                                                                                         edx = ecx;
                                                                                         rax = qword_ADDR;
                                                                                         ecx = 0;
@@ -3212,9 +3186,8 @@ void sub_140013154_l1(void) {
                                                                                 var_848 = 0xADDR;
                                                                                 edx = 0;
                                                                                 sub_1400029dc(&var_b50, 0, (rcx + 0xADDR));
-                                                                                eax = 0;
                                                                                 edx = 0;
-                                                                                r12d = eax;
+                                                                                r12d = 0;
                                                                                 ecx = 0;
                                                                                 rax = qword_ADDR;
                                                                                 sub_140028010(0, 0, 0xADDR);
@@ -3254,8 +3227,7 @@ void sub_140013154_l1(void) {
                                                                                         sub_140028010(var_80, var_840);
                                                                                         rbx = rax;
                                                                                         r8d = -1;
-                                                                                        eax = 0;
-                                                                                        var_28 = rax;
+                                                                                        var_28 = 0;
                                                                                         rax = qword_ADDR;
                                                                                         var_20 = 0xADDR;
                                                                                         sub_140028010(var_80, rdi, r8, &var_86c, 0xADDR, 0);
@@ -3441,7 +3413,7 @@ void sub_140013154_l1(void) {
                                             eax = 0;
                                             var_290 = rdi;
                                             esi &= 0xADDR;
-                                            var_5e0 = eax;
+                                            var_5e0 = 0;
                                             edx = 0;
                                             var_f0 = esi;
                                             sub_1400029dc(&var_5e4, 0, (rax + 0xADDR));
@@ -3550,9 +3522,9 @@ void sub_140013154_l1(void) {
                                                         ebx = ((ebx <= eax /* signed */) ? eax : ebx);
                                                         ecx -= r9d;
                                                         var_118 = ebx;
-                                                        r10d = eax;
+                                                        r10d = 0;
                                                         var_130 = ecx;
-                                                        r11d = eax;
+                                                        r11d = 0;
                                                         if (var_810 != 0) {
                                                             ecx = edx;
                                                             eax = r8d;
@@ -3584,10 +3556,10 @@ void sub_140013154_l1(void) {
                                                     edx = 0;
                                                     var_128 = r12d;
                                                     ecx = -(ecx);
-                                                    var_28 = edx;
-                                                    var_20 = rdx;
+                                                    var_28 = 0;
+                                                    var_20 = 0;
                                                     xmm0 = 0;
-                                                    var_2a8 = rdx;
+                                                    var_2a8 = 0;
                                                     r8d = 0;
                                                     var_a50 = rdx;
                                                     var_a58 = edx;
@@ -3620,22 +3592,21 @@ void sub_140013154_l1(void) {
                                                         rax = var_818;
                                                         var_90 = rax;
                                                         eax = 0;
-                                                        var_6c0 = eax;
+                                                        var_6c0 = 0;
                                                         sub_1400029dc(&var_6c4, 0, (rax + 0xADDR));
                                                         eax = 0;
                                                         edx = 0;
-                                                        var_730 = eax;
+                                                        var_730 = 0;
                                                         sub_1400029dc(&var_734, 0, (rax + 0xADDR));
                                                         ecx = 0;
-                                                        eax = 0;
                                                         xmm0 = 0;
-                                                        var_88 = rcx;
-                                                        var_b8 = ecx;
-                                                        var_80 = ecx;
+                                                        var_88 = 0;
+                                                        var_b8 = 0;
+                                                        var_80 = 0;
                                                         var_a00 = xmm0;
-                                                        var_a20 = rax;
+                                                        var_a20 = 0;
                                                         var_a10 = xmm0;
-                                                        var_a28 = eax;
+                                                        var_a28 = 0;
                                                         var_8e0 = xmm0;
                                                         if (var_90 == rcx) {
                                                             rdi = var_110;
@@ -3689,8 +3660,7 @@ void sub_140013154_l1(void) {
                                                                         rcx = rax;
                                                                         rax = qword_ADDR;
                                                                         sub_140028010(rax, 0xADDR, &var_730);
-                                                                        edx = 0;
-                                                                        ecx = edx;
+                                                                        ecx = 0;
                                                                         eax = var_c8;
                                                                         rcx = ((eax != 0) ? var_748 : rcx);
                                                                         eax -= var_108;
@@ -3716,7 +3686,7 @@ void sub_140013154_l1(void) {
                                                                         eax = var_148;
                                                                         edi = 0;
                                                                         r8d = -1;
-                                                                        var_28 = rdi;
+                                                                        var_28 = 0;
                                                                         var_20 = eax;
                                                                         rax = qword_ADDR;
                                                                         sub_140028010(var_140, var_90, r8, &var_8e0, var_148, 0);
@@ -3766,11 +3736,11 @@ void sub_140013154_l1(void) {
                                                                                 r14d = var_a0;
                                                                                 r12 = r11;
                                                                                 r8d *= r11d;
-                                                                                r11d = ebx;
+                                                                                r11d = 0;
                                                                                 rax = (int64)(r9d);
                                                                                 rcx = (int64)(ecx);
                                                                                 rcx += rax;
-                                                                                var_c8 = ebx;
+                                                                                var_c8 = 0;
                                                                                 rax = var_70;
                                                                                 var_78 = ebx;
                                                                                 rdx = (rax + (rcx * 4));
@@ -3802,7 +3772,7 @@ void sub_140013154_l1(void) {
                                                                                             edi = (uint32)(*(u8*)((r9 + r10)));
                                                                                             r11d = 0xADDR;
                                                                                             r8d = (uint32)(dl);
-                                                                                            eax = r11d;
+                                                                                            eax = 0xADDR;
                                                                                             ecx = (uint32)(r14b);
                                                                                             ecx -= edi;
                                                                                             ecx *= r8d;
@@ -3909,19 +3879,18 @@ void sub_140013154_l1(void) {
                                                                         sub_1400029dc(&var_494, 0, (rcx + 0xADDR));
                                                                         eax = 0;
                                                                         edx = 0;
-                                                                        var_7a0 = eax;
+                                                                        var_7a0 = 0;
                                                                         sub_1400029dc(&var_7a4, 0, (rax + 0xADDR));
                                                                         ecx = 0;
-                                                                        eax = 0;
                                                                         xmm0 = 0;
-                                                                        var_140 = rcx;
-                                                                        var_b8 = ecx;
+                                                                        var_140 = 0;
+                                                                        var_b8 = 0;
                                                                         rdi = var_110;
-                                                                        var_a0 = ecx;
+                                                                        var_a0 = 0;
                                                                         var_a60 = xmm0;
-                                                                        var_a80 = rax;
+                                                                        var_a80 = 0;
                                                                         var_a70 = xmm0;
-                                                                        var_a88 = eax;
+                                                                        var_a88 = 0;
                                                                         var_8f0 = xmm0;
                                                                         if (rdi != 0) {
                                                                             rax = qword_ADDR;
@@ -3966,8 +3935,7 @@ void sub_140013154_l1(void) {
                                                                                         rcx = rax;
                                                                                         rax = qword_ADDR;
                                                                                         sub_140028010(rax, 0xADDR, &var_7a0);
-                                                                                        edx = 0;
-                                                                                        ecx = edx;
+                                                                                        ecx = 0;
                                                                                         eax = var_e0;
                                                                                         rcx = ((eax != 0) ? var_7b8 : rcx);
                                                                                         eax -= var_e8;
@@ -3992,7 +3960,7 @@ void sub_140013154_l1(void) {
                                                                                         sub_140028010(r12, &var_8f0);
                                                                                         eax = var_148;
                                                                                         edi = 0;
-                                                                                        var_28 = rdi;
+                                                                                        var_28 = 0;
                                                                                         r8d = -1;
                                                                                         var_20 = eax;
                                                                                         rax = qword_ADDR;
@@ -4042,8 +4010,8 @@ void sub_140013154_l1(void) {
                                                                                             esi = var_120;
                                                                                             eax *= r9d;
                                                                                             edx *= edi;
-                                                                                            var_b8 = ebx;
-                                                                                            var_a0 = ebx;
+                                                                                            var_b8 = 0;
+                                                                                            var_a0 = 0;
                                                                                             rcx = (int64)(eax);
                                                                                             rax = (int64)(r8d);
                                                                                             rcx += rax;
@@ -4236,24 +4204,23 @@ void sub_140013154_l1(void) {
                                                 rdi = var_818;
                                                 ebx = 0xADDR;
                                                 var_f8 = eax;
-                                                r8d = ebx;
+                                                r8d = 0xADDR;
                                                 rax = var_830;
                                                 edx = 0;
                                                 var_68 = rax;
                                                 var_90 = rdi;
                                                 var_570 = r12d;
                                                 sub_1400029dc(&var_574);
-                                                r8d = ebx;
+                                                r8d = 0xADDR;
                                                 var_500 = r12d;
                                                 edx = 0;
                                                 sub_1400029dc(&var_504);
-                                                eax = 0;
                                                 var_88 = r12;
                                                 var_78 = r12d;
                                                 xmm0 = 0;
                                                 var_108 = r12d;
-                                                var_9c0 = rax;
-                                                var_9c8 = eax;
+                                                var_9c0 = 0;
+                                                var_9c8 = 0;
                                                 var_9a0 = xmm0;
                                                 var_9b0 = xmm0;
                                                 var_8b0 = xmm0;
@@ -4302,8 +4269,7 @@ void sub_140013154_l1(void) {
                                                             if (rax != 0) {
                                                                 rax = qword_ADDR;
                                                                 sub_140028010(rdi, 0xADDR, &var_500);
-                                                                edx = 0;
-                                                                ecx = edx;
+                                                                ecx = 0;
                                                                 eax = var_854;
                                                                 rdx = rdi;
                                                                 rcx = ((eax != 0) ? var_518 : rcx);
@@ -4330,7 +4296,7 @@ void sub_140013154_l1(void) {
                                                                 sub_140028010(rbx, &var_8b0);
                                                                 eax = var_148;
                                                                 edi = 0;
-                                                                var_28 = rdi;
+                                                                var_28 = 0;
                                                                 r8d = -1;
                                                                 var_20 = eax;
                                                                 rax = qword_ADDR;
@@ -4376,8 +4342,8 @@ void sub_140013154_l1(void) {
                                                                     r15d = var_f8;
                                                                     eax *= r8d;
                                                                     r8d = 0;
-                                                                    var_78 = r8d;
-                                                                    esi = r8d;
+                                                                    var_78 = 0;
+                                                                    esi = 0;
                                                                     rcx = (int64)(eax);
                                                                     rax = (int64)(edx);
                                                                     rcx += rax;
@@ -4440,13 +4406,12 @@ void sub_140013154_l1(void) {
                                                                 edx = 0;
                                                                 var_650 = ebx;
                                                                 sub_1400029dc(&var_654, 0, (rbx + 0xADDR));
-                                                                eax = 0;
                                                                 var_88 = rbx;
                                                                 var_f0 = ebx;
                                                                 xmm0 = 0;
                                                                 var_78 = ebx;
-                                                                var_9f0 = rax;
-                                                                var_9f8 = eax;
+                                                                var_9f0 = 0;
+                                                                var_9f8 = 0;
                                                                 var_9d0 = xmm0;
                                                                 var_9e0 = xmm0;
                                                                 var_8c0 = xmm0;
@@ -4495,8 +4460,7 @@ void sub_140013154_l1(void) {
                                                                             if (rax != 0) {
                                                                                 rax = qword_ADDR;
                                                                                 sub_140028010(rdi, 0xADDR, &var_650);
-                                                                                edx = 0;
-                                                                                ecx = edx;
+                                                                                ecx = 0;
                                                                                 eax = var_864;
                                                                                 rdx = rdi;
                                                                                 rcx = ((eax != 0) ? var_668 : rcx);
@@ -4523,7 +4487,7 @@ void sub_140013154_l1(void) {
                                                                                 sub_140028010(rbx, &var_8c0);
                                                                                 eax = var_148;
                                                                                 edi = 0;
-                                                                                var_28 = rdi;
+                                                                                var_28 = 0;
                                                                                 r8d = -1;
                                                                                 var_20 = eax;
                                                                                 rax = qword_ADDR;
@@ -4569,7 +4533,7 @@ void sub_140013154_l1(void) {
                                                                                     ebx = 0;
                                                                                     rdi = (int64)(var_f0);
                                                                                     eax *= r8d;
-                                                                                    var_f8 = ebx;
+                                                                                    var_f8 = 0;
                                                                                     rcx = (int64)(eax);
                                                                                     rax = (int64)(edx);
                                                                                     rcx += rax;
@@ -4787,7 +4751,7 @@ void sub_140013154_l1(void) {
                                             if (eax == 0) {
                                                 ebx = 4;
                                                 rsi = off_1400360c0;
-                                                rdi = rsi;
+                                                rdi = off_1400360c0;
                                                 eax = (rbx - 3);
                                                 do {
                                                     rcx = *(u64*)(rdi);
@@ -4852,9 +4816,8 @@ void sub_140013154_l1(void) {
                                         var_cc0 = r12d;
                                         esi -= dword_ADDR;
                                         xmm0 = 0;
-                                        eax = 0;
                                         var_70 = rsi;
-                                        var_cf8 = rax;
+                                        var_cf8 = 0;
                                         var_cc8 = xmm0;
                                         var_cd8 = xmm0;
                                         var_ce8 = xmm0;
@@ -4867,9 +4830,8 @@ void sub_140013154_l1(void) {
                                             eax += edi;
                                             dword_ADDR = eax;
                                         } else {
-                                            edi = 0;
                                             var_b8 = r12d;
-                                            var_e0 = edi;
+                                            var_e0 = 0;
                                             var_a0 = r12d;
                                             sub_140024bf8(0xADDR);
                                             rbx = rax;
@@ -5141,7 +5103,7 @@ void sub_140013154_l1(void) {
                                                 r13d = var_d8;
                                                 edx = 0;
                                                 r12d = var_a0;
-                                                eax = edx;
+                                                eax = 0;
                                                 cl = dl;
                                                 r14 = 0xADDR;
                                                 r8d = 0xADDR;
@@ -5269,7 +5231,7 @@ void sub_140013154_l1(void) {
                                             if (eax == 0) {
                                                 rsi = off_1400360c0;
                                                 eax = 1;
-                                                rdi = rsi;
+                                                rdi = off_1400360c0;
                                                 do {
                                                     rcx = *(u64*)(rdi);
                                                     if (rcx != 0) {
@@ -5534,7 +5496,7 @@ void sub_140013154_l1(void) {
                                                                                                                                     if (rdx < r12) {
                                                                                                                                         eax = 0xADDR;
                                                                                                                                         var_70 = r12;
-                                                                                                                                        var_a0 = eax;
+                                                                                                                                        var_a0 = 0xADDR;
                                                                                                                                         r12 = r8;
                                                                                                                                         var_98 = rbx;
                                                                                                                                         var_68 = rsi;
@@ -5611,8 +5573,7 @@ void sub_140013154_l1(void) {
                                                                                                                                         } else {
                                                                                                                                             eax = var_80;
                                                                                                                                             loc_ADDR:
-                                                                                                                                            ecx = 0;
-                                                                                                                                            var_70 = rcx;
+                                                                                                                                            var_70 = 0;
                                                                                                                                             if (r12 != 0) {
                                                                                                                                                 if (rax == 0) goto loc_ADDR;
                                                                                                                                             }
@@ -5784,7 +5745,7 @@ void sub_140013154_l1(void) {
                     if (eax == 0) {
                         r15 = off_1400360c0;
                         ebx = 4;
-                        rdi = r15;
+                        rdi = off_1400360c0;
                         do {
                             rcx = *(u64*)(rdi);
                             if (rcx != 0) {
@@ -5956,7 +5917,7 @@ void sub_140013154_l1(void) {
         if (eax == 0) goto loc_ADDR;
         rax = *(u64*)(rdi);
         ecx = 0xADDR;
-        r14d = r8d;
+        r14d = 0;
         if (*(u16*)(rax) == cx) goto loc_ADDR;
         loc_ADDR:
         do {
@@ -5994,13 +5955,12 @@ void sub_140013154_l1(void) {
                 rbx += 1;
                 rbx += rax;
                 if (r14d >= 0 /* signed */) {
-                    rax = off_1400360c0;
                     GetProcAddress(*(u64*)((rax + (r12 * 8))), rdx);
                     r8d = 0;
                     if (rax == 0) goto loc_ADDR;
                     ecx = var_a8;
                     rdx = off_140034000;
-                    *(u64*)((rdx + (rcx * 8))) = rax;
+                    *(u64*)((rdx + (rcx * 8))) = off_1400360c0;
                 }
                 var_a8 += 1;
                 edi += 1;
@@ -6037,9 +5997,8 @@ void sub_140013154_l1(void) {
     ebx = 0xADDR;
     r14d = 0;
     goto loc_ADDR;
-    r12d = 0xADDR;
     r14d = 0;
-    ebx = r12d;
+    ebx = 0xADDR;
     goto loc_ADDR;
     r14d = 0;
     r12d = 0xADDR;
@@ -6063,10 +6022,9 @@ void sub_140013154_l1(void) {
         r11d = eax;
         goto loc_ADDR;
     }
-    ecx = -1;
     r13d = 0xADDR;
-    r11d = ecx;
-    var_2f4 = ecx;
+    r11d = -1;
+    var_2f4 = -1;
     goto loc_ADDR;
     rax = (r13 + 8);
     var_88 = rax;
@@ -6076,7 +6034,7 @@ void sub_140013154_l1(void) {
     r8 = rax;
     if (rax == 0) goto loc_ADDR;
     var_60 = cl;
-    eax = ecx;
+    eax = 0;
     if (r13 != 0) {
         edx = (rcx + 1);
         do {
@@ -6129,8 +6087,8 @@ void sub_140013154_l1(void) {
     r13d = r11d;
     eax = 0;
     r9d = r10d;
-    var_118 = eax;
-    edi = eax;
+    var_118 = 0;
+    edi = 0;
     do {
         var_d8 = ecx;
         if (eax < 4 /* signed */) {
@@ -6165,7 +6123,6 @@ void sub_140013154_l1(void) {
     var_78 = r15d;
     r14 = 0xADDR;
     var_f8 = r12;
-    ecx = 0;
     var_120 = rsi;
     var_c0 = rbx;
     goto loc_ADDR;
@@ -6173,7 +6130,7 @@ void sub_140013154_l1(void) {
     r9 = var_68;
     r10d = 0xADDR;
     r11d = 0xADDR;
-    var_78 = ecx;
+    var_78 = 0;
     loc_ADDR:
     if (r8d > 4) {
         ecx = 8;
@@ -6503,8 +6460,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_88);
             rax = var_68;
-            ecx = 0;
-            *(u64*)((rax + 8)) = rcx;
+            *(u64*)((rax + 8)) = 0;
         }
         rcx = *(u64*)((rax + 0xADDR));
         var_88 = rcx;
@@ -6512,8 +6468,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_88);
             rax = var_68;
-            ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         rax = *(u64*)((rax + 0xADDR));
         var_88 = rax;
@@ -6522,7 +6477,7 @@ void sub_140013154_l1(void) {
             HeapFree(rax, 0, var_88);
             rax = var_68;
             ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         GetProcessHeap();
         HeapFree(rax, 0, var_68);
@@ -6544,7 +6499,7 @@ void sub_140013154_l1(void) {
         loc_ADDR:
         rdi = rax;
         eax = 0;
-        var_c8 = rax;
+        var_c8 = 0;
     }
     GetProcessHeap();
     HeapFree(rax, 0, var_90);
@@ -6556,8 +6511,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_68);
             rax = var_c8;
-            edx = 0;
-            *(u64*)((rax + 8)) = rdx;
+            *(u64*)((rax + 8)) = 0;
         }
         rcx = *(u64*)((rax + 0xADDR));
         var_68 = rcx;
@@ -6565,8 +6519,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_68);
             rax = var_c8;
-            edx = 0;
-            *(u64*)((rax + 0xADDR)) = rdx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         rax = *(u64*)((rax + 0xADDR));
         var_68 = rax;
@@ -6574,8 +6527,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_68);
             rax = var_c8;
-            ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         GetProcessHeap();
         HeapFree(rax, 0, var_c8);
@@ -6660,11 +6612,10 @@ void sub_140013154_l1(void) {
         if (var_2f0 > edx) goto loc_ADDR;
     }
     do {
-        r13d = 0xADDR;
         goto loc_ADDR;
         loc_ADDR:
         rdx = var_2f8;
-        r9d = r13d;
+        r9d = 0xADDR;
         do {
             r8 = (rdx + 4);
             var_a8 = eax;
@@ -6687,7 +6638,7 @@ void sub_140013154_l1(void) {
     if (var_2f0 <= 2) {
         r13d = 0xADDR;
         loc_ADDR:
-        var_d8 = r13d;
+        var_d8 = 0xADDR;
         var_a0 = rax;
         GetProcessHeap();
         HeapFree(rax, 0, rdi);
@@ -6751,9 +6702,8 @@ void sub_140013154_l1(void) {
     r13d += 0xADDR;
     var_d8 = r13d;
     if (rax == 0) goto loc_ADDR;
-    ebx = 0;
     xmm0 = 0;
-    var_218 = rbx;
+    var_218 = 0;
     var_380 = xmm0;
     var_390 = xmm0;
     if (rcx != 0) goto loc_ADDR;
@@ -6786,16 +6736,15 @@ void sub_140013154_l1(void) {
     edx = edi;
     if (r13d >= 0 /* signed */) {
         r13d = 0xADDR;
-        var_d8 = r13d;
+        var_d8 = 0xADDR;
     }
     do {
         if (r13d != 0xADDR) goto loc_ADDR;
         rdi = var_68;
-        r13d = 0xADDR;
         rbx = var_88;
         rcx = var_c8;
         loc_ADDR:
-        var_d8 = r13d;
+        var_d8 = 0xADDR;
         var_a0 = rcx;
         goto loc_ADDR;
         loc_ADDR:
@@ -6826,9 +6775,8 @@ void sub_140013154_l1(void) {
     var_a0 = r8;
     r9 = r12;
     if (r13d < 0 /* signed */) goto loc_ADDR;
-    ebx = 0;
     loc_ADDR:
-    var_90 = rbx;
+    var_90 = 0;
     rbx = r10;
     rsi = r11;
     r12 = r9;
@@ -6836,9 +6784,8 @@ void sub_140013154_l1(void) {
     rdi = rax;
     loc_ADDR:
     do {
-        r13d = 0xADDR;
         loc_ADDR:
-        var_d8 = r13d;
+        var_d8 = 0xADDR;
         var_a0 = r8;
         goto loc_ADDR;
         loc_ADDR:
@@ -6938,12 +6885,11 @@ void sub_140013154_l1(void) {
     GetProcessHeap();
     edx = 8;
     HeapAlloc(rax, 8, (rdx + 0xADDR));
-    r8d = 0;
     var_e8 = rax;
     rcx = rax;
     if (rax == 0) goto loc_ADDR;
     rax = var_e0;
-    r13d = r8d;
+    r13d = 0;
     rax += 4;
     if (rax != 0) {
         eax = var_78;
@@ -6992,12 +6938,11 @@ void sub_140013154_l1(void) {
         var_d0 = rax;
         GetProcessHeap();
         HeapAlloc(rax, 8, r13d);
-        edx = 0;
         rcx = rax;
         if (rax == 0) goto loc_ADDR;
         rax = var_e8;
         *(u64*)((rax + 0xADDR)) = rcx;
-        r13d = edx;
+        r13d = 0;
         sub_1400274ac(rcx, var_88, var_d0);
         rcx = var_e8;
         r8d = 0;
@@ -7034,8 +6979,7 @@ void sub_140013154_l1(void) {
                 GetProcessHeap();
                 HeapFree(rax, 0, var_d0);
                 rax = var_e8;
-                edx = 0;
-                *(u64*)((rax + 8)) = rdx;
+                *(u64*)((rax + 8)) = 0;
             }
             rcx = *(u64*)((rax + 0xADDR));
             var_d0 = rcx;
@@ -7044,7 +6988,7 @@ void sub_140013154_l1(void) {
                 HeapFree(rax, 0, var_d0);
                 rax = var_e8;
                 edx = 0;
-                *(u64*)((rax + 0xADDR)) = rdx;
+                *(u64*)((rax + 0xADDR)) = 0;
             }
             rax = *(u64*)((rax + 0xADDR));
             var_d0 = rax;
@@ -7053,7 +6997,7 @@ void sub_140013154_l1(void) {
                 HeapFree(rax, 0, var_d0);
                 rax = var_e8;
                 ecx = 0;
-                *(u64*)((rax + 0xADDR)) = rcx;
+                *(u64*)((rax + 0xADDR)) = 0;
             }
             GetProcessHeap();
             HeapFree(rax, 0, var_e8);
@@ -7088,9 +7032,8 @@ void sub_140013154_l1(void) {
     loc_ADDR:
     rcx = var_90;
     loc_ADDR:
-    eax = 0;
     if (r13d >= 0 /* signed */) goto loc_ADDR;
-    var_e8 = rax;
+    var_e8 = 0;
     if (rcx != 0) {
         rax = *(u64*)((rcx + 8));
         var_d0 = rax;
@@ -7098,8 +7041,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_d0);
             rcx = var_90;
-            eax = 0;
-            *(u64*)((rcx + 8)) = rax;
+            *(u64*)((rcx + 8)) = 0;
         }
         rax = *(u64*)((rcx + 0xADDR));
         var_d0 = rax;
@@ -7107,8 +7049,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_d0);
             rcx = var_90;
-            eax = 0;
-            *(u64*)((rcx + 0xADDR)) = rax;
+            *(u64*)((rcx + 0xADDR)) = 0;
         }
         rax = *(u64*)((rcx + 0xADDR));
         var_d0 = rax;
@@ -7116,14 +7057,12 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_d0);
             rax = var_90;
-            ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         GetProcessHeap();
         HeapFree(rax, 0, var_90);
-        ecx = 0;
         loc_ADDR:
-        var_e8 = rcx;
+        var_e8 = 0;
     }
     r13d |= 0xADDR;
     var_d8 = r13d;
@@ -7192,9 +7131,8 @@ void sub_140013154_l1(void) {
         r9d ^= 0xADDR;
         r11d ^= 0xADDR;
         r15d = r9d;
-        eax = 0;
         r14d = r11d;
-        var_f0 = eax;
+        var_f0 = 0;
         eax = var_78;
         do {
             var_a0 = rdx;
@@ -7244,11 +7182,10 @@ void sub_140013154_l1(void) {
         var_c0 = rbx;
         goto loc_ADDR;
         loc_ADDR:
-        ecx = 0;
         r11d = 0xADDR;
-        var_78 = ecx;
+        var_78 = 0;
         r9d = 0xADDR;
-        var_f0 = ecx;
+        var_f0 = 0;
         loc_ADDR:
         if (r10d > 4) {
             ecx = 8;
@@ -7268,12 +7205,10 @@ void sub_140013154_l1(void) {
         r11d <<= cl;
         goto loc_ADDR;
         loc_ADDR:
-        r10d = 0;
-        ecx = -1;
-        var_78 = r10d;
-        var_f0 = ecx;
-        r11d = r10d;
-        var_d8 = r10d;
+        var_78 = 0;
+        var_f0 = -1;
+        r11d = 0;
+        var_d8 = 0;
         loc_ADDR:
         r10 = var_110;
         rcx = (r10 >> 3);
@@ -7538,8 +7473,7 @@ void sub_140013154_l1(void) {
         loc_ADDR:
         r9d = 1;
         loc_ADDR:
-        edx = 0;
-        ecx = edx;
+        ecx = 0;
         if (r10 != 0) {
             do {
                 al ^= *(u8*)((rcx + r8));
@@ -7601,10 +7535,9 @@ void sub_140013154_l1(void) {
         rax -= r9;
         rax += rcx;
         if (rax >= 8) goto loc_ADDR;
-        eax = 0;
         var_c8 = r9;
-        var_d8 = eax;
-        r13d = eax;
+        var_d8 = 0;
+        r13d = 0;
         rax = var_d0;
         var_a0 = rax;
         rcx = rax;
@@ -7642,7 +7575,7 @@ void sub_140013154_l1(void) {
                 if (r11 < r9) goto loc_ADDR;
                 r9 = r11;
                 r11d = 0;
-                r13d = r11d;
+                r13d = 0;
                 if (r9 > r10) goto loc_ADDR;
                 eax = (r11 + 1);
                 var_d8 += eax;
@@ -7762,21 +7695,19 @@ void sub_140013154_l1(void) {
         r13d = 0xADDR;
         goto loc_ADDR;
         loc_ADDR:
-        r13d = 0;
-        var_a0 = r13;
+        var_a0 = 0;
         loc_ADDR:
         r13d = 0xADDR;
         loc_ADDR:
         r13d |= 0xADDR;
     }
     loc_ADDR:
-    r13d = 0xADDR;
-    var_d8 = r13d;
+    var_d8 = 0xADDR;
     goto loc_ADDR;
     r13d = 0;
     if (var_308 == r13) goto loc_ADDR;
     rax = var_308;
-    r9d = r13d;
+    r9d = 0;
     do {
         rdi = (rax + 4);
         rbx = r8;
@@ -7852,16 +7783,14 @@ void sub_140013154_l1(void) {
     r11d = *(u32*)(rax);
     rdi = (rax + 4);
     if (rdi < rax) goto loc_ADDR;
-    r13d = 0;
-    eax = r13d;
+    eax = 0;
     rax = ((r11d != 0) ? rdi : rax);
     if (r11d != 4) goto loc_ADDR;
     r13d = *(u32*)(rax);
-    edi = 0;
     if (var_308 == rdi) goto loc_ADDR;
     rax = var_308;
     r11 = rbx;
-    var_f0 = edi;
+    var_f0 = 0;
     rdi = rsi;
     do {
         var_78 = r13d;
@@ -7879,7 +7808,7 @@ void sub_140013154_l1(void) {
     r11 = (rax + 4);
     if (r11 < rax) goto loc_ADDR;
     r13d = 0;
-    edi = r13d;
+    edi = 0;
     rdi = ((*(u32*)(rax) != r13d) ? r11 : rdi);
     if (*(u32*)(rax) != 4) goto loc_ADDR;
     edi = *(u32*)(rdi);
@@ -7912,7 +7841,7 @@ void sub_140013154_l1(void) {
         if (eax == 0) goto loc_ADDR;
         rax = *(u64*)(rdi);
         ecx = 0xADDR;
-        r12d = r8d;
+        r12d = 0;
         if (*(u16*)(rax) == cx) goto loc_ADDR;
         loc_ADDR:
         do {
@@ -7952,14 +7881,13 @@ void sub_140013154_l1(void) {
                 rbx += 1;
                 rbx += rax;
                 if (r12d >= 0 /* signed */) {
-                    rax = off_1400360c0;
                     rcx = *(u64*)((rax + (rcx * 8)));
                     GetProcAddress(*(u64*)((rax + (rcx * 8))), rdx);
                     r8d = 0;
                     if (rax == 0) goto loc_ADDR;
                     ecx = var_78;
                     rdx = off_140034000;
-                    *(u64*)((rdx + (rcx * 8))) = rax;
+                    *(u64*)((rdx + (rcx * 8))) = off_1400360c0;
                     rcx = var_68;
                 }
                 var_78 += 1;
@@ -7991,7 +7919,7 @@ void sub_140013154_l1(void) {
         if (eax == 0) goto loc_ADDR;
         rax = *(u64*)(r12);
         ecx = 0xADDR;
-        edi = r8d;
+        edi = 0;
         if (*(u16*)(rax) == cx) goto loc_ADDR;
         loc_ADDR:
         do {
@@ -8031,14 +7959,13 @@ void sub_140013154_l1(void) {
                 rbx += 1;
                 rbx += rax;
                 if (edi >= 0 /* signed */) {
-                    rax = off_1400360c0;
                     rcx = *(u64*)((rax + (rcx * 8)));
                     GetProcAddress(*(u64*)((rax + (rcx * 8))), rdx);
                     r8d = 0;
                     if (rax == 0) goto loc_ADDR;
                     ecx = var_f8;
                     rdx = off_140034000;
-                    *(u64*)((rdx + (rcx * 8))) = rax;
+                    *(u64*)((rdx + (rcx * 8))) = off_1400360c0;
                     rcx = var_80;
                 }
                 var_f8 += 1;
@@ -8173,7 +8100,7 @@ void sub_140013154_l1(void) {
     r8 = rax;
     if (rax == 0) goto loc_ADDR;
     eax = var_80;
-    edx = r10d;
+    edx = 0;
     var_60 = r10b;
     ecx = eax;
     if (eax != 0) {
@@ -8190,9 +8117,9 @@ void sub_140013154_l1(void) {
     r9 = r8;
     var_880 = r14;
     r8 = rcx;
-    var_a0 = eax;
+    var_a0 = 0;
     r11d = -1;
-    var_e0 = eax;
+    var_e0 = 0;
     rdx = r12;
     r8d &= 7;
     if (r8d == 0) goto loc_ADDR;
@@ -8225,7 +8152,7 @@ void sub_140013154_l1(void) {
     r15d = r10d;
     ecx = 0;
     r14d = r11d;
-    var_e0 = ecx;
+    var_e0 = 0;
     r13d = (rcx + 1);
     do {
         var_a0 = eax;
@@ -8612,8 +8539,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_98);
             rax = var_b0;
-            ecx = 0;
-            *(u64*)((rax + 8)) = rcx;
+            *(u64*)((rax + 8)) = 0;
         }
         rcx = *(u64*)((rax + 0xADDR));
         var_98 = rcx;
@@ -8621,8 +8547,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_98);
             rax = var_b0;
-            ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         rax = *(u64*)((rax + 0xADDR));
         var_98 = rax;
@@ -8631,7 +8556,7 @@ void sub_140013154_l1(void) {
             HeapFree(rax, 0, var_98);
             rax = var_b0;
             ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         GetProcessHeap();
         HeapFree(rax, 0, var_b0);
@@ -8653,7 +8578,7 @@ void sub_140013154_l1(void) {
         loc_ADDR:
         rdi = rax;
         eax = 0;
-        var_70 = rax;
+        var_70 = 0;
     }
     GetProcessHeap();
     HeapFree(rax, 0, var_138);
@@ -8665,8 +8590,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_b0);
             rax = var_70;
-            edx = 0;
-            *(u64*)((rax + 8)) = rdx;
+            *(u64*)((rax + 8)) = 0;
         }
         rcx = *(u64*)((rax + 0xADDR));
         var_b0 = rcx;
@@ -8674,8 +8598,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_b0);
             rax = var_70;
-            edx = 0;
-            *(u64*)((rax + 0xADDR)) = rdx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         rax = *(u64*)((rax + 0xADDR));
         var_b0 = rax;
@@ -8683,8 +8606,7 @@ void sub_140013154_l1(void) {
             GetProcessHeap();
             HeapFree(rax, 0, var_b0);
             rax = var_70;
-            ecx = 0;
-            *(u64*)((rax + 0xADDR)) = rcx;
+            *(u64*)((rax + 0xADDR)) = 0;
         }
         GetProcessHeap();
         HeapFree(rax, 0, var_70);
@@ -8767,11 +8689,10 @@ void sub_140013154_l1(void) {
         if (var_340 > edx) goto loc_ADDR;
     }
     do {
-        r14d = 0xADDR;
         goto loc_ADDR;
         loc_ADDR:
         rdx = var_348;
-        r9d = r14d;
+        r9d = 0xADDR;
         do {
             r8 = (rdx + 4);
             var_b8 = eax;
@@ -8855,9 +8776,8 @@ void sub_140013154_l1(void) {
     r14d += 0xADDR;
     r11d = 0;
     if (rax == 0) goto loc_ADDR;
-    ebx = 0;
     xmm0 = 0;
-    var_2e8 = rbx;
+    var_2e8 = 0;
     var_360 = xmm0;
     var_370 = xmm0;
     if (rcx == 0) goto loc_ADDR;
@@ -8926,9 +8846,8 @@ void sub_140013154_l1(void) {
         var_140 = r8;
         r9 = r12;
         if (r14d < 0 /* signed */) goto loc_ADDR;
-        ebx = 0;
         loc_ADDR:
-        var_90 = rbx;
+        var_90 = 0;
         rbx = r10;
         rsi = r11;
         r12 = r9;
@@ -9034,12 +8953,11 @@ void sub_140013154_l1(void) {
                 GetProcessHeap();
                 edx = 8;
                 HeapAlloc(rax, 8, (rdx + 0xADDR));
-                r9d = 0;
                 var_110 = rax;
                 rcx = rax;
                 if (rax == 0) goto loc_ADDR;
                 rax = var_d0;
-                r14d = r9d;
+                r14d = 0;
                 rax += 4;
                 if (rax != 0) {
                     eax = var_80;
@@ -9090,12 +9008,11 @@ void sub_140013154_l1(void) {
                     var_70 = rax;
                     GetProcessHeap();
                     HeapAlloc(rax, 8, r14d);
-                    edx = 0;
                     rcx = rax;
                     if (rax == 0) goto loc_ADDR;
                     rax = var_110;
                     *(u64*)((rax + 0xADDR)) = rcx;
-                    r14d = edx;
+                    r14d = 0;
                     rdx = (var_138 + 4);
                     sub_1400274ac(rcx, rdx, var_70);
                     rcx = var_110;
@@ -9133,8 +9050,7 @@ void sub_140013154_l1(void) {
                             GetProcessHeap();
                             HeapFree(rax, 0, var_70);
                             rax = var_110;
-                            edx = 0;
-                            *(u64*)((rax + 8)) = rdx;
+                            *(u64*)((rax + 8)) = 0;
                         }
                         rcx = *(u64*)((rax + 0xADDR));
                         var_70 = rcx;
@@ -9143,7 +9059,7 @@ void sub_140013154_l1(void) {
                             HeapFree(rax, 0, var_70);
                             rax = var_110;
                             edx = 0;
-                            *(u64*)((rax + 0xADDR)) = rdx;
+                            *(u64*)((rax + 0xADDR)) = 0;
                         }
                         rax = *(u64*)((rax + 0xADDR));
                         var_70 = rax;
@@ -9152,7 +9068,7 @@ void sub_140013154_l1(void) {
                             HeapFree(rax, 0, var_70);
                             rax = var_110;
                             ecx = 0;
-                            *(u64*)((rax + 0xADDR)) = rcx;
+                            *(u64*)((rax + 0xADDR)) = 0;
                         }
                         GetProcessHeap();
                         HeapFree(rax, 0, var_110);
@@ -9187,9 +9103,8 @@ void sub_140013154_l1(void) {
                 loc_ADDR:
                 rcx = var_90;
                 loc_ADDR:
-                eax = 0;
                 if (r14d >= 0 /* signed */) goto loc_ADDR;
-                var_110 = rax;
+                var_110 = 0;
                 if (rcx != 0) {
                     rax = *(u64*)((rcx + 8));
                     var_70 = rax;
@@ -9197,8 +9112,7 @@ void sub_140013154_l1(void) {
                         GetProcessHeap();
                         HeapFree(rax, 0, var_70);
                         rcx = var_90;
-                        eax = 0;
-                        *(u64*)((rcx + 8)) = rax;
+                        *(u64*)((rcx + 8)) = 0;
                     }
                     rax = *(u64*)((rcx + 0xADDR));
                     var_70 = rax;
@@ -9206,8 +9120,7 @@ void sub_140013154_l1(void) {
                         GetProcessHeap();
                         HeapFree(rax, 0, var_70);
                         rcx = var_90;
-                        eax = 0;
-                        *(u64*)((rcx + 0xADDR)) = rax;
+                        *(u64*)((rcx + 0xADDR)) = 0;
                     }
                     rax = *(u64*)((rcx + 0xADDR));
                     var_70 = rax;
@@ -9215,14 +9128,12 @@ void sub_140013154_l1(void) {
                         GetProcessHeap();
                         HeapFree(rax, 0, var_70);
                         rax = var_90;
-                        ecx = 0;
-                        *(u64*)((rax + 0xADDR)) = rcx;
+                        *(u64*)((rax + 0xADDR)) = 0;
                     }
                     GetProcessHeap();
                     HeapFree(rax, 0, var_90);
-                    ecx = 0;
                     loc_ADDR:
-                    var_110 = rcx;
+                    var_110 = 0;
                 }
                 r14d |= 0xADDR;
                 if (r14d < 0 /* signed */) goto loc_ADDR;
@@ -9288,9 +9199,8 @@ void sub_140013154_l1(void) {
                 eax = r11d;
                 r15d = var_80;
                 r9d ^= 0xADDR;
-                r10d = 0;
                 r8d = r9d;
-                var_b8 = r10d;
+                var_b8 = 0;
                 r10 = var_e8;
                 do {
                     var_138 = rcx;
@@ -9339,11 +9249,10 @@ void sub_140013154_l1(void) {
                 var_98 = rbx;
                 goto loc_ADDR;
                 loc_ADDR:
-                ecx = 0;
                 r11d = 0xADDR;
-                var_80 = ecx;
+                var_80 = 0;
                 r9d = 0xADDR;
-                var_154 = ecx;
+                var_154 = 0;
                 loc_ADDR:
                 if (edx > 4) {
                     ecx = 8;
@@ -9363,9 +9272,8 @@ void sub_140013154_l1(void) {
                 r11d <<= cl;
                 goto loc_ADDR;
                 loc_ADDR:
-                ecx = 0;
-                var_80 = ecx;
-                var_b8 = ecx;
+                var_80 = 0;
+                var_b8 = 0;
                 loc_ADDR:
                 rcx = r10;
                 edx = 0;
@@ -9643,10 +9551,9 @@ void sub_140013154_l1(void) {
                 var_110 = r14;
                 if (rcx != *(u64*)((r10 + rax))) {
                     sub_140024e2c(r8);
-                    r11d = 0;
                     loc_ADDR:
                     r14d = 0xADDR;
-                    var_100 = r11;
+                    var_100 = 0;
                     goto loc_ADDR;
                 }
                 var_110 = rdx;
@@ -9692,12 +9599,11 @@ void sub_140013154_l1(void) {
                     rax -= r9;
                     rax += rcx;
                 } while (rax >= 8);
-                eax = 0;
                 var_e0 = r9;
                 var_100 = r8;
-                r14d = eax;
+                r14d = 0;
                 var_110 = rdx;
-                r15d = eax;
+                r15d = 0;
                 rax = var_70;
                 var_140 = rax;
                 rcx = rax;
@@ -9732,8 +9638,7 @@ void sub_140013154_l1(void) {
                                 r11 += r9;
                                 if (r11 < r9) goto loc_ADDR;
                                 r9 = r11;
-                                r11d = 0;
-                                r14d = r11d;
+                                r14d = 0;
                                 if (r9 > r10) goto loc_ADDR;
                                 rax = var_e0;
                                 r15d += 1;
@@ -9845,8 +9750,7 @@ void sub_140013154_l1(void) {
     r14d = 0xADDR;
     goto loc_ADDR;
     loc_ADDR:
-    r14d = 0;
-    var_140 = r14;
+    var_140 = 0;
     loc_ADDR:
     r14d = 0xADDR;
     loc_ADDR:

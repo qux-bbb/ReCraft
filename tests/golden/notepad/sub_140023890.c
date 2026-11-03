@@ -1,7 +1,7 @@
 // L1 structure recovery (14 blocks)
 void sub_140023890_l1(void) {
     r9d = 0;
-    r8d = r9d;
+    r8d = 0;
     if (ecx == 0) {
         r8 = "EditMenu";
     } else if (ecx == 1) {
@@ -34,9 +34,8 @@ void sub_140023890_l1(void) {
                 rax = &var_38;
                 var_80 = r8;
                 var_70 = rax;
-                rax = off_140036178;
                 var_8c = r9d;
-                var_60 = rax;
+                var_60 = off_140036178;
                 r8d = 0;
                 rax = &var_40;
                 var_78 = 8;

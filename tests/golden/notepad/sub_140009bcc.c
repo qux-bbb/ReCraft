@@ -14,8 +14,7 @@ void sub_140009bcc_l1(void) {
         sub_140009f6c(rdi);
         rcx = qword_ADDR;
         *(u64*)(rbx) = 0xADDR;
-        rax = 0xADDR;
-        *(u64*)(rdi) = rax;
+        *(u64*)(rdi) = 0xADDR;
         *(u32*)((rbx + 0xADDR)) = 1;
         if (rcx != 0) {
             rax = *(u64*)(rcx);
@@ -25,10 +24,10 @@ void sub_140009bcc_l1(void) {
         *(u64*)(rbx) = 0xADDR;
         *(u64*)((rbx + 0xADDR)) = 0;
         rax = 0xADDR;
-        *(u64*)(rdi) = rax;
+        *(u64*)(rdi) = 0xADDR;
         *(u32*)((rbx + 0xADDR)) = 0;
         CreateEventExW(0, 0, 0, 0xADDR);
-        rsi = rax;
+        rsi = 0xADDR;
         if (rax == 0) {
             sub_1400057d8();
             edi = eax;
@@ -121,10 +120,9 @@ void sub_140009bcc_l1(void) {
             sub_140009488((rbx + 0xADDR), rsi);
         }
     } else {
-        edi = 0xADDR;
-        r9d = edi;
+        r9d = 0xADDR;
         sub_140007cf0(var_68, 0xADDR, "onecore\\internal\\sdk\\inc\\wil\\opensource\\wil\\winrt.h");
-        eax = edi;
+        eax = 0xADDR;
         return;
     }
     return;

@@ -1,6 +1,6 @@
 // L1 structure recovery (22 blocks)
 void sub_14000b230_l1(void) {
-    *(u64*)(r8) = rbx;
+    *(u64*)(r8) = 0;
     if (*(u32*)(rdx) != 0) {
         if (*(u32*)(rdx) != 0xADDR) {
             rcx += 8;
@@ -10,20 +10,17 @@ void sub_14000b230_l1(void) {
                 } else {
                     eax = dword_ADDR;
                     if (*(u32*)((rdx + 4)) != eax) {
-                        ebx = 0xADDR;
-                        eax = ebx;
+                        eax = 0xADDR;
                         return;
                     }
                     eax = dword_ADDR;
                     if (*(u32*)((rdx + 8)) != eax) {
-                        ebx = 0xADDR;
-                        eax = ebx;
+                        eax = 0xADDR;
                         return;
                     }
                     eax = dword_ADDR;
                     if (*(u32*)((rdx + 0xADDR)) != eax) {
-                        ebx = 0xADDR;
-                        eax = ebx;
+                        eax = 0xADDR;
                         return;
                     }
                     rax = r8;
@@ -36,20 +33,18 @@ void sub_14000b230_l1(void) {
             } else {
                 eax = dword_ADDR;
                 if (*(u32*)((rdx + 4)) != eax) {
-                    ebx = 0xADDR;
-                    eax = ebx;
+                    eax = 0xADDR;
                     return;
                 }
                 eax = dword_ADDR;
                 if (*(u32*)((rdx + 8)) != eax) {
-                    ebx = 0xADDR;
-                    eax = ebx;
+                    eax = 0xADDR;
                     return;
                 }
                 eax = dword_ADDR;
                 if (*(u32*)((rdx + 0xADDR)) != eax) {
                     ebx = 0xADDR;
-                    eax = ebx;
+                    eax = 0xADDR;
                     return;
                 }
                 rax = r8;

@@ -1,12 +1,11 @@
 // L1 structure recovery (35 blocks)
 void sub_140001a34_l1(void) {
-    eax = 0;
     ecx = 0;
     __asm("cpuid");
     ecx ^= 0xADDR;
     edx ^= 0xADDR;
     edx |= ecx;
-    ebp = eax;
+    ebp = 0;
     eax = 1;
     ebx ^= 0xADDR;
     edx |= ebx;
@@ -31,9 +30,9 @@ void sub_140001a34_l1(void) {
         }
     }
     r9d = 0;
-    esi = r9d;
-    r10d = r9d;
-    r11d = r9d;
+    esi = 0;
+    r10d = 0;
+    r11d = 0;
     if (ebp >= 7 /* signed */) {
         eax = (r9 + 7);
         ecx = 0;

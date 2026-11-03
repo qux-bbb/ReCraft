@@ -5,9 +5,8 @@ void sub_1400082b0_l1(void) {
     r9 = rdx;
     rbx = rcx;
     if (rax > 0xADDR) {
-        edx = 0xADDR;
     } else {
-        r10 = rdx;
+        r10 = 0xADDR;
         rax = rcx;
         edi = 0;
         while (*(u16*)(rax) != di) {

@@ -3,7 +3,7 @@ void sub_14000d6a8_l1(void) {
     r12d = 0;
     rax = &var_38;
     r14 = r9;
-    var_38 = r12;
+    var_38 = 0;
     rsi = r8;
     rdi = rdx;
     r15 = rcx;

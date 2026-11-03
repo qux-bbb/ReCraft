@@ -13,10 +13,9 @@ void sub_140008fec_l1(void) {
     edx = 0;
     sub_1400029dc(&var_20, 0, 0xADDR);
     rcx = *(u64*)((rbx + 0xADDR));
-    r8d = 1;
-    var_38 = r8d;
+    var_38 = 1;
     var_20 = 0xADDR;
-    var_24 = r8d;
+    var_24 = 1;
     var_40 = 7;
     if (rcx != 0) {
         rax = (int64)(*(u32*)((rbx + 8)));

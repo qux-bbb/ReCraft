@@ -12,7 +12,7 @@ void sub_140005cc0_l1(void) {
             } else if (edx == 0) {
                 edx = 0;
             } else if (((edx >> 0xADDR) & 1) == 0) {
-                eax = edx;
+                eax = 0;
                 ecx = 0xADDR;
                 eax &= 0xADDR;
                 if (eax != 0xADDR) {
@@ -20,7 +20,7 @@ void sub_140005cc0_l1(void) {
                     eax &= ecx;
                     if (eax != 0xADDR) {
                         edx = 0xADDR;
-                        eax = edx;
+                        eax = 0xADDR;
                         return;
                     } else if (edx > 0 /* signed */) {
                         edx = (uint32)(dx);

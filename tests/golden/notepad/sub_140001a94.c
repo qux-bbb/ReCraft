@@ -11,11 +11,10 @@ void sub_140001a94_l1(void) {
     sub_1400025cc();
     if ((eax == 0) || (ebx != 0)) {
         xmm0 = xmmword_ADDR;
-        rax = -1;
         xmmword_ADDR = xmm0;
-        qword_ADDR = rax;
+        qword_ADDR = -1;
         xmmword_ADDR = xmm0;
-        qword_ADDR = rax;
+        qword_ADDR = -1;
         byte_ADDR = 1;
         al = 1;
         return;

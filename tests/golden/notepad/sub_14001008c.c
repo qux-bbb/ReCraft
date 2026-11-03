@@ -18,9 +18,8 @@ void sub_14001008c_l1(void) {
             sub_14000c520();
             if (eax != 0) {
                 var_30 = 0;
-                r8d = 3;
                 var_28 = 0xADDR;
-                var_20 = r8d;
+                var_20 = 3;
                 CreateFileW(rbx, 0xADDR, 3, 0, 3, 0xADDR, 0);
                 qword_ADDR = rax;
                 dword_ADDR = 1;

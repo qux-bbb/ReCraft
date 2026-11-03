@@ -17,7 +17,6 @@ void internal/abi.(*FuncType).InSlice_l1(void) {
         return;
     }
     eax = 0;
-    ebx = 0;
-    rcx = rbx;
+    rcx = 0;
     return;
 }

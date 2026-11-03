@@ -16,8 +16,8 @@ void sub_140002b88_l1(void) {
     rcx += *(u64*)((rax + 0xADDR));
     eax = 0;
     var_38 = al;
-    var_30 = rax;
-    var_28 = eax;
+    var_30 = 0;
+    var_28 = 0;
     var_20 = rcx;
     sub_140003b4c(rbp, &var_50, rsi, rdi, (rcx + *(u64*)((rax + 0xADDR))), 0, 0, 0);
     return;

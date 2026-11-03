@@ -53,9 +53,9 @@ void sub_14000d078_l1(void) {
         rax = sub_14000f170;
         var_78 = rcx;
         var_e0 = 0xADDR;
-        var_d8 = rax;
+        var_d8 = sub_14000f170;
         SetThreadDpiAwarenessContext(-0xADDR);
-        r14 = rax;
+        r14 = sub_14000f170;
         GetOpenFileNameW(&var_60);
         if (eax == 0) {
             GetModuleHandleA("comdlg32.dll");

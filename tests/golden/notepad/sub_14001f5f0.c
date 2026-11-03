@@ -1,12 +1,11 @@
 // L1 structure recovery (53 blocks)
 void sub_14001f5f0_l1(void) {
-    eax = 0;
     xmm0 = 0;
     r10 = rcx;
     r11d = r8d;
     rsi = rdx;
     *(__m128*)(rcx) = xmm0;
-    *(u64*)((rcx + 0xADDR)) = rax;
+    *(u64*)((rcx + 0xADDR)) = 0;
     ecx = r8d;
     if (r8d == 0) {
         eax = *(u32*)(rdx);

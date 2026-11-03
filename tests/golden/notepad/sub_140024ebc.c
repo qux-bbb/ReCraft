@@ -18,8 +18,7 @@ void sub_140024ebc_l1(void) {
         sub_140009f6c(rdi);
         rcx = qword_ADDR;
         *(u64*)(rbx) = 0xADDR;
-        rax = 0xADDR;
-        *(u64*)(rdi) = rax;
+        *(u64*)(rdi) = 0xADDR;
         *(u32*)((rbx + 0xADDR)) = 1;
         if (rcx != 0) {
             rax = *(u64*)(rcx);
@@ -27,13 +26,12 @@ void sub_140024ebc_l1(void) {
             sub_140028010(rcx, rdx);
         }
         *(u32*)((rbx + 0xADDR)) = 0;
-        rax = 0xADDR;
         *(u64*)((rbx + 0xADDR)) = 0;
-        *(u64*)(rbx) = rax;
+        *(u64*)(rbx) = 0xADDR;
         rax = 0xADDR;
-        *(u64*)(rdi) = rax;
+        *(u64*)(rdi) = 0xADDR;
         CreateEventExW(0, 0, 0, 0xADDR);
-        *(u64*)((rbx + 0xADDR)) = rax;
+        *(u64*)((rbx + 0xADDR)) = 0xADDR;
         if (rax != 0) {
             rax = *(u64*)(rbx);
             rax = *(u64*)((rax + 8));

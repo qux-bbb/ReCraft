@@ -3,8 +3,8 @@ void bytes_op_l1(void) {
     r8d = 0;
     r11 = (int64)(edx);
     r10 = rcx;
-    r9d = r8d;
-    ecx = r8d;
+    r9d = 0;
+    ecx = 0;
     if (edx > 0 /* signed */ && r11d >= 8) {
         r9 = r11;
         xmm3 = 0;

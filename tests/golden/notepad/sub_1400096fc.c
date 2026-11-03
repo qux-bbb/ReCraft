@@ -12,17 +12,17 @@ void sub_1400096fc_l1(void) {
                 if (rsi == 0) {
                     _o__errno();
                     ebx = 0xADDR;
-                    *(u32*)(rax) = ebx;
+                    *(u32*)(rax) = 0xADDR;
                     sub_140002934();
-                    eax = ebx;
+                    eax = 0xADDR;
                 } else if (rdi >= rbx) {
                     eax = 0xADDR;
                 } else {
                     _o__errno();
                     ebx = 0xADDR;
-                    *(u32*)(rax) = ebx;
+                    *(u32*)(rax) = 0xADDR;
                     sub_140002934();
-                    eax = ebx;
+                    eax = 0xADDR;
                     return;
                 }
             } else if (rdi >= rbx) {
@@ -33,10 +33,9 @@ void sub_1400096fc_l1(void) {
             }
         } else {
             _o__errno();
-            ebx = 0xADDR;
-            *(u32*)(rax) = ebx;
+            *(u32*)(rax) = 0xADDR;
             sub_140002934();
-            eax = ebx;
+            eax = 0xADDR;
             return;
         }
     } else {

@@ -5,9 +5,8 @@ void sub_140023d8c_l1(void) {
     rcx = qword_ADDR;
     rbx = rdx;
     if (rcx == 0) {
-        rax = off_140036660;
         r8d = (rcx + 3);
-        var_20 = rax;
+        var_20 = off_140036660;
         CoCreateInstance(off_14002bb90, 0, (rcx + 3), off_14002bb70, off_140036660);
         rcx = qword_ADDR;
     }

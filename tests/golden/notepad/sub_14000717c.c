@@ -125,7 +125,7 @@ void sub_14000717c_l1(void) {
         } else {
             eax = (uint32)(var_38);
             r13d = 1;
-            var_3c = r13d;
+            var_3c = 1;
             rsi = r10;
             var_40 = r15w;
             var_48 = r10;

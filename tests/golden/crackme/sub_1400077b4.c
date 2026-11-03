@@ -11,7 +11,7 @@ void sub_1400077b4_l1(void) {
             ecx = 0;
             sub_14000d770(0, rbx);
             rsi = qword_ADDR;
-            qword_ADDR = rbx;
+            qword_ADDR = off_140023cd0;
             if (rsi == 0) {
                 rsi = rbx;
             }
@@ -75,7 +75,7 @@ void sub_1400077b4_l1(void) {
         } else {
             sub_140008e30();
             edi = 0xADDR;
-            *(u32*)(rax) = edi;
+            *(u32*)(rax) = 0xADDR;
             sub_140008c88();
         }
     }

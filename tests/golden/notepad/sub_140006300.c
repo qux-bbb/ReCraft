@@ -10,7 +10,7 @@ void sub_140006300_l1(void) {
     eax = (uint32)(*(u16*)((rcx + 0xADDR)));
     var_38 = ax;
     rax = *(u64*)((rcx + 0xADDR));
-    var_24 = esi;
+    var_24 = 0;
     var_31 = sil;
     var_34 = esi;
     var_3a = si;

@@ -5,9 +5,9 @@ void sub_1400229e8_l1(void) {
     r12d = 0;
     rax = &var_68;
     rbx = rcx;
-    var_e8 = r12d;
+    var_e8 = 0;
     edi = 0xADDR;
-    var_68 = r12;
+    var_68 = 0;
     var_20 = rax;
     RegOpenKeyExW(0xADDR, "Software\\Microsoft\\Notepad\\Autosave", 0, edi, &var_68);
     rcx = var_68;
@@ -147,9 +147,8 @@ void sub_1400229e8_l1(void) {
                                 rcx = rdi;
                                 rdx = &var_78;
                                 var_30 = r13;
-                                r8d = 3;
                                 var_28 = 0xADDR;
-                                var_20 = r8d;
+                                var_20 = 3;
                                 rax = &var_80;
                                 rax = ((r15w != 0) ? rdx : rax);
                                 var_88 = rax;
@@ -208,9 +207,8 @@ void sub_1400229e8_l1(void) {
                                 rcx = rbx;
                                 rdx = &var_78;
                                 var_30 = r13;
-                                r8d = 3;
                                 var_28 = 0xADDR;
-                                var_20 = r8d;
+                                var_20 = 3;
                                 rax = &var_80;
                                 rax = ((r15w != 0) ? rdx : rax);
                                 var_88 = rax;

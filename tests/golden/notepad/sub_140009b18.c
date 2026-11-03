@@ -2,7 +2,7 @@
 void sub_140009b18_l1(void) {
     r9 = (rcx + 0xADDR);
     edi = 0;
-    *(u64*)(r9) = rdi;
+    *(u64*)(r9) = 0;
     rbx = rcx;
     rcx = *(u64*)(rdx);
     rdx = -1;

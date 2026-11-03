@@ -5,8 +5,8 @@ void sub_140010c0c_l1(void) {
     r15 = r9;
     r12d = r8d;
     edi = edx;
-    var_80 = ebx;
-    var_40 = ebx;
+    var_80 = 0;
+    var_40 = 0;
     if (var_a0 != 0) {
         rsi = rbx;
         if (edi != 0xADDR) {

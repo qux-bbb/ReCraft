@@ -9,7 +9,7 @@ void sub_140008cd0_l1(void) {
     edx = ecx;
     r8b = (uint8)((eax <= 1));
     eax = 0;
-    var_40 = rax;
+    var_40 = 0;
     sub_140005e90(&var_30, ecx, (uint8)((eax <= 1)), r9, r8);
     ecx = 0;
     ecx = ((al != 0) ? var_30 : ecx);

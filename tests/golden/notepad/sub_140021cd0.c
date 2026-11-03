@@ -3,9 +3,9 @@ void sub_140021cd0_l1(void) {
     ebx = 0;
     r15d = ecx;
     rcx = qword_ADDR;
-    var_68 = ebx;
-    var_70 = ebx;
-    var_78 = ebx;
+    var_68 = 0;
+    var_70 = 0;
+    var_78 = 0;
     if (rcx != 0) {
         wcsnlen(qword_ADDR, 0xADDR);
         r14 = rax;
@@ -19,7 +19,7 @@ void sub_140021cd0_l1(void) {
         eax = 0;
     } else {
         LocalLock(rax);
-        rsi = rax;
+        rsi = 0;
         if (rax == 0) {
             eax = 0;
             return;
@@ -38,7 +38,6 @@ void sub_140021cd0_l1(void) {
             eax = var_70;
             eax -= var_68;
             if (var_78 == eax) {
-                esi = 1;
                 SendMessageW(qword_ADDR, 0xADDR, esi, qword_ADDR);
                 ecx = var_68;
                 r8d = ecx;
@@ -47,7 +46,7 @@ void sub_140021cd0_l1(void) {
                 if (r15d != 0) {
                     SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                 }
-                ebx = esi;
+                ebx = 1;
             }
         }
         LocalUnlock(rdi);

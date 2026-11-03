@@ -10,10 +10,10 @@ void sub_14000accc_l1(void) {
     r12b = al;
     ebx = (rax + 0xADDR);
     MulDiv((rax + 0xADDR), edi, ebx);
-    r13d = eax;
+    r13d = 0;
     MulDiv((rbx - 0xADDR), edi, ebx);
-    var_30 = eax;
-    r15d = eax;
+    var_30 = 0;
+    r15d = 0;
     MulDiv(0xADDR, edi, ebx);
     r8d = ebx;
     edx = edi;
@@ -27,14 +27,13 @@ void sub_14000accc_l1(void) {
     r14d = eax;
     if (edi == dword_ADDR) {
         eax = 0;
-        var_28 = eax;
+        var_28 = 0;
         var_20 = r14d;
         MoveWindow(qword_ADDR, 0, 0, esi, r14d, 0);
     } else {
         dword_ADDR = edi;
         sub_14000a934(r13d, r15d);
         rbp = qword_ADDR;
-        r15 = rax;
         if (rbp != 0) {
             GetLastError();
             ebx = eax;
@@ -42,12 +41,11 @@ void sub_14000accc_l1(void) {
             SetLastError(ebx);
         }
         edx = 0;
-        qword_ADDR = r15;
+        qword_ADDR = 0;
         sub_1400029dc(&var_54, 0, 0xADDR);
         r9d = 0;
         var_20 = edi;
-        edx = 0xADDR;
-        var_50 = edx;
+        var_50 = 0xADDR;
         SystemParametersInfoForDpi((r9 + 0xADDR), 0xADDR, &var_50, 0, edi);
         CreateFontIndirectW(&var_1e8);
         rbp = qword_ADDR;
@@ -63,7 +61,7 @@ void sub_14000accc_l1(void) {
         qword_ADDR = r15;
         SendMessageW(qword_ADDR, (r9 + 0xADDR), r15, 0);
         r15d = 0;
-        var_28 = r15d;
+        var_28 = 0;
         var_20 = r14d;
         MoveWindow(qword_ADDR, 0, 0, esi, r14d, 0);
         sub_14000b160();

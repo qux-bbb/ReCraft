@@ -6,7 +6,7 @@ void sub_14000468c_l1(void) {
     GetCurrentProcessId();
     esi = 0xADDR;
     var_28 = rbx;
-    var_20 = esi;
+    var_20 = 0xADDR;
     sub_1400083f8(&var_50, (rsi - 0xADDR), "Local\\SM0:%lu:%lu:%hs", eax, 0xADDR, rcx);
     var_30 = 0;
     CreateMutexExW(0, &var_50, 0, 0xADDR);
@@ -49,8 +49,7 @@ void sub_14000468c_l1(void) {
                         *(u64*)((rdi + 0xADDR)) = rax;
                         *(u32*)(rdi) = 1;
                         sub_1400029dc((rdi + 0xADDR), 0, 0xADDR);
-                        eax = 0;
-                        *(u64*)((rdi + 0xADDR)) = rax;
+                        *(u64*)((rdi + 0xADDR)) = 0;
                         sub_1400039e4((rdi + 0xADDR));
                         rsi = (rdi + 0xADDR);
                         InitializeCriticalSectionEx(rsi, 0, 0);
@@ -99,9 +98,9 @@ void sub_14000468c_l1(void) {
                     }
                 }
                 esi = 0xADDR;
-                r9d = esi;
+                r9d = 0xADDR;
                 sub_140007cf0(var_298, 0xADDR, "wil");
-                r9d = esi;
+                r9d = 0xADDR;
                 sub_140007cf0(var_298, 0xADDR, "wil");
                 if (r14 == 0) {
                     if (rbx == 0) {

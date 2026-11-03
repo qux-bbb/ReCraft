@@ -12,7 +12,7 @@ void sub_14000a630_l1(void) {
         sub_1400029dc(&var_40, 0, (rdx + 0xADDR));
         BeginPaint(rbx, &var_f0);
         xmm1 = var_50;
-        var_48 = rax;
+        var_48 = 0;
         esi = 0xADDR;
         xmm0 = var_40;
         rdi = rax;
@@ -43,13 +43,13 @@ void sub_14000a630_l1(void) {
         if (*(u64*)((r9 + 0xADDR)) == rax) {
             ebx = *(u32*)((r9 + 0xADDR));
             edi = 0;
-            edx = edi;
+            edx = 0;
             r8 = *(u64*)((rsi + 0xADDR));
             rcx = qword_ADDR;
             dl = (uint8)((byte_ADDR != dil));
             eax = (rdi + 2);
-            var_28 = edi;
-            var_20 = edi;
+            var_28 = 0;
+            var_20 = 0;
             __asm("cmova edx, eax");
             ImageList_Draw(rcx, rdx, r8, 0);
             if (((ebx >> 4) & 1) != 0) {

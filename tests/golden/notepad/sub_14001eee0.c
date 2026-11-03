@@ -7,11 +7,11 @@ void sub_14001eee0_l1(void) {
     rcx = -1;
     var_28 = 0xADDR;
     var_38 = xmm0;
-    var_48 = rax;
+    var_48 = 0;
     esi = 0;
-    var_50 = eax;
+    var_50 = 0;
     SetThreadDpiAwarenessContext((rcx | -1));
-    rdi = rax;
+    rdi = 0;
     GetWindowPlacement(rbx, &var_28);
     ebx = eax;
     SetThreadDpiAwarenessContext(rdi);

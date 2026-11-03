@@ -5,10 +5,10 @@ void sub_140021e54_l1(void) {
     r12 = &var_80;
     r14 = rcx;
     r15d = 0;
-    var_28 = r15;
+    var_28 = 0;
     sub_140002a5c(rbp, r12);
     rdi = (int64)(eax);
-    var_20 = r15;
+    var_20 = 0;
     edx = 0;
     sub_140009e44(&var_28, 0, rdi);
     sub_14000a0c0(&var_20, rax);

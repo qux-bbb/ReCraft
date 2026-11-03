@@ -16,8 +16,8 @@ void sub_140002864_l1(void) {
     rdi = *(u64*)((rdi + 8));
     r12d = -1;
     r11 = (int64)(*(u32*)((rbx + 0xADDR)));
-    r8d = r12d;
-    r13d = r12d;
+    r8d = -1;
+    r13d = -1;
     edx = ebp;
     while (1) {
         eax = (rdx - 1);

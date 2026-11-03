@@ -6,8 +6,8 @@ void sub_14000da7c_l1(void) {
     r14 = rdx;
     xmm0 = 0;
     edx = 0xADDR;
-    ebx = esi;
-    var_40 = rbx;
+    ebx = 0;
+    var_40 = 0;
     r15 = rcx;
     r12d = (rsi + 1);
     rect = xmm0;
@@ -119,9 +119,8 @@ void sub_14000da7c_l1(void) {
                 } else {
                     edi -= r12d;
                     if (edi == 0) {
-                        eax = 0xADDR;
-                        r9d = eax;
-                        r8d = eax;
+                        r9d = 0xADDR;
+                        r8d = 0xADDR;
                     } else {
                         edi -= 0xADDR;
                         if (edi == 0) {
@@ -153,7 +152,7 @@ void sub_14000da7c_l1(void) {
                 word_ADDR = (word_ADDR + r12w);
                 edi = 0xADDR;
                 edx = 0;
-                r8d = edi;
+                r8d = 0xADDR;
                 sub_1400029dc(&var_70);
                 GetDC(0);
                 rbx = rax;
@@ -164,7 +163,7 @@ void sub_14000da7c_l1(void) {
                 }
                 r14 = off_140035650;
                 var_70 = edi;
-                var_88 = r14;
+                var_88 = off_140035650;
                 var_78 = r15;
                 GetDeviceCaps(rax, (rdi - 0xADDR));
                 r15d = 0xADDR;
@@ -172,13 +171,12 @@ void sub_14000da7c_l1(void) {
                 var_94 = 0xADDR;
                 eax = -(eax);
                 dword_ADDR = eax;
-                eax = 0xADDR;
                 var_c8 = ax;
                 ReleaseDC(0, rbx);
                 SetThreadDpiAwarenessContext((rdi - 0xADDR));
-                rdi = rax;
+                rdi = 0xADDR;
                 ChooseFontW(&var_70);
-                ebx = eax;
+                ebx = 0xADDR;
                 SetThreadDpiAwarenessContext(rdi);
                 if (ebx == 0) {
                     eax = r12d;
@@ -277,7 +275,7 @@ void sub_14000da7c_l1(void) {
                         sub_14001f948(rcx, rdx);
                         rcx = off_140036540;
                         qword_ADDR = rsi;
-                        qword_ADDR = rcx;
+                        qword_ADDR = off_140036540;
                         dword_ADDR = 0xADDR;
                         FindTextW(off_1400355d0);
                         if (rax == 0) {
@@ -388,9 +386,8 @@ void sub_14000da7c_l1(void) {
                         edx |= ecx;
                         dword_ADDR = edx;
                         sub_14001f948(rcx, rdx);
-                        rcx = off_140036540;
                         qword_ADDR = rsi;
-                        qword_ADDR = rcx;
+                        qword_ADDR = off_140036540;
                         dword_ADDR = 0xADDR;
                         FindTextW(off_1400355d0);
                         if (rax == 0) {
@@ -426,9 +423,9 @@ void sub_14000da7c_l1(void) {
                         sub_14001f948(rcx, rdx);
                         rcx = off_140036540;
                         dword_ADDR = 0xADDR;
-                        qword_ADDR = rcx;
+                        qword_ADDR = off_140036540;
                         rax = 0xADDR;
-                        qword_ADDR = rax;
+                        qword_ADDR = 0xADDR;
                         ReplaceTextW(off_1400355d0);
                         if (rax != 0) {
                             qword_ADDR = rax;
@@ -639,7 +636,7 @@ void sub_14000da7c_l1(void) {
                 edx = 0xADDR;
                 rcx = 0xADDR;
                 r9 = 0xADDR;
-                r8d = edx;
+                r8d = 0xADDR;
                 r9 -= 0xADDR;
                 do {
                     rax = (r8 + 0xADDR);

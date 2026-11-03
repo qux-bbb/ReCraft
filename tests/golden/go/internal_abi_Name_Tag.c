@@ -7,10 +7,9 @@ void internal/abi.Name.Tag_l1(void) {
         }
         internal/abi.Name.HasTag();
         if (al == 0) break;
-        ebx = 1;
         internal/abi.Name.ReadVarint();
         var_30 = rax;
-        var_28 = rbx;
+        var_28 = 1;
         rbx += rax;
         rbx += 1;
         internal/abi.Name.ReadVarint();

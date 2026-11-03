@@ -6,10 +6,9 @@ void sub_1400037fc_l1(void) {
     r14 = rdx;
     rsi = rcx;
     if (ebx == 0) {
-        eax = 1;
     } else {
         sub_140002b30(rcx);
-        r9 = rax;
+        r9 = 1;
         r9 += rbx;
         if (r9 == 0) {
             eax = 1;
@@ -41,15 +40,14 @@ void sub_1400037fc_l1(void) {
                 if ((*(u8*)(r14) & 2) == 0 && (*(u8*)(r15) & 1) == 0 && (*(u8*)(r15) & 4) == 0 && (*(u8*)(r15) & 2) == 0) {
                     edi = 1;
                 } else if ((*(u8*)(rsi) & al) != 0) {
-                    edi = 1;
-                    eax = edi;
+                    eax = 1;
                     return;
                 }
                 eax = edi;
             } else {
                 rbx = (int64)(*(u32*)((rsi + 4)));
                 if (ebx == 0) {
-                    rbp = rdi;
+                    rbp = 1;
                 } else {
                     sub_140002b30(rcx);
                     rbp = (rbx + rax);

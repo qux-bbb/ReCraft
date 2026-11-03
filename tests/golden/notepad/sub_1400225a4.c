@@ -3,13 +3,13 @@ void sub_1400225a4_l1(void) {
     rbp = &var_b9;
     r15d = 0;
     rax = &var_128;
-    var_40 = r15;
+    var_40 = 0;
     var_38 = rax;
     r13 = rcx;
-    var_30 = r15;
+    var_30 = 0;
     ebx = 0xADDR;
-    var_28 = ebx;
-    var_20 = r15d;
+    var_28 = 0xADDR;
+    var_20 = 0;
     var_128 = r15;
     RegCreateKeyExW(0xADDR, "Software\\Microsoft\\Notepad\\Autosave", 0, 0, 0, 0xADDR, 0, &var_128, 0);
     rcx = var_128;
@@ -78,9 +78,8 @@ void sub_1400225a4_l1(void) {
                 do {
                     rdi += 1;
                 } while (*(u16*)((rax + (rdi * 2))) != r15w);
-                rax = off_140029230;
                 var_50 = r15;
-                var_70 = rax;
+                var_70 = off_140029230;
                 rax = &var_70;
                 var_d8 = rax;
                 sub_1400107f8(&var_50, &var_68);

@@ -252,8 +252,8 @@ void sub_1400030a8_l1(void) {
     ecx = -1;
     var_48 = r14;
     var_40 = 0;
-    var_38 = ecx;
-    var_30 = ecx;
+    var_38 = -1;
+    var_30 = -1;
     var_28 = rsi;
     var_20 = 0;
     sub_14000299c(r12, rdi, var_68, rax, 0, rsi, (ecx | -1), (ecx | -1), 0, r14, var_198);

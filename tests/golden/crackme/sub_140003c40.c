@@ -2,9 +2,9 @@
 void sub_140003c40_l1(void) {
     rdi = rcx;
     r15d = 0;
-    var_20 = r15d;
-    var_b0 = r15d;
-    var_28 = r15;
+    var_20 = 0;
+    var_b0 = 0;
+    var_28 = 0;
     var_c8 = r15;
     sub_14000217c(rcx);
     r13 = *(u64*)((rax + 0xADDR));

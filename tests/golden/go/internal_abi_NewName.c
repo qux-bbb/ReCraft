@@ -15,21 +15,19 @@ void internal/abi.NewName_l1(void) {
             rdi = rax;
             esi = 0xADDR;
             r9d = 3;
-            eax = 0;
             runtime.concatstring3(0xADDR, rdx, off_1400db041);
             runtime.convTstring();
-            rbx = rax;
+            rbx = 0;
             rax = off_1400bd6e0;
             runtime.gopanic();
         }
         if (rdi >= 0xADDR /* signed */) {
-            eax = 0;
             rdi = rcx;
             esi = 0xADDR;
             r9d = 3;
             runtime.concatstring3(0xADDR, rdx, off_1400db041);
             runtime.convTstring();
-            rbx = rax;
+            rbx = 0;
             rax = off_1400bd6e0;
             runtime.gopanic();
         }
@@ -44,8 +42,7 @@ void internal/abi.NewName_l1(void) {
         var_3b = 0;
         var_43 = 0;
         rax = &var_45;
-        ecx = 0xADDR;
-        rbx = rcx;
+        rbx = 0xADDR;
         internal/abi.writeVarint(0xADDR, rdx, r8);
         var_58 = rax;
         rax = &var_3b;

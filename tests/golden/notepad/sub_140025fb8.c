@@ -3,8 +3,8 @@ void sub_140025fb8_l1(void) {
     r14d = 0;
     rsi = rcx;
     *(u16*)(rcx) = r14w;
-    var_20 = r14;
-    hstring = r14;
+    var_20 = 0;
+    hstring = 0;
     WindowsCreateStringReference("Windows.ApplicationModel.DataTransfer.Clipboard", (r14 + 0xADDR), &hstringHeader, &hstring, 0);
     if (eax < 0 /* signed */) {
         ecx = eax;

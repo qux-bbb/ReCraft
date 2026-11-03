@@ -31,10 +31,9 @@ void sub_1400033ac_l1(void) {
     var_58 = r15;
     var_40 = eax;
     xmm1 = 0;
-    eax = 0;
     var_60 = r14d;
-    var_98 = rax;
-    var_80 = rax;
+    var_98 = 0;
+    var_80 = 0;
     rax = qword_ADDR;
     var_64 = edi;
     var_48 = r13;
@@ -68,7 +67,7 @@ void sub_1400033ac_l1(void) {
     }
     if (var_28 >= r13d /* signed */) {
         ecx = 0xADDR;
-        var_28 = ecx;
+        var_28 = 0xADDR;
         sub_140005cc0(0xADDR);
         var_2c = eax;
     }

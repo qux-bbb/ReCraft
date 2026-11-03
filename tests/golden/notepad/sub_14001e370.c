@@ -6,16 +6,15 @@ void sub_14001e370_l1(void) {
     esi = ebp;
     sub_14001f57c("/.SETUP", rcx);
     if (eax != 0) {
-        eax = 0;
     } else {
         rcx = qword_ADDR;
         dword_ADDR = 1;
         GetSystemMenu(qword_ADDR, 0);
         rcx = qword_ADDR;
-        qword_ADDR = rax;
+        qword_ADDR = 0;
         LoadAcceleratorsW(qword_ADDR, "SlipUpAcc");
         rcx = qword_ADDR;
-        qword_ADDR = rax;
+        qword_ADDR = 0;
         SetWindowLongW(qword_ADDR, &var_n10, 0xADDR);
         rcx = (rbx + 0xADDR);
         r14d = (rbp + 2);

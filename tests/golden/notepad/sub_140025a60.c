@@ -4,7 +4,7 @@ void sub_140025a60_l1(void) {
     rax = *(u64*)(r8);
     r14 = rcx;
     r15d = 0;
-    var_60 = r15;
+    var_60 = 0;
     rax = *(u64*)((rax + 0xADDR));
     sub_140028010(r8, &var_60);
     ebx = eax;

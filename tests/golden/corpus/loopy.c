@@ -1,9 +1,9 @@
 // L1 structure recovery (4 blocks)
 void loopy_l1(void) {
     r10d = 0;
-    edx = r10d;
-    r8d = r10d;
-    eax = r10d;
+    edx = 0;
+    r8d = 0;
+    eax = 0;
     if (ecx >= 2 /* signed */) {
         r9d = (rcx - 1);
         do {

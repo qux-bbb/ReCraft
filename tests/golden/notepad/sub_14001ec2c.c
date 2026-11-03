@@ -22,7 +22,7 @@ void sub_14001ec2c_l1(void) {
     edi = 0;
     var_80 = 3;
     r9d &= 1;
-    var_70 = edi;
+    var_70 = 0;
     eax = ((rax * 4) + 2);
     r8d &= 1;
     var_20 = eax;

@@ -10,11 +10,10 @@ void sub_140023648_l1(void) {
             rax = qword_ADDR;
             rax &= rdx;
             if (rax == qword_ADDR) {
-                eax = 1;
                 var_58 = ebx;
-                qword_ADDR = rax;
+                qword_ADDR = 1;
                 rdx = off_14002e964;
-                var_60 = rax;
+                var_60 = 1;
                 var_30 = &var_58;
                 var_28 = &var_60;
                 rax = &var_68;

@@ -2,9 +2,9 @@
 void sub_14000f2a0_l1(void) {
     esi = 0;
     rdi = rcx;
-    r14d = esi;
-    var_60 = esi;
-    var_58 = esi;
+    r14d = 0;
+    var_60 = 0;
+    var_58 = 0;
     GetMenu(qword_ADDR);
     rbp = rax;
     SendMessageW(qword_ADDR, 0xADDR, &var_60, &var_58);

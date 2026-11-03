@@ -1,16 +1,13 @@
 // L1 structure recovery (20 blocks)
 void sub_140002418_l1(void) {
-    eax = 0;
-    ecx = 0;
     __asm("cpuid");
-    r8d = ecx;
+    r8d = 0;
     r11d = 0;
     r10d = edx;
     r8d ^= 0xADDR;
     r10d ^= 0xADDR;
     r9d = ebx;
-    esi = eax;
-    ecx = 0;
+    esi = 0;
     eax = (r11 + 1);
     r10d |= r8d;
     __asm("cpuid");
@@ -18,8 +15,8 @@ void sub_140002418_l1(void) {
     var_0 = eax;
     r10d |= r9d;
     var_4 = ebx;
-    edi = ecx;
-    var_8 = ecx;
+    edi = 0;
+    var_8 = 0;
     var_c = edx;
     if (r10d != 0) {
         r8d = dword_ADDR;
@@ -41,12 +38,11 @@ void sub_140002418_l1(void) {
     eax = 7;
     r9d = (rax - 5);
     if (esi >= 7 /* signed */) {
-        ecx = 0;
         __asm("cpuid");
         var_0 = eax;
         r11d = ebx;
         var_4 = ebx;
-        var_8 = ecx;
+        var_8 = 0;
         var_c = edx;
         if (((ebx >> 9) & 1) != 0) {
             r8d |= r9d;
@@ -58,7 +54,7 @@ void sub_140002418_l1(void) {
     if (((edi >> 0xADDR) & 1) != 0) {
         dword_ADDR = r9d;
         ebx = 6;
-        dword_ADDR = ebx;
+        dword_ADDR = 6;
         if (((edi >> 0xADDR) & 1) != 0 && ((edi >> 0xADDR) & 1) != 0) {
             ecx = 0;
             __asm("xgetbv");

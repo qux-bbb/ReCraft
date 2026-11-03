@@ -3,7 +3,7 @@ void sub_140026268_l1(void) {
     var_60 = r8d;
     r15d = 0;
     rsi = r9;
-    *(u32*)(r9) = r15d;
+    *(u32*)(r9) = 0;
     r14 = rdx;
     *(u16*)(rdx) = r15w;
     rbx = rcx;
@@ -14,7 +14,7 @@ void sub_140026268_l1(void) {
     } else {
         var_58 = r15;
         sub_1400256d8(rbx, &var_58);
-        ebx = eax;
+        ebx = 0;
         if (eax >= 0 /* signed */) {
             rcx = var_58;
             var_60 = r15d;

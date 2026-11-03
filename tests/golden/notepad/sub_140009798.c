@@ -9,13 +9,12 @@ void sub_140009798_l1(void) {
         *(u32*)(rdi) = ebx;
     }
     *(u32*)(rax) = 1;
-    r14d = ebx;
-    var_30 = rbx;
+    r14d = 0;
+    var_30 = 0;
     r14b = (uint8)((r8d == 0));
     ebp = ebx;
-    eax = 0;
-    var_38 = rax;
-    var_40 = eax;
+    var_38 = 0;
+    var_40 = 0;
     rax = qword_ADDR;
     if (rax != 0) {
         sub_140028010(r15d, r14d, &var_30, &var_38);

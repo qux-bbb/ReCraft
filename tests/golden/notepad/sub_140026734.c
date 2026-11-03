@@ -5,7 +5,7 @@ void sub_140026734_l1(void) {
     rsi = rdx;
     *(u16*)(rdx) = r14w;
     rax = *(u64*)(rcx);
-    var_a0 = r14;
+    var_a0 = 0;
     rax = *(u64*)((rax + 0xADDR));
     sub_140028010(rcx, &var_a0);
     ebx = eax;
@@ -51,12 +51,11 @@ void sub_140026734_l1(void) {
                 rax = *(u64*)((rax + 0xADDR));
                 sub_140028010(rcx, rdx, r8);
             }
-            eax = 0;
         } else if (var_b0 > r14d) {
             r8 = var_a8;
             r8 = *(u64*)(r8);
             sub_140008384(rsi, 0xADDR);
-            edi = eax;
+            edi = 0;
             sub_1400253cc(&var_40);
             rcx = *(u64*)(rbx);
             rax = *(u64*)((rcx + 0xADDR));

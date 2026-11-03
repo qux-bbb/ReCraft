@@ -8,8 +8,7 @@ void sub_140026ee8_l1(void) {
     } else {
         rcx = qword_ADDR;
         *(u64*)(rbx) = "@)";
-        rax = 0xADDR;
-        *(u64*)(rbx) = rax;
+        *(u64*)(rbx) = 0xADDR;
         *(u32*)((rbx + 0xADDR)) = 1;
         if (rcx != 0) {
             rax = *(u64*)(rcx);

@@ -6,7 +6,7 @@ void sub_140007e20_l1(void) {
     rsi = rcx;
     *(u32*)((rcx + 8)) = eax;
     r12 = -1;
-    *(u64*)((rcx + 0xADDR)) = r13;
+    *(u64*)((rcx + 0xADDR)) = 0;
     r15 = rdx;
     eax = (uint32)(*(u16*)((rdx + 0xADDR)));
     *(u16*)((rcx + 0xADDR)) = ax;

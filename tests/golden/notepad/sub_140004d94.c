@@ -17,8 +17,7 @@ void sub_140004d94_l1(void) {
                 }
                 rcx = off_140034c40;
                 if (qword_ADDR != 0) {
-                    ebx = 1;
-                    dword_ADDR = ebx;
+                    dword_ADDR = 1;
                     ReleaseSRWLockExclusive(off_140034c40);
                 } else {
                     ReleaseSRWLockExclusive(off_140034c40);

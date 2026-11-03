@@ -8,9 +8,8 @@ void sub_14000c7f0_l1(void) {
     rax = qword_ADDR;
     rcx = qword_ADDR;
     var_64 = rax;
-    rax = off_14002b268;
     var_60 = 0xADDR;
-    var_a0 = rax;
+    var_a0 = off_14002b268;
     var_6c = rcx;
     var_78 = 8;
     var_7c = 0xADDR;
@@ -27,8 +26,7 @@ void sub_14000c7f0_l1(void) {
         var_50 = rbx;
         FormatMessageW(0xADDR, rbp, 0, 0, &var_48, 0, &var_50);
         if (eax == 0) {
-            eax = 6;
-            var_40 = eax;
+            var_40 = 6;
         } else {
             rax = var_48;
             var_8c = rax;

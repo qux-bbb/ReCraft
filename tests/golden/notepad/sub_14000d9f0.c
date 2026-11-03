@@ -1,7 +1,7 @@
 // L1 structure recovery (3 blocks)
 void sub_14000d9f0_l1(void) {
     ebx = 0;
-    hObject = rbx;
+    hObject = 0;
     GetCurrentProcess();
     OpenProcessToken(rax, (rbx + 8), &hObject);
     if (eax != 0) {

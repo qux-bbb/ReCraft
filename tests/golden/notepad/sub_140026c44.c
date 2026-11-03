@@ -2,7 +2,7 @@
 void sub_140026c44_l1(void) {
     esi = 0;
     rdi = rcx;
-    hstring2 = rsi;
+    hstring2 = 0;
     var_30 = si;
     if (rcx == 0) {
         WindowsDeleteString(rcx);
@@ -22,21 +22,18 @@ void sub_140026c44_l1(void) {
             } else {
                 rcx = qword_ADDR;
                 *(u64*)(rbx) = "@)";
-                rax = off_140029578;
-                *(u64*)(rbx) = rax;
+                *(u64*)(rbx) = off_140029578;
                 *(u32*)((rbx + 0xADDR)) = 1;
                 if (rcx != 0) {
                     rdx = *(u64*)(rcx);
                     rax = *(u64*)((rdx + 8));
                     sub_140028010(rcx, *(u64*)(rcx));
                 }
-                rax = sub_14000ce80;
                 *(u64*)((rbx + 0xADDR)) = rdi;
-                *(u64*)((rbx + 0xADDR)) = rax;
+                *(u64*)((rbx + 0xADDR)) = sub_14000ce80;
                 rdi = rsi;
-                rax = off_1400294b0;
                 *(u16*)((rbx + 0xADDR)) = si;
-                *(u64*)(rbx) = rax;
+                *(u64*)(rbx) = off_1400294b0;
             }
             WindowsDeleteString(rdi);
             var_20 = rsi;
@@ -116,10 +113,10 @@ void sub_140026c44_l1(void) {
     } while (*(u16*)((rcx + (rbx * 2))) != si);
     if (rbx > 0xADDR) {
         ebx = 0xADDR;
-        r9d = ebx;
+        r9d = 0xADDR;
         sub_140007cf0(var_68, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
         WindowsDeleteString(hstring2);
-        eax = ebx;
+        eax = 0xADDR;
         r11 = &var_60;
         return;
     }
@@ -141,21 +138,18 @@ void sub_140026c44_l1(void) {
         } else {
             rcx = qword_ADDR;
             *(u64*)(rbx) = "@)";
-            rax = off_140029578;
-            *(u64*)(rbx) = rax;
+            *(u64*)(rbx) = off_140029578;
             *(u32*)((rbx + 0xADDR)) = 1;
             if (rcx != 0) {
                 rdx = *(u64*)(rcx);
                 rax = *(u64*)((rdx + 8));
                 sub_140028010(rcx, *(u64*)(rcx));
             }
-            rax = sub_14000ce80;
             *(u64*)((rbx + 0xADDR)) = rdi;
-            *(u64*)((rbx + 0xADDR)) = rax;
+            *(u64*)((rbx + 0xADDR)) = sub_14000ce80;
             rdi = rsi;
-            rax = off_1400294b0;
             *(u16*)((rbx + 0xADDR)) = si;
-            *(u64*)(rbx) = rax;
+            *(u64*)(rbx) = off_1400294b0;
         }
         WindowsDeleteString(rdi);
         var_20 = rsi;
@@ -222,11 +216,10 @@ void sub_140026c44_l1(void) {
         r11 = &var_60;
         return;
     }
-    ebx = 0xADDR;
-    r9d = ebx;
+    r9d = 0xADDR;
     sub_140007cf0(var_68, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
     WindowsDeleteString(hstring2);
-    eax = ebx;
+    eax = 0xADDR;
     r11 = &var_60;
     return;
 }

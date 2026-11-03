@@ -2,7 +2,7 @@
 void sub_140010d60_l1(void) {
     esi = 0;
     rbx = rdx;
-    var_60 = rsi;
+    var_60 = 0;
     rdi = rcx;
     PathFindExtensionW(rcx);
     if (rax == 0) {

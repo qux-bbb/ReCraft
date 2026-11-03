@@ -6,9 +6,8 @@ void sub_14000fe3c_l1(void) {
         edx = 0;
         sub_1400029dc(&var_e0, 0, 0xADDR);
         FindFirstFileW(rbx, &var_e0);
-        rcx = off_1400291e0;
         rbx = rax;
-        var_70 = rcx;
+        var_70 = off_1400291e0;
         rcx = &var_48;
         rdx = &var_68;
         if (rax == -1) {

@@ -40,12 +40,11 @@ void sub_140004460_l1(void) {
             rsi += 0xADDR;
             rdi -= 1;
         } while (rdi != 0);
-        eax = 0;
     } else {
         dword_ADDR = edi;
         sub_140008e60(rdi, 8);
         ecx = 0;
-        qword_ADDR = rax;
+        qword_ADDR = 0;
         sub_140008ee0(0);
         if (qword_ADDR == rbx) {
             eax = -1;

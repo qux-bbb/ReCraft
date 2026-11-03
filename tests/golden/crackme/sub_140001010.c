@@ -27,7 +27,7 @@ void sub_140001010_l1(void) {
         if (rax != 0xADDR) goto loc_ADDR;
         eax = 0;
         r8d = (uint32)(*(u8*)(((rax + rdi) + 0xADDR)));
-        rcx = rax;
+        rcx = 0;
         ecx &= 0xADDR;
         edx = (uint32)(*(u8*)(((rsp + r8) + 0xADDR)));
         dl ^= *(u8*)(((rcx + rdi) + 0xADDR));
@@ -64,7 +64,7 @@ void sub_140001010_l1(void) {
     }
     loc_ADDR:
     r8d = (uint32)(*(u8*)(((rax + rdi) + 0xADDR)));
-    rcx = rax;
+    rcx = 0;
     ecx &= 0xADDR;
     edx = (uint32)(*(u8*)(((rsp + r8) + 0xADDR)));
     dl ^= *(u8*)(((rcx + rdi) + 0xADDR));
@@ -119,7 +119,7 @@ void sub_140001010_l1(void) {
         if (rax != 0xADDR) goto loc_ADDR;
         eax = 0;
         r8d = (uint32)(*(u8*)(((rax + rdi) + 0xADDR)));
-        rcx = rax;
+        rcx = 0;
         ecx &= 0xADDR;
         edx = (uint32)(*(u8*)(((rsp + r8) + 0xADDR)));
         dl ^= *(u8*)(((rcx + rdi) + 0xADDR));

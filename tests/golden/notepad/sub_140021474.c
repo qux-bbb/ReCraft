@@ -5,9 +5,9 @@ void sub_140021474_l1(void) {
     rsi = off_140035a90;
     r13d = 0;
     rbx = rcx;
-    var_a8 = r13;
+    var_a8 = 0;
     r12d = 1;
-    var_b0 = r13d;
+    var_b0 = 0;
     r15d = 0xADDR;
     if (r9w == 0) {
         rcx = r13;
@@ -134,8 +134,7 @@ void sub_140021474_l1(void) {
                             } else if (ax != *(u16*)((r8 + 0xADDR))) {
                                 if (ax != r10w) {
                                     if (ax == *(u16*)((r8 + 0xADDR))) {
-                                        r12d = 1;
-                                        r14 = r12;
+                                        r14 = 1;
                                     } else if (ax != *(u16*)((r8 + 0xADDR))) {
                                         if (ax == *(u16*)((r8 + 0xADDR))) {
                                             r12d = 2;

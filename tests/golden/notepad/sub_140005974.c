@@ -28,8 +28,7 @@ void sub_140005974_l1(void) {
             *(__m128*)((rbx + 0xADDR)) = xmm0;
             xmm1 = *(f64*)((rdx + 0xADDR));
             *(f64*)((rbx + 0xADDR)) = xmm1;
-            rbx = -1;
-            rax = rbx;
+            rax = -1;
             do {
                 rax += 1;
             } while (*(u8*)((rdi + rax)) != 0);

@@ -3,10 +3,10 @@ void sub_140011af8_l1(void) {
     rax = qword_ADDR;
     r12d = 0;
     var_58 = rax;
-    r15d = r12d;
-    var_54 = r12d;
+    r15d = 0;
+    var_54 = 0;
     r13 = r9;
-    var_44 = r12d;
+    var_44 = 0;
     dil = r8b;
     var_40 = r8b;
     rsi = rdx;
@@ -88,7 +88,7 @@ void sub_140011af8_l1(void) {
                         dword_ADDR = eax;
                         SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                         r12d = 0;
-                        dword_ADDR = r12d;
+                        dword_ADDR = 0;
                         if (dword_ADDR == 1 && r15d == 0) {
                             r8d = 0;
                             sub_140010f48(rsi, (r12 + 1), 0);
@@ -127,8 +127,7 @@ void sub_140011af8_l1(void) {
                                     sub_1400029dc(&var_280, 0, 0xADDR);
                                     sub_140026268(rbx, &var_280, r8, &var_48);
                                     if (eax >= 0 /* signed */ && var_48 != 2) {
-                                        r14d = 1;
-                                        edi = r14d;
+                                        edi = 1;
                                     }
                                 }
                                 if (rbx != 0) {
@@ -136,7 +135,7 @@ void sub_140011af8_l1(void) {
                                 }
                             } else {
                                 r14d = 1;
-                                edi = r14d;
+                                edi = 1;
                             }
                         }
                         if (r13 != 0) {

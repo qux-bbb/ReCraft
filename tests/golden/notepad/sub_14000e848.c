@@ -22,7 +22,7 @@ void sub_14000e848_l1(void) {
     ebp -= ebx;
     ebp -= edi;
     edi = 1;
-    var_28 = edi;
+    var_28 = 1;
     var_20 = ebp;
     MoveWindow(qword_ADDR, 0, ebx, esi, (ebp - edi), 1);
     rcx = qword_ADDR;

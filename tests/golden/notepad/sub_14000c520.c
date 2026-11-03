@@ -6,7 +6,7 @@ void sub_14000c520_l1(void) {
         esi = 1;
         rcx = qword_ADDR;
         rcx = ((dword_ADDR != edi) ? qword_ADDR : rcx);
-        dword_ADDR = esi;
+        dword_ADDR = 1;
         sub_14000c7f0(rcx);
         dword_ADDR = edi;
         r12d = eax;
