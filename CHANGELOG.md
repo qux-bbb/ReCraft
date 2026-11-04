@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Tab` flips between the disassembly and the pseudo-C, like IDA.** From the listing it
+  decompiles the function under the cursor (exactly `F5`: same view switch, same centring of
+  the cursor's line); from the Decompile view it returns to the disassembly address of the
+  cursor's row and keeps that row highlighted. The flip is a view change, not a jump: it
+  adds no navigation-history entry, and coming back re-centres the same line instead of
+  decompiling the function again. The binding is read after the Ctrl/Cmd chord guard, so
+  chords still reach the platform and `Space` keeps switching Graph/Text; the auxiliary
+  panes (Functions, Strings, Hex, …) ignore `Tab`. Three tests cover the key binding, the
+  listing-to-pseudo-C direction and the round trip (anchor, highlight, history, no
+  re-decompilation); the welcome cheat sheet, the Decompile hint line, `docs/DEMO.md` and
+  `docs/M4.md` document the key in both languages.
 - **File → Close project (`Ctrl+W`) unloads the open project** and returns to the welcome
   screen, so switching projects no longer needs a restart. Closing first cancels a running
   background analysis (its worker owns a second SQLite connection) and drops the AI job,

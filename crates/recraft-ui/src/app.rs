@@ -1023,6 +1023,8 @@ enum Action {
     Analyze,
     /// IDA's F5: show the pseudo-C of the function under the cursor in the Decompile pane.
     Decompile,
+    /// IDA's Tab: flip between the listing and the pseudo-C of the cursor's address.
+    ToggleDisasmPseudo,
     CancelAnalysis,
     Undo,
     Redo,
@@ -2354,13 +2356,7 @@ impl ReCraftApp {
     fn cursor_address(&self) -> Option<Address> {
         if self.tab == Tab::Pseudo {
             // Follow the active pseudo-C row, not the listing's first address.
-            self.pseudo
-                .as_ref()
-                .and_then(|lines| {
-                    self.active_pseudo_line(lines)
-                        .and_then(|index| lines.get(index))
-                        .map(|line| line.addr)
-                })
+            self.pseudo_cursor_address()
                 .or_else(|| self.disasm_rows.get(self.selected).map(|line| line.addr))
                 .or(Some(self.pseudo_start))
         } else if self.tab == Tab::Disasm && self.view_mode == ViewMode::Graph {
@@ -2368,6 +2364,70 @@ impl ReCraftApp {
         } else {
             self.disasm_rows.get(self.selected).map(|line| line.addr)
         }
+    }
+
+    /// Address of the pseudo-C row under the cursor. Returns `None` when the listing has no
+    /// row matching the disassembly selection — Graph mode keeps that selection from before
+    /// the function on screen, so the listing legitimately disagrees with it.
+    fn pseudo_cursor_address(&self) -> Option<Address> {
+        self.pseudo.as_ref().and_then(|lines| {
+            self.active_pseudo_line(lines)
+                .and_then(|index| lines.get(index))
+                .map(|line| line.addr)
+        })
+    }
+
+    /// IDA's `F5`: decompile the function under the cursor, bring the Decompile view to the
+    /// front and keep the cursor's line in view.
+    fn decompile_cursor_function(&mut self) {
+        if self.session.is_none() {
+            return;
+        }
+        let Some(addr) = self.cursor_address() else {
+            return;
+        };
+        let target = self
+            .function_containing(addr)
+            .map(|function| function.start);
+        // Re-decompiling a listing that already shows this function just re-centres it;
+        // only a different function retires the current rows and click anchor.
+        if target != self.pseudo_function_start() {
+            self.pseudo_dirty = true;
+            self.pseudo_selected_line = None;
+        }
+        self.pseudo_start = addr;
+        self.pseudo_scroll_to = Some(addr);
+        self.tab = Tab::Pseudo;
+        self.focus_pane(Pane::Pseudo);
+    }
+
+    /// IDA's `Tab`: flip between the listing and the pseudo-C of the address under the
+    /// cursor.
+    ///
+    /// Leaving the listing is exactly `F5`. Leaving the pseudo-C re-anchors the listing on
+    /// the cursor's row without retiring the pseudo-C (so its row highlight survives) and
+    /// without a history entry: IDA's Tab is a view flip, not a jump. That also means a
+    /// second Tab lands back on the same line instead of decompiling again.
+    fn toggle_disasm_pseudo(&mut self) {
+        if self.session.is_none() {
+            return;
+        }
+        if self.tab != Tab::Pseudo {
+            self.decompile_cursor_function();
+            return;
+        }
+        // The row the cursor is on. Graph mode has no row cursor and its anchor is the
+        // pseudo-C function, so the anchor is what goes back on screen.
+        let addr = self.pseudo_cursor_address().unwrap_or(self.pseudo_start);
+        self.disasm_start = addr;
+        self.selected = 0;
+        self.disasm_dirty = true;
+        // The target row opens at the top, like following it from the pseudo-C view.
+        self.disasm_scroll_to = Some(0.0);
+        // Graph mode anchors on `pseudo_start`, and coming back re-centres on the same row.
+        self.pseudo_start = addr;
+        self.tab = Tab::Disasm;
+        self.focus_pane(Pane::View);
     }
 
     /// Start the background analysis pass for the open project, unless one is running.
@@ -6926,6 +6986,9 @@ impl ReCraftApp {
                 action = Action::ShowXrefs;
             } else if input.modifiers.command {
                 // leave Ctrl/Cmd chords (copy, paste, …) to the platform.
+            } else if input.key_pressed(Key::Tab) {
+                // IDA's Tab flips the two code views; the auxiliary panes keep their keys.
+                action = Action::ToggleDisasmPseudo;
             } else if self.tab == Tab::Disasm && input.key_pressed(Key::C) {
                 action = Action::ApplyData(DataOp::Code);
             } else if self.tab == Tab::Disasm && input.key_pressed(Key::D) {
@@ -7132,29 +7195,8 @@ impl ReCraftApp {
             Action::Analyze => {
                 self.start_analysis();
             }
-            Action::Decompile => {
-                // IDA's F5: decompile the function under the cursor, bring the Decompile
-                // pane to the front and keep the cursor's line in view.
-                if self.session.is_none() {
-                    return;
-                }
-                let Some(addr) = self.cursor_address() else {
-                    return;
-                };
-                let target = self
-                    .function_containing(addr)
-                    .map(|function| function.start);
-                // Re-decompiling a listing that already shows this function just re-centres
-                // it; only a different function retires the current rows and click anchor.
-                if target != self.pseudo_function_start() {
-                    self.pseudo_dirty = true;
-                    self.pseudo_selected_line = None;
-                }
-                self.pseudo_start = addr;
-                self.pseudo_scroll_to = Some(addr);
-                self.tab = Tab::Pseudo;
-                self.focus_pane(Pane::Pseudo);
-            }
+            Action::Decompile => self.decompile_cursor_function(),
+            Action::ToggleDisasmPseudo => self.toggle_disasm_pseudo(),
             Action::CancelAnalysis => {
                 if let Some(job) = self.analysis.as_ref() {
                     job.cancel.store(true, Ordering::Relaxed);
@@ -9181,6 +9223,157 @@ mod tests {
             app.pseudo_scroll_to.is_none(),
             "the scroll request is one-shot"
         );
+    }
+
+    /// `Tab` is IDA's view flip; the auxiliary panes keep their own keys, so the binding is
+    /// only read off the tab, and `Space` still switches Graph/Text.
+    #[test]
+    fn tab_key_flips_the_two_code_views() {
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp::default();
+        let run = |app: &mut ReCraftApp, key: Key| -> Action {
+            let mut action = Action::None;
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let _ = ui;
+                action = app.handle_keys(&ctx);
+            });
+            output.textures_delta.clear();
+            action
+        };
+        app.tab = Tab::Disasm;
+        assert_eq!(
+            run(&mut app, Key::Tab),
+            Action::ToggleDisasmPseudo,
+            "Tab must flip the code views, not edit the listing"
+        );
+        app.tab = Tab::Pseudo;
+        assert_eq!(run(&mut app, Key::Tab), Action::ToggleDisasmPseudo);
+        app.tab = Tab::Disasm;
+        assert_eq!(
+            run(&mut app, Key::Space),
+            Action::ToggleViewMode,
+            "Space stays the Graph/Text switch"
+        );
+    }
+
+    /// From the listing, `Tab` is exactly `F5`: the cursor's function opens in Decompile.
+    #[test]
+    fn tab_from_the_listing_decompiles_the_cursor_function() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("tab-open.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.view_mode = ViewMode::Text;
+        app.tick();
+        app.tab = Tab::Disasm;
+        let cursor = app
+            .disasm_rows
+            .first()
+            .map(|row| row.addr)
+            .expect("the entry listing must have rows");
+        app.apply_action(&egui::Context::default(), Action::ToggleDisasmPseudo);
+        assert!(
+            matches!(app.tab, Tab::Pseudo),
+            "Tab opens the Decompile view"
+        );
+        assert_eq!(app.pseudo_start, cursor, "the pane must follow the cursor");
+        assert_eq!(
+            app.pseudo_scroll_to,
+            Some(cursor),
+            "Tab must centre the cursor line like F5"
+        );
+    }
+
+    /// Inside the pseudo-C, `Tab` goes back to the listing row it came from: the row keeps
+    /// its highlight, no history entry is added and a second `Tab` re-centres instead of
+    /// decompiling the same function again.
+    #[test]
+    fn tab_from_the_pseudo_c_returns_to_its_listing_row() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("tab-toggle.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::Decompile);
+        app.tick();
+        let lines = app
+            .pseudo
+            .clone()
+            .expect("the entry function must decompile");
+        // Click a row in the middle of the listing, then leave with Tab. A frame runs
+        // between the click and the key press, so the listing is reloaded by then.
+        let index = lines.len() / 2;
+        let addr = lines[index].addr;
+        app.apply_action(&ctx, Action::SyncPseudoLine { addr, line: index });
+        app.tick();
+        let history = app.history.len();
+        app.apply_action(&ctx, Action::ToggleDisasmPseudo);
+        assert!(
+            matches!(app.tab, Tab::Disasm),
+            "Tab must leave the pseudo-C view"
+        );
+        assert_eq!(
+            app.disasm_start, addr,
+            "the listing must re-anchor on the row's address"
+        );
+        assert_eq!(
+            app.history.len(),
+            history,
+            "Tab is a view flip, not a jump; it must not touch the history"
+        );
+        app.tick();
+        assert_eq!(
+            app.disasm_rows.first().map(|row| row.addr),
+            Some(addr),
+            "the row address must open the listing"
+        );
+        assert_eq!(
+            app.active_pseudo_line(&lines),
+            Some(index),
+            "the row stays the active line across the flip"
+        );
+        let history = app.history.len();
+        app.apply_action(&ctx, Action::ToggleDisasmPseudo);
+        assert!(matches!(app.tab, Tab::Pseudo));
+        assert_eq!(
+            app.pseudo_scroll_to,
+            Some(addr),
+            "coming back must re-centre the same line"
+        );
+        assert!(
+            !app.pseudo_dirty,
+            "the function is already decompiled; Tab must not decompile it again"
+        );
+        assert_eq!(app.history.len(), history, "the way back is a flip too");
     }
 
     /// IDA analyses a binary as soon as it is loaded, so importing a PE must start the

@@ -74,7 +74,9 @@ applied 3 proposal(s) through the command bus (undoable)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
    pane 或 Reset layout。快捷键：`F5` 反编译光标所在函数（IDA 同款，切到 Decompile 页签并把
-   当前行居中）、`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
+   当前行居中）、**`Tab` 在反汇编与伪代码之间来回切换**（同 IDA：反汇编里按 `Tab` 等于 `F5`；
+   伪代码里按 `Tab` 回到光标行对应的反汇编地址并保留该行高亮；切换不写导航历史，再按一次
+   `Tab` 回到同一行且不会重新反编译）、`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
    `F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`X` 打开交叉引用对话框；`Space` 切换
    Disassembly 的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
    （Text/Decompile/Hex）。分析没有独立快捷键（同 IDA）：导入时自动跑，重跑在菜单里。
@@ -90,7 +92,8 @@ applied 3 proposal(s) through the command bus (undoable)
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
 3. 点击函数（或按 **`F5`**）→ 中间 **Decompile** 页签，直接显示结构化反编译与签名（没有 L0/L1/L2 开关）；**Disassembly**
-   的 **Graph** 模式看 CFG。`F5` 会把光标所在函数的伪代码居中显示（同 IDA 的反编译键）。
+   的 **Graph** 模式看 CFG。`F5` 会把光标所在函数的伪代码居中显示（同 IDA 的反编译键）；
+   在伪代码里按 **`Tab`** 回到该行对应的反汇编（Graph 模式下回到同一张图）。
    反编译与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
    工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在反编译里同步高亮，
    反编译**单击**同步光标；**双击函数名进入该函数**（`Back`/◀ 返回调用方），**双击字符串字面量跳到该字符串的数据**（`db '…',0`），双击其他位置跳到反汇编。
