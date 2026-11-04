@@ -1,4 +1,4 @@
-﻿<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
 
 # ADR-010: 依赖白名单（cargo-deny），禁 GPL 系
 
@@ -8,7 +8,7 @@
 
 ## Context
 
-AGPL + 商业双许可要求依赖许可兼容。
+AGPL-3.0-only 是项目唯一许可，依赖许可必须与之兼容；同时保留将来对自己代码重新许可的可能。
 
 ## Decision
 

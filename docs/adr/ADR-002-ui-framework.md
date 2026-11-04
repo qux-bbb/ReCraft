@@ -13,7 +13,7 @@ ReCraft 的 UI 需要同时满足：
 2. 控制流图（数百到数千节点）的绘制、拖拽、缩放；
 3. 多面板停靠、键盘优先的操作流、深色主题；
 4. 中文注释与输入法；
-5. 全 Rust、无 webview（项目所有者明确要求）、MIT/Apache 许可（AGPL + 商业双许可兼容）；
+5. 全 Rust、无 webview（项目所有者明确要求）、MIT/Apache 许可（与 AGPL-3.0-only 兼容）；
 6. 单人、每周 3 天的投入，迭代速度优先。
 
 候选：egui / iced / Tauri（web） / Qt(cxx-qt) / Slint / GPUI。

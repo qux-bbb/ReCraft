@@ -103,7 +103,7 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 3. `pwsh -File scripts/package.ps1`（MSI 需要 `dotnet tool restore`；CI msi job 自动完成）。
 4. `scripts/verify-package.ps1` + 提权提示符下的 `scripts/verify-msi.ps1` 全过；
    校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
-5. 明确 AGPL-3.0-only 与商业许可入口（`LICENSE`/`README`），**不包含**任何样本二进制。
+5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
 6. 代码签名后，在干净 Win10/Win11 虚拟机各复跑一次安装→启动 UI→卸载。
 
 ## 限制

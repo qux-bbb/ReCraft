@@ -35,7 +35,7 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 
 | | ReCraft | IDA Pro | Ghidra |
 |---|---|---|---|
-| Price / license | AGPL-3.0-only (+ commercial) | commercial | Apache-2.0 |
+| Price / license | AGPL-3.0-only | commercial | Apache-2.0 |
 | UI | native Rust/egui | native | Java/Swing |
 | Decompiler | self-built (readable, not compilable) | Hex-Rays (mature) | mature |
 | MCP / AI assist | built in (provider-backed) | plugins/add-ons | plugins |
@@ -240,15 +240,17 @@ cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # und
 
 ## Contributing
 
-Contributions are welcome, but **every contribution requires a signed CLA**
-(this is what makes the AGPL + commercial dual-license model work).
+Contributions are welcome. Everything is accepted under **AGPL-3.0-only** (inbound =
+outbound): certify the [DCO](https://developercertificate.org/) with `git commit -s` —
+there is no CLA and no copyright assignment.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`CLA.md`](CLA.md).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 Never commit malware samples or binaries — use local, uncommitted test data only.
 
 ## License
 
-- Open-source edition: **AGPL-3.0-only** (see [`LICENSE`](LICENSE)).
-- Commercial license for use without AGPL obligations: see [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md).
+- **AGPL-3.0-only** (see [`LICENSE`](LICENSE)): distributing the binaries, or exposing them
+  over a network, requires offering the corresponding source. The project does not sell a
+  commercial license.
 - The "ReCraft" name and logo are governed by [`TRADEMARK.md`](TRADEMARK.md).

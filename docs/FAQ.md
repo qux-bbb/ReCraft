@@ -42,10 +42,11 @@ ReCraft 只做**静态解析**，不加载、不执行、不解包样本；但�
 问题请按 [SECURITY.md](../SECURITY.md) 报告。分析时请勿把样本提交到仓库（`.gitignore`
 已排除常见二进制）。
 
-## 8. 为什么是 AGPL + 商业双许可？
+## 8. 为什么是 AGPL-3.0-only？
 
-开源版 AGPL-3.0-only 保证社区可审计/可修改；不想承担 AGPL 义务的组织可购买商业许可。
-两者都要求贡献者签署 CLA（见 [CLA.md](../CLA.md)）。
+反编译器本身就是「可审计性」的工具：AGPL 保证任何人拿到二进制都能拿到对应源码，改了也
+必须回馈，这正是这类工具该守的规则。贡献按 inbound = outbound 接受（`git commit -s` 签
+DCO），不需要 CLA，也不做版权转让。
 
 ## 9. 有 MCP 吗？能接 Claude/Cursor 吗？
 

@@ -20,8 +20,6 @@ $failures = New-Object System.Collections.Generic.List[string]
 # 1. Required legal/notice files.
 $required = @(
     'LICENSE',
-    'LICENSE-COMMERCIAL.md',
-    'CLA.md',
     'CONTRIBUTING.md',
     'TRADEMARK.md',
     'SECURITY.md',

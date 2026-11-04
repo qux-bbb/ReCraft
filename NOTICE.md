@@ -1,13 +1,13 @@
 # NOTICE
 
-ReCraft is licensed under **AGPL-3.0-only** (see [LICENSE](LICENSE)); commercial licensing
-is available separately (see [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md)). Documentation
-and the design documents in `docs/` are distributed under the same license. "ReCraft" and
-the ReCraft logo are trademarks of the project authors (see [TRADEMARK.md](TRADEMARK.md)).
+ReCraft is licensed under **AGPL-3.0-only** (see [LICENSE](LICENSE)); there is no commercial
+license. Contributions are accepted under the same license (inbound = outbound, DCO
+sign-off). Documentation and the design documents in `docs/` are distributed under the same
+license. "ReCraft" and the ReCraft logo are trademarks of the project authors (see
+[TRADEMARK.md](TRADEMARK.md)).
 
 ReCraft links the following third-party components. Their licenses are compatible with
-AGPL-3.0-only and with the optional commercial license (no GPL-2.0-only / GPL-3.0 code is
-used). Direct dependencies:
+AGPL-3.0-only (no GPL-2.0-only / GPL-3.0 code is used). Direct dependencies:
 
 | Component | Purpose | License |
 |---|---|---|

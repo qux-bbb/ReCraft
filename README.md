@@ -35,7 +35,7 @@ ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的�
 
 | | ReCraft | IDA Pro | Ghidra |
 |---|---|---|---|
-| 价格 / 许可 | AGPL-3.0-only（另有商业许可） | 商业 | Apache-2.0 |
+| 价格 / 许可 | AGPL-3.0-only | 商业 | Apache-2.0 |
 | 界面 | 原生 Rust/egui | 原生 | Java/Swing |
 | 反编译器 | 自研（可读，不保证可编译） | Hex-Rays（成熟） | 成熟 |
 | MCP / AI 辅助 | 内置（离线优先） | 插件/附加组件 | 插件 |
@@ -234,15 +234,16 @@ cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # und
 
 ## 贡献
 
-欢迎贡献，但**每项贡献都需要签署 CLA**（这是 AGPL + 商业双许可模式能够成立的前提）。
+欢迎贡献。贡献按 **AGPL-3.0-only** 入库（inbound = outbound）：提交时用 `git commit -s`
+签署 [DCO](https://developercertificate.org/) 即可，没有 CLA，也没有版权转让——你写的东西
+仍然属于你，只是以 AGPL 授权给所有人。
 
-见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`CLA.md`](CLA.md)。
+见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 绝不要提交恶意样本或二进制文件——只使用本地、未提交的测试数据。
 
 ## 许可
 
-- 开源版：**AGPL-3.0-only**（见 [`LICENSE`](LICENSE)）。
-- 希望在不承担 AGPL 义务的情况下使用，可购买商业许可：见
-  [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)。
+- **AGPL-3.0-only**（见 [`LICENSE`](LICENSE)）：分发二进制或通过网络提供服务时，必须提供
+  对应源码。本项目不另售商业许可。
 - “ReCraft”名称和 logo 受 [`TRADEMARK.md`](TRADEMARK.md) 约束。

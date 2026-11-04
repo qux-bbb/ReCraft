@@ -34,8 +34,8 @@ thiserror = "2"
 # Third-party crates are added here when the first consumer lands, e.g.:
 #   iced-x86, goblin, rusqlite (bundled SQLite), egui/eframe/egui_dock,
 #   clap, rayon, serde, tracing, thiserror, rmcp, fluent.
-# Every dependency must pass `deny.toml` (permissive licenses only: the code must
-# remain usable in the commercial edition of ReCraft).
+# Every dependency must pass `deny.toml` (permissive licenses only: the whole workspace
+# stays uniformly AGPL-3.0-only, with no GPL-2.0-only code pulled in).
 
 [profile.release]
 lto = "thin"

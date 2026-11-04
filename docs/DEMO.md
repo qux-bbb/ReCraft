@@ -152,7 +152,7 @@ recraft-cli ai explain demo.rcraft --addr entry --llm
 
 ## 演示话术（对外 10 分钟）
 
-1. **问题**（1 min）：闭源 IDA 昂贵/不可定制；ReCraft 是 AGPL + 商业双许可的原生 Rust 工具。
+1. **问题**（1 min）：闭源 IDA 昂贵/不可定制；ReCraft 是 AGPL-3.0-only 的原生 Rust 工具。
 2. **导入与分析**（2 min）：1 GiB 样本门禁（zip 体积、内存 ≤512 MiB）、函数发现、API 分类。
 3. **反编译**（3 min）：L2 结构化、字段/数组/结构体/原型、golden 回归与质量门禁。
 4. **AI 与写回**（2 min）：Proposal 带证据与置信度；只有人工确认才经命令总线写入，可 undo。

@@ -3,8 +3,8 @@
 The name **ReCraft**, the ReCraft logo, and any associated wordmarks or visual identity
 (the "Marks") are trademarks of the project owner.
 
-The source code is licensed under AGPL-3.0-only (and a commercial license), but **the
-Marks are not licensed under those terms.** Specifically:
+The source code is licensed under AGPL-3.0-only, but **the Marks are not licensed under
+those terms.** Specifically:
 
 - Forks and derivative distributions may not use the Marks, or confusingly similar names
   (e.g. "ReCraft Pro", "ReCraft++", "ReCraft Reborn"), in a way that suggests endorsement,

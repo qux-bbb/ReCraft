@@ -75,6 +75,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **AGPL-3.0-only is now the only license, and contributions use a DCO instead of a CLA.**
+  The commercial-license track is gone (`LICENSE-COMMERCIAL.md` and `CLA.md` removed), so
+  the only thing a contributor has to do is `git commit -s`: contributions are accepted
+  inbound = outbound under AGPL-3.0-only, with no copyright assignment and no relicensing
+  grant. The dependency allow-list is unchanged (GPL-2.0-only stays out for AGPL
+  compatibility, GPL-3.0-only to keep a future relicense of our own code possible).
+  `scripts/check-license.ps1`, `deny.toml`, `Cargo.toml`, `NOTICE.md`, both READMEs,
+  `CONTRIBUTING.md`, `docs/FAQ.md`, `docs/DESIGN.md` §11/§12/§16, `docs/M4.md`,
+  `docs/RELEASE.md`, `docs/DEMO.md`, `docs/README.md` and ADR-002/ADR-010 were updated, and
+  ADR-013 supersedes ADR-007.
 - **`F5` decompiles, like IDA; analysis runs on import.** The key no longer starts the
   analysis pass. Importing a PE now kicks off the background analysis on its own — the
   toolbar button, `Options → Analyze functions` and the palette command `Re-run analysis`

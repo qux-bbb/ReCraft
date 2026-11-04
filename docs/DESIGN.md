@@ -20,7 +20,7 @@
 | 8 | 脚本 | v1 仅 CLI + MCP；插件/脚本宿主后置 |
 | 9 | 动态分析 | v1 不做 |
 | 10 | AI | 原生 MCP；LLM 命名、解释、自然语言查询 |
-| 11 | 许可证 | AGPL-3.0-only + 商业双许可 + CLA |
+| 11 | 许可证 | AGPL-3.0-only；贡献 inbound = outbound（DCO），无 CLA |
 | 12 | 大样本 | 目标 1 GB |
 | 13 | 语言 | UI 英文 + 简中；代码/文档英文 |
 | 14 | 分发 | GitHub 公开仓库 + Actions；Windows 绿色版 zip + 安装包 |
@@ -479,10 +479,10 @@ CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质�
 
 ## 12. 许可与合规
 
-- 代码：`AGPL-3.0-only`（每文件 SPDX 头）+ 商业许可（`LICENSE-COMMERCIAL.md`）
-- **CLA 从第一天启用**（双许可的前提）；不使用 DCO
+- 代码：`AGPL-3.0-only`（每文件 SPDX 头）；不提供商业许可
+- 贡献：inbound = outbound，`git commit -s` 签署 DCO；**不使用 CLA**，不做版权转让（ADR-013）
 - `TRADEMARK.md`：名字/logo 不得被 fork 使用
-- 依赖白名单：MIT / Apache-2.0 / BSD-2/3 / ISC / Zlib / MPL-2.0 / Unlicense；**禁止 GPL-2.0-only 与 GPL-3.0**（前者与 AGPL 不兼容，后者阻断闭源商业版）
+- 依赖白名单：MIT / Apache-2.0 / BSD-2/3 / ISC / Zlib / MPL-2.0 / Unlicense；**禁止 GPL-2.0-only 与 GPL-3.0**（前者与 AGPL 不兼容，后者会堵死将来对自己代码的重新许可）
 - CI：`cargo-deny`（licenses/bans/sources）；`REUSE` 合规检查；`NOTICE` 汇总
 - 样本、签名、恶意代码一律不入库
 
@@ -492,7 +492,7 @@ CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质�
 
 ## 13. 发布与分发
 
-- 仓库：GitHub 公开；分支 `main` + PR 流程；`CONTRIBUTING.md`（含 CLA）
+- 仓库：GitHub 公开；分支 `main` + PR 流程；`CONTRIBUTING.md`（DCO 签署说明）
 - CI（GitHub Actions）：`windows-latest` 构建/测试/clippy/fmt/deny；后续 `ubuntu-latest`
 - 产物：绿色版 zip（解压即用）+ WiX MSI 安装包（按机器、需管理员，可选文件关联 `.rcraft`）
 - 版本：SemVer；`CHANGELOG.md`
@@ -524,7 +524,7 @@ CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质�
 | 1 GB 性能 | M1 起就用合成大样本跑基准；xref 有退路方案 |
 | 单人节奏断裂 | 每里程碑可演示产出；M3 发内部 alpha 收反馈 |
 | 分析质量被加壳样本击穿 | v1 明确"未加壳/可静态"范围；文档写清限制 |
-| AGPL 劝退企业用户 | README 写清双许可路径；M4 前上商业许可入口 |
+| AGPL 劝退企业用户 | README 写清许可性质与理由（可审计性优先）；不另售商业许可，也不假装有 |
 
 ---
 
@@ -549,8 +549,10 @@ CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质�
 | ADR-004 | 用户数据（journal）与派生数据（可重建）分离 | 已定 |
 | ADR-005 | 自研 L1 反编译器（LIR→MIR→HIR），不集成外部实现 | 已定 |
 | ADR-006 | 不兼容 IDAPython；自有 API（CLI/MCP 先行） | 已定 |
-| ADR-007 | AGPL-3.0-only + 商业双许可 + CLA | 已定 |
+| ADR-007 | AGPL-3.0-only + 商业双许可 + CLA | 已被 ADR-013 取代 |
 | ADR-008 | MCP 原生；写操作 propose/apply，人工确认 | 已定 |
 | ADR-009 | Windows 首发，core 跨平台，Ubuntu 后置 | 已定 |
 | ADR-010 | 依赖白名单（cargo-deny），禁 GPL 系 | 已定 |
 | ADR-011 | 大样本目标 1 GB，交互优先、后台导入/分析 | 已定 |
+| ADR-012 | 多窗口 | 已定 |
+| ADR-013 | 纯 AGPL-3.0-only，DCO 取代 CLA，取消商业许可 | 已定 |

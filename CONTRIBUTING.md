@@ -7,9 +7,11 @@ open an issue before starting anything non-trivial.
 
 1. **Read [`docs/DESIGN.md`](docs/DESIGN.md).** It defines the architecture, the crate graph,
    and the non-goals. Changes that cut across those need an ADR entry first.
-2. **Sign the CLA.** Every contribution (code, docs, assets) requires the
-   [Individual CLA](CLA.md) or a Corporate CLA. PRs without a signed CLA cannot be merged.
-   This is required by the AGPL + commercial dual-license model.
+2. **Sign off your commits.** Contributions are accepted under the project license
+   (`AGPL-3.0-only`, inbound = outbound): certify the
+   [Developer Certificate of Origin](https://developercertificate.org/) with `git commit -s`.
+   There is no CLA and no copyright assignment — your contribution stays yours, licensed to
+   everyone under AGPL-3.0-only.
 3. **No malware, no binaries.** Do not commit samples, packed executables, or anything that
    requires execution. Tests use source-built fixtures and synthetic data.
 

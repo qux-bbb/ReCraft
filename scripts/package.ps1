@@ -165,7 +165,7 @@ try {
         "ReCraft $Version"
         "built: $stamp"
         "target: windows-x64"
-        "license: AGPL-3.0-only (commercial licensing available, see LICENSE)"
+        "license: AGPL-3.0-only (see LICENSE)"
     ) | Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Encoding ascii
 
     $zipName = "recraft-v$Version-windows-x64.zip"
