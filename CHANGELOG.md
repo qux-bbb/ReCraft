@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The AI panel has a **Re-polish** button once a polish answer is on screen. The panel's
+  `PromptCache` normally answers a repeated Polish instantly with the same text, which made
+  a second attempt on the same function look like a dead button. Re-polish rebuilds the
+  prompt, skips the cache lookup and streams a fresh answer, which then replaces the cached
+  entry; Polish itself now reports a cache hit as “polish done … (cached)”. The button only
+  appears for polish results (an Explain report is prose and has nothing to redo) and is
+  disabled while a job is running. A test seeds the cache, checks that Polish reuses it and
+  that Re-polish starts a new job instead.
 - **`Tab` flips between the disassembly and the pseudo-C, like IDA.** From the listing it
   decompiles the function under the cursor (exactly `F5`: same view switch, same centring of
   the cursor's line); from the Decompile view it returns to the disassembly address of the

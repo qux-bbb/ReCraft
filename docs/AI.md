@@ -113,6 +113,10 @@ recraft-cli ai polish notepad.rcraft --addr entry [--json] [--no-cache]
   请求在后台线程执行，UI 不阻塞；结果只做展示（不写回伪代码），并按伪代码语法着色
   （关键字/类型蓝、寄存器紫、符号名金、数字与字符串/注释绿，与 Decompile 视图同一套配色；
   Explain 的说明文本保持纯色）。
+- **Re-polish（重新润色）**：润色结果出现后，Polish 旁多出一个「重新润色」按钮。普通
+  Polish 会先查本次会话的 `PromptCache`（命中时状态显示“润色完成（使用缓存）”并立即返回
+  同一段文本）；重新润色跳过这次查缓存，重新向模型要一版，完成后用新答案覆盖该 prompt
+  的缓存。用于对第一条建议不满意、或想换个模型/思考模式重试时。
 - **Provider settings**：UI 内直接编辑 provider 类型、endpoint、model、API key 环境变量名与
   max tokens，保存到 `%LOCALAPPDATA%\ReCraft\ai-settings.json`（只存环境变量名，**不存密钥**）。
   保存后从环境变量重算 `enabled`；CLI 的 `ai provider` 仍可查看解析结果。

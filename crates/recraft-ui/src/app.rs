@@ -1051,6 +1051,8 @@ enum Action {
     OpenRecent(usize),
     AiExplain,
     AiPolish,
+    /// Run the polish request again for the current function, ignoring the session cache.
+    AiRepolish,
     AiQuery,
     NavigateToDisasm(Address),
     /// Centre a block in the graph view without leaving graph mode (Graph overview click).
@@ -2577,6 +2579,96 @@ impl ReCraftApp {
                 }
             }
         }
+    }
+
+    /// Build the polish prompt for the function under the cursor and start the model
+    /// request on a background thread.
+    ///
+    /// `use_cache` reuses this session's answer for an identical prompt. **Re-polish**
+    /// passes `false`: clicking the button again on the same function is an explicit
+    /// request for another suggestion, so serving the cached text silently would make
+    /// the action look broken. A fresh answer replaces the cached one when it arrives.
+    fn start_polish(&mut self, ctx: &egui::Context, use_cache: bool) {
+        if self.ai_job.is_some() {
+            return;
+        }
+        self.ai_settings.refresh_enabled();
+        if !self.ai_settings.enabled {
+            self.ai_status = self.t("ui_enable_provider_for_polish").to_owned();
+            return;
+        }
+        let Some((start, _)) = self.current_function() else {
+            self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
+            return;
+        };
+        let mut settings = self.ai_settings.clone();
+        // OpenCode Go allocates very long reasoning budgets when asked for 64k
+        // completion tokens; a polish answer is typically < 4k, and the high cap
+        // delays the first token by tens of seconds. Keep an 8k ceiling on the
+        // direct-answer path; an explicit thinking request needs the full budget.
+        if !self.ai_thinking {
+            settings.max_tokens = polish_token_limit(&settings.endpoint, settings.max_tokens);
+        }
+        let fingerprint = format!(
+            "{}|{}|{}",
+            settings.endpoint, settings.model, settings.max_tokens
+        );
+        if self.ai_cache_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+            self.ai_cache = recraft_ai::PromptCache::new();
+            self.ai_cache_fingerprint = Some(fingerprint);
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let prompt = match recraft_ai::build_polish_prompt(session, start, &settings) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        // The toggle opts into the model's reasoning pass and streams it into the
+        // collapsible thinking section; off keeps the fast direct-answer path.
+        let prompt = if self.ai_thinking {
+            prompt.with_thinking()
+        } else {
+            prompt
+        };
+        self.ai_explanation = None;
+        // Polish answers are pseudo-C: colour them like the Decompile view.
+        self.ai_result_kind = AiResultKind::Code;
+        self.ai_reasoning.clear();
+        self.ai_reasoning_open = self.ai_thinking;
+        if use_cache && let Some(cached) = self.ai_cache.get(&prompt) {
+            let text = cached.to_owned();
+            self.ai_explanation = Some(text);
+            self.ai_status = self.t_args("ui_polish_cached", &[("ms", "0")]);
+            self.set_status(self.ai_status.clone());
+            return;
+        }
+        let job_prompt = prompt.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut provider = recraft_ai::provider_from_settings(&settings);
+            let result = provider.complete_stream_with_reasoning(
+                &prompt,
+                &mut |chunk| {
+                    let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
+                },
+                &mut |reasoning| {
+                    let _ = sender.send(AiMessage::Reasoning(reasoning.to_owned()));
+                },
+            );
+            let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
+        });
+        self.ai_job = Some(AiJob {
+            receiver,
+            started: Instant::now(),
+            prompt: Some(job_prompt),
+        });
+        self.ai_status = self.t("ui_calling_provider").to_owned();
+        self.set_status(self.ai_status.clone());
+        ctx.request_repaint();
     }
 
     /// Data row for the stored string at `index`, starting at `addr`.
@@ -4748,6 +4840,8 @@ impl ReCraftApp {
         let apply_label = self.t("ui_apply_selected");
         let explain_label = self.t("ui_explain");
         let polish_label = self.t("ui_polish");
+        let repolish_label = self.t("ui_repolish");
+        let repolish_hint = self.t("ui_repolish_hint");
         let clear = self.t("ui_clear");
         let thinking_mode = self.t("ui_thinking_mode");
         let thinking_hint = self.t("ui_thinking_hint");
@@ -4834,6 +4928,21 @@ impl ReCraftApp {
                     .clicked()
                 {
                     *action = Action::AiPolish;
+                }
+                // A polish answer can be cached, so pressing Polish again may return the
+                // same text. Offer an explicit re-run that skips the cache once a polish
+                // result is on screen (an explanation is prose and has nothing to redo).
+                if self.ai_result_kind == AiResultKind::Code
+                    && self.ai_explanation.is_some()
+                    && ui
+                        .add_enabled(
+                            self.ai_job.is_none(),
+                            egui::Button::new(repolish_label.as_str()),
+                        )
+                        .on_hover_text(repolish_hint.as_str())
+                        .clicked()
+                {
+                    *action = Action::AiRepolish;
                 }
                 if ui
                     .add_enabled(has_selection, egui::Button::new(apply_label.as_str()))
@@ -7448,89 +7557,8 @@ impl ReCraftApp {
                     Err(error) => self.set_error(error),
                 }
             }
-            Action::AiPolish => {
-                if self.ai_job.is_some() {
-                    return;
-                }
-                self.ai_settings.refresh_enabled();
-                if !self.ai_settings.enabled {
-                    self.ai_status = self.t("ui_enable_provider_for_polish").to_owned();
-                    return;
-                }
-                let Some((start, _)) = self.current_function() else {
-                    self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
-                    return;
-                };
-                let mut settings = self.ai_settings.clone();
-                // OpenCode Go allocates very long reasoning budgets when asked for 64k
-                // completion tokens; a polish answer is typically < 4k, and the high cap
-                // delays the first token by tens of seconds. Keep an 8k ceiling on the
-                // direct-answer path; an explicit thinking request needs the full budget.
-                if !self.ai_thinking {
-                    settings.max_tokens =
-                        polish_token_limit(&settings.endpoint, settings.max_tokens);
-                }
-                let fingerprint = format!(
-                    "{}|{}|{}",
-                    settings.endpoint, settings.model, settings.max_tokens
-                );
-                if self.ai_cache_fingerprint.as_deref() != Some(fingerprint.as_str()) {
-                    self.ai_cache = recraft_ai::PromptCache::new();
-                    self.ai_cache_fingerprint = Some(fingerprint);
-                }
-                let Some(session) = self.session.as_mut() else {
-                    return;
-                };
-                let prompt = match recraft_ai::build_polish_prompt(session, start, &settings) {
-                    Ok(prompt) => prompt,
-                    Err(error) => {
-                        self.set_error(error);
-                        return;
-                    }
-                };
-                // The toggle opts into the model's reasoning pass and streams it into the
-                // collapsible thinking section; off keeps the fast direct-answer path.
-                let prompt = if self.ai_thinking {
-                    prompt.with_thinking()
-                } else {
-                    prompt
-                };
-                self.ai_explanation = None;
-                // Polish answers are pseudo-C: colour them like the Decompile view.
-                self.ai_result_kind = AiResultKind::Code;
-                self.ai_reasoning.clear();
-                self.ai_reasoning_open = self.ai_thinking;
-                if let Some(cached) = self.ai_cache.get(&prompt) {
-                    let text = cached.to_owned();
-                    self.ai_explanation = Some(text);
-                    self.ai_status = self.t_args("ui_polish_done", &[("ms", "0")]);
-                    self.set_status(self.ai_status.clone());
-                    return;
-                }
-                let job_prompt = prompt.clone();
-                let (sender, receiver) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let mut provider = recraft_ai::provider_from_settings(&settings);
-                    let result = provider.complete_stream_with_reasoning(
-                        &prompt,
-                        &mut |chunk| {
-                            let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
-                        },
-                        &mut |reasoning| {
-                            let _ = sender.send(AiMessage::Reasoning(reasoning.to_owned()));
-                        },
-                    );
-                    let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
-                });
-                self.ai_job = Some(AiJob {
-                    receiver,
-                    started: Instant::now(),
-                    prompt: Some(job_prompt),
-                });
-                self.ai_status = self.t("ui_calling_provider").to_owned();
-                self.set_status(self.ai_status.clone());
-                ctx.request_repaint();
-            }
+            Action::AiPolish => self.start_polish(ctx, true),
+            Action::AiRepolish => self.start_polish(ctx, false),
             Action::TogglePalette => {
                 self.palette = if self.palette.is_some() {
                     None
@@ -10433,6 +10461,63 @@ mod tests {
             app.ai_status
         );
         assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn repolish_bypasses_the_session_cache() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("repolish.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.refresh_functions();
+        app.tick();
+        if app.functions.is_empty() || app.disasm_rows.is_empty() {
+            return;
+        }
+        // Any cache miss spawns a worker for this endpoint, so the cache decision is
+        // observable without a real provider round trip.
+        app.ai_settings.endpoint = "http://127.0.0.1:1".to_owned();
+        app.ai_settings.model = "test-model".to_owned();
+        app.ai_settings.api_key = Some("test-key".to_owned());
+        app.ai_settings.max_tokens = 4096;
+        app.ai_settings.refresh_enabled();
+        assert!(app.ai_settings.enabled);
+        app.ai_cache_fingerprint = Some(format!(
+            "{}|{}|{}",
+            app.ai_settings.endpoint, app.ai_settings.model, app.ai_settings.max_tokens
+        ));
+        let (start, _) = app.current_function().expect("cursor inside a function");
+        let prompt =
+            recraft_ai::build_polish_prompt(app.session.as_mut().unwrap(), start, &app.ai_settings)
+                .unwrap();
+        app.ai_cache.insert(&prompt, "cached polish");
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::AiPolish);
+        assert_eq!(app.ai_explanation.as_deref(), Some("cached polish"));
+        assert!(
+            app.ai_job.is_none(),
+            "a repeated polish may reuse the cache"
+        );
+        app.apply_action(&ctx, Action::AiRepolish);
+        assert!(
+            app.ai_explanation.is_none(),
+            "a fresh answer streams from scratch"
+        );
+        assert!(
+            app.ai_job.is_some(),
+            "re-polish must ask the provider again"
+        );
+        app.ai_job = None;
     }
 
     #[test]
