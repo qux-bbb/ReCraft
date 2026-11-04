@@ -2327,6 +2327,9 @@ impl ReCraftApp {
             self.refresh_imports();
         }
         self.refresh_xrefs();
+        // A jump, an undo or a restored layout can leave graph mode pointing at an item the
+        // graph cannot draw; IDA falls back to text in that case (see the rule below).
+        self.enforce_graph_view_mode();
         if self.view_mode == ViewMode::Graph {
             self.refresh_cfg();
         }
@@ -3140,6 +3143,34 @@ impl ReCraftApp {
                 self.set_error(error);
             }
         }
+    }
+
+    /// IDA's rule for graph mode: the graph only exists for instructions that belong to a
+    /// function, so anything else (a data row, an address outside every function) keeps the
+    /// view in text mode and reports the switch instead of painting an empty canvas.
+    ///
+    /// Called both when the mode is asked for (`Space`, the toolbar button, the palette) and
+    /// on every tick, so jumps, undo and restored layouts cannot leave the pane in graph mode
+    /// over an item that has no graph.
+    fn enforce_graph_view_mode(&mut self) {
+        if self.view_mode != ViewMode::Graph || self.tab != Tab::Disasm {
+            return;
+        }
+        // Without a project the pane shows the welcome page: there is no current item, and
+        // the persisted mode is only a preference.
+        if self.session.is_none() || self.graph_item_available() {
+            return;
+        }
+        self.view_mode = ViewMode::Text;
+        self.set_status(self.t("ui_graph_view_needs_an_instruction").to_owned());
+    }
+
+    /// Whether the current item can be drawn as a graph: a code row inside a function.
+    fn graph_item_available(&self) -> bool {
+        self.disasm_rows
+            .get(self.selected)
+            .is_some_and(|line| !line.flags.is_data())
+            && self.current_function().is_some()
     }
 
     // ---------------------------------------------------------------- draw --
@@ -7010,7 +7041,10 @@ impl ReCraftApp {
                 action = Action::EditName;
             } else if input.key_pressed(Key::Semicolon) {
                 action = Action::EditComment;
-            } else if input.key_pressed(Key::Space) {
+            } else if self.tab == Tab::Disasm && input.key_pressed(Key::Space) {
+                // IDA binds Space to the disassembly view, so the Decompile pane (and the
+                // side lists) leave it alone; the toolbar button and the palette entry can
+                // still bring the graph/text switch back to the front from anywhere.
                 action = Action::ToggleViewMode;
             } else if input.key_pressed(Key::X) {
                 action = Action::ShowXrefs;
@@ -7450,12 +7484,15 @@ impl ReCraftApp {
                 self.save_layout_now();
             }
             Action::ToggleViewMode => {
+                self.tab = Tab::Disasm;
+                self.focus_pane(Pane::View);
                 self.view_mode = match self.view_mode {
                     ViewMode::Graph => ViewMode::Text,
                     ViewMode::Text => ViewMode::Graph,
                 };
-                self.tab = Tab::Disasm;
-                self.focus_pane(Pane::View);
+                // Asking for the graph on a data row stays in text, like IDA; the status
+                // line says why (the button and the palette reach this from any pane).
+                self.enforce_graph_view_mode();
             }
             Action::GotoDialog => {
                 if self.session.is_some() {
@@ -9260,7 +9297,8 @@ mod tests {
     }
 
     /// `Tab` is IDA's view flip; the auxiliary panes keep their own keys, so the binding is
-    /// only read off the tab, and `Space` still switches Graph/Text.
+    /// only read off the tab. `Space` is the disassembly view's own Graph/Text switch, so the
+    /// pseudo-C view must leave it alone instead of jumping back to the listing.
     #[test]
     fn tab_key_flips_the_two_code_views() {
         let ctx = egui::Context::default();
@@ -9297,6 +9335,12 @@ mod tests {
             run(&mut app, Key::Space),
             Action::ToggleViewMode,
             "Space stays the Graph/Text switch"
+        );
+        app.tab = Tab::Pseudo;
+        assert_eq!(
+            run(&mut app, Key::Space),
+            Action::None,
+            "Space belongs to the disassembly view, not to the pseudo-C view"
         );
     }
 
@@ -9592,6 +9636,72 @@ mod tests {
             line.operands
         );
         assert!(line.flags.is_data(), "string rows are data, not code");
+    }
+
+    /// IDA's graph view exists for instructions inside a function only: asking for it on a
+    /// data row (or on an address outside every function) reports the switch and stays in
+    /// text, and a jump onto data leaves graph mode the same way instead of painting an
+    /// empty canvas.
+    #[test]
+    fn graph_view_falls_back_to_text_for_items_it_cannot_draw() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("graph-fallback.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        app.refresh_strings();
+
+        // Code inside a function keeps graph mode and builds its CFG.
+        let function = app
+            .functions
+            .first()
+            .expect("analysis found a function")
+            .start;
+        app.apply_action(
+            &egui::Context::default(),
+            Action::NavigateToDisasm(function),
+        );
+        app.tick();
+        app.view_mode = ViewMode::Graph;
+        app.tick();
+        assert_eq!(app.view_mode, ViewMode::Graph, "code keeps graph mode");
+        assert!(app.cfg.is_some(), "graph mode builds the function's CFG");
+
+        // A jump onto a string's data row drops out of graph mode on the next tick.
+        let data = app
+            .strings
+            .iter()
+            .find(|row| !is_string_noise(&row.segment, &row.text) && !row.text.is_empty())
+            .map(|row| row.addr)
+            .expect("sample has at least one string");
+        app.navigate(data);
+        app.tick();
+        assert_eq!(
+            app.view_mode,
+            ViewMode::Text,
+            "graph mode cannot stay on a data row"
+        );
+        assert_eq!(app.status, app.t("ui_graph_view_needs_an_instruction"));
+        assert!(!app.is_error, "the fallback is a notice, not an error");
+
+        // Space on a data row must not flip the mode either, only report why.
+        app.apply_action(&egui::Context::default(), Action::ToggleViewMode);
+        assert_eq!(
+            app.view_mode,
+            ViewMode::Text,
+            "Space cannot open a graph here"
+        );
+        assert_eq!(app.status, app.t("ui_graph_view_needs_an_instruction"));
     }
 
     #[test]

@@ -67,7 +67,9 @@ applied 3 proposal(s) through the command bus (undoable)
    字节、函数、与 Hex 同步提示）。
    **Disassembly 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
    **空格键**切换，不会切换标签页；Graph 中双击基本块会切到 Text 并定位。图形支持节点块/
-   箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。
+   箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。空格同 IDA 只属于反汇编视图：Decompile 等
+   页签里按空格没有作用；光标落在数据行或函数外时按空格会留在 Text 并在状态栏说明原因
+   （IDA 的"该条目无法用图形显示"提示）。
    **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在**全浅色/全深色**主题间切换；默认是**全浅色**，
    选择随布局一起保存。
    ![Default light theme](images/ida-layout.png)
@@ -78,7 +80,8 @@ applied 3 proposal(s) through the command bus (undoable)
    伪代码里按 `Tab` 回到光标行对应的反汇编地址并保留该行高亮；切换不写导航历史，再按一次
    `Tab` 回到同一行且不会重新反编译）、`F2` Functions、`F3` Names、`F4` Strings、`F6` Imports、
    `F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；`X` 打开交叉引用对话框；`Space` 切换
-   Disassembly 的 Graph/Text；**`Ctrl+=` / `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
+   Disassembly 的 Graph/Text（仅反汇编视图；数据行上留在 Text 并提示）；**`Ctrl+=` /
+   `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
    （Text/Decompile/Hex）。分析没有独立快捷键（同 IDA）：导入时自动跑，重跑在菜单里。
    **Strings** 采用 IDA 风格四列：**Address（段:地址）/ Length（hex）/ Type（C/C16）/
    String**；按数据库编码解码（UTF-16LE 不再乱码）、不再截断到 64 字节；单击选中并同步
