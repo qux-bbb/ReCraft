@@ -543,6 +543,11 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         addr: start,
         text: "}".to_owned(),
     });
+    if info.is_some() {
+        // The typed view is what a reader compares to source: replace machine registers by
+        // recovered locals. L1 stays register-level (it is the golden snapshot form).
+        crate::variables::recover_variables(&mut lines, session.image().is_64);
+    }
     // A function that still has jumps says so in the header: a reader can tell at a glance that
     // this body could not be reduced to structured control flow.
     let fallbacks = lines
@@ -10071,11 +10076,20 @@ mod tests {
         let start = function_start(&session, "corpus_counter_bump").unwrap();
         let text = pseudocode_l2(&mut session, start).unwrap().text();
         // The increment stays visible *and* the loaded value is not lost to the caller. The
-        // accumulation folds into the load (`eax = (dword_… + 1);`), so the assertions look at
-        // the increment and at the store that keeps the value in memory.
+        // accumulation folds into the load (`v1 = (dword_… + 1);`), so the value that is
+        // stored back and the value that is returned must be the same local.
         assert!(text.contains("dword_140003028 + 1)"), "{text}");
-        assert!(text.contains("dword_140003028 = eax;"), "{text}");
-        assert!(text.contains("return eax;"), "{text}");
+        let stored = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("dword_140003028 ="))
+            .expect("store");
+        let value = stored
+            .split_once('=')
+            .expect("store value")
+            .1
+            .trim()
+            .trim_end_matches(';');
+        assert!(text.contains(&format!("return {value};")), "{text}");
     }
 
     #[test]
@@ -10406,7 +10420,16 @@ mod tests {
         };
         let start = function_start(&session, "recursive").unwrap();
         let before = pseudocode_l2(&mut session, start).unwrap().text();
-        assert!(before.contains("recursive(rcx)"), "{before}");
+        // The call site names its argument (a local now, not the raw `rcx`).
+        let argument = |text: &str| {
+            text.split("recursive(")
+                .nth(1)
+                .and_then(|rest| rest.split(')').next())
+                .unwrap_or("")
+                .trim()
+                .to_owned()
+        };
+        assert!(!argument(&before).is_empty(), "{before}");
         session
             .execute(recraft_core::Command::SetPrototype {
                 addr: start,
@@ -10415,7 +10438,7 @@ mod tests {
             .unwrap();
         let after = pseudocode_l2(&mut session, start).unwrap().text();
         assert!(after.contains("int recursive(int n)"), "{after}");
-        assert!(after.contains("recursive(rcx)"), "{after}");
+        assert!(!argument(&after).is_empty(), "{after}");
         assert!(!after.contains("recursive()"), "{after}");
     }
 

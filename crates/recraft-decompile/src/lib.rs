@@ -25,6 +25,7 @@ use recraft_ir::{
 mod l2;
 mod quality;
 mod structuring;
+mod variables;
 
 pub use l2::{
     ArgNames, CallingConvention, L2Info, ProtoParam, ProtoSig, ReturnKind, parse_prototype,
