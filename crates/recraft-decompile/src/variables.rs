@@ -1966,6 +1966,11 @@ impl Vars {
             self.unsigned[var] += 1;
         }
     }
+
+    /// A definition widens the value but must not affect its inferred signedness.
+    fn add_def(&mut self, var: usize, width: u8) {
+        self.width[var] = self.width[var].max(width);
+    }
 }
 
 struct Program {
@@ -2054,7 +2059,9 @@ impl Program {
         let mut vars = Vars::new();
         let mut nodes = nodes;
         for node in &mut nodes {
-            if let Some(write) = &node.write {
+            if let Some(write) = &node.write
+                && write.compound.is_none()
+            {
                 node.write_var = vars.new_var(write.width);
             }
             if node.call {
@@ -2129,7 +2136,16 @@ impl Program {
             ins[index] = new_in;
             let mut out = new_in;
             if let Some(write) = &nodes[index].write {
-                out[write.reg as usize] = vars.find(nodes[index].write_var);
+                if write.compound.is_some() {
+                    // A compound assignment updates the value it read, so it keeps that
+                    // variable instead of introducing a second one.
+                    let previous = new_in[write.reg as usize];
+                    if previous != NONE {
+                        out[write.reg as usize] = vars.find(previous);
+                    }
+                } else {
+                    out[write.reg as usize] = vars.find(nodes[index].write_var);
+                }
             }
             if nodes[index].call_var != NONE {
                 out[Reg::Rax as usize] = vars.find(nodes[index].call_var);
@@ -2163,7 +2179,23 @@ impl Program {
             if let Some(write) = nodes[index].write.take() {
                 let mut write = write;
                 let prev = ins[index][write.reg as usize];
-                if prev != NONE {
+                if write.compound.is_some() {
+                    match prev {
+                        NONE => {
+                            // No previous value to read: keep the line register-shaped.
+                            nodes[index].write_var = vars.new_raw_var(write.width);
+                        }
+                        previous => {
+                            write.prev = previous;
+                            nodes[index].write_var = previous;
+                            vars.add_def(previous, write.width);
+                            if write.partial {
+                                let full = full_width(write.reg, is_64);
+                                vars.add_use(previous, full, false);
+                            }
+                        }
+                    }
+                } else if write.partial && prev != NONE {
                     write.prev = prev;
                     let full = full_width(write.reg, is_64);
                     vars.add_use(prev, full, false);
@@ -2622,6 +2654,24 @@ mod tests {
         assert!(text.contains("v1 = 0;"), "{text}");
         assert!(text.contains("v1 += 1;"), "{text}");
         assert!(text.contains("return v1;"), "{text}");
+        assert_no_registers(&text);
+    }
+
+    #[test]
+    fn compound_assignment_updates_the_local_it_read() {
+        let text = run(&["    rax = 5;", "    rax -= arg1;", "    return rax;"]);
+        assert!(text.contains("v1 = 5;"), "{text}");
+        assert!(text.contains("v1 -= arg1;"), "{text}");
+        assert!(!text.contains("v2"), "{text}");
+        assert_no_registers(&text);
+    }
+
+    #[test]
+    fn wide_compound_assignment_casts_the_read() {
+        let text = run(&["    eax = arg1;", "    eax += 1;", "    return rax;"]);
+        assert_eq!(text.matches("uint32 v1;").count(), 0, "{text}");
+        assert!(text.contains("uint64 v1;"), "{text}");
+        assert!(text.contains("v1 = (uint32)((uint32)v1 + 1);"), "{text}");
         assert_no_registers(&text);
     }
 
