@@ -2105,27 +2105,41 @@ impl Program {
                     if live_in[index] & (1u64 << reg) == 0 {
                         continue;
                     }
-                    let mut merged = NONE;
+                    let mut values = Vec::new();
                     let mut merged_raw = false;
+                    let mut merged_named = false;
                     for &pred in &preds[index] {
                         let value = outs[pred][reg];
                         if value == NONE {
                             continue;
                         }
                         let root = vars.find(value);
-                        merged_raw |= vars.raw[root];
-                        merged = if merged == NONE {
-                            root
+                        if vars.raw[root] {
+                            merged_raw = true;
                         } else {
-                            vars.union(merged, root)
-                        };
+                            merged_named = true;
+                        }
+                        values.push(root);
                     }
-                    if merged != NONE && merged_raw {
+                    if values.is_empty() {
+                        map[reg] = NONE;
+                    } else if merged_raw && merged_named {
+                        // One path's value came out of an unmodelled instruction. The join
+                        // itself is unknown (reads here stay register-shaped), but the named
+                        // definitions before it must not be tainted: do not union the two
+                        // kinds, or the whole web turns raw.
+                        map[reg] = vars.new_raw_var(0);
+                    } else {
+                        let mut merged = values[0];
+                        for value in &values[1..] {
+                            merged = vars.union(merged, *value);
+                        }
                         let root = vars.find(merged);
-                        vars.raw[root] = true;
-                        merged = root;
+                        if merged_raw {
+                            vars.raw[root] = true;
+                        }
+                        map[reg] = root;
                     }
-                    map[reg] = merged;
                 }
                 map
             };
@@ -2753,6 +2767,21 @@ mod tests {
         ]);
         assert!(text.contains("v1 = rax;"), "{text}");
         assert!(!text.contains("uint64 v2;"), "{text}");
+    }
+
+    #[test]
+    fn asm_value_join_does_not_taint_a_named_definition() {
+        let text = run(&[
+            "    __asm(\"cpuid\");",
+            "    if (arg1) {",
+            "        rax = 1;",
+            "    }",
+            "    return rax;",
+        ]);
+        // The join of the asm's raw rax and the clean `rax = 1` is unknown, so the return
+        // stays a register; the definition before the join is still a named local.
+        assert!(text.contains("v1 = 1;"), "{text}");
+        assert!(text.contains("return rax;"), "{text}");
     }
 
     #[test]
