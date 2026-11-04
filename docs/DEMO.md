@@ -61,13 +61,15 @@ applied 3 proposal(s) through the command bus (undoable)
    **Options → Analyze functions**（工具栏 Analyze 按钮同效）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
    Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
    项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
-   图标）及其下方 **Graph overview**；右侧**文档标签区**按固定顺序显示 **Disassembly、
+   图标），其下方是 **Graph overview**（只在 Disassembly 的 Graph 模式出现，Text 模式把空间还给
+   Functions，与 IDA 相同）；右侧**文档标签区**按固定顺序显示 **Disassembly、
    Decompile、Hex、Strings、Local Types、Imports、Exports、AI**（Names、Segments
    默认隐藏，可从 **Views** 菜单打开）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、
    字节、函数、与 Hex 同步提示）。
    **Disassembly 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
-   **空格键**切换，不会切换标签页；Graph 中双击基本块会切到 Text 并定位。图形支持节点块/
-   箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）。空格同 IDA 只属于反汇编视图：Decompile 等
+   **空格键**切换，不会切换标签页；Graph 中双击基本块会切到 Text 并定位，**点击 Graph overview
+   里的块会在图内居中**（不离开 Graph）。图形支持节点块/箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）；
+   overview 把整张 CFG 缩放进面板，并用虚线框标出当前可视区域（图大于视口时）。空格同 IDA 只属于反汇编视图：Decompile 等
    页签里按空格没有作用；光标落在数据行或函数外时按空格会留在 Text 并在状态栏说明原因
    （IDA 的"该条目无法用图形显示"提示）。
    **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在**全浅色/全深色**主题间切换；默认是**全浅色**，

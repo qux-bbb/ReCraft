@@ -68,6 +68,10 @@ const NAV_DATA: Color32 = Color32::from_rgb(0x4a, 0x6a, 0x3a);
 const NAV_UNEXPLORED: Color32 = Color32::from_rgb(0x5a, 0x5a, 0x5a);
 const NAV_EXTERNAL: Color32 = Color32::from_rgb(0x7a, 0x3a, 0x6a);
 
+/// Share of the left column that the Functions window keeps when the Graph overview is
+/// docked underneath it (the overview takes the remaining 18 %, like IDA's ~110 px pane).
+const GRAPH_OVERVIEW_SPLIT: f32 = 0.82;
+
 /// Semantic palette shared by the chrome, code views and graph view.
 #[derive(Clone, Copy)]
 struct Palette {
@@ -1049,6 +1053,8 @@ enum Action {
     AiPolish,
     AiQuery,
     NavigateToDisasm(Address),
+    /// Centre a block in the graph view without leaving graph mode (Graph overview click).
+    GraphGoTo(Address),
     /// Open a callee's pseudo-C body in the Decompile pane (double-click on its name).
     EnterFunction(Address),
     SyncDisasm(Address),
@@ -1176,6 +1182,11 @@ pub struct ReCraftApp {
     mono_zoom: f32,
     /// Last visible graph-canvas rectangle (for the overview viewport box).
     graph_visible: Option<egui::Rect>,
+    /// Split fraction used to re-dock the Graph overview below Functions after it was
+    /// taken out of the layout in text mode (kept so a resized overview survives toggles).
+    graph_overview_fraction: f32,
+    /// Block the graph view should centre on its next frame (set by an overview click).
+    graph_center_on: Option<Address>,
     analysis: Option<AnalysisJob>,
     /// AI rename suggestions (never applied implicitly).
     ai_proposals: Vec<recraft_ai::Proposal>,
@@ -1279,6 +1290,8 @@ impl Default for ReCraftApp {
             view_mode: ViewMode::Graph,
             mono_zoom: 1.0,
             graph_visible: None,
+            graph_overview_fraction: GRAPH_OVERVIEW_SPLIT,
+            graph_center_on: None,
             cfg_dirty: false,
             analysis: None,
             ai_proposals: Vec::new(),
@@ -3178,6 +3191,13 @@ impl ReCraftApp {
     /// Focus/Show entries shared by the View and Windows menus.
     fn pane_menu_items(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         for pane in Pane::all() {
+            // The overview only exists while a graph is displayed (same rule IDA applies
+            // to its Graph overview window), so do not offer to focus it in text mode.
+            if pane == Pane::GraphOverview
+                && (self.session.is_none() || self.view_mode != ViewMode::Graph)
+            {
+                continue;
+            }
             let button = ui.button(self.t(pane.key()));
             let button = if let Some(shortcut) = pane.shortcut() {
                 button.on_hover_text(shortcut)
@@ -3814,9 +3834,66 @@ impl ReCraftApp {
             // Functions window with a graph overview underneath it.
             let [left, _docs] = surface.split_left(top, 0.22, vec![Pane::Functions]);
             let [_functions, _overview] =
-                surface.split_below(left, 0.74, vec![Pane::GraphOverview]);
+                surface.split_below(left, GRAPH_OVERVIEW_SPLIT, vec![Pane::GraphOverview]);
         }
         self.dock = Some(state);
+    }
+
+    /// IDA only keeps the Graph overview on screen while a graph is displayed: in text
+    /// mode the window is not part of the desktop, so the left column gives its space back
+    /// to Functions (no tab strip is left behind). Remove/re-add the pane instead of
+    /// collapsing it, then put it back under Functions at the size the user last gave it.
+    fn sync_graph_overview(&mut self) {
+        self.ensure_dock();
+        let wanted = self.session.is_some() && self.view_mode == ViewMode::Graph;
+        let present = self
+            .dock
+            .as_ref()
+            .is_some_and(|state| state.find_tab(&Pane::GraphOverview).is_some());
+        if wanted && !present {
+            self.add_graph_overview();
+        } else if !wanted && present {
+            self.remove_graph_overview();
+        }
+    }
+
+    /// Re-dock the overview below Functions (the slot IDA's default desktop uses).
+    fn add_graph_overview(&mut self) {
+        let fraction = self.graph_overview_fraction.clamp(0.5, 0.95);
+        let Some(state) = self.dock.as_mut() else {
+            return;
+        };
+        if state.find_tab(&Pane::GraphOverview).is_some() {
+            return;
+        }
+        let Some(functions) = state.find_tab(&Pane::Functions) else {
+            return;
+        };
+        state.split(
+            functions.node_path(),
+            egui_dock::Split::Below,
+            fraction,
+            egui_dock::Node::leaf_with(vec![Pane::GraphOverview]),
+        );
+    }
+
+    /// Take the overview out of the dock, remembering the height the user chose.
+    fn remove_graph_overview(&mut self) {
+        let Some(state) = self.dock.as_mut() else {
+            return;
+        };
+        let Some(path) = state.find_tab(&Pane::GraphOverview) else {
+            return;
+        };
+        if let Some(parent) = path.node.parent()
+            && let Ok(egui_dock::Node::Vertical(split)) =
+                state.node(egui_dock::NodePath::new(path.surface, parent))
+        {
+            self.graph_overview_fraction = split.fraction;
+        }
+        state.remove_tab(path);
+        // The next graph gets its own viewport; a frame from the old one must not leak.
+        self.graph_visible = None;
     }
 
     /// Draw the dock area. The state is temporarily moved out so the tab viewer can borrow
@@ -4090,45 +4167,43 @@ impl ReCraftApp {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 2.0, pal.view);
-        // Fit the real graph canvas into the minimap, but keep tiny graphs readable
-        // instead of blowing a single node up to the whole pane.
-        let scale = (rect.width() / canvas.x)
-            .min(rect.height() / canvas.y)
-            .min(0.35);
+        // Fit the whole CFG into the pane like IDA: small graphs are scaled up (up to
+        // 100 %) instead of staying a stamp in the corner of a mostly empty pane.
+        let inner = rect.shrink(4.0);
+        let scale = (inner.width() / canvas.x)
+            .min(inner.height() / canvas.y)
+            .clamp(0.01, 1.0);
         let free = egui::vec2(
-            (rect.width() - canvas.x * scale).max(0.0),
-            (rect.height() - canvas.y * scale).max(0.0),
+            (inner.width() - canvas.x * scale).max(0.0),
+            (inner.height() - canvas.y * scale).max(0.0),
         );
-        let offset = rect.min + free * 0.5;
+        let offset = inner.min + free * 0.5;
         let map = |r: egui::Rect| {
             egui::Rect::from_min_size(
                 egui::pos2(offset.x + r.min.x * scale, offset.y + r.min.y * scale),
                 egui::vec2((r.width() * scale).max(2.0), (r.height() * scale).max(2.0)),
             )
         };
-        let selected = self
-            .disasm_rows
-            .get(self.selected)
-            .map(|line| line.addr.get());
         for block in &cfg.blocks {
-            for &(target, _) in &block.edges {
+            for &(target, kind) in &block.edges {
                 if let Some(target_rect) = local.get(target) {
                     painter.line_segment(
                         [map(local[block.index]).center(), map(*target_rect).center()],
-                        egui::Stroke::new(0.6, pal.graph_border),
+                        egui::Stroke::new(1.0, graph_edge_color(pal, kind)),
                     );
                 }
             }
         }
         for (index, block) in cfg.blocks.iter().enumerate() {
             let node = map(local[index]);
-            let current =
-                selected.is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
-            painter.rect_filled(node, 1.0, if current { pal.addr } else { pal.edge_jump });
+            // IDA's overview draws plain boxes: white blocks on the graph colour with a
+            // hairline frame (no per-block text and no "current block" tint — the dashed
+            // viewport is what tells you where you are).
+            painter.rect_filled(node, 1.0, pal.graph_node);
             painter.rect_stroke(
                 node,
                 1.0,
-                egui::Stroke::new(0.6, pal.graph_border),
+                egui::Stroke::new(1.0, pal.text),
                 egui::StrokeKind::Inside,
             );
             let response = ui.interact(
@@ -4137,15 +4212,20 @@ impl ReCraftApp {
                 Sense::click(),
             );
             if response.clicked() {
-                *action = Action::NavigateToDisasm(block.start);
+                *action = Action::GraphGoTo(block.start);
             }
         }
-        if let Some(visible) = self.graph_visible {
-            painter.rect_stroke(
+        // The visible viewport is a dashed frame, exactly like IDA's overview, and only
+        // meaningful while the graph is larger than the pane.
+        if let Some(visible) = self.graph_visible
+            && (visible.width() < canvas.x - 0.5 || visible.height() < canvas.y - 0.5)
+        {
+            paint_dashed_rect(
+                &painter,
                 map(visible),
-                0.0,
                 egui::Stroke::new(1.0, pal.text),
-                egui::StrokeKind::Inside,
+                4.0,
+                3.0,
             );
         }
     }
@@ -5355,13 +5435,7 @@ impl ReCraftApp {
             ui.weak(self.t("ui_function_has_no_decodable_blocks"));
             return;
         }
-        let edge_color = |kind: recraft_analysis::EdgeKind| match kind {
-            recraft_analysis::EdgeKind::Fallthrough => pal.edge_jump,
-            recraft_analysis::EdgeKind::Taken => pal.edge_taken,
-            recraft_analysis::EdgeKind::NotTaken => pal.edge_not_taken,
-            recraft_analysis::EdgeKind::Unconditional => pal.edge_jump,
-            recraft_analysis::EdgeKind::JumpTable => pal.edge_jump_table,
-        };
+        let edge_color = |kind: recraft_analysis::EdgeKind| graph_edge_color(pal, kind);
         ui.horizontal(|ui| {
             for (label, color) in [
                 (
@@ -5443,6 +5517,15 @@ impl ReCraftApp {
                     clip.min - origin,
                     clip.max - origin,
                 ));
+                // An overview click asks the graph to centre one block without leaving
+                // graph mode (IDA pans the graph instead of switching to the listing).
+                if let Some(addr) = self.graph_center_on.take()
+                    && let Some(index) = cfg.blocks.iter().position(|block| {
+                        block.start.get() <= addr.get() && addr.get() < block.end.get()
+                    })
+                {
+                    ui.scroll_to_rect(local[index].translate(origin), Some(egui::Align::Center));
+                }
                 // Edges first, so frames paint on top.
                 for block in &cfg.blocks {
                     for &(target, kind) in &block.edges {
@@ -7130,6 +7213,15 @@ impl ReCraftApp {
                 self.view_mode = ViewMode::Text;
                 self.focus_pane(Pane::View);
             }
+            Action::GraphGoTo(addr) => {
+                // IDA's overview is a navigation aid for the graph, not a way out of it:
+                // follow the block but keep the graph on screen and centre the target.
+                self.navigate(addr);
+                self.tab = Tab::Disasm;
+                self.view_mode = ViewMode::Graph;
+                self.graph_center_on = Some(addr);
+                self.focus_pane(Pane::View);
+            }
             Action::EnterFunction(start) => {
                 // Like IDA's decompiler: the listing follows the callee and the Decompile
                 // pane stays in front. Entering the function already on screen must not
@@ -7608,6 +7700,7 @@ impl ReCraftApp {
         self.top_bar(root, &mut action);
         self.bottom_bar(root);
         self.ai_sidebar_ui(root, &mut action);
+        self.sync_graph_overview();
         self.dock_area(root, &mut action);
         self.ai_settings_window(&ctx);
         self.edit_window(&ctx, &mut action);
@@ -7623,6 +7716,49 @@ impl ReCraftApp {
 impl eframe::App for ReCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.update_inner(ui);
+    }
+}
+
+/// Edge colour shared by the graph view and its overview thumbnail.
+fn graph_edge_color(pal: Palette, kind: recraft_analysis::EdgeKind) -> Color32 {
+    match kind {
+        recraft_analysis::EdgeKind::Fallthrough => pal.edge_jump,
+        recraft_analysis::EdgeKind::Taken => pal.edge_taken,
+        recraft_analysis::EdgeKind::NotTaken => pal.edge_not_taken,
+        recraft_analysis::EdgeKind::Unconditional => pal.edge_jump,
+        recraft_analysis::EdgeKind::JumpTable => pal.edge_jump_table,
+    }
+}
+
+/// Draw a dashed rectangle (egui has no dashed stroke, and IDA's overview viewport frame
+/// is dotted). The painter clips the segments to the pane.
+fn paint_dashed_rect(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    stroke: egui::Stroke,
+    dash: f32,
+    gap: f32,
+) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 || dash <= 0.0 {
+        return;
+    }
+    for (from, to) in [
+        (rect.left_top(), rect.right_top()),
+        (rect.right_top(), rect.right_bottom()),
+        (rect.right_bottom(), rect.left_bottom()),
+        (rect.left_bottom(), rect.left_top()),
+    ] {
+        let length = (to - from).length();
+        if length <= 0.0 {
+            continue;
+        }
+        let direction = (to - from) / length;
+        let mut start = 0.0;
+        while start < length {
+            let end = (start + dash).min(length);
+            painter.line_segment([from + direction * start, from + direction * end], stroke);
+            start = end + gap;
+        }
     }
 }
 
@@ -9705,6 +9841,63 @@ mod tests {
     }
 
     #[test]
+    fn overview_click_centres_the_graph_without_leaving_it() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("overview-click.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let function = app
+            .functions
+            .first()
+            .expect("analysis found a function")
+            .start;
+        app.apply_action(
+            &egui::Context::default(),
+            Action::NavigateToDisasm(function),
+        );
+        app.view_mode = ViewMode::Graph;
+        app.tick();
+        assert!(app.cfg.is_some(), "graph mode builds the CFG");
+
+        app.apply_action(&egui::Context::default(), Action::GraphGoTo(function));
+        assert_eq!(
+            app.view_mode,
+            ViewMode::Graph,
+            "the overview stays in graph mode"
+        );
+        assert!(app.tab == Tab::Disasm);
+        assert_eq!(app.graph_center_on, Some(function));
+
+        // Rendering the graph consumes the pending centre request without a mode change.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        assert!(
+            app.graph_center_on.is_none(),
+            "the graph view must consume the pending centre"
+        );
+        assert_eq!(app.view_mode, ViewMode::Graph);
+    }
+
+    #[test]
     fn clicking_a_string_literal_in_pseudo_c_opens_its_data() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../corpus/build/x64/corpus.exe");
@@ -11133,6 +11326,63 @@ mod tests {
                 "{hidden:?} should be hidden by default"
             );
         }
+    }
+
+    #[test]
+    fn graph_overview_only_lives_in_graph_mode() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("overview-mode.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.ensure_dock();
+        assert!(
+            app.dock
+                .as_ref()
+                .unwrap()
+                .find_tab(&Pane::GraphOverview)
+                .is_some()
+        );
+
+        app.view_mode = ViewMode::Text;
+        app.sync_graph_overview();
+        let state = app.dock.as_ref().unwrap();
+        assert!(
+            state.find_tab(&Pane::GraphOverview).is_none(),
+            "text mode must hide the overview, like IDA's graph-only window"
+        );
+        assert!(
+            state.find_tab(&Pane::Functions).is_some(),
+            "Functions takes the overview's space back"
+        );
+
+        app.view_mode = ViewMode::Graph;
+        app.sync_graph_overview();
+        assert!(
+            app.dock
+                .as_ref()
+                .unwrap()
+                .find_tab(&Pane::GraphOverview)
+                .is_some(),
+            "the overview comes back with the graph"
+        );
+
+        // Closing the project removes it too: there is no graph to overview.
+        app.session = None;
+        app.sync_graph_overview();
+        assert!(
+            app.dock
+                .as_ref()
+                .unwrap()
+                .find_tab(&Pane::GraphOverview)
+                .is_none()
+        );
     }
 
     #[test]

@@ -75,6 +75,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Graph overview behaves like IDA's: it exists only while a graph is displayed.** It
+  is now a graph-mode window, not an always-docked pane: switching the Disassembly view to
+  Text (`Space`) takes it out of the layout so Functions gets the whole left column back
+  (no tab strip is left behind), and switching back re-docks it under Functions at the
+  height the user last chose (default 18 % of the column, like IDA's ~110 px overview).
+  The thumbnail now fits the whole CFG — small graphs are scaled up instead of being capped
+  at 35 %, which was what produced the "big white frame around a tiny block" look — draws
+  plain graph-coloured boxes with hairline frames and per-edge-kind colours (no current
+  block tint), marks the visible region with a dashed rectangle (only while the graph is
+  larger than the pane) and centres the clicked block in the graph instead of jumping to
+  the text listing. The Views menu no longer offers the pane outside graph mode, and the
+  saved layout no longer carries it in text mode. Two tests cover the mode-driven presence
+  and the click path, and `docs/DEMO.md` documents the graph-only window.
+
 - **AGPL-3.0-only is now the only license, and contributions use a DCO instead of a CLA.**
   The commercial-license track is gone (`LICENSE-COMMERCIAL.md` and `CLA.md` removed), so
   the only thing a contributor has to do is `git commit -s`: contributions are accepted
