@@ -4119,9 +4119,14 @@ fn fold_return_values(lines: &mut Vec<PseudoLine>, ret: ReturnKind) {
                 return is_return_register(lhs)
                     .then(|| (previous, format!("return ({lhs} {op} {value});")));
             }
-            // A call as the last statement leaves its result in the return register.
-            (statement.ends_with(");") && contains_call(statement) && !statement.contains(" = "))
-                .then(|| (previous, format!("return {statement}")))
+            // A call as the last statement leaves its result in the return register. An
+            // intrinsic is not a call: `return __asm("...");` is not valid C and the
+            // instruction does not produce a value.
+            (statement.ends_with(");")
+                && !statement.starts_with("__asm(")
+                && contains_call(statement)
+                && !statement.contains(" = "))
+            .then(|| (previous, format!("return {statement}")))
         });
         let replacement = match replacement {
             Some((previous, text)) => (Some(previous), text),
@@ -10704,6 +10709,16 @@ mod tests {
         let mut lines = vec![test_line("    sub_3(rax);"), test_line("    return;")];
         fold_return_values(&mut lines, ReturnKind::Int64);
         assert_eq!(lines[0].text, "    return sub_3(rax);");
+
+        // An intrinsic is not a call and produces no value: `return __asm(...)` is invalid C.
+        let mut lines = vec![
+            test_line("    __asm(\"vzeroupper\");"),
+            test_line("    return;"),
+        ];
+        fold_return_values(&mut lines, ReturnKind::Int64);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "    __asm(\"vzeroupper\");");
+        assert_eq!(lines[1].text, "    return;");
     }
 
     #[test]

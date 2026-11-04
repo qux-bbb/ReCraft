@@ -1050,7 +1050,7 @@ impl Parser<'_> {
     fn parse_item(&mut self) -> Option<Item> {
         let line = self.pos;
         let trimmed = self.lines[line].text.trim().to_owned();
-        if trimmed.starts_with("//") {
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
             self.pos += 1;
             return Some(Item::Comment);
         }
@@ -2782,6 +2782,18 @@ mod tests {
         // stays a register; the definition before the join is still a named local.
         assert!(text.contains("v1 = 1;"), "{text}");
         assert!(text.contains("return rax;"), "{text}");
+    }
+
+    #[test]
+    fn block_comment_line_is_skipped() {
+        let text = run(&[
+            "    /* jump table: 2 targets, selector=index */",
+            "    rax = 1;",
+            "    return rax;",
+        ]);
+        assert!(text.contains("/* jump table"), "{text}");
+        assert!(text.contains("v1 = 1;"), "{text}");
+        assert_no_registers(&text);
     }
 
     #[test]
