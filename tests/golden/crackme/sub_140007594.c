@@ -44,6 +44,7 @@ void sub_140007594_l1(void) {
     }
     rdi -= 1;
     sil = 0;
+    loc_ADDR:
     while (1) {
         al = *(u8*)(rdi);
         if (al == 0) break;
@@ -96,80 +97,39 @@ void sub_140007594_l1(void) {
         loc_ADDR:
     } while (eax != 0);
     al = *(u8*)(rdi);
-    if (al == 0) {
-        if (rbx == 0) {
-            *(u64*)(r15) += 1;
-            continue;
-            if (r14 != 0) {
-                *(u64*)(r14) = 0;
+    if (al != 0) {
+        if (sil != 0) goto loc_ADDR;
+        if (al != 0xADDR) {
+            if (al != 9) {
+                loc_ADDR:
+                if (edx != 0) {
+                    if (rbx != 0) {
+                        *(u8*)(rbx) = al;
+                        rbx += 1;
+                    }
+                    sub_14000e454((int32)(*(u8*)(rdi)));
+                    if (eax != 0) {
+                        *(u64*)(r15) += 1;
+                        rdi += 1;
+                        if (rbx != 0) {
+                            al = *(u8*)(rdi);
+                            *(u8*)(rbx) = al;
+                            rbx += 1;
+                        }
+                    }
+                    *(u64*)(r15) += 1;
+                }
+                rdi += 1;
+                goto loc_ADDR;
             }
-            *(u64*)(r12) += 1;
-            return;
         }
+    }
+    if (rbx != 0) {
         *(u8*)(rbx) = 0;
         rbx += 1;
-        *(u64*)(r15) += 1;
-        continue;
-        if (r14 != 0) {
-            *(u64*)(r14) = 0;
-        }
-        *(u64*)(r12) += 1;
-        return;
     }
-    if (sil == 0) {
-        if ((al == 0xADDR) || (al == 9)) {
-            if (rbx == 0) {
-                *(u64*)(r15) += 1;
-                continue;
-                if (r14 != 0) {
-                    *(u64*)(r14) = 0;
-                }
-                *(u64*)(r12) += 1;
-                return;
-            }
-            *(u8*)(rbx) = 0;
-            rbx += 1;
-            *(u64*)(r15) += 1;
-            continue;
-            if (r14 != 0) {
-                *(u64*)(r14) = 0;
-            }
-            *(u64*)(r12) += 1;
-            return;
-        }
-    }
-    if (edx != 0) {
-        if (rbx != 0) {
-            *(u8*)(rbx) = al;
-            rbx += 1;
-        }
-        sub_14000e454((int32)(*(u8*)(rdi)));
-        if (eax != 0) {
-            *(u64*)(r15) += 1;
-            rdi += 1;
-            if (rbx != 0) {
-                al = *(u8*)(rdi);
-                *(u8*)(rbx) = al;
-                rbx += 1;
-            }
-        }
-        *(u64*)(r15) += 1;
-    }
-    rdi += 1;
-    goto loc_ADDR;
-    if (rbx == 0) {
-        *(u64*)(r15) += 1;
-        continue;
-        if (r14 != 0) {
-            *(u64*)(r14) = 0;
-        }
-        *(u64*)(r12) += 1;
-        return;
-    }
-    *(u8*)(rbx) = 0;
-    rbx += 1;
     *(u64*)(r15) += 1;
-    continue;
+    goto loc_ADDR;
     if (r14 != 0) {
         *(u64*)(r14) = 0;
     }

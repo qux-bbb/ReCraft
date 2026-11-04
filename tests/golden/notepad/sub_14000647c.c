@@ -35,6 +35,7 @@ void sub_14000647c_l1(void) {
                 xmm0 >>= 8;
                 r15 = xmm0;
             }
+            loc_ADDR:
             if (rsi != 0) {
                 ReleaseSRWLockExclusive(rsi);
             }
@@ -47,19 +48,7 @@ void sub_14000647c_l1(void) {
                 LeaveCriticalSection(rbp);
             }
         } while (rbx < rdi);
-            if (rsi != 0) {
-                ReleaseSRWLockExclusive(rsi);
-            }
-            if (r14 != 0) {
-                rcx = r15;
-                rax = r14;
-                sub_140028010();
-            }
-            if (rbp != 0) {
-                LeaveCriticalSection(rbp);
-            }
-            if (rbx >= rdi) break;
-            return;
+            goto loc_ADDR;
     }
     return;
 }

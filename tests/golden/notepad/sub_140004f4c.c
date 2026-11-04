@@ -130,30 +130,31 @@ void sub_140004f4c_l1(void) {
         var_48 = ax;
         al = *(u8*)((r13 + 8));
         var_4a = al;
-        while (rsi != 0) {
-            r15 = (rsi >> 1);
-            rax = r15;
-            rax *= *(u64*)((r13 + 0xADDR));
-            rax += r14;
-            var_b0 = rax;
-            sub_1400068f0(&var_48, &var_b0, *(u64*)((r13 + 0xADDR)));
-            eax = (uint32)(var_50);
-            if (rdi != rax) {
+        while (1) {
+            while (rsi != 0) {
+                r15 = (rsi >> 1);
+                rax = r15;
+                rax *= *(u64*)((r13 + 0xADDR));
+                rax += r14;
+                var_b0 = rax;
+                sub_1400068f0(&var_48, &var_b0, *(u64*)((r13 + 0xADDR)));
                 eax = (uint32)(var_50);
-                ecx = edi;
-                ecx -= eax;
-            } else {
-                r8 = rdi;
-                sub_1400274a0(var_c8, var_60);
-                ecx = eax;
+                if (rdi != rax) {
+                    eax = (uint32)(var_50);
+                    ecx = edi;
+                    ecx -= eax;
+                } else {
+                    r8 = rdi;
+                    sub_1400274a0(var_c8, var_60);
+                    ecx = eax;
+                }
+                if (ecx <= 0 /* signed */) goto loc_ADDR;
             }
-            if (ecx <= 0 /* signed */) goto loc_ADDR;
+            r14 = var_b0;
+            rax = r12;
+            rax -= r15;
+            rsi += rax;
         }
-        r14 = var_b0;
-        rax = r12;
-        rax -= r15;
-        rsi += rax;
-        continue;
         if (r14 >= var_20) {
             rax = r14;
             return;

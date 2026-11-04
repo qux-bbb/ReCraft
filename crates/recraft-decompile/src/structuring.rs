@@ -3312,6 +3312,10 @@ impl Structurer {
             addr: self.blocks[header].entry,
             text: format!("{}}}", indent(level)),
         });
+        // The leftovers are emitted after the loop's closing brace, so they are no longer
+        // inside the loop: `continue`/`break` would be invalid C there. Pop the loop before
+        // emitting them and let the jump become a labelled `goto`.
+        self.loop_stack.pop();
         for block in &body {
             if !self.emitted[*block] {
                 self.emitted[*block] = true;
@@ -3327,7 +3331,6 @@ impl Structurer {
                 self.emit_raw_flow(lines, *block, level);
             }
         }
-        self.loop_stack.pop();
         Some(exit)
     }
 
@@ -3462,7 +3465,10 @@ impl Structurer {
             addr: self.blocks[latch].entry,
             text: format!("{}}} while ({continue_condition});", indent(level)),
         });
-        // Any body blocks that were not reached linearly stay as labelled leftovers.
+        // Any body blocks that were not reached linearly stay as labelled leftovers. They
+        // are outside the loop now, so a jump back to the header must be a `goto`, not
+        // `continue`/`break`.
+        self.loop_stack.pop();
         for block in body {
             if !self.emitted[*block] {
                 self.emitted[*block] = true;
@@ -3478,7 +3484,6 @@ impl Structurer {
                 self.emit_raw_flow(lines, *block, level + 1);
             }
         }
-        self.loop_stack.pop();
         Some(exit)
     }
 
@@ -5190,6 +5195,11 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
         }
         if tail.len() <= 48
             && depth == 0
+            // `break`/`continue` bind to the loop at the copy site, which is a different
+            // loop (or none at all) when the tail leaves the branch it came from.
+            && !tail
+                .iter()
+                .any(|line| line.ends_with("break;") || line.ends_with("continue;"))
             && tail
                 .last()
                 .is_some_and(|line| line.starts_with("return ") || line == "return;")
@@ -7108,6 +7118,13 @@ fn fold_last_label_tails(lines: &mut Vec<PseudoLine>) {
     if depth != 0 || tail.len() > 128 {
         return;
     }
+    // `break`/`continue` bind to the loop at the copy site, not the one they came from.
+    if tail
+        .iter()
+        .any(|line| line.ends_with("break;") || line.ends_with("continue;"))
+    {
+        return;
+    }
     // The target exits every enclosing branch and runs the function epilogue. Copy that
     // epilogue too; otherwise a bare `return` would skip stack/cookie restoration.
     if tail.last().is_none_or(|line| line != "return;") {
@@ -8559,6 +8576,27 @@ mod tests {
             .join("\n");
         assert!(!text.contains("goto loc_"), "{text}");
         assert!(text.contains("value = 1;"), "{text}");
+    }
+
+    #[test]
+    fn return_tail_with_break_is_not_copied() {
+        let mut lines = vec![
+            test_line("    goto loc_20;"),
+            test_line("loc_20:"),
+            test_line("    if (flag) {"),
+            test_line("        break;"),
+            test_line("    }"),
+            test_line("    return;"),
+        ];
+        fold_return_tail_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The `break` would bind to whatever loop (if any) encloses the copy site.
+        assert!(text.contains("goto loc_20;"), "{text}");
+        assert_eq!(text.matches("break;").count(), 1, "{text}");
     }
 
     #[test]
