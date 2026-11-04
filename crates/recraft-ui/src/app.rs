@@ -6211,7 +6211,16 @@ impl ReCraftApp {
                     first_top.get_or_insert(rect.top());
                     last_bottom = Some(rect.bottom());
                     if scroll_line == Some(index) {
-                        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                        // Centre the row vertically only. `scroll_to_rect` centres both axes,
+                        // so the target spans the visible width: a row wider than the pane
+                        // would otherwise pan the listing (and its line numbers) sideways.
+                        ui.scroll_to_rect(
+                            egui::Rect::from_min_max(
+                                egui::pos2(viewport.left(), rect.top()),
+                                egui::pos2(viewport.right(), rect.bottom()),
+                            ),
+                            Some(egui::Align::Center),
+                        );
                     }
                     if rect.bottom() < viewport.top() || rect.top() > viewport.bottom() {
                         continue;
@@ -9288,6 +9297,56 @@ mod tests {
             run(&mut app, Key::Space),
             Action::ToggleViewMode,
             "Space stays the Graph/Text switch"
+        );
+    }
+
+    /// `scroll_to_rect(Align::Center)` centres both axes, so centring a row wider than the
+    /// pane used to drag the pseudo-C listing (and its line numbers) sideways whenever `F5`
+    /// or `Tab` re-centred it. The view's scroll target spans the visible width instead,
+    /// which leaves the horizontal offset alone.
+    #[test]
+    fn centring_the_pseudo_c_row_does_not_pan_sideways() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 240.0));
+        let mut offset = egui::Vec2::ZERO;
+        for _ in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
+                // The view allocates rows wider than the pane (it keeps 1100 pt of code) and
+                // then centres the cursor row.
+                let scroll = egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let viewport = ui.clip_rect();
+                        for index in 0..200 {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(1100.0, 16.0), Sense::hover());
+                            if index == 150 {
+                                ui.scroll_to_rect(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(viewport.left(), rect.top()),
+                                        egui::pos2(viewport.right(), rect.bottom()),
+                                    ),
+                                    Some(egui::Align::Center),
+                                );
+                            }
+                        }
+                    });
+                offset = scroll.state.offset;
+            });
+            output.textures_delta.clear();
+        }
+        assert!(
+            offset.y > 0.0,
+            "the row must be centred vertically, got {offset:?}"
+        );
+        assert_eq!(
+            offset.x, 0.0,
+            "centring a row must not pan the listing sideways, got {offset:?}"
         );
     }
 

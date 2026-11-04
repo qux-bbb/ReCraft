@@ -1240,6 +1240,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`F5`/`Tab` no longer pan the pseudo-C listing sideways.** `scroll_to_rect(Align::Center)`
+  centres both axes, and the target was the whole allocated row — wider than the pane, because
+  the view keeps at least 1100 pt of code — so re-centring the cursor line also pushed the
+  listing (and its line numbers) to the right, while opening the view by clicking its tab left
+  it alone. The scroll target now spans the visible width, so the row is centred vertically
+  and the horizontal offset is untouched. A test renders the same geometry (1100 pt rows in a
+  360 pt viewport) and asserts a vertical centring with `offset.x == 0`.
 - **MCP `filter` now runs before `limit`.** `list_functions` and `list_strings` applied the row
   cap while scanning and filtered afterwards, so a match past the default 500-row window came
   back as `count: 0`: on the Go sample `filter: "main"` reported nothing at all, and notepad's
