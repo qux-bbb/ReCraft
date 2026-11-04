@@ -153,6 +153,7 @@ impl Lifter {
                 self.lift_cmpxchg_flags(insn);
                 self.intrinsic(insn, &mut stmts)
             }
+            M::Xadd => self.lift_xadd(insn, &mut stmts),
             M::Imul => self.lift_imul(insn, &mut stmts),
             // Bit scans read one operand and write another; rendering them as builtin calls keeps
             // the result usable instead of leaving `__asm("bsf ...")` plus a move in the output.
@@ -1211,6 +1212,58 @@ impl Lifter {
         Flow::Fallthrough
     }
 
+    /// `xadd dst, src`: `src = dst; dst = dst + src`, with the add's flags. For a register
+    /// destination the old value is recovered as `dst - src` after the write; for memory the
+    /// same expression re-reads the updated slot. No temporary is needed.
+    fn lift_xadd(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::OpKind;
+        let (Some(destination), Some(source)) =
+            (self.read_operand(insn, 0), self.read_operand(insn, 1))
+        else {
+            return self.intrinsic(insn, stmts);
+        };
+        let sum = self.push(Expr::Bin {
+            op: BinOp::Add,
+            lhs: destination,
+            rhs: source,
+        });
+        if !self.write_operand(insn, 0, sum, stmts) {
+            return self.intrinsic(insn, stmts);
+        }
+        // Read the destination as it is *after* the store: a register holds the sum, a
+        // memory slot must be reloaded (the old value is the new value minus the source).
+        let after = match insn.op_kind(0) {
+            OpKind::Register => match from_iced(insn.op_register(0)) {
+                Some(view) => self.reg(view),
+                None => return self.intrinsic(insn, stmts),
+            },
+            OpKind::Memory => {
+                let (Some(addr), Some(size)) = (self.memory_address(insn), memory_size_bytes(insn))
+                else {
+                    return self.intrinsic(insn, stmts);
+                };
+                self.push(Expr::Load { addr, size })
+            }
+            _ => return self.intrinsic(insn, stmts),
+        };
+        let old = self.push(Expr::Bin {
+            op: BinOp::Sub,
+            lhs: after,
+            rhs: source,
+        });
+        if !self.write_operand(insn, 1, old, stmts) {
+            return self.intrinsic(insn, stmts);
+        }
+        // The add's zero/sign flags describe the new destination, exactly like `add`.
+        let zero = self.constant(0);
+        self.last_cmp = Some(CmpState {
+            lhs: after,
+            rhs: zero,
+            source: CmpSource::ZeroOnly,
+        });
+        Flow::Fallthrough
+    }
+
     fn lift_cmov(&mut self, insn: &Insn, kind: CondKind, stmts: &mut Vec<Stmt>) -> Flow {
         let Some(condition) = self.condition_expr(kind, false) else {
             return self.intrinsic(insn, stmts);
@@ -1723,6 +1776,60 @@ mod tests {
             Stmt::WriteReg { reg, .. } => {
                 assert_eq!(reg.base, Reg::Rax);
                 assert_eq!(reg.width, 4);
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn xadd_lifts_to_add_and_old_value() {
+        // xadd edx, ecx (ModRM CA: reg=ecx, rm=edx)
+        let (lifter, item) = lift_one(&[0x0f, 0xc1, 0xca], 0x1000);
+        assert_eq!(item.stmts.len(), 2);
+        match &item.stmts[0] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.base, Reg::Rdx);
+                assert!(matches!(
+                    lifter.expr(*value),
+                    Expr::Bin { op: BinOp::Add, .. }
+                ));
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+        match &item.stmts[1] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.base, Reg::Rcx);
+                match lifter.expr(*value) {
+                    Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs,
+                        ..
+                    } => assert!(
+                        matches!(lifter.expr(*lhs), Expr::Reg(view) if view.base == Reg::Rdx)
+                    ),
+                    other => panic!("unexpected old value {other:?}"),
+                }
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn locked_xadd_memory_reloads_the_slot() {
+        // lock xadd [0x1000], ecx
+        let (lifter, item) = lift_one(&[0xf0, 0x0f, 0xc1, 0x0d, 0x00, 0x10, 0x00, 0x00], 0x1000);
+        assert_eq!(item.stmts.len(), 2);
+        match &item.stmts[1] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.base, Reg::Rcx);
+                match lifter.expr(*value) {
+                    Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs,
+                        ..
+                    } => assert!(matches!(lifter.expr(*lhs), Expr::Load { .. })),
+                    other => panic!("unexpected old value {other:?}"),
+                }
             }
             other => panic!("unexpected stmt {other:?}"),
         }

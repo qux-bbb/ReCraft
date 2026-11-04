@@ -66,9 +66,8 @@ void sub_140005f6c_l1(void) {
     if (*(u32*)((r15 + 8)) == 1) {
         *(u32*)((rbx + 4)) = 8;
     }
-    eax = 1;
-    __asm("lock xadd [0xADDR], eax");
-    eax += 1;
+    dword_ADDR += 1;
+    eax = ((dword_ADDR - eax) + 1);
     *(u32*)((rbx + 0xADDR)) = eax;
     rax = var_c0;
     if (rax == 0) {

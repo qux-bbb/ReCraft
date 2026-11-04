@@ -22,8 +22,8 @@ void sub_140003624_l1(void) {
     ecx = ((*(u32*)((rdx + 8)) == 1) ? eax : ecx);
     var_24 = ecx;
     ecx = (rax - 7);
-    __asm("lock xadd [0xADDR], ecx");
-    ecx += 1;
+    dword_ADDR += ecx;
+    ecx = ((dword_ADDR - ecx) + 1);
     var_38 = r12;
     var_30 = ecx;
     GetCurrentThreadId();

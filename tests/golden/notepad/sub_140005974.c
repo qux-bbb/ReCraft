@@ -12,9 +12,8 @@ void sub_140005974_l1(void) {
         rdx = *(u64*)((rsi + 0xADDR));
         if (rdx != 0) {
             if (*(u32*)(rdx) == 0) {
-                eax = 1;
-                __asm("lock xadd [0xADDR], eax");
-                eax += 1;
+                dword_ADDR += 1;
+                eax = ((dword_ADDR - eax) + 1);
                 *(u32*)(rdx) = eax;
             }
             if (*(u32*)((rbx + 0xADDR)) == 0) {

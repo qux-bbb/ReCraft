@@ -31,9 +31,8 @@ void sub_1400081ac_l1(void) {
             rax = *(u64*)((rbx + 8));
             rcx <<= 4;
             rcx += r8;
-            r8d = 1;
-            __asm("lock xadd [rax], r8d");
-            r8d += 1;
+            *(u32*)(rax) += 1;
+            r8d = ((*(u32*)(rax) - r8d) + 1);
             sub_140007e20(rcx, rsi, r8);
         } else {
             eax = (uint32)(*(u16*)((rbx + 0xADDR)));
@@ -51,9 +50,8 @@ void sub_1400081ac_l1(void) {
                 rax = *(u64*)((rbx + 8));
                 rcx <<= 4;
                 rcx += r8;
-                r8d = 1;
-                __asm("lock xadd [rax], r8d");
-                r8d += 1;
+                *(u32*)(rax) += 1;
+                r8d = ((*(u32*)(rax) - r8d) + 1);
                 sub_140007e20(rcx, rsi, r8);
                 return;
             }

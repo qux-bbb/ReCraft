@@ -58,9 +58,8 @@ void sub_1400052e0_l1(void) {
     GetCurrentThreadId();
     ecx = dword_ADDR;
     if (ecx != eax) {
-        ecx = 1;
-        __asm("lock xadd [0xADDR], ecx");
-        ecx += 1;
+        dword_ADDR += 1;
+        ecx = ((dword_ADDR - ecx) + 1);
         if (ecx < 4 /* signed */) {
             dword_ADDR = eax;
             sub_140005a6c();
