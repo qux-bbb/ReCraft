@@ -6861,6 +6861,19 @@ impl ReCraftApp {
 
     // ------------------------------------------------------------- actions --
 
+    /// Take Tab away from egui's own widget-focus navigation.
+    ///
+    /// egui 0.36 queues a focus move in `begin_pass` for Tab (= next) and Shift+Tab (= the
+    /// previous widget); the first focusable widget that renders claims it, which is the menu
+    /// bar here. The app binds Tab instead, so the queued move is cleared at the top of the
+    /// frame, before any widget can take it. Text fields keep their focus, and a `Tab` inside
+    /// them is still delivered to the field itself.
+    fn claim_tab_from_focus_navigation(&self, ctx: &egui::Context) {
+        if ctx.input(|input| input.key_pressed(Key::Tab)) {
+            ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+        }
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context) -> Action {
         // egui may run several layout passes for one frame (`request_discard`); the same key
         // event is visible in each pass, so only the first pass may act on it or shortcuts
@@ -6882,7 +6895,15 @@ impl ReCraftApp {
             // may react to them.
             return Action::None;
         }
-        if self.edit.is_some() || self.goto.is_some() || ctx.egui_wants_keyboard_input() {
+        if self.edit.is_some() || self.goto.is_some() {
+            return Action::None;
+        }
+        // A focused text field owns the keyboard, so typing there cannot trigger shortcuts.
+        // Tab is the exception: egui's focus ring is cancelled for it (see
+        // [`Self::claim_tab_from_focus_navigation`]), so a Tab pressed while a button or a
+        // list has the focus still has to flip the views.
+        let tab = ctx.input(|input| input.key_pressed(Key::Tab));
+        if ctx.egui_wants_keyboard_input() && !(tab && !ctx.text_edit_focused()) {
             return Action::None;
         }
         // The desktop integration turns Ctrl+C into `Event::Copy`. A selected label (the AI
@@ -6986,7 +7007,7 @@ impl ReCraftApp {
                 action = Action::ShowXrefs;
             } else if input.modifiers.command {
                 // leave Ctrl/Cmd chords (copy, paste, …) to the platform.
-            } else if input.key_pressed(Key::Tab) {
+            } else if input.key_pressed(Key::Tab) && !input.modifiers.any() {
                 // IDA's Tab flips the two code views; the auxiliary panes keep their keys.
                 action = Action::ToggleDisasmPseudo;
             } else if self.tab == Tab::Disasm && input.key_pressed(Key::C) {
@@ -7516,6 +7537,10 @@ impl ReCraftApp {
         let ctx = root.ctx().clone();
         self.install_style(&ctx);
         self.handle_dropped_files(&ctx);
+        // egui queues its own widget-focus move for Tab at the start of the frame, and the
+        // first focusable widget that renders claims it; every later Tab would then walk the
+        // menu bar instead of the app's binding. Drop the move before any widget runs.
+        self.claim_tab_from_focus_navigation(&ctx);
         self.tick();
         // Background AI requests must wake the UI when they complete; otherwise the
         // polished text only appears after an unrelated mouse/keyboard event.
@@ -9374,6 +9399,64 @@ mod tests {
             "the function is already decompiled; Tab must not decompile it again"
         );
         assert_eq!(app.history.len(), history, "the way back is a flip too");
+    }
+
+    /// egui moves keyboard focus with Tab on its own, and the first press hands the ring to
+    /// a focusable widget (the menu bar first). The app binds Tab, so every press must flip
+    /// the views and no widget may keep the keyboard focus.
+    #[test]
+    fn tab_keeps_flipping_without_moving_the_keyboard_focus() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("tab-repeat.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        let frame = |app: &mut ReCraftApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        };
+        let tab = || {
+            vec![egui::Event::Key {
+                key: Key::Tab,
+                physical_key: Some(Key::Tab),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+        // One frame without events, so the menu bar, the dock and the panes are laid out and
+        // their widgets are known to egui.
+        frame(&mut app, Vec::new());
+        frame(&mut app, tab());
+        assert!(
+            matches!(app.tab, Tab::Pseudo),
+            "the first Tab opens the Decompile view"
+        );
+        frame(&mut app, tab());
+        assert!(
+            matches!(app.tab, Tab::Disasm),
+            "the second Tab must flip back, not move the focus ring"
+        );
+        assert!(
+            ctx.memory(|memory| memory.focused()).is_none(),
+            "Tab must not leave the keyboard focus on a widget"
+        );
     }
 
     /// IDA analyses a binary as soon as it is loaded, so importing a PE must start the

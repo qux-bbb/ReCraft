@@ -16,10 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adds no navigation-history entry, and coming back re-centres the same line instead of
   decompiling the function again. The binding is read after the Ctrl/Cmd chord guard, so
   chords still reach the platform and `Space` keeps switching Graph/Text; the auxiliary
-  panes (Functions, Strings, Hex, …) ignore `Tab`. Three tests cover the key binding, the
-  listing-to-pseudo-C direction and the round trip (anchor, highlight, history, no
-  re-decompilation); the welcome cheat sheet, the Decompile hint line, `docs/DEMO.md` and
-  `docs/M4.md` document the key in both languages.
+  panes (Functions, Strings, Hex, …) ignore `Tab`. egui's own Tab focus navigation is
+  cancelled at the top of the frame, because it handed the focus ring to the first focusable
+  widget (the menu bar) on the first press and swallowed every later one; a focused text
+  field still keeps the keyboard, so typing in a filter box cannot flip the views. Four
+  tests cover the key binding, the listing-to-pseudo-C direction, the round trip (anchor,
+  highlight, history, no re-decompilation) and repeated presses without a focus ring; the
+  welcome cheat sheet, the Decompile hint line, `docs/DEMO.md` and `docs/M4.md` document the
+  key in both languages.
 - **File → Close project (`Ctrl+W`) unloads the open project** and returns to the welcome
   screen, so switching projects no longer needs a restart. Closing first cancels a running
   background analysis (its worker owns a second SQLite connection) and drops the AI job,
