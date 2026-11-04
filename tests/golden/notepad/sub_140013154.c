@@ -3126,14 +3126,14 @@ void sub_140013154_l1(void) {
                                                                                                 eax -= ebx;
                                                                                                 ecx = (eax * 0xADDR);
                                                                                                 eax = 0xADDR;
-                                                                                                __asm("imul ecx");
+                                                                                                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                 edx >>= 5;
                                                                                                 eax = (edx >> 0xADDR);
                                                                                                 edx += eax;
                                                                                             } else {
                                                                                                 ecx = (rax + (rax * 4));
                                                                                                 eax = 0xADDR;
-                                                                                                __asm("imul ecx");
+                                                                                                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                 edx >>= 5;
                                                                                                 eax = (edx >> 0xADDR);
                                                                                                 edx += eax;
@@ -3145,7 +3145,7 @@ void sub_140013154_l1(void) {
                                                                                             loc_ADDR:
                                                                                             var_310 = edx;
                                                                                             eax = 0xADDR;
-                                                                                            __asm("imul ecx");
+                                                                                            edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                             edx >>= 5;
                                                                                             eax = (edx >> 0xADDR);
                                                                                             edx += eax;
@@ -3178,7 +3178,8 @@ void sub_140013154_l1(void) {
                                                                                             eax -= ebx;
                                                                                             ecx = (eax * 0xADDR);
                                                                                             eax = 0xADDR;
-                                                                                            __asm("imul ecx");
+                                                                                            edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
+                                                                                            eax = (uint32)(((int64)((int32)(eax)) * (int64)((int32)(ecx))));
                                                                                             edx >>= 5;
                                                                                             ecx = (edx >> 0xADDR);
                                                                                             edx += ecx;
@@ -3785,7 +3786,7 @@ void sub_140013154_l1(void) {
                                                                                             ecx = (uint32)(r14b);
                                                                                             ecx -= edi;
                                                                                             ecx *= r8d;
-                                                                                            __asm("imul ecx");
+                                                                                            edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                             edx += ecx;
                                                                                             ecx = (uint32)(var_a1);
                                                                                             edx >>= 7;
@@ -3797,7 +3798,7 @@ void sub_140013154_l1(void) {
                                                                                             edi = (uint32)(*(u8*)(((r10 + r9) - 1)));
                                                                                             ecx -= edi;
                                                                                             ecx *= r8d;
-                                                                                            __asm("imul ecx");
+                                                                                            edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                             edx += ecx;
                                                                                             ecx = (uint32)(var_a2);
                                                                                             edx >>= 7;
@@ -3809,7 +3810,7 @@ void sub_140013154_l1(void) {
                                                                                             edi = (uint32)(*(u8*)(((r10 + r9) - 2)));
                                                                                             ecx -= edi;
                                                                                             ecx *= r8d;
-                                                                                            __asm("imul ecx");
+                                                                                            edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                             edx += ecx;
                                                                                             ecx = 0xADDR;
                                                                                             edx >>= 7;
@@ -3823,7 +3824,7 @@ void sub_140013154_l1(void) {
                                                                                             ecx -= edi;
                                                                                             ecx *= r8d;
                                                                                             r8d = var_b8;
-                                                                                            __asm("imul ecx");
+                                                                                            edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                             edx += ecx;
                                                                                             edx >>= 7;
                                                                                             eax = (edx >> 0xADDR);
@@ -4057,7 +4058,7 @@ void sub_140013154_l1(void) {
                                                                                                         ecx = (uint32)(sil);
                                                                                                         ecx -= edi;
                                                                                                         ecx *= r8d;
-                                                                                                        __asm("imul ecx");
+                                                                                                        edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                         edx += ecx;
                                                                                                         ecx = (uint32)(var_81);
                                                                                                         edx >>= 7;
@@ -4069,7 +4070,7 @@ void sub_140013154_l1(void) {
                                                                                                         edi = (uint32)(*(u8*)(((r10 + r9) - 1)));
                                                                                                         ecx -= edi;
                                                                                                         ecx *= r8d;
-                                                                                                        __asm("imul ecx");
+                                                                                                        edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                         edx += ecx;
                                                                                                         ecx = (uint32)(var_82);
                                                                                                         edx >>= 7;
@@ -4081,7 +4082,7 @@ void sub_140013154_l1(void) {
                                                                                                         edi = (uint32)(*(u8*)(((r10 + r9) - 2)));
                                                                                                         ecx -= edi;
                                                                                                         ecx *= r8d;
-                                                                                                        __asm("imul ecx");
+                                                                                                        edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                         edx += ecx;
                                                                                                         ecx = 0xADDR;
                                                                                                         edx >>= 7;
@@ -4093,7 +4094,7 @@ void sub_140013154_l1(void) {
                                                                                                         edi = (uint32)(*(u8*)(((r10 + r9) + 1)));
                                                                                                         ecx -= edi;
                                                                                                         ecx *= r8d;
-                                                                                                        __asm("imul ecx");
+                                                                                                        edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                         edx += ecx;
                                                                                                         edx >>= 7;
                                                                                                         eax = (edx >> 0xADDR);
@@ -4581,7 +4582,7 @@ void sub_140013154_l1(void) {
                                                                                                 ecx = (uint32)(r15b);
                                                                                                 ecx -= edi;
                                                                                                 ecx *= r8d;
-                                                                                                __asm("imul ecx");
+                                                                                                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                 edx += ecx;
                                                                                                 ecx = (uint32)(var_149);
                                                                                                 edx >>= 7;
@@ -4593,7 +4594,7 @@ void sub_140013154_l1(void) {
                                                                                                 edi = (uint32)(*(u8*)(((r10 + r9) - 1)));
                                                                                                 ecx -= edi;
                                                                                                 ecx *= r8d;
-                                                                                                __asm("imul ecx");
+                                                                                                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                 edx += ecx;
                                                                                                 ecx = (uint32)(var_14a);
                                                                                                 edx >>= 7;
@@ -4605,7 +4606,7 @@ void sub_140013154_l1(void) {
                                                                                                 edi = (uint32)(*(u8*)(((r10 + r9) - 2)));
                                                                                                 ecx -= edi;
                                                                                                 ecx *= r8d;
-                                                                                                __asm("imul ecx");
+                                                                                                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                 edx += ecx;
                                                                                                 ecx = 0xADDR;
                                                                                                 edx >>= 7;
@@ -4618,7 +4619,7 @@ void sub_140013154_l1(void) {
                                                                                                 ecx -= edi;
                                                                                                 ecx *= r8d;
                                                                                                 r8d = var_f0;
-                                                                                                __asm("imul ecx");
+                                                                                                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                                                                                                 edx += ecx;
                                                                                                 edx >>= 7;
                                                                                                 eax = (edx >> 0xADDR);
@@ -8033,7 +8034,7 @@ void sub_140013154_l1(void) {
                 ecx = (uint32)(r15b);
                 ecx -= edi;
                 ecx *= r8d;
-                __asm("imul ecx");
+                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                 edx += ecx;
                 ecx = (uint32)(var_f9);
                 edx >>= 7;
@@ -8045,7 +8046,7 @@ void sub_140013154_l1(void) {
                 edi = (uint32)(*(u8*)(((r10 + r9) - 1)));
                 ecx -= edi;
                 ecx *= r8d;
-                __asm("imul ecx");
+                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                 edx += ecx;
                 ecx = (uint32)(var_fa);
                 edx >>= 7;
@@ -8057,7 +8058,7 @@ void sub_140013154_l1(void) {
                 edi = (uint32)(*(u8*)(((r10 + r9) - 2)));
                 ecx -= edi;
                 ecx *= r8d;
-                __asm("imul ecx");
+                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                 edx += ecx;
                 ecx = 0xADDR;
                 edx >>= 7;
@@ -8070,7 +8071,7 @@ void sub_140013154_l1(void) {
                 ecx -= edi;
                 ecx *= r8d;
                 r8d = var_108;
-                __asm("imul ecx");
+                edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
                 edx += ecx;
                 edx >>= 7;
                 eax = (edx >> 0xADDR);

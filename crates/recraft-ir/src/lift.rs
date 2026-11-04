@@ -1109,8 +1109,10 @@ impl Lifter {
 
     fn lift_imul(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
         // 2-operand: dst = dst * src; 3-operand: dst = src * imm. The one-operand form
-        // writes rdx:rax and stays an intrinsic.
+        // writes rdx:rax; the 32-bit form fits a 64-bit intermediate and is lifted below,
+        // larger widths stay an intrinsic (no portable 128-bit product).
         let (lhs, rhs) = match insn.op_count() {
+            1 => return self.lift_imul_one(insn, stmts),
             2 => (self.read_operand(insn, 0), self.read_operand(insn, 1)),
             3 => (self.read_operand(insn, 1), self.read_operand(insn, 2)),
             _ => return self.intrinsic(insn, stmts),
@@ -1130,6 +1132,83 @@ impl Lifter {
         } else {
             self.intrinsic(insn, stmts)
         }
+    }
+
+    /// `imul r/m32`: signed `edx:eax = eax * src`. The full product fits in `i64`, so the
+    /// high half is a shift instead of an intrinsic.
+    fn lift_imul_one(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::OpKind;
+        let size = match insn.op_kind(0) {
+            OpKind::Register => from_iced(insn.op_register(0)).map(|view| view.width),
+            OpKind::Memory => memory_size_bytes(insn),
+            _ => None,
+        };
+        let Some(size) = size else {
+            return self.intrinsic(insn, stmts);
+        };
+        if size != 4 {
+            return self.intrinsic(insn, stmts);
+        }
+        let Some(source) = self.read_operand(insn, 0) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let eax = self.reg(RegView::new(Reg::Rax, 4, 0));
+        // Sign-extend through int32 explicitly: the register's C type is unsigned, so a
+        // direct (int64) cast would zero-extend a negative operand.
+        let eax32 = self.push(Expr::Cast {
+            arg: eax,
+            width: 4,
+            signed: true,
+        });
+        let eax64 = self.push(Expr::Cast {
+            arg: eax32,
+            width: 8,
+            signed: true,
+        });
+        let source32 = self.push(Expr::Cast {
+            arg: source,
+            width: 4,
+            signed: true,
+        });
+        let source64 = self.push(Expr::Cast {
+            arg: source32,
+            width: 8,
+            signed: true,
+        });
+        let product = self.push(Expr::Bin {
+            op: BinOp::Mul,
+            lhs: eax64,
+            rhs: source64,
+        });
+        let shift = self.constant(32);
+        let high_bits = self.push(Expr::Bin {
+            op: BinOp::Shr,
+            lhs: product,
+            rhs: shift,
+        });
+        let low = self.push(Expr::Cast {
+            arg: product,
+            width: 4,
+            signed: false,
+        });
+        let high = self.push(Expr::Cast {
+            arg: high_bits,
+            width: 4,
+            signed: false,
+        });
+        // The high half must be computed before eax is overwritten.
+        stmts.push(Stmt::WriteReg {
+            reg: RegView::new(Reg::Rdx, 4, 0),
+            value: high,
+        });
+        stmts.push(Stmt::WriteReg {
+            reg: RegView::new(Reg::Rax, 4, 0),
+            value: low,
+        });
+        self.reg_env.insert(Reg::Rax, low);
+        self.reg_env.insert(Reg::Rdx, high);
+        self.last_cmp = None;
+        Flow::Fallthrough
     }
 
     fn lift_cmov(&mut self, insn: &Insn, kind: CondKind, stmts: &mut Vec<Stmt>) -> Flow {
@@ -1622,6 +1701,28 @@ mod tests {
                     lifter.expr(*value),
                     Expr::Bin { op: BinOp::Xor, .. }
                 ));
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+    }
+
+    #[test]
+    fn one_operand_imul_writes_both_halves() {
+        // imul ecx: edx:eax = eax * ecx
+        let (lifter, item) = lift_one(&[0xf7, 0xe9], 0x1000);
+        assert_eq!(item.stmts.len(), 2);
+        match &item.stmts[0] {
+            Stmt::WriteReg { reg, value } => {
+                assert_eq!(reg.base, Reg::Rdx);
+                assert_eq!(reg.width, 4);
+                assert!(matches!(lifter.expr(*value), Expr::Cast { .. }));
+            }
+            other => panic!("unexpected stmt {other:?}"),
+        }
+        match &item.stmts[1] {
+            Stmt::WriteReg { reg, .. } => {
+                assert_eq!(reg.base, Reg::Rax);
+                assert_eq!(reg.width, 4);
             }
             other => panic!("unexpected stmt {other:?}"),
         }

@@ -44,7 +44,6 @@ void sub_1400206b4_l1(void) {
     GetTimeFormatW(esi, 0, off_140035a80, 0, off_140034670, 0xADDR);
     xmm0 = xmmword_ADDR;
     xmm1 = xmmword_ADDR;
-    var_e0 = xmm0;
     xmm0 = xmmword_ADDR;
     var_f0 = xmm1;
     xmm1 = xmmword_ADDR;
@@ -60,7 +59,7 @@ void sub_1400206b4_l1(void) {
     var_138 = dword_ADDR;
     eax = 0xADDR;
     var_e4 = 0;
-    __asm("imul ecx");
+    edx = (uint32)((((int64)((int32)(eax)) * (int64)((int32)(ecx))) >> 0xADDR));
     edx -= ecx;
     edx >>= 9;
     eax = (edx >> 0xADDR);
