@@ -80,13 +80,18 @@ fn materialize_cmpxchg_outputs(lines: &mut Vec<PseudoLine>) {
             .split(|ch: char| !ch.is_ascii_alphanumeric())
             .next()
             .unwrap_or("");
-        if mnemonic != "cmpxchg" {
+        if !matches!(
+            mnemonic,
+            "cmpxchg" | "div" | "idiv" | "mul" | "rdtsc" | "rdtscp" | "cpuid" | "xgetbv"
+        ) {
             continue;
         }
         let indent = " ".repeat(line.text.len() - line.text.trim_start().len());
         let mut added = Vec::new();
         for reg in writes {
-            let mut read_before_write = false;
+            // A self-assignment adds one register mention; worth it when at least one later
+            // line reads the value (it turns a possibly very large tail into one mention).
+            let mut read_lines = 0usize;
             for later in &lines[index + 1..] {
                 let later_text = later.text.trim();
                 if let Some(assignment) = split_assignment(later_text) {
@@ -96,13 +101,14 @@ fn materialize_cmpxchg_outputs(lines: &mut Vec<PseudoLine>) {
                         .is_some_and(|token| token.reg == *reg && token.offset == 0);
                     if writes_reg {
                         // A compound assignment reads the old value first.
-                        read_before_write |= assignment.compound.is_some();
+                        if assignment.compound.is_some() {
+                            read_lines += 1;
+                        }
                         break;
                     }
                     let rhs = &later_text[assignment.rhs.0..assignment.rhs.1];
                     if scan_tokens(rhs).iter().any(|token| token.reg == *reg) {
-                        read_before_write = true;
-                        break;
+                        read_lines += 1;
                     }
                     continue;
                 }
@@ -110,11 +116,10 @@ fn materialize_cmpxchg_outputs(lines: &mut Vec<PseudoLine>) {
                     .iter()
                     .any(|token| token.reg == *reg)
                 {
-                    read_before_write = true;
-                    break;
+                    read_lines += 1;
                 }
             }
-            if !read_before_write {
+            if read_lines == 0 {
                 continue;
             }
             let spelling = reg.name64();
