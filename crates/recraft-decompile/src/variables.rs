@@ -47,11 +47,58 @@ const NONE: usize = usize::MAX;
 /// not valid C), a straight-line fallback still names values whose definition and use sit in
 /// the same basic run; the text is never left worse than the emitter's.
 pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
+    normalize_inline_cases(lines);
     if recover_structured(lines, is_64) || recover_linear(lines, is_64) {
         strip_parameter_registers(lines);
         return true;
     }
     false
+}
+
+/// The structurer prints some case arms as `case N: goto loc_X;` / `case N: return ...;`.
+/// The variable parser (like C) expects a case to own a block, so give each single-line arm
+/// braces first. This is textual and only touches L2; the result is valid either way.
+fn normalize_inline_cases(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index < lines.len() {
+        let text = lines[index].text.trim().to_owned();
+        let is_case = text.starts_with("case ") || text.starts_with("default");
+        if !is_case {
+            index += 1;
+            continue;
+        }
+        let Some((label, rest)) = text.split_once(':') else {
+            index += 1;
+            continue;
+        };
+        let rest = rest.trim();
+        if rest.is_empty() || rest.starts_with('{') || !rest.ends_with(';') {
+            index += 1;
+            continue;
+        }
+        if rest.starts_with("case ") || rest.starts_with("default") {
+            index += 1;
+            continue;
+        }
+        let indent = " ".repeat(lines[index].text.len() - lines[index].text.trim_start().len());
+        let addr = lines[index].addr;
+        lines[index].text = format!("{indent}{label}: {{");
+        lines.insert(
+            index + 1,
+            PseudoLine {
+                addr,
+                text: format!("{indent}    {rest}"),
+            },
+        );
+        lines.insert(
+            index + 2,
+            PseudoLine {
+                addr,
+                text: format!("{indent}}}"),
+            },
+        );
+        index += 3;
+    }
 }
 
 /// The parameter comment names the argument registers; once the body has locals it is both
@@ -1201,6 +1248,14 @@ impl Parser<'_> {
             let is_case = trimmed.starts_with("case ");
             let is_default = trimmed.starts_with("default");
             if (!is_case && !is_default) || !trimmed.ends_with('{') {
+                // Statements after the last case are dead when every arm transfers control;
+                // they are skipped rather than making the whole function fall back. A
+                // control line could open a block we cannot skip safely, so only simple
+                // statements are ignored.
+                if !is_case && !is_default && trimmed.ends_with(';') {
+                    self.pos += 1;
+                    continue;
+                }
                 return None;
             }
             has_default |= is_default;
@@ -2794,6 +2849,23 @@ mod tests {
         assert!(text.contains("/* jump table"), "{text}");
         assert!(text.contains("v1 = 1;"), "{text}");
         assert_no_registers(&text);
+    }
+
+    #[test]
+    fn inline_case_gets_a_block() {
+        let text = run(&[
+            "    switch (arg1) {",
+            "        case 0: return 1;",
+            "        case 1: {",
+            "            rax = 2;",
+            "            break;",
+            "        }",
+            "    }",
+            "    return 0;",
+        ]);
+        assert!(text.contains("case 0: {"), "{text}");
+        assert!(text.contains("return 1;"), "{text}");
+        assert!(text.contains("case 1: {"), "{text}");
     }
 
     #[test]

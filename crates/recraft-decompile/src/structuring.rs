@@ -5937,7 +5937,19 @@ fn fold_trivial_return_labels(lines: &mut [PseudoLine]) {
                 let condition = condition.strip_prefix("if (").unwrap_or(condition);
                 format!("{indent}if ({condition}) {result}")
             }
-            None => format!("{indent}{result}"),
+            None => {
+                // Keep a leading `case N:` / label prefix: replacing the whole line would
+                // drop the case label and make the switch body invalid C.
+                let prefix = text
+                    .split_once("goto loc_")
+                    .map(|(prefix, _)| prefix.trim_end())
+                    .unwrap_or("");
+                if prefix.is_empty() {
+                    format!("{indent}{result}")
+                } else {
+                    format!("{indent}{prefix} {result}")
+                }
+            }
         };
     }
 }
@@ -8602,6 +8614,28 @@ mod tests {
         // The `break` would bind to whatever loop (if any) encloses the copy site.
         assert!(text.contains("goto loc_20;"), "{text}");
         assert_eq!(text.matches("break;").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn case_prefix_survives_return_label_folding() {
+        let mut lines = vec![
+            test_line("    switch (index) {"),
+            test_line("        case 0: goto loc_20;"),
+            test_line("    }"),
+            test_line("loc_20:"),
+            test_line("    return rax;"),
+        ];
+        fold_trivial_return_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("case 0: return rax;"), "{text}");
+        assert!(
+            !text.contains("        return rax;\n        case"),
+            "{text}"
+        );
     }
 
     #[test]
