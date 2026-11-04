@@ -47,45 +47,49 @@ const NONE: usize = usize::MAX;
 /// not valid C), a straight-line fallback still names values whose definition and use sit in
 /// the same basic run; the text is never left worse than the emitter's.
 pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
-    materialize_cmpxchg_outputs(lines);
     normalize_inline_cases(lines);
-    if recover_structured(lines, is_64) || recover_linear(lines, is_64) {
-        strip_parameter_registers(lines);
-        return true;
+    let original = lines.clone();
+    if !recover_structured(lines, is_64) {
+        *lines = original;
+        if recover_linear(lines, is_64) {
+            strip_parameter_registers(lines);
+            return true;
+        }
+        return false;
     }
-    false
+    let before = register_line_count(lines);
+    let mut candidate = original;
+    materialize_asm_outputs(&mut candidate);
+    if recover_structured(&mut candidate, is_64) && register_line_count(&candidate) < before {
+        *lines = candidate;
+    }
+    strip_parameter_registers(lines);
+    true
 }
 
-/// `cmpxchg` leaves its result in the accumulator and writes the destination only on
-/// success. A self-assignment after the statement gives the post-instruction value a normal
-/// definition (`rax = rax;` becomes `v1 = rax;`): the single register mention stays at the
-/// assembly boundary, while the retry loop and the following code use the local. Only
-/// registers read again before being overwritten are materialized, so no dead copies appear.
-fn materialize_cmpxchg_outputs(lines: &mut Vec<PseudoLine>) {
+/// Lines that still name a register outside an `__asm` string.
+fn register_line_count(lines: &[PseudoLine]) -> usize {
+    lines
+        .iter()
+        .filter(|line| {
+            let text = line.text.trim_start();
+            !text.starts_with("//") && !text.starts_with("__asm(") && !scan_tokens(text).is_empty()
+        })
+        .count()
+}
+
+/// An `__asm` statement leaves its result in a register; a self-assignment after the
+/// statement gives the post-instruction value a normal definition (`rax = rax;` becomes
+/// `v1 = rax;`): the single register mention stays at the assembly boundary, while the
+/// following C statements use the local. Only registers read again before being
+/// overwritten are materialized, and uses inside another `__asm` do not count.
+fn materialize_asm_outputs(lines: &mut Vec<PseudoLine>) {
     let effects = asm_effects_of(lines, 0);
     let mut inserts: Vec<(usize, Vec<String>)> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let Some((_, writes)) = effects.get(&index) else {
             continue;
         };
-        let body = line
-            .text
-            .trim_start()
-            .strip_prefix("__asm(")
-            .and_then(|rest| rest.split('"').nth(1))
-            .unwrap_or("");
-        let lower = body.trim_start();
-        let lower = lower.strip_prefix("lock ").unwrap_or(lower).trim_start();
-        let mnemonic = lower
-            .split(|ch: char| !ch.is_ascii_alphanumeric())
-            .next()
-            .unwrap_or("");
-        if !matches!(
-            mnemonic,
-            "cmpxchg" | "div" | "idiv" | "mul" | "rdtsc" | "rdtscp" | "cpuid" | "xgetbv"
-        ) {
-            continue;
-        }
         let indent = " ".repeat(line.text.len() - line.text.trim_start().len());
         let mut added = Vec::new();
         for reg in writes {
@@ -94,6 +98,11 @@ fn materialize_cmpxchg_outputs(lines: &mut Vec<PseudoLine>) {
             let mut read_lines = 0usize;
             for later in &lines[index + 1..] {
                 let later_text = later.text.trim();
+                // Another assembly statement consumes the register itself; it does not
+                // read the C local, so it must not count as a use here.
+                if later_text.starts_with("__asm(") {
+                    continue;
+                }
                 if let Some(assignment) = split_assignment(later_text) {
                     let lhs = &later_text[assignment.lhs.0..assignment.lhs.1];
                     let writes_reg = scan_tokens(lhs)
