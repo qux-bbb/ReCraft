@@ -3976,16 +3976,15 @@ void sub_140013154_l1(void) {
                                                                                         sub_140028010(r12, var_b0, r8, &var_8f0, var_148, 0);
                                                                                         eax = (rdi + 1);
                                                                                         if (esi != eax) {
-                                                                                            eax = 0xADDR;
-                                                                                            while (1) {
-                                                                                                var_80 = eax;
-                                                                                                var_120 = eax;
-                                                                                            } else if (var_80 == edi) {
-                                                                                                var_80 = 0xADDR;
-                                                                                            } else {
-                                                                                                rax = qword_ADDR;
-                                                                                                sub_140028010((rdi + 8));
-                                                                                            }
+                                                                                            loc_ADDR:
+                                                                                            var_80 = 0xADDR;
+                                                                                            var_120 = 0xADDR;
+                                                                                        } else if (var_80 == edi) {
+                                                                                            var_80 = 0xADDR;
+                                                                                        } else {
+                                                                                            rax = qword_ADDR;
+                                                                                            sub_140028010((rdi + 8));
+                                                                                            goto loc_ADDR;
                                                                                         }
                                                                                         eax = var_a8;
                                                                                         r10d = edi;
@@ -4503,16 +4502,15 @@ void sub_140013154_l1(void) {
                                                                                 sub_140028010(rbx, var_90, r8, &var_8c0, var_148, 0);
                                                                                 eax = (rdi + 1);
                                                                                 if (esi != eax) {
-                                                                                    eax = 0xADDR;
-                                                                                    while (1) {
-                                                                                        var_148 = eax;
-                                                                                        var_120 = eax;
-                                                                                    } else if (var_f8 == edi) {
-                                                                                        var_148 = 0xADDR;
-                                                                                    } else {
-                                                                                        rax = qword_ADDR;
-                                                                                        sub_140028010((rdi + 8));
-                                                                                    }
+                                                                                    loc_ADDR:
+                                                                                    var_148 = 0xADDR;
+                                                                                    var_120 = 0xADDR;
+                                                                                } else if (var_f8 == edi) {
+                                                                                    var_148 = 0xADDR;
+                                                                                } else {
+                                                                                    rax = qword_ADDR;
+                                                                                    sub_140028010((rdi + 8));
+                                                                                    goto loc_ADDR;
                                                                                 }
                                                                                 eax = var_85c;
                                                                                 r9d = edi;

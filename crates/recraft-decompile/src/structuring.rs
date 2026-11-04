@@ -4959,10 +4959,37 @@ fn fold_backward_gotos_into_loops(lines: &mut Vec<PseudoLine>) -> usize {
                 usable = false;
                 break;
             }
-            depth += text.matches('{').count() as isize;
-            depth -= text.matches('}').count() as isize;
-            if depth < 0 {
-                usable = false;
+            // Count braces in reading order, not per line: `} else {` nets to zero but closes
+            // the block the label lives in, which would turn the region into
+            // `do { … } else { … } while (1);` — not valid C. A `}` that takes the depth
+            // below the label's level means the region left that block.
+            let mut quoted = false;
+            let mut escaped = false;
+            for ch in text.chars() {
+                if quoted {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        quoted = false;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => quoted = true,
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth < 0 {
+                            usable = false;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !usable {
                 break;
             }
         }
@@ -11199,5 +11226,23 @@ mod tests {
         // The region closes the enclosing `{`, so the loop body would not be contiguous.
         assert_eq!(fold_backward_gotos_into_loops(&mut lines), 0);
         assert!(lines[2].text.contains("goto loc_20;"));
+    }
+
+    #[test]
+    fn backward_jump_that_crosses_an_else_arm_is_kept() {
+        let mut lines = vec![
+            test_line("    if (a) {"),
+            test_line("        loc_20:"),
+            test_line("        value += 1;"),
+            test_line("    } else {"),
+            test_line("        value = 0;"),
+            test_line("        goto loc_20;"),
+            test_line("    }"),
+            test_line("    return;"),
+        ];
+        // `} else {` nets zero braces, but its `}` closes the block the label lives in.
+        // Folding it would emit `do { … } else { … } while (1);`, which is not valid C.
+        assert_eq!(fold_backward_gotos_into_loops(&mut lines), 0);
+        assert!(lines[5].text.contains("goto loc_20;"));
     }
 }

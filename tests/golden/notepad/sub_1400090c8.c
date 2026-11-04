@@ -10,32 +10,32 @@ void sub_1400090c8_l1(void) {
         if (al != 2) {
             if (*(u16*)(rsi) != r14w) {
                 rbp = (rsi + 8);
-                while (1) {
-                    r9d = (uint32)(*(u16*)(rbp));
-                    rax = (r9 + rbx);
-                    if (rax <= rdi) {
-                        rdi -= rbx;
-                        sub_1400096fc(rbx, rdi, *(u64*)((rsi + 0xADDR)));
-                        ecx = (uint32)(*(u16*)(rbp));
-                        al = 1;
-                        rcx += rbx;
-                        *(u64*)(r15) = rcx;
-                    } else {
-                        al = 0;
-                    }
+                loc_ADDR:
+                r9d = (uint32)(*(u16*)(rbp));
+                rax = (r9 + rbx);
+                if (rax <= rdi) {
+                    rdi -= rbx;
+                    sub_1400096fc(rbx, rdi, *(u64*)((rsi + 0xADDR)));
+                    ecx = (uint32)(*(u16*)(rbp));
+                    al = 1;
+                    rcx += rbx;
+                    *(u64*)(r15) = rcx;
                 } else {
-                    r14 = (rbx + 2);
-                    if (r14 > rdi) {
-                        al = 0;
-                        return;
-                    }
-                    rbp = (rsi + 8);
-                    rdx = rdi;
-                    rdx -= rbx;
-                    r9d = 2;
-                    sub_1400096fc(rbx, rdx, rbp);
-                    rbx = r14;
+                    al = 0;
                 }
+            } else {
+                r14 = (rbx + 2);
+                if (r14 > rdi) {
+                    al = 0;
+                    return;
+                }
+                rbp = (rsi + 8);
+                rdx = rdi;
+                rdx -= rbx;
+                r9d = 2;
+                sub_1400096fc(rbx, rdx, rbp);
+                rbx = r14;
+                goto loc_ADDR;
             }
         } else {
             rbp = (rbx + 4);
