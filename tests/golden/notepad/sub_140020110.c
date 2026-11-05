@@ -30,14 +30,13 @@ void sub_140020110_l1(void) {
         edx -= 1;
         if (edx == 0) {
             rcx = qword_ADDR;
-            ebx = 1;
             dword_ADDR = 1;
-            EnableWindow(qword_ADDR, ebx);
+            EnableWindow(qword_ADDR, 1);
             DestroyWindow(qword_ADDR);
             qword_ADDR = 0;
             rax = 1;
         } else if (edx == 5) {
-            EnableMenuItem(qword_ADDR, 0xADDR, ebx);
+            EnableMenuItem(qword_ADDR, 0xADDR, 1);
             rax = 1;
             return;
         }

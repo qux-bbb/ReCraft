@@ -7,7 +7,6 @@ void sub_140009508_l1(void) {
     r14 = rcx;
     if (rax >= 0xADDR) {
         esi = 0;
-        r12 = 0xADDR;
         do {
             edx = 0;
             sub_1400029dc(&var_50, 0, 0xADDR);
@@ -21,7 +20,7 @@ void sub_140009508_l1(void) {
             ebx = eax;
             if (eax == 0) {
                 r9d = var_40;
-                rax = r12;
+                rax = 0xADDR;
                 __asm("mul r9");
                 rdx >>= 3;
                 rcx = ((rdx + (rdx * 2)) << 2);
@@ -29,11 +28,11 @@ void sub_140009508_l1(void) {
                     var_40 = 0;
                 }
                 r8 = *(u64*)(r14);
-                rax = r12;
+                rax = 0xADDR;
                 ecx = r9d;
                 __asm("mul rcx");
                 rcx = *(u64*)((r14 + 8));
-                rax = r12;
+                rax = 0xADDR;
                 r10 = rdx;
                 rcx -= r8;
                 __asm("mul rcx");

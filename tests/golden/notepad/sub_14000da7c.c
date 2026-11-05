@@ -88,8 +88,7 @@ void sub_14000da7c_l1(void) {
                     eax += 0xADDR;
                     eax = ((eax >= ecx) ? ecx : eax);
                     r8d = eax;
-                    r9d = 0xADDR;
-                    SendMessageW(qword_ADDR, 0xADDR, r8, r9);
+                    SendMessageW(qword_ADDR, 0xADDR, r8, 0xADDR);
                     sub_14000fd5c();
                     eax = r12d;
                     r11 = &var_310;
@@ -167,7 +166,7 @@ void sub_14000da7c_l1(void) {
                 var_78 = r15;
                 GetDeviceCaps(rax, (rdi - 0xADDR));
                 r15d = 0xADDR;
-                MulDiv(dword_ADDR, eax, r15d);
+                MulDiv(dword_ADDR, eax, 0xADDR);
                 var_94 = 0xADDR;
                 eax = -(eax);
                 dword_ADDR = eax;
@@ -206,9 +205,8 @@ void sub_14000da7c_l1(void) {
             ecx = (edi - 0xADDR);
             if (ecx == 0) {
                 r9 = -1;
-                SendMessageW(qword_ADDR, 0xADDR, 0, (r9 | -1));
-                edx = 0xADDR;
-                SendMessageW(qword_ADDR, rdx, 0, 0);
+                SendMessageW(qword_ADDR, 0xADDR, 0, (-1 | -1));
+                SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                 eax = r12d;
                 r11 = &var_310;
                 return;
@@ -259,8 +257,7 @@ void sub_14000da7c_l1(void) {
                         }
                         rcx = qword_ADDR;
                         if (rcx != 0) {
-                            r9d = 0;
-                            SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+                            SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                         }
                         al = byte_ADDR;
                         al = byte_ADDR;
@@ -372,8 +369,7 @@ void sub_14000da7c_l1(void) {
                         }
                         rcx = qword_ADDR;
                         if (rcx != 0) {
-                            r9d = 0;
-                            SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+                            SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                         }
                         al = byte_ADDR;
                         al = byte_ADDR;
@@ -410,8 +406,7 @@ void sub_14000da7c_l1(void) {
                         rcx = qword_ADDR;
                         dword_ADDR = r12d;
                         if (rcx != 0) {
-                            r9d = 0;
-                            SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+                            SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                         }
                         al = byte_ADDR;
                         al = byte_ADDR;

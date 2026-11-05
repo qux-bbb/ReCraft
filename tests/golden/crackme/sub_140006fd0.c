@@ -59,8 +59,8 @@ void sub_140006fd0_l1(void) {
                         rax = r8;
                         return;
                     }
-                    ecx = *(u32*)(((rsi + (r9 * 4)) + 0xADDR));
-                    rcx += rsi;
+                    ecx = *(u32*)(((0xADDR + (r9 * 4)) + 0xADDR));
+                    rcx += 0xADDR;
                     __asm("jmp rcx");
                 }
             }
@@ -81,7 +81,7 @@ void sub_140006fd0_l1(void) {
             loc_ADDR:
             if (edi != 0) goto loc_ADDR;
         }
-        ecx = *(u32*)(((rsi + (rax * 4)) + 0xADDR));
+        ecx = *(u32*)(((0xADDR + (rax * 4)) + 0xADDR));
         rcx += rsi;
         __asm("jmp rcx");
     }

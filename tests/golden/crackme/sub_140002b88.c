@@ -14,11 +14,10 @@ void sub_140002b88_l1(void) {
     rdx = *(u64*)((rdi + 0xADDR));
     ecx = *(u32*)(rdx);
     rcx += *(u64*)((rax + 0xADDR));
-    eax = 0;
     var_38 = al;
     var_30 = 0;
     var_28 = 0;
     var_20 = rcx;
-    sub_140003b4c(rbp, &var_50, rsi, rdi, (rcx + *(u64*)((rax + 0xADDR))), 0, 0, 0);
+    sub_140003b4c(rbp, &var_50, rsi, rdi, (rcx + *(u64*)(0xADDR)), 0, 0, 0);
     return;
 }

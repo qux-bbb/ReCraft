@@ -1935,6 +1935,51 @@ impl Printer<'_> {
         Some(format!("{name}->{field}"))
     }
 
+    /// `[rsp + index + disp]` is the frame slot at `disp`, indexed: `*(u8*)(&var_20 + i)`.
+    /// The plain spelling prints `rsp`, which stops meaning anything once the prologue's
+    /// stack adjustment is hidden — and the L2 variable pass would turn that `rsp` into an
+    /// uninitialised local. Only a frame base qualifies: `[rax + index + 8]` is a structure
+    /// access, not a local array.
+    fn indexed_stack_access(&self, addr: ExprId, size: u8) -> Option<String> {
+        let Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } = &self.exprs[addr as usize]
+        else {
+            return None;
+        };
+        // `(base + index) + disp`, with the constant on either side.
+        let (sum, disp) = match (&self.exprs[*lhs as usize], &self.exprs[*rhs as usize]) {
+            (Expr::Bin { op: BinOp::Add, .. }, Expr::Const(value)) => (*lhs, *value as i64),
+            (Expr::Const(value), Expr::Bin { op: BinOp::Add, .. }) => (*rhs, *value as i64),
+            _ => return None,
+        };
+        let Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } = &self.exprs[sum as usize]
+        else {
+            return None;
+        };
+        let (base, index) = match (&self.exprs[*lhs as usize], &self.exprs[*rhs as usize]) {
+            (Expr::Reg(view), _) => (view.base, *rhs),
+            (_, Expr::Reg(view)) => (view.base, *lhs),
+            _ => return None,
+        };
+        let frame_base = base == Reg::Rsp || self.pointer_offsets.contains_key(&base);
+        if !frame_base {
+            return None;
+        }
+        let name = self.stack_reference(base, disp)?;
+        Some(format!(
+            "*({}*)(&{name} + {})",
+            Self::scalar_type(size),
+            self.expr(index)
+        ))
+    }
+
     /// `argN[index]` for `base + index*scale` addressing through a typed pointer.
     fn array_access(&self, expr: ExprId, size: u8) -> Option<String> {
         let Expr::Bin { op, lhs, rhs } = &self.exprs[expr as usize] else {
@@ -2282,6 +2327,8 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     name
+                } else if let Some(index) = self.indexed_stack_access(*addr, *size) {
+                    index
                 } else if let Some(index) = self.array_access(*addr, *size) {
                     index
                 } else if let Some(field) = self.field_access(*addr, *size) {
@@ -2295,6 +2342,8 @@ impl Printer<'_> {
                     && let Some(name) = self.stack_reference(base, offset)
                 {
                     name
+                } else if let Some(index) = self.indexed_stack_access(*addr, *size) {
+                    index
                 } else if let Some(index) = self.array_access(*addr, *size) {
                     index
                 } else if let Some(field) = self.field_access(*addr, *size) {

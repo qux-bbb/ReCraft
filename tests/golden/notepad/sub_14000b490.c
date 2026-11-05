@@ -6,8 +6,8 @@ void sub_14000b490_l1(void) {
     PathFileExistsW(&var_80);
     esi = 0;
     if (eax == 0) {
-        var_30 = rsi;
-        hstring = rsi;
+        var_30 = 0;
+        hstring = 0;
         WindowsCreateStringReference("Windows.System.Launcher", 0xADDR, &hstringHeader, &hstring);
         if (eax < 0 /* signed */) {
             ecx = eax;
@@ -23,7 +23,7 @@ void sub_14000b490_l1(void) {
         RoGetActivationFactory(rbx, off_14002af50, &var_30);
         ebx = eax;
         if (eax >= 0 /* signed */) {
-            var_38 = rsi;
+            var_38 = 0;
             hstring = rsi;
             WindowsCreateStringReference("W", 0xADDR, &hstringHeader, &hstring);
             if (eax < 0 /* signed */) {

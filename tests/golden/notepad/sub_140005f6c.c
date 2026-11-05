@@ -13,8 +13,8 @@ void sub_140005f6c_l1(void) {
     r14 = var_d0;
     esi = 0;
     ecx = ebp;
-    *(u16*)(r14) = r8w;
-    *(u8*)(rax) = r8b;
+    *(u16*)(r14) = 0xADDR;
+    *(u8*)(rax) = 0xADDR;
     edi = *(u32*)(r15);
     *(u32*)((rbx + 8)) = edi;
     eax = *(u32*)((r15 + 4));
@@ -71,7 +71,7 @@ void sub_140005f6c_l1(void) {
     *(u32*)((rbx + 0xADDR)) = eax;
     rax = var_c0;
     if (rax == 0) {
-        rax = rdi;
+        rax = 0;
     }
     *(u64*)((rbx + 0xADDR)) = rax;
     GetCurrentThreadId();
@@ -85,7 +85,7 @@ void sub_140005f6c_l1(void) {
     *(u64*)((rbx + 0xADDR)) = rax;
     *(u32*)((rbx + 0xADDR)) = esi;
     *(u64*)((rbx + 0xADDR)) = r12;
-    *(u64*)((rbx + 0xADDR)) = rdi;
+    *(u64*)((rbx + 0xADDR)) = 0;
     *(__m128*)((rbx + 0xADDR)) = xmm0;
     *(u64*)((rbx + 0xADDR)) = 0;
     *(__m128*)((rbx + 0xADDR)) = xmm0;
@@ -122,7 +122,7 @@ void sub_140005f6c_l1(void) {
                 rax = qword_ADDR;
                 esi = 0xADDR;
                 if (rax != 0 && byte_ADDR == dil) {
-                    r8d = esi;
+                    r8d = 0xADDR;
                     rdx = r14;
                     rcx = rbx;
                     sub_140028010(rbx, r14, esi);

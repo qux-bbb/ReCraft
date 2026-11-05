@@ -32,7 +32,6 @@ void sub_14000cec0_l1(void) {
     }
     var_20 = rdi;
     ebp = 0xADDR;
-    rdi = -1;
     SendDlgItemMessageW(rbx, esi, ebp, rdi, rdi);
     if (eax != edi) {
         var_20 = 0;
@@ -40,7 +39,7 @@ void sub_14000cec0_l1(void) {
     } else {
         rax = qword_ADDR;
         var_20 = rax;
-        SendDlgItemMessageW(rbx, esi, ebp, rdi, qword_ADDR);
+        SendDlgItemMessageW(rbx, esi, ebp, -1, qword_ADDR);
         if (eax != edi) {
             var_20 = 0;
             SendDlgItemMessageW(rbx, esi, 0xADDR, (int64)(eax), 0);

@@ -15,10 +15,10 @@ void sub_14000627c_l1(void) {
                 loc_ADDR:
                 r13d = 0;
                 if (al != 0) {
-                    if (*(u8*)((rbx + 0xADDR)) == r13b) {
+                    if (*(u8*)((rbx + 0xADDR)) == 0xADDR) {
                         var_38 = ax;
                         var_3a = al;
-                        rdi = r13;
+                        rdi = 0;
                         edx = *(u32*)((rbx + 0xADDR));
                         eax = (edx >> 4);
                         if ((al & 1) != 0) {
@@ -62,7 +62,7 @@ void sub_14000627c_l1(void) {
                         r15d -= edi;
                         if ((dl & 0xADDR) == 0) {
                             r14 = *(u64*)((rbx + 8));
-                            esi = r13d;
+                            esi = 0;
                             if (r15d > 0 /* signed */) {
                                 while (1) {
                                     rax = *(u64*)((rbx + 0xADDR));

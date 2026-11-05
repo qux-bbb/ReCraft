@@ -37,7 +37,7 @@ void sub_140025ed0_l1(void) {
                     rax = *(u64*)(rcx);
                     rax = *(u64*)((rax + 8));
                     sub_140028010();
-                    eax = ebx;
+                    eax = 0xADDR;
                     return;
                 }
             }

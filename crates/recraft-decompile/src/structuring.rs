@@ -466,12 +466,16 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
 
     fold_constant_registers(&mut lines);
+    merge_address_constants(&mut lines);
+    fold_literal_arithmetic(&mut lines);
     // The constant fold just turned `rcx += rdx` into `rcx += 0x…`, so an accumulation can now
     // merge back into the assignment that produced its input.
     merge_accumulations(&mut lines);
     // Later passes move loads and copies around, which exposes more adjacent pairs.
     for _ in 0..2 {
         fold_constant_registers(&mut lines);
+        merge_address_constants(&mut lines);
+        fold_literal_arithmetic(&mut lines);
         merge_accumulations(&mut lines);
     }
     fold_compound_assignments(&mut lines);
@@ -691,6 +695,18 @@ const KNOWN_STRUCTS: [KnownStruct; 3] = [
 /// live afterwards.
 fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
     let mut depths = line_depths(lines);
+    // The last line that writes each register base. A constant assignment that is a register's
+    // final write holds for the rest of the function, so a use in a nested block can take it
+    // (the image base is loaded once in the prologue and read from inside every loop); only a
+    // value that is rewritten later needs the "same block, ten lines" restriction below.
+    let mut last_write: HashMap<u8, usize> = HashMap::new();
+    for (position, line) in lines.iter().enumerate() {
+        if let Some(name) = assigned_register_name(&line.text)
+            && let Some(base) = register_base_any(name)
+        {
+            last_write.insert(base, position);
+        }
+    }
     let mut index = 0;
     while index < lines.len() {
         let text = lines[index].text.trim().to_owned();
@@ -725,19 +741,25 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         }
         // The constant holds until the register is written, so the first *foldable* read is
         // used; a read that cannot take the constant (`r9d = (rax - 5)`) does not stop the
-        // scan, it only rules itself out. The depth gate keeps a use in a nested loop body
-        // from seeing a loop-carried value instead of the constant above it.
+        // scan, it only rules itself out. A use in a nested block may see a loop-carried value
+        // instead of the constant above it, so it is only folded when this assignment is the
+        // register's final write; otherwise the scan stays in the same block.
+        let final_value = register_base_any(&register)
+            .and_then(|base| last_write.get(&base).map(|last| *last == index))
+            .unwrap_or(false);
+        let limit = if final_value {
+            (index + 400).min(lines.len())
+        } else {
+            (index + 10).min(lines.len())
+        };
         let mut fold: Option<(usize, String, String)> = None;
-        for offset in index + 1..(index + 10).min(lines.len()) {
+        for offset in index + 1..limit {
             let statement = lines[offset].text.trim();
             let body = statement.trim_end_matches(';');
             if family.iter().any(|name| assigns_to(body, name)) {
                 break;
             }
-            // A mention inside a nested block may run more than once and see a value the loop
-            // carried, so it is skipped rather than folded; the write check above still sees
-            // the assignments that happen inside it.
-            if depths[offset] != depths[index] {
+            if !final_value && depths[offset] != depths[index] {
                 continue;
             }
             let Some(spelling) = family
@@ -795,6 +817,14 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
                 fold = Some((offset, spelling, folded_value));
                 break;
             }
+            // A constant base inside an address expression: `((rax + rdi) + 0x18380)`
+            // with `rdi = 0x140000000` is one image address plus an index. Only uses
+            // inside a `*(type*)(…)` operand qualify; a call argument or an ordinary
+            // arithmetic statement keeps the register (it may be a live named value).
+            if contains_token(statement, &spelling) && statement.contains("*)(") {
+                fold = Some((offset, spelling, folded_value));
+                break;
+            }
         }
         let Some((use_index, folded, folded_value)) = fold else {
             index += 1;
@@ -835,6 +865,164 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         }
         index += 1;
     }
+}
+
+/// `(x + 0x140000000) + 0x18380` is one address: the image base plus the instruction's own
+/// displacement. Both halves come from different sources (a `lea` of the base, then the
+/// memory operand), so the lifter prints them as two additions. Merging them is exactly what
+/// the machine does (integer addition) and lets the data-symbol naming below see one address —
+/// which is how `(((i + 0x140000000) + 0x18380))` becomes `byte_140018380[i]`.
+fn merge_address_constants(lines: &mut [PseudoLine]) {
+    const OP: &str = " + 0x";
+    for line in lines.iter_mut() {
+        let mut search = 0usize;
+        while let Some(offset) = line.text[search..].find(") + 0x") {
+            // `(X + 0xN)` where X itself ends in `+ 0xM`: the `)` before the sum's constant
+            // closes X. The sum's own `(` is one group further out.
+            let close = search + offset;
+            let digits = line.text[close + 1 + OP.len()..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_hexdigit())
+                .count();
+            let end = close + 1 + OP.len() + digits;
+            let Some(second) = (digits > 0 && line.text[end..].starts_with(')'))
+                .then(|| u64::from_str_radix(&line.text[close + 1 + OP.len()..end], 16).ok())
+                .flatten()
+            else {
+                search = close + 1;
+                continue;
+            };
+            let (Some(open_x), Some(open)) = (
+                matching_open(&line.text, close),
+                matching_open(&line.text, end),
+            ) else {
+                search = close + 1;
+                continue;
+            };
+            // X has to be the sum's first operand, otherwise this is not a nested addition.
+            if open + 1 != open_x {
+                search = close + 1;
+                continue;
+            }
+            let inner = &line.text[open_x + 1..close];
+            let Some(inner_at) = inner.rfind(OP) else {
+                search = close + 1;
+                continue;
+            };
+            let first_digits = &inner[inner_at + OP.len()..];
+            let Some(first) = (first_digits.chars().all(|ch| ch.is_ascii_hexdigit())
+                && !first_digits.is_empty())
+            .then(|| u64::from_str_radix(first_digits, 16).ok())
+            .flatten() else {
+                search = close + 1;
+                continue;
+            };
+            let Some(sum) = first.checked_add(second) else {
+                search = close + 1;
+                continue;
+            };
+            let head = &inner[..inner_at];
+            let replacement = format!("({head} + 0x{sum:x})");
+            // `((X) + 0xN)` becomes `(X + 0xM)`: the outer group and the inner one collapse
+            // into one, so the parentheses stay balanced.
+            line.text.replace_range(open..=end, &replacement);
+            search = open + replacement.len();
+        }
+    }
+}
+
+/// `(0 + 0x1234)` is `0x1234` and `(0x1234 - 0x1234)` is `0`. The printer folds arithmetic on
+/// expression trees, but two literals can meet only after a register constant is folded into
+/// the text (a zeroed register becomes the base of an address). Evaluating the pair keeps the
+/// address recognisable: `*(u64*)((0 + 0x…)）` would otherwise hide a global read.
+fn fold_literal_arithmetic(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        let mut search = 0usize;
+        while let Some(offset) = line.text[search..].find('(') {
+            let open = search + offset;
+            let inner_start = open + 1;
+            let Some((first, after_first)) = parse_literal(&line.text, inner_start) else {
+                search = open + 1;
+                continue;
+            };
+            let rest = &line.text[after_first..];
+            let Some(operator) = [" + ", " - ", " * ", " & ", " | ", " ^ "]
+                .iter()
+                .find(|operator| rest.starts_with(**operator))
+            else {
+                search = open + 1;
+                continue;
+            };
+            let Some((second, after_second)) =
+                parse_literal(&line.text, after_first + operator.len())
+            else {
+                search = open + 1;
+                continue;
+            };
+            if !line.text[after_second..].starts_with(')') {
+                search = open + 1;
+                continue;
+            }
+            let value = match *operator {
+                " + " => first.checked_add(second),
+                " - " => first.checked_sub(second),
+                " * " => first.checked_mul(second),
+                " & " => Some(first & second),
+                " | " => Some(first | second),
+                _ => Some(first ^ second),
+            };
+            let Some(value) = value else {
+                search = open + 1;
+                continue;
+            };
+            let replacement = if value < 10 {
+                value.to_string()
+            } else {
+                format!("{value:#x}")
+            };
+            line.text.replace_range(open..=after_second, &replacement);
+            search = open + replacement.len();
+        }
+    }
+}
+
+/// A decimal or `0x`-hex literal starting at `start`, with the index just past it.
+fn parse_literal(text: &str, start: usize) -> Option<(u64, usize)> {
+    let rest = &text[start..];
+    if let Some(hex) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        let digits = hex.chars().take_while(|ch| ch.is_ascii_hexdigit()).count();
+        if digits == 0 {
+            return None;
+        }
+        return Some((
+            u64::from_str_radix(&hex[..digits], 16).ok()?,
+            start + 2 + digits,
+        ));
+    }
+    // A bare token must be decimal: hex letters without the prefix are register names.
+    let digits = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    Some((rest[..digits].parse().ok()?, start + digits))
+}
+
+/// Index of the `(` that opens the group closed by the `)` at `close`.
+fn matching_open(text: &str, close: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, ch) in text[..=close].char_indices().rev() {
+        match ch {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 // The register named on the right of a compound assignment (`x += rdx;` → `rdx`).
@@ -1209,6 +1397,53 @@ fn constants(lines: &[PseudoLine]) -> BTreeSet<u64> {
     found
 }
 
+/// `*(u8*)((index + 0x140018380))` is a read from the array at that image address:
+/// `byte_140018380[index]`. The address has to be the last addend (the lifter puts a
+/// register-displacement base first) and look like an image address (eight or more hex
+/// digits), so a computed offset keeps its explicit form.
+fn name_indexed_global(line: &mut PseudoLine, width: &str, prefix: &str) {
+    let head = format!("*({width}*)((");
+    let mut search = 0usize;
+    while let Some(offset) = line.text[search..].find(&head) {
+        let start = search + offset;
+        let inner_start = start + head.len();
+        // The cast's operand closes with `))`; stop at the first `)` that brings the depth
+        // back to zero, which is the second of the two.
+        let mut depth = 2isize;
+        let mut end = None;
+        for (position, ch) in line.text[inner_start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(inner_start + position);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end.filter(|end| *end > inner_start) else {
+            break;
+        };
+        let content = &line.text[inner_start..end - 1];
+        let Some(at) = content.rfind(" + 0x") else {
+            search = start + 1;
+            continue;
+        };
+        let address = &content[at + " + 0x".len()..];
+        if address.len() < 8 || !address.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            search = start + 1;
+            continue;
+        }
+        let index = &content[..at];
+        let replacement = format!("{prefix}{address}[{index}]");
+        line.text.replace_range(start..=end, &replacement);
+        search = start + replacement.len();
+    }
+}
+
 /// Global data addressed by an absolute image address reads as a named word, like a symbol:
 /// `*(u64*)(0x140036648)` becomes `qword_140036648`, `*(u32*)(0x140034460)` `dword_140034460`,
 /// `*(u8*)(…)` `byte_…`, `*(u16*)(…)` `word_…`, `*(__m128*)(…)` `xmmword_…`. The width stays
@@ -1225,6 +1460,8 @@ fn name_global_data(lines: &mut [PseudoLine]) {
     ];
     for line in lines.iter_mut() {
         for (width, prefix) in KINDS {
+            // `*(u8*)((index + 0x140018380))` reads the array at that image address.
+            name_indexed_global(line, width, prefix);
             let head = format!("*({width}*)(0x");
             let mut search = 0;
             while let Some(position) = line.text[search..].find(&head) {
@@ -6397,6 +6634,23 @@ fn assigns_to(statement: &str, name: &str) -> bool {
     ) && !rest.starts_with("->")
 }
 
+/// The register on the left of an assignment (`rax = …`, `edx += …`), when the statement
+/// starts with one. A store through memory (`*(u32*)(rax) = 0;`) does not count.
+fn assigned_register_name(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    let end = trimmed.find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))?;
+    let name = &trimmed[..end];
+    if !is_machine_register(name) {
+        return None;
+    }
+    let rest = trimmed[end..].trim_start();
+    matches!(
+        rest.chars().next(),
+        Some('=' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '!' | '?')
+    )
+    .then_some(name)
+}
+
 /// A substituted expression needs parentheses when it has an operator outside parentheses:
 /// `a + b` must land as `(a + b) * 2`, while a cast chain like `(u32)(x)` does not.
 fn needs_parentheses(expression: &str) -> bool {
@@ -9948,6 +10202,74 @@ mod tests {
         assert_eq!(lines[0].text, "    rbx = 0x2b992ddfa232;");
         assert_eq!(lines[1].text, "    if (rax == 0x2b992ddfa232) {");
     }
+    #[test]
+    fn an_image_base_constant_reaches_an_address_inside_a_loop() {
+        let mut lines = vec![
+            test_line("    rdi = 0x140000000;"),
+            test_line("    do {"),
+            test_line("        r8d = (uint32)(*(u8*)(((rax + rdi) + 0x18380)));"),
+            test_line("        rax += 1;"),
+            test_line("    } while (rax < 0x20);"),
+        ];
+        fold_constant_registers(&mut lines);
+        // The register is written once, so the nested use takes the value and the dead
+        // assignment goes away.
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("r8d = (uint32)(*(u8*)(((rax + 0x140000000) + 0x18380)));"),
+            "{text}"
+        );
+        assert!(!text.contains("rdi = "), "{text}");
+    }
+
+    #[test]
+    fn two_address_constants_merge_into_one() {
+        let mut lines = vec![
+            test_line("    r8d = (uint32)(*(u8*)(((rax + 0x140000000) + 0x18380)));"),
+            test_line("    dl = (dl ^ *(u8*)(((rcx + 0x140000000) + 0x8)));"),
+        ];
+        merge_address_constants(&mut lines);
+        fold_literal_arithmetic(&mut lines);
+        assert_eq!(
+            lines[0].text,
+            "    r8d = (uint32)(*(u8*)((rax + 0x140018380)));"
+        );
+        assert_eq!(
+            lines[1].text,
+            "    dl = (dl ^ *(u8*)((rcx + 0x140000008)));"
+        );
+    }
+
+    #[test]
+    fn a_pair_of_literals_is_evaluated() {
+        let mut lines = vec![
+            test_line("    sub_1400223a0(&var_1a8, *(u64*)((0 + 0x14001f9c0)));"),
+            test_line("    SendMessageW(hwnd, 0x111, (rdx - 0x14), 0);"),
+            test_line("    eax = (0x10 + 0x8);"),
+        ];
+        fold_literal_arithmetic(&mut lines);
+        assert_eq!(
+            lines[0].text,
+            "    sub_1400223a0(&var_1a8, *(u64*)(0x14001f9c0));"
+        );
+        assert_eq!(lines[2].text, "    eax = 0x18;");
+    }
+
+    #[test]
+    fn an_indexed_global_read_is_named() {
+        let mut lines = vec![
+            test_line("    v5 = (uint32)(*(u8*)((i + 0x140018380)));"),
+            test_line("    *(u32*)((i + 0x1400183a0)) = v5;"),
+        ];
+        name_global_data(&mut lines);
+        assert_eq!(lines[0].text, "    v5 = (uint32)(byte_140018380[i]);");
+        assert_eq!(lines[1].text, "    dword_1400183a0[i] = v5;");
+    }
+
     #[test]
     fn noop_statements_are_dropped() {
         let mut lines = vec![

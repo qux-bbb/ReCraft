@@ -98,14 +98,13 @@ void sub_140010f48_l1(void) {
                         }
                         case 0xADDR: {
                             ecx -= 0xADDR;
-                            eax = 0xADDR;
                             var_4c = 1;
                             edi = r13d;
                             var_30 = 2;
                             edi >>= 1;
                             var_34 = edi;
                             var_38 = 1;
-                            if (*(u16*)(r14) != ax) goto loc_ADDR;
+                            if (*(u16*)(r14) != 0xADDR) goto loc_ADDR;
                             break;
                         }
                         case 0xADDR: {
@@ -163,7 +162,7 @@ void sub_140010f48_l1(void) {
                     }
                 } else {
                     eax = 0xADDR;
-                    if (*(u16*)(r14) == ax) goto loc_ADDR;
+                    if (*(u16*)(r14) == 0xADDR) goto loc_ADDR;
                 }
             }
             if (r12d == 0) {
@@ -260,14 +259,10 @@ void sub_140010f48_l1(void) {
                         SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                         sub_140010580(1);
                     }
-                    edx = 0xADDR;
-                    SendMessageW(qword_ADDR, 0xADDR, (rdx - 0xADDR), 0);
-                    r9d = 1;
-                    SetScrollPos(qword_ADDR, r9d, eax, 1);
-                    r9d = 0;
-                    SendMessageW(qword_ADDR, (r9 + 0xADDR), (r9 + 1), 0);
-                    edx = 0;
-                    InvalidateRect(qword_ADDR, 0, (rdx + 1));
+                    SendMessageW(qword_ADDR, 0xADDR, 0xADDR, 0);
+                    SetScrollPos(qword_ADDR, 1, eax, 1);
+                    SendMessageW(qword_ADDR, 0xADDR, 1, 0);
+                    InvalidateRect(qword_ADDR, 0, 1);
                     UpdateWindow(qword_ADDR);
                     sub_14000f9f0();
                     SetCursor(qword_ADDR);
@@ -283,8 +278,7 @@ void sub_140010f48_l1(void) {
                     sub_14000c3a4(qword_ADDR, qword_ADDR, qword_ADDR, *(u64*)(rbx), 0xADDR);
                     ecx = 0;
                     sub_1400118a0(0);
-                    r9d = 0;
-                    SendMessageW(qword_ADDR, (r9 + 0xADDR), (r9 + 1), 0);
+                    SendMessageW(qword_ADDR, 0xADDR, 1, 0);
                     al = 0;
                     r11 = &var_300;
                     return;

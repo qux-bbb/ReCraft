@@ -9,7 +9,7 @@ void sub_140001a14_l1(void) {
         while (1) {
             eax = 0;
             __asm("lock cmpxchg [0xADDR], rcx");
-            if (qword_ADDR == rax) break;
+            if (qword_ADDR == 0) break;
             if (rcx != rax) continue;
         }
     }

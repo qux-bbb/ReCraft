@@ -13,10 +13,9 @@ void sub_140021b08_l1(void) {
     if (rax == 0) {
         ebx = 0;
         do {
-            ecx = 0;
             sub_140021cd0(0);
             ebx = ((eax != 0) ? r13d : ebx);
-            sub_14001fe40(rcx, byte_ADDR);
+            sub_14001fe40(0, byte_ADDR);
         } while (al != 0);
     } else {
         LocalLock(rax);
@@ -40,12 +39,12 @@ void sub_140021b08_l1(void) {
                 rcx = rax;
                 if (rax == 0) break;
                 rax = (int64)(var_60);
-                edi += r13d;
+                edi += 1;
                 r14d += var_60;
                 rcx += (rax * 2);
                 continue;
             }
-            if (edi > r13d /* signed */) {
+            if (edi > 1 /* signed */) {
                 sub_14002193c(rsi, r15d, r14d, edi);
                 ebx = eax;
             }

@@ -11,9 +11,9 @@ void sub_14000d6a8_l1(void) {
     CoCreateInstance(off_14002a860, 0, r13d, off_14002b238, &var_38);
     ebx = eax;
     if (eax >= 0 /* signed */) {
-        *(u64*)(rsi) = r12;
+        *(u64*)(rsi) = 0;
         dword_ADDR = r13d;
-        var_50 = r12;
+        var_50 = 0;
         PSGetPropertyDescriptionListFromString("prop:System.Security.EncryptionOwners", off_14002b228, &var_50);
         ebx = eax;
         if (eax >= 0 /* signed */) {

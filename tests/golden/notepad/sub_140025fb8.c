@@ -2,7 +2,7 @@
 void sub_140025fb8_l1(void) {
     r14d = 0;
     rsi = rcx;
-    *(u16*)(rcx) = r14w;
+    *(u16*)(rcx) = 0xADDR;
     var_20 = 0;
     hstring = 0;
     WindowsCreateStringReference("Windows.ApplicationModel.DataTransfer.Clipboard", (r14 + 0xADDR), &hstringHeader, &hstring, 0);

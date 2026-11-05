@@ -62,7 +62,7 @@ void sub_140002418_l1(void) {
             rdx |= rax;
             var_20 = rdx;
             rax = var_20;
-            al &= bl;
+            al &= 0xADDR;
             if (al == bl) {
                 eax = (dword_ADDR | 8);
                 dword_ADDR = 3;

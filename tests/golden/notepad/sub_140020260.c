@@ -9,7 +9,7 @@ void sub_140020260_l1(void) {
     } else {
         ebx = 1;
         while (1) {
-            var_20 = ebx;
+            var_20 = 1;
             PeekMessageW(&msg, 0, 0, 0, ebx);
             if (eax == 0) break;
             if (qword_ADDR == 0) {
@@ -23,11 +23,10 @@ void sub_140020260_l1(void) {
         }
         eax = dword_ADDR;
         if (eax != 0) {
-            ebx = 0;
             eax = 0;
             return;
         }
     }
-    eax = ebx;
+    eax = 0;
     return;
 }

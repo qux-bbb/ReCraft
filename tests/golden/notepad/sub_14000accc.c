@@ -10,7 +10,6 @@ void sub_14000accc_l1(void) {
     r12b = al;
     ebx = (rax + 0xADDR);
     MulDiv((rax + 0xADDR), edi, ebx);
-    r13d = 0;
     MulDiv((rbx - 0xADDR), edi, ebx);
     var_30 = 0;
     r15d = 0;
@@ -57,9 +56,8 @@ void sub_14000accc_l1(void) {
             SetLastError(ebx);
         }
         rcx = qword_ADDR;
-        r9d = 0;
         qword_ADDR = r15;
-        SendMessageW(qword_ADDR, (r9 + 0xADDR), r15, 0);
+        SendMessageW(qword_ADDR, 0xADDR, r15, 0);
         r15d = 0;
         var_28 = 0;
         var_20 = r14d;
@@ -131,9 +129,9 @@ void sub_14000accc_l1(void) {
     MulDiv((r8 - 0xADDR), edi, 0xADDR);
     esi -= eax;
     var_28 = 1;
-    esi -= r13d;
+    esi -= 0;
     var_20 = r15d;
-    MoveWindow(qword_ADDR, esi, ebx, r13d, r15d, 1);
+    MoveWindow(qword_ADDR, esi, ebx, 0, r15d, 1);
     r11 = &var_260;
     return;
 }

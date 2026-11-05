@@ -30,7 +30,7 @@ void sub_140021cd0_l1(void) {
         rcx = (rsi + (rax * 2));
         rax = &var_78;
         var_20 = rax;
-        sub_14001f8d8((rsi + (rax * 2)), rdx, qword_ADDR);
+        sub_14001f8d8((0 + (rax * 2)), rdx, qword_ADDR);
         rdx = rax;
         eax = var_68;
         rcx = (rsi + (rax * 2));
@@ -38,7 +38,7 @@ void sub_140021cd0_l1(void) {
             eax = var_70;
             eax -= var_68;
             if (var_78 == eax) {
-                SendMessageW(qword_ADDR, 0xADDR, esi, qword_ADDR);
+                SendMessageW(qword_ADDR, 0xADDR, 1, qword_ADDR);
                 ecx = var_68;
                 r8d = ecx;
                 r9d = (r14 + rcx);
@@ -46,11 +46,10 @@ void sub_140021cd0_l1(void) {
                 if (r15d != 0) {
                     SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                 }
-                ebx = 1;
             }
         }
         LocalUnlock(rdi);
-        eax = ebx;
+        eax = 1;
     }
     return;
 }

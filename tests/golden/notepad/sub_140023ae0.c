@@ -10,11 +10,10 @@ void sub_140023ae0_l1(void) {
     } else {
         GetLastError();
         if (eax != 0xADDR) {
-            ebx = 1;
             eax = 1;
             return;
         }
     }
-    eax = ebx;
+    eax = 1;
     return;
 }

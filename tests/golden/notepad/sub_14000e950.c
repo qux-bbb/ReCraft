@@ -18,7 +18,7 @@ void sub_14000e950_l1(void) {
                 var_20 = eax;
                 SetWindowPos(qword_ADDR, 0, *(u32*)(r14), *(u32*)((r9 + 4)), (eax - *(u32*)(r14)), (ecx - r9d), 0xADDR);
                 r12d = 5;
-                SendMessageW(qword_ADDR, r12d, rdi, r14);
+                SendMessageW(qword_ADDR, 5, rdi, r14);
                 GetDpiForWindow(qword_ADDR);
                 MulDiv(dword_ADDR, eax, 0xADDR);
                 eax = -(eax);
@@ -249,7 +249,7 @@ void sub_14000e950_l1(void) {
                 if (dword_ADDR == 0) {
                     sub_14000d990();
                     if (al == 0) {
-                        rax = rbx;
+                        rax = 1;
                         return;
                     }
                     rcx = qword_ADDR;

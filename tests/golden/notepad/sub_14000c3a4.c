@@ -7,7 +7,7 @@ void sub_14000c3a4_l1(void) {
     r15 = rcx;
     ebp = 0xADDR;
     if (r9 == 0) {
-        esi = r12d;
+        esi = 0;
     } else {
         wcsnlen(r9, ebp);
         rsi = rax;
@@ -15,7 +15,7 @@ void sub_14000c3a4_l1(void) {
     if (rbx != 0) {
         wcsnlen(rbx, rbp);
     } else {
-        eax = r12d;
+        eax = 0;
     }
     esi += eax;
     edx = (rsi + 1);
@@ -24,12 +24,12 @@ void sub_14000c3a4_l1(void) {
     rbp = rax;
     if (rax == 0) {
         MessageBoxW(r15, rbx, r14, var_60);
-        ebx = eax;
+        ebx = 0;
     } else {
         r8d = (uint32)(word_ADDR);
-        edx = r12d;
+        edx = 0;
         rcx = rax;
-        while (*(u16*)(rbx) != r8w) {
+        while (*(u16*)(0) != r8w) {
             if (edx >= esi) break;
             edx += 1;
             *(u16*)(rcx) = ax;

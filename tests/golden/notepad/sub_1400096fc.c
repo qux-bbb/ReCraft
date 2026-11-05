@@ -16,17 +16,15 @@ void sub_1400096fc_l1(void) {
                     sub_140002934();
                     eax = 0xADDR;
                 } else if (rdi >= rbx) {
-                    eax = 0xADDR;
                 } else {
                     _o__errno();
-                    ebx = 0xADDR;
-                    *(u32*)(rax) = 0xADDR;
+                    *(u32*)(0xADDR) = 0xADDR;
                     sub_140002934();
                     eax = 0xADDR;
                     return;
                 }
             } else if (rdi >= rbx) {
-                r8 = rbx;
+                r8 = 0xADDR;
                 rdx = rsi;
                 sub_1400274ac();
                 eax = 0;

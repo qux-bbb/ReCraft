@@ -12,8 +12,7 @@ void sub_14001fa28_l1(void) {
     var_20 = 0;
     SendMessageW(qword_ADDR, 0xADDR, &var_24, &var_20, 0);
     SendMessageW(qword_ADDR, 0xADDR, 0, 0);
-    r9d = 0;
-    SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+    SendMessageW(qword_ADDR, 0xADDR, 0, 0);
     eax += 1;
     r15 = (int64)(eax);
     LocalAlloc(2, (r15 + r15));
@@ -27,9 +26,9 @@ void sub_14001fa28_l1(void) {
         rsi = rax;
         if (rax != 0) {
             r15d = 0xADDR;
-            GetWindowLongW(qword_ADDR, r15d);
+            GetWindowLongW(qword_ADDR, 0xADDR);
             SetWindowLongW(rsi, r15d, eax);
-            SendMessageW(rsi, (r15 + 0xADDR), qword_ADDR, (r15 + 0xADDR));
+            SendMessageW(rsi, 0xADDR, qword_ADDR, 0xADDR);
             SendMessageW(rsi, (r15 + 0xADDR), 0, r14);
             if (rax != 0) {
                 LocalUnlock(rbx);
@@ -39,9 +38,8 @@ void sub_14001fa28_l1(void) {
                 rcx = qword_ADDR;
                 ebx = 5;
                 qword_ADDR = rax;
-                ShowWindow(qword_ADDR, ebx);
-                r8d = 0;
-                SendMessageW(qword_ADDR, 0xADDR, r8b, 0);
+                ShowWindow(qword_ADDR, 5);
+                SendMessageW(qword_ADDR, 0xADDR, 0xADDR, 0);
                 SendMessageW(qword_ADDR, 0xADDR, var_24, var_20);
                 SetFocus(qword_ADDR);
                 SetCursor(rdi);
@@ -55,7 +53,7 @@ void sub_14001fa28_l1(void) {
                     ecx -= rect2.left;
                     sub_14000e848(rcx, rdx);
                     sub_14000f9f0();
-                    ShowWindow(qword_ADDR, ebx);
+                    ShowWindow(qword_ADDR, 5);
                 }
                 eax = 1;
             } else {

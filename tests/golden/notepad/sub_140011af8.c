@@ -42,8 +42,7 @@ void sub_140011af8_l1(void) {
                 sub_14000cbc8(1);
             }
         }
-        r9d = 0;
-        SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+        SendMessageW(qword_ADDR, 0xADDR, 0, 0);
         rdi = rax;
         SendMessageW(qword_ADDR, 0xADDR, 0, 0);
         r12 = rax;
@@ -108,10 +107,10 @@ void sub_140011af8_l1(void) {
                             sub_140010d60(*(u64*)(rsi), &var_70);
                             var_278 = dword_ADDR;
                         }
-                        if (dword_ADDR != r12d) {
+                        if (dword_ADDR != 0) {
                             sub_140011a64();
                         }
-                        edi = r12d;
+                        edi = 0;
                         if (word_ADDR == r12w) {
                             r14d = 1;
                         } else {
@@ -206,7 +205,7 @@ void sub_140011af8_l1(void) {
                         r10d = 0;
                         r8 = rbx;
                         if (edi != 0) {
-                            r9d = edi;
+                            r9d = 1;
                             r14d = 0xADDR;
                             do {
                                 ecx = (uint32)(*(u16*)(r8));
@@ -219,8 +218,8 @@ void sub_140011af8_l1(void) {
                             } while (r9 != 0);
                             r14d = var_48;
                         }
-                        var_20 = r10;
-                        WriteFile(qword_ADDR, rbx, (rdi + rdi), &var_44, r10);
+                        var_20 = 0;
+                        WriteFile(qword_ADDR, rbx, 2, &var_44, 0);
                         r8d = eax;
                         if (edi == 0) goto loc_ADDR;
                     } else {

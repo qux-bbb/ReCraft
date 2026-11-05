@@ -21,12 +21,11 @@ void sub_1400081ac_l1(void) {
     if (r8 != 0) {
         if (edi == 0) {
             eax = (uint32)(*(u16*)((rbx + 0xADDR)));
-            edx = 0;
             ecx = (uint32)(*(u16*)((rbx + 0xADDR)));
             eax += 1;
             __asm("div ecx");
             eax = (uint32)(dx);
-            *(u16*)((rbx + 0xADDR)) = dx;
+            *(u16*)((rbx + 0xADDR)) = 0xADDR;
             rcx = (rax + (rax * 4));
             rax = *(u64*)((rbx + 8));
             rcx <<= 4;
@@ -40,12 +39,11 @@ void sub_1400081ac_l1(void) {
             rcx += r8;
             if (r8 == rcx) {
                 eax = (uint32)(*(u16*)((rbx + 0xADDR)));
-                edx = 0;
                 ecx = (uint32)(*(u16*)((rbx + 0xADDR)));
                 eax += 1;
                 __asm("div ecx");
                 eax = (uint32)(dx);
-                *(u16*)((rbx + 0xADDR)) = dx;
+                *(u16*)((rbx + 0xADDR)) = 0xADDR;
                 rcx = (rax + (rax * 4));
                 rax = *(u64*)((rbx + 8));
                 rcx <<= 4;

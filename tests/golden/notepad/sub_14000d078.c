@@ -33,11 +33,11 @@ void sub_14000d078_l1(void) {
             rcx += 2;
             rdi -= 1;
         } while (rdi != 0);
-        var_40 = r15;
+        var_40 = 0;
         rax = (rcx - 2);
-        var_38 = r15;
+        var_38 = 0;
         rax = ((rdi != 0) ? rcx : rax);
-        *(u16*)(rax) = r15w;
+        *(u16*)(rax) = 0xADDR;
         var_b8 = qword_ADDR;
         rax = qword_ADDR;
         var_30 = rax;

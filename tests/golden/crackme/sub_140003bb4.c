@@ -2,10 +2,9 @@
 void sub_140003bb4_l1(void) {
     rbx = rcx;
     rax = rdx;
-    xmm0 = 0;
     *(u64*)(rbx) = off_1400194a0;
     rdx = (rbx + 8);
-    *(__m128*)(rdx) = xmm0;
+    *(__m128*)(rdx) = 0;
     sub_140004310((rax + 8), (rbx + 8));
     rax = rbx;
     return;

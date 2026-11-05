@@ -6,7 +6,7 @@ void sub_1400054a4_l1(void) {
     r14 = rcx;
     if (rdx != 0 && rcx != 0) {
         rax = qword_ADDR;
-        *(u16*)(rcx) = r15w;
+        *(u16*)(rcx) = 0xADDR;
         if (rax == 0) {
             ecx = *(u32*)(rbx);
             rsi = off_14002a8ab;
@@ -46,7 +46,7 @@ void sub_1400054a4_l1(void) {
             if ((*(u8*)((rbx + 4)) & bpl) == 0) {
                 ebp = *(u32*)((rbx + 8));
                 rax = &var_40;
-                var_30 = r15;
+                var_30 = 0;
                 var_28 = 0xADDR;
                 var_20 = rax;
                 FormatMessageW(0xADDR, 0, ebp, 0xADDR, &var_40, 0xADDR, r15);
@@ -87,7 +87,7 @@ void sub_1400054a4_l1(void) {
             var_28 = eax;
             var_20 = ecx;
             sub_14000627c(r14, rdi, "%hs(%d) tid(%x) %08X %ws", rsi, *(u32*)((rbx + 0xADDR)), eax, ebp, &var_40);
-            if (*(u64*)((rbx + 0xADDR)) != r15) {
+            if (*(u64*)((rbx + 0xADDR)) != 0) {
                 sub_14000627c(rax, rdi, "    ", r9);
                 r9 = *(u64*)((rbx + 0xADDR));
                 if (r9 != 0) {

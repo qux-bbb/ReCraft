@@ -14,10 +14,9 @@ void sub_140004a60_l1(void) {
             sub_140008e30();
             *(u32*)(rax) = 0xADDR;
             sub_140008c88();
-            eax = 0;
         } else if (rbx == 0) {
             sub_140008e30();
-            *(u32*)(rax) = 0xADDR;
+            *(u32*)(0) = 0xADDR;
             sub_140008c88();
             eax = 0;
             return;

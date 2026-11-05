@@ -67,12 +67,11 @@ void sub_140023f90_l1(void) {
                     if (ecx == 0) {
                         sub_140024aec(rdi, rbp, 8, *(u32*)(r15));
                         edx = dword_ADDR;
-                        r8d = 0;
                         rcx = *(u64*)((rbp + 8));
-                        SendMessageW(*(u64*)((rbp + 8)), rdx, r8, rbp);
-                        rax = rsi;
+                        SendMessageW(*(u64*)((rbp + 8)), rdx, 0, rbp);
+                        rax = 1;
                     } else {
-                        ecx -= esi;
+                        ecx -= 1;
                         if (ecx == 0) {
                             eax = ((*(u32*)((rbp + 0xADDR)) & -0xADDR) | 0xADDR);
                             *(u32*)((rbp + 0xADDR)) = eax;

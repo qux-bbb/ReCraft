@@ -31,7 +31,7 @@ void sub_14000a630_l1(void) {
         SelectObject(rdi, qword_ADDR);
         r8d = -1;
         var_20 = 0xADDR;
-        DrawTextW(rdi, qword_ADDR, (r8d | -1), off_140035508, 0xADDR);
+        DrawTextW(rdi, qword_ADDR, (-1 | -1), off_140035508, 0xADDR);
         if (rbx != 0) {
             DeleteObject(rbx);
         }

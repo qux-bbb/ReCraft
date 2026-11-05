@@ -24,10 +24,10 @@ void sub_14000e848_l1(void) {
     edi = 1;
     var_28 = 1;
     var_20 = ebp;
-    MoveWindow(qword_ADDR, 0, ebx, esi, (ebp - edi), 1);
+    MoveWindow(qword_ADDR, 0, ebx, esi, (ebp - 1), 1);
     rcx = qword_ADDR;
     if (rcx != 0) {
-        var_28 = edi;
+        var_28 = 1;
         var_20 = ebx;
         MoveWindow(qword_ADDR, 0, 0, esi, ebx, edi);
     }

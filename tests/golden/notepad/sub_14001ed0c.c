@@ -15,9 +15,9 @@ void sub_14001ed0c_l1(void) {
     var_30 = xmm1;
     if (rax != 0) {
         if (ebx == 0) {
-            r8d = esi;
+            r8d = 1;
             edx = ebx;
-            ecx = r15d;
+            ecx = 0xADDR;
             sub_140028010(r15d, ebx, esi);
             xmm1 = var_30;
         } else {
@@ -38,7 +38,7 @@ void sub_14001ed0c_l1(void) {
             xmm1 >>= 8;
             r9d = 0;
             edx = xmm1;
-            ecx = r15d;
+            ecx = 0xADDR;
             sub_140028010(r15d, xmm1, r8, 0);
         } else {
             rax = qword_ADDR;
@@ -69,14 +69,13 @@ void sub_14001ed0c_l1(void) {
         if (rax != 0) {
             r9d = 0;
             r8d = 0;
-            ecx = r15d;
+            ecx = 0xADDR;
             sub_140028010(r15d, rdx, 0, 0);
         } else {
             rax = qword_ADDR;
         }
     }
     if (edi != 0) {
-        esi = 0;
     } else {
         rax = qword_ADDR;
         if (rax != 0) {
@@ -84,6 +83,6 @@ void sub_14001ed0c_l1(void) {
         }
     }
     r11 = &var_70;
-    eax = esi;
+    eax = 0;
     return;
 }

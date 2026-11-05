@@ -32,8 +32,7 @@ void sub_140022440_l1(void) {
                 var_60 = rbp;
                 GetDiskFreeSpaceExW(*(u64*)((rdi + 8)), &var_60, 0, 0);
                 if (eax != 0) {
-                    r9d = 0;
-                    SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+                    SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                     ecx = (rax + 1);
                     rcx += rcx;
                     if (rcx <= var_60) {

@@ -5,8 +5,7 @@ void sub_1400118a0_l1(void) {
     ebp = 0;
     edi = eax;
     if (ebx == 0) {
-        r8d = 0;
-        SendMessageW(qword_ADDR, (r8 + 0xADDR), 0, off_14002b210);
+        SendMessageW(qword_ADDR, 0xADDR, 0, off_14002b210);
         rsi = qword_ADDR;
         dword_ADDR = 1;
         if (rsi != 0) {

@@ -7,7 +7,6 @@ void sub_140006b2c_l1(void) {
     rax -= rbx;
     if (rax >= 0xADDR) {
         ebp = 1;
-        r15d = 0xADDR;
         r14d = (rbp + 1);
         while (rbx != rsi) {
             r9 = *(u64*)((rbx + 8));
@@ -55,8 +54,8 @@ void sub_140006b2c_l1(void) {
                 r8 += 8;
             }
             ecx = (edx >> 5);
-            if ((r15d & ecx) != 0) {
-                cx &= r15w;
+            if ((0xADDR & ecx) != 0) {
+                cx &= 0xADDR;
                 *(u32*)(r8) = r10d;
                 eax = edx;
                 *(u16*)((r8 + 6)) = cx;

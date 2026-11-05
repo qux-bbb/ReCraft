@@ -10,7 +10,7 @@ void sub_140021474_l1(void) {
     var_b0 = 0;
     r15d = 0xADDR;
     if (r9w == 0) {
-        rcx = r13;
+        rcx = 0;
         rdx = &var_a8;
         do {
             rax = (int64)(*(u32*)(rdx));
@@ -108,9 +108,9 @@ void sub_140021474_l1(void) {
                         wcsnlen(&var_b8, esi);
                         rsi = off_140035a90;
                         ecx = (rax + rdi);
-                        if (ecx < r15d /* signed */) {
+                        if (ecx < 0xADDR /* signed */) {
                             rax = ((int64)(r12d) << 8);
-                            rdx = r15;
+                            rdx = 0xADDR;
                             rax += rdi;
                             rdx -= rdi;
                             sub_140008384((rsi + (rax * 2)), rdx, &var_b8);
@@ -152,7 +152,7 @@ void sub_140021474_l1(void) {
                                         *(u32*)(((rbp + (r14 * 4)) - 1)) = edx;
                                         rcx <<= 8;
                                         rcx += rdi;
-                                        *(u16*)((rsi + (rcx * 2))) = r10w;
+                                        *(u16*)((off_140035a90 + (rcx * 2))) = r10w;
                                     }
                                 }
                             }

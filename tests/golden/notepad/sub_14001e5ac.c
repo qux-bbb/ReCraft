@@ -27,12 +27,12 @@ void sub_14001e5ac_l1(void) {
             return;
         }
         ShowWindow(qword_ADDR, ebp);
-        var_70 = r14;
+        var_70 = 0;
         sub_14001278c(rbx, &var_70);
         rax += 2;
         if (edi != 0) {
             rbx = var_70;
-            var_30 = r14;
+            var_30 = 0;
             var_28 = 0xADDR;
             var_20 = 3;
             CreateFileW(rbx, 0xADDR, 3, 0, 3, 0xADDR, r14);
@@ -83,15 +83,14 @@ void sub_14001e5ac_l1(void) {
         }
         if (cx == 0xADDR) {
             rdx = (rax + 2);
-            eax = r14d;
-            r9 = off_140035850;
+            eax = 0;
             while (1) {
                 ecx = (uint32)(*(u16*)(rdx));
                 if (cx == 0) break;
                 if (cx == 0xADDR) break;
                 r8d = (rax + 1);
                 if (r8d >= 0xADDR) break;
-                *(u16*)((r9 + (rax * 2))) = cx;
+                *(u16*)((off_140035850 + (rax * 2))) = cx;
                 rdx += 2;
                 eax = r8d;
             }
@@ -99,7 +98,7 @@ void sub_14001e5ac_l1(void) {
             if (rax >= 0xADDR) {
                 sub_140001dc8();
             }
-            *(u16*)((rax + r9)) = r14w;
+            word_ADDR[rax] = r14w;
         }
     }
     rbx += 6;

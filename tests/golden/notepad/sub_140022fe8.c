@@ -3,10 +3,8 @@ void sub_140022fe8_l1(void) {
     r11d = 4;
     rbx = rcx;
     if (dword_ADDR > 4) {
-        r10 = 0xADDR;
         if ((qword_ADDR & 0xADDR) != 0) {
-            rax = qword_ADDR;
-            rax &= r10;
+            rax = (qword_ADDR & 0xADDR);
             if (rax == qword_ADDR) {
                 var_30 = ax;
                 var_32 = ax;
@@ -46,8 +44,8 @@ void sub_140022fe8_l1(void) {
                 rax = &var_44;
                 var_58 = r8d;
                 var_5c = edx;
-                var_1e8 = r11;
-                var_1d8 = r11;
+                var_1e8 = 4;
+                var_1d8 = 4;
                 var_1c8 = r11;
                 var_1b8 = 2;
                 var_1a8 = 2;
@@ -90,10 +88,8 @@ void sub_140022fe8_l1(void) {
             }
         }
     }
-    xmm0 = 0;
-    eax = 0;
-    *(__m128*)(rbx) = xmm0;
-    *(__m128*)((rbx + 0xADDR)) = xmm0;
-    *(u16*)((rbx + 0xADDR)) = ax;
+    *(__m128*)(rbx) = 0;
+    *(__m128*)((rbx + 0xADDR)) = 0;
+    *(u16*)((rbx + 0xADDR)) = 0xADDR;
     return;
 }

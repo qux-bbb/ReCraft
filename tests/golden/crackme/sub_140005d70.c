@@ -18,9 +18,8 @@ void sub_140005d70_l1(void) {
                 if (eax == 2) {
                     eax = *(u32*)((rbx + 0xADDR));
                 } else {
-                    r14 = off_1400194f0;
                     do {
-                        *(u32*)((rbx + 0xADDR)) = esi;
+                        *(u32*)((rbx + 0xADDR)) = 0;
                         *(u8*)((rbx + 0xADDR)) = sil;
                         r8b = *(u8*)(rcx);
                         rcx += 1;
@@ -28,19 +27,19 @@ void sub_140005d70_l1(void) {
                             *(u64*)((rbx + 0xADDR)) = rcx;
                             *(u8*)((rbx + 0xADDR)) = r8b;
                             if (r8b == 0) break;
-                            if (*(u32*)((rbx + 0xADDR)) < esi /* signed */) break;
+                            if (*(u32*)((rbx + 0xADDR)) < 0 /* signed */) break;
                             eax = (r8 - 0xADDR);
                             if (al > 0xADDR) {
                                 cl = sil;
                             } else {
                                 rax = ((int64)(r8b) - 0xADDR);
                                 eax &= 0xADDR;
-                                cl = *(u8*)(((r14 + (rax * 2)) + 1));
+                                cl = *(u8*)(((off_1400194f0 + (rax * 2)) + 1));
                             }
                             ecx = (uint32)(cl);
                             rdx = (rax + (rcx * 8));
                             edx &= 0xADDR;
-                            eax = (uint32)(*(u8*)((r14 + (rdx * 2))));
+                            eax = (uint32)(*(u8*)((off_1400194f0 + (rdx * 2))));
                             *(u8*)((rbx + 0xADDR)) = al;
                             if (al < 8) {
                                 ecx = eax;
@@ -99,7 +98,7 @@ void sub_140005d70_l1(void) {
                                 } else {
                                     ecx -= 1;
                                     if (ecx == 0) {
-                                        *(u64*)((rbx + 0xADDR)) = rsi;
+                                        *(u64*)((rbx + 0xADDR)) = 0;
                                         *(u8*)((rbx + 0xADDR)) = sil;
                                         *(u32*)((rbx + 0xADDR)) = ebp;
                                         *(u32*)((rbx + 0xADDR)) = esi;

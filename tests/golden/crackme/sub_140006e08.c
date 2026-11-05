@@ -29,7 +29,6 @@ void sub_140006e08_l1(void) {
             r9d = 0;
             var_20 = 0;
             r8d = 0;
-            edx = 0;
             var_5c = 0xADDR;
             ecx = 0;
             sub_140008bd0(0, 0, 0, 0);
@@ -40,7 +39,7 @@ void sub_140006e08_l1(void) {
             var_80 = rax;
             r9 = &var_70;
             rax = &var_30;
-            var_78 = rdx;
+            var_78 = 0;
             var_88 = rax;
             var_90 = &var_d8;
             var_98 = &var_e0;

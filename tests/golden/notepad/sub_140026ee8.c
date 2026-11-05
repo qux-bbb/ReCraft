@@ -7,9 +7,9 @@ void sub_140026ee8_l1(void) {
         ebx = 0;
     } else {
         rcx = qword_ADDR;
-        *(u64*)(rbx) = "@)";
-        *(u64*)(rbx) = 0xADDR;
-        *(u32*)((rbx + 0xADDR)) = 1;
+        *(u64*)(0) = "@)";
+        *(u64*)(0) = 0xADDR;
+        *(u32*)(0xADDR) = 1;
         if (rcx != 0) {
             rax = *(u64*)(rcx);
             rax = *(u64*)((rax + 8));

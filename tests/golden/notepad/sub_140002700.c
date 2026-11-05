@@ -3,10 +3,9 @@ void sub_140002700_l1(void) {
     rbx = rcx;
     rax = rdx;
     rcx = "`'";
-    xmm0 = 0;
     *(u64*)(rbx) = rcx;
     rdx = (rbx + 8);
-    *(__m128*)(rdx) = xmm0;
+    *(__m128*)(rdx) = 0;
     sub_1400028a4((rax + 8), (rbx + 8));
     rax = rbx;
     return;

@@ -8,8 +8,7 @@ void sub_1400082b0_l1(void) {
     } else {
         r10 = 0xADDR;
         rax = rcx;
-        edi = 0;
-        while (*(u16*)(rax) != di) {
+        while (*(u16*)(rax) != 0xADDR) {
             rax += 2;
             r10 -= 1;
             if (r10 == 0) break;
@@ -46,7 +45,7 @@ void sub_1400082b0_l1(void) {
             rcx = -(rcx);
             edx = ((rcx != 0) ? -1 : 0);
             edx = (~(edx) & 0xADDR);
-            *(u16*)(rax) = di;
+            *(u16*)(rax) = 0xADDR;
         }
     }
     eax = edx;

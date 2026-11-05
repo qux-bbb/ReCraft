@@ -14,7 +14,7 @@ void sub_14000fb98_l1(void) {
         eax = 0xADDR;
         var_20 = edi;
         var_30 = ax;
-        sub_1400083f8(&var_32, (rax + 0xADDR), qword_ADDR, esi, edi);
+        sub_1400083f8(&var_32, 0xADDR, qword_ADDR, esi, edi);
         if (eax >= 0 /* signed */ && qword_ADDR != 0) {
             SendMessageW(qword_ADDR, 0xADDR, 1, &var_30);
         }

@@ -15,7 +15,7 @@ void sub_140021140_l1(void) {
             edi = dword_ADDR;
         }
         r15d = 0xADDR;
-        if (word_ADDR != r14w) {
+        if (word_ADDR != 0xADDR) {
             wcsnlen(off_140035a90, r15d);
             var_20 = eax;
             TextOutW(rsi, dword_ADDR, edi, off_140035a90, eax);

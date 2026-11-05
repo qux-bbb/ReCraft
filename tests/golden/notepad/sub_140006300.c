@@ -12,9 +12,9 @@ void sub_140006300_l1(void) {
     rax = *(u64*)((rcx + 0xADDR));
     var_24 = 0;
     var_31 = sil;
-    var_34 = esi;
+    var_34 = 0;
     var_3a = si;
-    var_3c = esi;
+    var_3c = 0;
     var_60 = rsi;
     if (rdi != 0) {
         ecx = 0;

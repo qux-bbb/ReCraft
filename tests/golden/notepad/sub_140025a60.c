@@ -10,13 +10,13 @@ void sub_140025a60_l1(void) {
     ebx = eax;
     if (eax >= 0 /* signed */) {
         rcx = var_60;
-        var_68 = r15d;
+        var_68 = 0;
         rax = *(u64*)(rcx);
         rax = *(u64*)((rax + 0xADDR));
         sub_140028010(var_60, &var_68);
         ebx = eax;
         if (eax >= 0 /* signed */) {
-            esi = r15d;
+            esi = 0;
             if (var_68 <= r15d) {
                 rcx = var_60;
                 if (rcx != 0) {

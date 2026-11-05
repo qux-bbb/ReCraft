@@ -14,22 +14,21 @@ void sub_1400043b8_l1(void) {
     var_20 = 0;
     if (rbx != 0) {
         RtlPcToFileHeader(rbx, &var_20);
-        var_20 = rax;
+        var_20 = 0;
         if ((*(u8*)(rbx) & 8) != 0) {
             edi = 0xADDR;
         } else if (rax == 0) {
-            edi = 0xADDR;
             edx = 1;
             var_28 = 0xADDR;
             var_30 = rsi;
             var_38 = rbx;
-            var_40 = rax;
+            var_40 = 0;
             RaiseException(0xADDR, 1, (rdx + 3), &var_28);
             return;
         }
     }
     edx = 1;
-    var_28 = rdi;
+    var_28 = 0xADDR;
     var_30 = rsi;
     var_38 = rbx;
     var_40 = rax;

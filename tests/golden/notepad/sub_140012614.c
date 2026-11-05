@@ -38,7 +38,7 @@ void sub_140012614_l1(void) {
             eax = ((r8d == 2) ? r12d : eax);
             edi |= eax;
         } else {
-            edi |= r12d;
+            edi |= 0xADDR;
         }
         r8d = *(u32*)(rbx);
         while (1) {
@@ -52,7 +52,7 @@ void sub_140012614_l1(void) {
                 eax ^= ecx;
                 ecx = eax;
                 ecx ^= edi;
-                ecx &= r12d;
+                ecx &= 0xADDR;
                 ecx ^= eax;
                 ecx |= 1;
                 edx = ecx;

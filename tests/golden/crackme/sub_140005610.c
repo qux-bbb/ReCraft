@@ -3,12 +3,11 @@ void sub_140005610_l1(void) {
     r8d = *(u32*)((rcx + 0xADDR));
     bpl = dl;
     rbx = rcx;
-    r14d = 8;
     if (r8d > 5 /* signed */) {
         r8d -= 6;
         if (r8d == 0) {
             edx = *(u32*)((rcx + 0xADDR));
-            rdi = r14;
+            rdi = 8;
             rcx = *(u64*)((rcx + 0xADDR));
             eax = (edx >> 4);
             rax = (rcx + 8);
@@ -35,7 +34,7 @@ void sub_140005610_l1(void) {
             *(u8*)((rbx + 0xADDR)) = 0;
             r8b = bpl;
             rcx = rbx;
-            if (rdi != r14) {
+            if (rdi != 8) {
                 sub_140005930(rbx, esi, r8b);
             } else {
                 sub_140005ad4(rbx, rsi, r8b);
@@ -85,7 +84,7 @@ void sub_140005610_l1(void) {
                         ecx = 0;
                         var_28 = rax;
                         var_20 = 0;
-                        sub_140008bd0(0, 0, 0, 0, 0, *(u64*)((rcx + 8)));
+                        sub_140008bd0(0, 0, 0, 0, 0, *(u64*)(8));
                         al = 0;
                     }
                 }

@@ -90,15 +90,14 @@ void sub_140024500_l1(void) {
     rcx = rdi;
     if (ebp != 0) {
         ebx = 0xADDR;
-        SetDlgItemTextW(rdi, ebx, *(u64*)((rsi + 0xADDR)));
+        SetDlgItemTextW(rdi, 0xADDR, *(u64*)((rsi + 0xADDR)));
         r9d = (uint32)(*(u16*)((rsi + 0xADDR)));
         var_20 = 0;
         r9 -= 1;
         SendDlgItemMessageW(rdi, ebx, 0xADDR, (r9 - 1), 0);
         SendMessageW(rdi, 0xADDR, 0xADDR, 0);
     } else {
-        r9d = (*(u32*)((rsi + 0xADDR)) & 1);
-        r9d += r14d;
+        r9d = ((*(u32*)((rsi + 0xADDR)) & 1) + 0xADDR);
         CheckRadioButton(rdi, r14d, 0xADDR, (r9d + r14d));
     }
     return;

@@ -14,17 +14,17 @@ void sub_1400060f4_l1(void) {
                 ecx = 0;
                 var_28 = rax;
                 var_20 = 0;
-                sub_140008bd0(0, 0, 0, 0, 0, *(u64*)((rcx + 8)));
+                sub_140008bd0(0, 0, 0, 0, 0, *(u64*)(8));
                 al = 0;
             } else {
                 if (al == 0xADDR) {
-                    r8 = *(u64*)((rcx + 0xADDR));
+                    r8 = *(u64*)(0xADDR);
                     al = *(u8*)(r8);
                     if (al != 0xADDR) {
                         if (al != 0xADDR) {
                             al -= 0xADDR;
                             if (al <= 0xADDR && ((0xADDR >> rax) & 1) != 0) {
-                                *(u32*)((rcx + 0xADDR)) = 9;
+                                *(u32*)(0xADDR) = 9;
                             }
                         } else if (*(u8*)((r8 + 1)) == 0xADDR) {
                             rax = (r8 + 2);

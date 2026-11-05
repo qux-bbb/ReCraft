@@ -92,8 +92,8 @@ void sub_140001a34_l1(void) {
                     qword_ADDR = rax;
                     if (r9d == 0xADDR) {
                         rax = var_20;
-                        al &= dl;
-                        if (al == dl) {
+                        al &= 0xADDR;
+                        if (al == 0xADDR) {
                             rax = qword_ADDR;
                             dword_ADDR |= 0xADDR;
                             rax &= -0xADDR;

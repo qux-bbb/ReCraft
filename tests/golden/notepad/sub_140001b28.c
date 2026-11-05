@@ -35,9 +35,8 @@ void sub_140001b28_l1(void) {
             eax = *(u32*)((rdx + 8));
             eax += ecx;
         }
-        edx = 0;
         if (rdx != 0) {
-            if (*(u32*)((rdx + 0xADDR)) >= 0 /* signed */) {
+            if (*(u32*)(0xADDR) >= 0 /* signed */) {
                 al = 1;
             } else {
                 al = 0;

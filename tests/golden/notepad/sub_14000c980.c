@@ -1,14 +1,13 @@
 // L1 structure recovery (11 blocks)
 void sub_14000c980_l1(void) {
-    edi = 0;
     ebx = ecx;
-    word_ADDR = di;
+    word_ADDR = 0xADDR;
     if (ecx == 5) {
         rcx = qword_ADDR;
         dword_ADDR = 5;
         if (rcx != 0) {
             sub_14002708c(rcx);
-            qword_ADDR = rdi;
+            qword_ADDR = 0;
         }
     } else {
         sub_140026b60();
@@ -21,7 +20,7 @@ void sub_14000c980_l1(void) {
                         rcx = qword_ADDR;
                         if (rcx != 0) {
                             sub_14002708c(rcx);
-                            qword_ADDR = rdi;
+                            qword_ADDR = 0;
                         }
                     }
                 }

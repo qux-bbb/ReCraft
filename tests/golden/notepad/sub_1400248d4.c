@@ -6,12 +6,11 @@ void sub_1400248d4_l1(void) {
     edx = 0;
     sub_1400029dc(&var_20, 0, 0xADDR);
     if (rdi != 0) {
-        al = 8;
         if ((*(u8*)((rdi + 0xADDR)) & 8) == 0) {
             if ((*(u8*)((rdi + 0xADDR)) & 0xADDR) != 0) {
                 if ((bl & 0xADDR) == 0) {
                     if ((bl & 0xADDR) == 0) {
-                        bl &= al;
+                        bl &= 8;
                         bl = -(bl);
                         edx = (((bl != 0) ? -0xADDR : 0) + 0xADDR);
                     } else {
@@ -23,7 +22,7 @@ void sub_1400248d4_l1(void) {
                 LoadStringW(qword_ADDR, rdx, &var_20, 0xADDR);
             }
         } else {
-            bl &= al;
+            bl &= 8;
             bl = -(bl);
             edx = (((bl != 0) ? -1 : 0) + 0xADDR);
             LoadStringW(qword_ADDR, rdx, &var_20, 0xADDR);

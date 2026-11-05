@@ -31,11 +31,11 @@ void sub_14000d2e8_l1(void) {
             rcx += 2;
             rdi -= 1;
         } while (rdi != 0);
-        var_40 = r12;
+        var_40 = 0;
         rax = (rcx - 2);
-        var_38 = r12;
+        var_38 = 0;
         rax = ((rdi != 0) ? rcx : rax);
-        *(u16*)(rax) = r12w;
+        *(u16*)(rax) = 0xADDR;
         var_b8 = qword_ADDR;
         var_d8 = sub_14000f1d0;
         rax = qword_ADDR;

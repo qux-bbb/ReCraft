@@ -24,7 +24,7 @@ void sub_140021e54_l1(void) {
             sub_1400029f4(rbx, rdi, rbp, r12);
             if (eax < 0 /* signed */) {
                 rax = 0xADDR;
-                *(u16*)((rbx + (rdi * 2))) = r15w;
+                *(u16*)((rbx + (rdi * 2))) = 0xADDR;
                 edi = 0xADDR;
                 __asm("if (jbe short 0xADDR /* unmodelled flags */) goto 0xADDR");
                 *(u16*)(rbx) = r15w;
@@ -54,22 +54,20 @@ void sub_140021e54_l1(void) {
                 }
             }
         } else {
-            edi = 0xADDR;
             if (rsi == 0) {
                 edx = 0xADDR;
-                r9d = edi;
+                r9d = 0xADDR;
                 sub_140007cf0(var_68, rdx, "onecore\\internal\\sdk\\inc\\wil\\opensource\\wil\\resource.h");
                 if (rbx != 0) {
                     CoTaskMemFree(rbx);
                 }
-                eax = edi;
+                eax = 0xADDR;
                 return;
             }
         }
     } else {
-        edi = 0xADDR;
         edx = 0xADDR;
     }
-    eax = edi;
+    eax = 0xADDR;
     return;
 }

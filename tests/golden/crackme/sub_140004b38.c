@@ -7,7 +7,6 @@ void sub_140004b38_l1(void) {
         sub_140009a28(rcx);
         r9 = (int64)(eax);
         r10 = off_1400231d0;
-        r11 = off_140023f50;
         r8 = r9;
         eax = (r9 + 2);
         if (eax <= 1) {
@@ -17,7 +16,7 @@ void sub_140004b38_l1(void) {
             rdx = (r9 >> 6);
             eax &= 0xADDR;
             rcx = (rax + (rax * 8));
-            rax = *(u64*)((r11 + (rdx * 8)));
+            rax = *(u64*)((off_140023f50 + (rdx * 8)));
             rdx = (rax + (rcx * 8));
         }
         if (*(u8*)((rdx + 0xADDR)) != 0) {
@@ -30,7 +29,7 @@ void sub_140004b38_l1(void) {
             if (eax > 1) {
                 rax = (r8 >> 6);
                 r8d &= 0xADDR;
-                rax = *(u64*)((r11 + (rax * 8)));
+                rax = *(u64*)((off_140023f50 + (rax * 8)));
                 rcx = (r8 + (r8 * 8));
                 r10 = (rax + (rcx * 8));
             }

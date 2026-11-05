@@ -194,10 +194,9 @@ void sub_1400229e8_l1(void) {
                                         }
                                     }
                                     eax = var_60;
-                                    r9d = 0;
                                     rcx = qword_ADDR;
                                     dword_ADDR = eax;
-                                    SendMessageW(qword_ADDR, 0xADDR, (r9 + 1), 0);
+                                    SendMessageW(qword_ADDR, 0xADDR, 1, 0);
                                     sub_14000fe3c(rcx);
                                     sub_14000f9f0();
                                     rdi = var_78;

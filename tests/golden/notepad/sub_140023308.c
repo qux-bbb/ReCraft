@@ -1,10 +1,8 @@
 // L1 structure recovery (5 blocks)
 void sub_140023308_l1(void) {
     if (dword_ADDR > 4) {
-        r8 = 0xADDR;
         if ((qword_ADDR & 0xADDR) != 0) {
-            rax = qword_ADDR;
-            rax &= r8;
+            rax = (qword_ADDR & 0xADDR);
             if (rax == qword_ADDR) {
                 var_98 = *(u32*)((rcx + 0xADDR));
                 var_a0 = *(u32*)((rcx + 4));

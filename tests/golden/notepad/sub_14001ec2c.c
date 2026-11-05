@@ -19,7 +19,6 @@ void sub_14001ec2c_l1(void) {
     r8d >>= 0xADDR;
     rcx = (rdi + 8);
     var_74 = 3;
-    edi = 0;
     var_80 = 3;
     r9d &= 1;
     var_70 = 0;
@@ -33,7 +32,7 @@ void sub_14001ec2c_l1(void) {
             var_38 = 1;
             rcx = &var_80;
             var_30 = dil;
-            var_28 = rdi;
+            var_28 = 0;
             r9d = ebx;
             var_20 = rcx;
             r8d = 0;

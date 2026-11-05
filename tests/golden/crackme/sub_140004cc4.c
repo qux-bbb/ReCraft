@@ -1,6 +1,5 @@
 // L1 structure recovery (22 blocks)
 void sub_140004cc4_l1(void) {
-    esi = 0;
     var_60 = 0;
     var_70 = sil;
     ebx = (rsi + 1);
@@ -39,7 +38,6 @@ void sub_140004cc4_l1(void) {
             sub_140009a28(rax);
             r8 = (int64)(eax);
             r9 = off_1400231d0;
-            r11 = off_140023f50;
             rdx = r8;
             ecx = (r8 + 2);
             if (ecx <= ebx) {
@@ -48,7 +46,7 @@ void sub_140004cc4_l1(void) {
                 rcx = r8;
                 rax = (r8 >> 6);
                 ecx &= 0xADDR;
-                rax = *(u64*)((r11 + (rax * 8)));
+                rax = *(u64*)((off_140023f50 + (rax * 8)));
                 rcx += (rcx * 8);
                 r10 = (rax + (rcx * 8));
             }
@@ -58,7 +56,7 @@ void sub_140004cc4_l1(void) {
                 var_28 = rax;
                 r9d = 0;
                 r8d = 0;
-                var_20 = rsi;
+                var_20 = 0;
                 edx = 0;
                 var_8c = 0xADDR;
                 ecx = 0;
@@ -69,7 +67,7 @@ void sub_140004cc4_l1(void) {
                 if (eax > ebx) {
                     rax = (rdx >> 6);
                     edx &= 0xADDR;
-                    rax = *(u64*)((r11 + (rax * 8)));
+                    rax = *(u64*)((off_140023f50 + (rax * 8)));
                     rcx = (rdx + (rdx * 8));
                     r9 = (rax + (rcx * 8));
                 }

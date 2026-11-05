@@ -97,14 +97,13 @@ void sub_14000468c_l1(void) {
                         sub_1400091e4(var_298, 0xADDR);
                     }
                 }
-                esi = 0xADDR;
                 r9d = 0xADDR;
                 sub_140007cf0(var_298, 0xADDR, "wil");
                 r9d = 0xADDR;
                 sub_140007cf0(var_298, 0xADDR, "wil");
                 if (r14 == 0) {
                     if (rbx == 0) {
-                        eax = esi;
+                        eax = 0xADDR;
                         return;
                     }
                     CloseHandle(rbx);

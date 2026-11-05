@@ -3,7 +3,6 @@ void sub_14000c520_l1(void) {
     sub_14000d990();
     edi = 0;
     if (al != 0) {
-        esi = 1;
         rcx = qword_ADDR;
         rcx = ((dword_ADDR != edi) ? qword_ADDR : rcx);
         dword_ADDR = 1;
@@ -12,7 +11,7 @@ void sub_14000c520_l1(void) {
         r12d = eax;
         if (eax == 6) {
             edx = dword_ADDR;
-            r15d = esi;
+            r15d = 1;
             if (edx != 0) {
                 var_28 = rdi;
                 rcx = "*.txt";
@@ -97,7 +96,7 @@ void sub_14000c520_l1(void) {
                     edx = dword_ADDR;
                 }
             }
-            word_ADDR += si;
+            word_ADDR += 0xADDR;
         }
         dil = (uint8)((r12d != 2));
         eax = edi;

@@ -78,7 +78,7 @@ void internal/abi.NewName_l1(void) {
         rcx = var_68;
         __asm("if (jbe 0xADDR /* unmodelled flags */) goto 0xADDR");
         edx = (uint32)(var_4f);
-        *(u8*)(rax) = dl;
+        byte_ADDR = dl;
         rsi = (rcx - 1);
         rdx = (-(rdx) >> 0xADDR);
         edx &= 1;

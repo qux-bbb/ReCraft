@@ -18,9 +18,9 @@ void sub_140008078_l1(void) {
     *(u64*)((rbx + 0xADDR)) = (rdi + r14);
     rax = (rdi + rbp);
     *(u64*)((rbx + 0xADDR)) = rax;
-    *(u8*)((rbx + 0xADDR)) = r15b;
+    *(u8*)((rbx + 0xADDR)) = 0xADDR;
     if (r14 < 0xADDR) {
-        *(u16*)(rdi) = r15w;
+        *(u16*)(rdi) = 0xADDR;
         *(u16*)((rdi + 2)) = ax;
         *(u16*)((rdi + 4)) = ax;
         *(u8*)((rdi + 8)) = *(u8*)((rbx + 4));

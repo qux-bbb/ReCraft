@@ -8,7 +8,7 @@ void sub_14001278c_l1(void) {
     r12 = rdx;
     if (cx == 0xADDR) {
         r14 += 2;
-        edx = r13d;
+        edx = 0;
         rdi = r14;
         while (1) {
             eax = (uint32)(*(u16*)(r14));
@@ -31,7 +31,7 @@ void sub_14001278c_l1(void) {
         rax = rsi;
         do {
             rax += 1;
-        } while (*(u16*)((r14 + (rax * 2))) != r13w);
+        } while (*(u16*)((r14 + (rax * 2))) != 0xADDR);
         rbx = (rax + 1);
         edx = 0;
         sub_140009e44(&var_28, 0, rbx);

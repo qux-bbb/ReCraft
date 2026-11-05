@@ -1,7 +1,6 @@
 // L1 structure recovery (5 blocks)
 void sub_140023648_l1(void) {
     ebx = ecx;
-    rdi = off_140036178;
     CoCreateGuid(rdi);
     qword_ADDR = 0;
     if (dword_ADDR > 4) {
@@ -18,7 +17,7 @@ void sub_140023648_l1(void) {
                 var_28 = &var_60;
                 rax = &var_68;
                 var_20 = rax;
-                var_68 = rdi;
+                var_68 = off_140036178;
                 sub_1400011bc(rcx);
             }
         }

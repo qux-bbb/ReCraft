@@ -12,13 +12,13 @@ void sub_140012308_l1(void) {
     sub_140010a74(rsi, &var_30);
     r14d = 1;
     if (eax < 0 /* signed */) {
-        word_ADDR += r14w;
-        ecx = r14d;
+        word_ADDR += 0xADDR;
+        ecx = 1;
         sub_14000c980(rcx);
         if (var_30 != 0) {
             CoTaskMemFree(var_30);
         }
-        eax = r14d;
+        eax = 1;
     } else {
         sub_140026268(var_30, &var_40, r8, &var_38);
         if (eax >= 0 /* signed */) {

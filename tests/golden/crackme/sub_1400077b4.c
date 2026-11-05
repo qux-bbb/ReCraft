@@ -74,11 +74,10 @@ void sub_1400077b4_l1(void) {
             }
         } else {
             sub_140008e30();
-            edi = 0xADDR;
             *(u32*)(rax) = 0xADDR;
             sub_140008c88();
         }
     }
-    eax = edi;
+    eax = 0xADDR;
     return;
 }

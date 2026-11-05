@@ -14,15 +14,15 @@ void sub_140024a24_l1(void) {
     if (eax == 0) {
         eax = 0;
         return;
-    } else if (*(u64*)((rbx + 0xADDR)) == rsi) {
+    } else if (*(u64*)((rbx + 0xADDR)) == 0) {
         eax = 0;
         return;
     } else if (edi != 1) {
-        if (*(u16*)((rbx + 0xADDR)) == si) {
+        if (*(u16*)((rbx + 0xADDR)) == 0xADDR) {
             eax = 0;
             return;
         } else if ((*(u32*)((rbx + 0xADDR)) & 0xADDR) == 0) {
-            *(u64*)((rbx + 0xADDR)) = rsi;
+            *(u64*)((rbx + 0xADDR)) = 0;
             if (edi != 1) {
                 RegisterWindowMessageW("commdlg_FindReplace");
                 dword_ADDR = eax;

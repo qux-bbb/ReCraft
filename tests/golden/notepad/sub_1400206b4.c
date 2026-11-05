@@ -242,7 +242,7 @@ void sub_1400206b4_l1(void) {
                                                     if (edx != 0) {
                                                         esi -= edx;
                                                         r15 += (rdx * 2);
-                                                        if (dword_ADDR != r12d) break;
+                                                        if (dword_ADDR != 0) break;
                                                     }
                                                 }
                                             }
@@ -290,7 +290,7 @@ void sub_1400206b4_l1(void) {
             esi = eax;
         }
     }
-    if (var_38 != r14d) {
+    if (var_38 != 0) {
         rcx = rdi;
         if (dword_ADDR == r14d) {
             EndDoc(rdi);

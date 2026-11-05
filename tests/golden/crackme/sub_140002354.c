@@ -6,7 +6,7 @@ void sub_140002354_l1(void) {
     r12 = r9;
     rbp = r8;
     r13 = rdx;
-    rax = *(u64*)(((r15 + (rdi * 8)) + 0xADDR));
+    rax = *(u64*)(((0xADDR + (rdi * 8)) + 0xADDR));
     if (rax == -1) {
         eax = 0;
     } else if (rax == 0) {
@@ -23,7 +23,7 @@ void sub_140002354_l1(void) {
                     if (rax == 0) {
                         GetLastError();
                         if (eax != 0xADDR) {
-                            rax = r14;
+                            rax = -1;
                             r15 = 0xADDR;
                             __asm("xchg [r15+rsi*8+0xADDR], rax");
                             loc_ADDR:
@@ -33,7 +33,7 @@ void sub_140002354_l1(void) {
                             sub_1400088d0(r15, "api-ms-", (rbx + 7));
                             if (eax != 0) {
                                 LoadLibraryExW(r15, 0, 0);
-                                rbx = rax;
+                                rbx = -1;
                             }
                         }
                     }
@@ -45,10 +45,9 @@ void sub_140002354_l1(void) {
             GetProcAddress(rbx, r13);
             if (rax == 0) {
                 __asm("xchg [r15+rdi*8+0xADDR], r14");
-                eax = 0;
                 return;
             }
-            rcx = rax;
+            rcx = 0;
             __asm("xchg [r15+rdi*8+0xADDR], rcx");
         }
     }

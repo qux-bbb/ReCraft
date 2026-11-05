@@ -7,13 +7,13 @@ void sub_140026438_l1(void) {
     ebx = eax;
     if (eax >= 0 /* signed */) {
         rcx = var_30;
-        var_38 = rsi;
+        var_38 = 0;
         rax = *(u64*)(rcx);
         rax = *(u64*)(rax);
         sub_140028010(var_30, off_14002af98, &var_38);
         ebx = eax;
         if (eax >= 0 /* signed */) {
-            var_40 = rsi;
+            var_40 = 0;
             hstring = rsi;
             WindowsCreateStringReference("Windows.Security.EnterpriseData.FileProtectionManager", 0xADDR, &hstringHeader, &hstring);
             if (eax < 0 /* signed */) {

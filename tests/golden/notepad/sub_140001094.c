@@ -16,25 +16,24 @@ void sub_140001094_l1(void) {
         rax = rcx;
         do {
             rax += 1;
-        } while (*(u16*)((rdx + (rax * 2))) != r9w);
+        } while (*(u16*)((rdx + (rax * 2))) != 0xADDR);
         eax = ((rax * 2) + 2);
     }
     var_88 = eax;
     rax = var_110;
     var_80 = rdx;
-    var_8c = r9d;
+    var_8c = 0;
     rdx = *(u64*)(rax);
     if (rdx == 0) {
-        rdx = off_14002b210;
     } else {
         do {
             rcx += 1;
-        } while (*(u16*)((rdx + (rcx * 2))) != r9w);
+        } while (*(u16*)((off_14002b210 + (rcx * 2))) != 0xADDR);
         r8d = ((rcx * 2) + 2);
     }
     var_60 = var_108;
     rax = var_100;
-    var_70 = rdx;
+    var_70 = off_14002b210;
     var_78 = r8d;
     r8d = 0;
     var_7c = r9d;

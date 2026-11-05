@@ -18,13 +18,13 @@ void sub_1400033ac_l1(void) {
     edi = eax;
     eax = (r13 + 8);
     var_20 = 3;
-    ecx = r13d;
+    ecx = 0;
     ecx = ((*(u32*)((rbx + 8)) == 1) ? eax : ecx);
     var_24 = ecx;
     ecx = (rax - 7);
     dword_ADDR += ecx;
     ecx = ((dword_ADDR - ecx) + 1);
-    var_38 = r13;
+    var_38 = 0;
     var_30 = ecx;
     GetCurrentThreadId();
     xmm0 = 0;
@@ -36,7 +36,7 @@ void sub_1400033ac_l1(void) {
     var_80 = 0;
     rax = qword_ADDR;
     var_64 = edi;
-    var_48 = r13;
+    var_48 = 0;
     var_50 = r13;
     var_a8 = rsi;
     var_b0 = r12;
@@ -76,7 +76,7 @@ void sub_1400033ac_l1(void) {
             rax = qword_ADDR;
             ebx = 0xADDR;
             if (rax != 0 && byte_ADDR == r13b) {
-                r8d = ebx;
+                r8d = 0xADDR;
                 sub_140028010(&var_20, &var_4c0);
             }
             if (var_4c0 == r13w) {

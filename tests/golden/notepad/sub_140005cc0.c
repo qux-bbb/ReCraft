@@ -74,9 +74,8 @@ void sub_140005cc0_l1(void) {
         } else if (ecx == 0xADDR) {
             edx = 0xADDR;
         } else if (ecx == 0xADDR) {
-            edx = 0xADDR;
         }
     }
-    eax = edx;
+    eax = 0xADDR;
     return;
 }

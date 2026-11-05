@@ -12,8 +12,8 @@ void sub_140004008_l1(void) {
             rbx = *(u64*)(rdi);
             GetProcessHeap();
             HeapFree(rax, 0, rbx);
-            *(u64*)(rdi) = r14;
-            *(u64*)((rdi + 8)) = r14;
+            *(u64*)(rdi) = 0;
+            *(u64*)((rdi + 8)) = 0;
             rdi += 0xADDR;
             rax = (rdi - 0xADDR);
         } while (rax != rsi);
@@ -21,7 +21,7 @@ void sub_140004008_l1(void) {
     rbx = *(u64*)((rbp + 0xADDR));
     GetProcessHeap();
     HeapFree(rax, 0, rbx);
-    *(u32*)((rbp + 0xADDR)) = r14d;
+    *(u32*)((rbp + 0xADDR)) = 0;
     *(u64*)((rbp + 0xADDR)) = r14;
     return;
 }

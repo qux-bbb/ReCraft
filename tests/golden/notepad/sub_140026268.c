@@ -5,14 +5,14 @@ void sub_140026268_l1(void) {
     rsi = r9;
     *(u32*)(r9) = 0;
     r14 = rdx;
-    *(u16*)(rdx) = r15w;
+    *(u16*)(rdx) = 0xADDR;
     rbx = rcx;
     sub_140026b60();
     if (eax == 0) {
         *(u32*)(rsi) = 5;
         eax = 0;
     } else {
-        var_58 = r15;
+        var_58 = 0;
         sub_1400256d8(rbx, &var_58);
         ebx = 0;
         if (eax >= 0 /* signed */) {

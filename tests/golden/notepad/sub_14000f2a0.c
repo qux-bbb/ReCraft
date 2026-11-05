@@ -30,8 +30,7 @@ void sub_14000f2a0_l1(void) {
     bl = (uint8)((r14d == 0));
     GetSubMenu(rbp, r15d);
     EnableMenuItem(rax, 0xADDR, ebx);
-    r9d = 0;
-    SendMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+    SendMessageW(qword_ADDR, 0xADDR, 0, 0);
     ebx = esi;
     bl = (uint8)((rax == 0));
     GetSubMenu(rbp, r15d);

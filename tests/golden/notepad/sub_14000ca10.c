@@ -47,7 +47,6 @@ void sub_14000ca10_l1(void) {
                             r11 = &var_460;
                             return;
                         }
-                        ebx = 2;
                         CloseHandle(rsi);
                         eax = 2;
                         r11 = &var_460;
@@ -58,7 +57,7 @@ void sub_14000ca10_l1(void) {
         }
         CloseHandle(rsi);
     }
-    eax = ebx;
+    eax = 2;
     r11 = &var_460;
     return;
 }

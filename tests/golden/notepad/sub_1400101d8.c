@@ -15,8 +15,7 @@ void sub_1400101d8_l1(void) {
     xmm0 = *(__m128*)((rax - 0xADDR));
     var_70 = xmm0;
     if (qword_ADDR == 0) {
-        xmm0 = 0;
-        xmmword_ADDR = xmm0;
+        xmmword_ADDR = 0;
         EventRegister(&var_70, sub_140001260, off_1400341f8, off_140034218);
         if (eax == 0) {
             EventSetInformation(qword_ADDR, (rax + 2), qword_ADDR, (uint32)(*(u16*)(qword_ADDR)));
@@ -27,7 +26,7 @@ void sub_1400101d8_l1(void) {
         CoInitializeEx(0, 2);
         if (eax >= 0 /* signed */) {
             eax = (uint32)(*(u16*)(rbx));
-            edi = r15d;
+            edi = 0;
             while (ax != 0) {
                 if (ax == 0xADDR) {
                     if (edi == 0) break;

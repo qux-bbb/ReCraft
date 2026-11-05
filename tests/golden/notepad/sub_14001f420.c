@@ -25,15 +25,14 @@ void sub_14001f420_l1(void) {
     eax = esi;
     eax = ((ebx > 0 /* signed */) ? ebx : eax);
     var_2c = eax;
-    ebx = 5;
     eax = esi;
     eax = ((edi > 0 /* signed */) ? edi : eax);
     var_30 = eax;
     esi = ((r14d > 0 /* signed */) ? r14d : esi);
     var_38 = -1;
     var_34 = esi;
-    SendMessageW(qword_ADDR, 0xADDR, ebx, &var_28);
-    SendMessageW(qword_ADDR, ebx, 0, 0);
+    SendMessageW(qword_ADDR, 0xADDR, 5, &var_28);
+    SendMessageW(qword_ADDR, 5, 0, 0);
     r11 = &var_50;
     return;
 }

@@ -3,12 +3,10 @@ void sub_140007390_l1(void) {
     rsi = rdx;
     edi = ecx;
     sub_14000ab5c();
-    r9d = 0;
     rbx = rax;
     if (rax == 0) {
-        eax = 0;
     } else {
-        rcx = *(u64*)(rax);
+        rcx = *(u64*)(0);
         rax = rcx;
         r8 = (rcx + 0xADDR);
         if (rcx == r8) {
@@ -33,14 +31,14 @@ void sub_140007390_l1(void) {
                 *(u64*)((rbx + 8)) = rsi;
                 if (*(u32*)((rax + 4)) != 8) {
                     ecx = *(u32*)((rax + 4));
-                    *(u64*)((rax + 8)) = r9;
+                    *(u64*)((rax + 8)) = 0;
                     rax = r8;
                     sub_1400160e0(*(u32*)((rax + 4)));
                 } else {
                     rcx += 0xADDR;
                     rdx = (rcx + 0xADDR);
                     while (rcx != rdx) {
-                        *(u64*)((rcx + 8)) = r9;
+                        *(u64*)((rcx + 8)) = 0;
                         rcx += 0xADDR;
                     }
                     edi = *(u32*)((rbx + 0xADDR));
@@ -121,7 +119,7 @@ void sub_140007390_l1(void) {
             }
             eax = -1;
         } else {
-            *(u64*)((rax + 8)) = r9;
+            *(u64*)((rax + 8)) = 0;
             eax = (r8 - 4);
         }
     }

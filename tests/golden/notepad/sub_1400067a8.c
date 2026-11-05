@@ -1,6 +1,5 @@
 // L1 structure recovery (12 blocks)
 void sub_1400067a8_l1(void) {
-    r15d = 0;
     ebx = r9d;
     ebp = (uint32)(r8w);
     r14d = edx;
@@ -16,8 +15,8 @@ void sub_1400067a8_l1(void) {
             var_28 = ebx;
             sub_14000925c((rdi + 0xADDR), &var_20, 0xADDR);
             r14 = (rdi + 0xADDR);
-            if (*(u8*)((rdi + 0xADDR)) == r15b) {
-                if (*(u64*)(r14) == r15) {
+            if (*(u8*)((rdi + 0xADDR)) == 0xADDR) {
+                if (*(u64*)(r14) == 0) {
                     GetLastError();
                     ebx = eax;
                     CreateThreadpoolTimer(sub_140002fb0, rdi, 0);

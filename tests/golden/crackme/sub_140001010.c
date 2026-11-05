@@ -6,7 +6,6 @@ void sub_140001010_l1(void) {
     sub_140004cc4("  flag format: flag{...}");
     sub_140004cc4("==========================================");
     ebx = 0;
-    rdi = 0xADDR;
     do {
         sub_140001170("Enter flag: ", rdx, r8, r9);
         sub_140004580(1);
@@ -21,7 +20,7 @@ void sub_140001010_l1(void) {
         }
         sub_140006fd0(&var_20, "\r\n");
         if (rax != 0) {
-            *(u8*)(rax) = 0;
+            *(u8*)(1) = 0;
         }
         sub_140016b60(&var_20, "flag{strings_are_not_enough_you_know}");
         if (eax != 0) {
@@ -29,13 +28,13 @@ void sub_140001010_l1(void) {
             if (rax == 0xADDR) {
                 eax = 0;
                 do {
-                    r8d = (uint32)(*(u8*)(((rax + rdi) + 0xADDR)));
+                    r8d = (uint32)(byte_ADDR[rax]);
                     rcx = rax;
                     ecx &= 0xADDR;
-                    edx = (uint32)(*(u8*)(((rsp + r8) + 0xADDR)));
-                    dl ^= *(u8*)(((rcx + rdi) + 0xADDR));
+                    edx = (uint32)(*(u8*)(&var_20 + r8));
+                    dl ^= byte_ADDR[rcx];
                     dl += r8b;
-                    if (dl != *(u8*)(((rax + rdi) + 0xADDR))) goto loc_ADDR;
+                    if (dl != byte_ADDR[rax]) goto loc_ADDR;
                     rax += 1;
                 } while (rax < 0xADDR);
                 sub_140004cc4("[+] Correct! Nice reversing.");

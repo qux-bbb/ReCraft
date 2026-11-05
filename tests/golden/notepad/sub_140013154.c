@@ -59,11 +59,10 @@ void sub_140013154_l1(void) {
         sub_14001e1dc(rdi, r14);
         ebx = 2;
         qword_ADDR = rdi;
-        xmm0 = 0;
         qword_ADDR = r14;
         rax = sub_140021020;
         dword_ADDR = 0xADDR;
-        xmmword_ADDR = xmm0;
+        xmmword_ADDR = 0;
         qword_ADDR = r14;
         qword_ADDR = sub_140021020;
         qword_ADDR = 0xADDR;
@@ -82,14 +81,14 @@ void sub_140013154_l1(void) {
         dword_ADDR = eax;
         dword_ADDR = eax;
         eax = 0;
-        word_ADDR = ax;
-        word_ADDR = ax;
-        byte_ADDR = al;
+        word_ADDR = 0xADDR;
+        word_ADDR = 0xADDR;
+        byte_ADDR = 0xADDR;
         byte_ADDR = al;
         sub_140012a2c();
         sub_1400221ac(&var_2b8);
         rdx = off_14002a790;
-        rdi = 0;
+        rdi = rax;
         sub_140001c90(0xADDR);
         if (rax != 0) {
             sub_140021fc4(rax, rdi);
@@ -110,9 +109,8 @@ void sub_140013154_l1(void) {
         }
         if (rax == 0) {
             loc_ADDR:
-            eax = 0;
         } else {
-            sub_1400223a0(&var_1a8, *(u64*)((rax + 0xADDR)));
+            sub_1400223a0(&var_1a8, *(u64*)(0xADDR));
             rdi = var_1a8;
             eax = 0;
             if (rdi != 0) {
@@ -192,8 +190,8 @@ void sub_140013154_l1(void) {
         }
         sub_14001f318(rax);
         r13d = 1;
-        SendMessageW(qword_ADDR, 0xADDR, r13d, r13d);
-        SendMessageW(qword_ADDR, 0xADDR, r13d, 0);
+        SendMessageW(qword_ADDR, 0xADDR, 1, 1);
+        SendMessageW(qword_ADDR, 0xADDR, 1, 0);
         SendMessageW(qword_ADDR, 0xADDR, 0, "NPCTXT");
         eax = dword_ADDR;
         eax = -(eax);
@@ -242,8 +240,7 @@ void sub_140013154_l1(void) {
             CreateFontIndirectW(off_140035650);
             qword_ADDR = rax;
         }
-        r9d = 0;
-        SendMessageW(qword_ADDR, (r9 + 0xADDR), rax, 0);
+        SendMessageW(qword_ADDR, 0xADDR, rax, 0);
         ReleaseDC(0, r15);
         SendMessageW(qword_ADDR, 0xADDR, 0, 0);
         qword_ADDR = rax;
@@ -317,9 +314,8 @@ void sub_140013154_l1(void) {
                 var_138 = r14;
                 var_118 = r14d;
                 do {
-                    eax = 0;
                     __asm("lock cmpxchg [0xADDR], r13d");
-                } while (dword_ADDR != eax);
+                } while (dword_ADDR != 0);
                 eax = dword_ADDR;
                 r12 = off_140029260;
                 rsi = off_140034000;
@@ -841,8 +837,8 @@ void sub_140013154_l1(void) {
                         *(__m128*)((rbx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
                         *(__m128*)((rbx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
                         *(__m128*)((rbx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
-                        *(__m128*)(((rbx + rdx) - 0xADDR)) = *(__m128*)((rax + 0xADDR));
-                        xmm0 = *(__m128*)((rax + rdx));
+                        *(__m128*)(((rbx + 0xADDR) - 0xADDR)) = *(__m128*)((rax + 0xADDR));
+                        xmm0 = *(__m128*)((rax + 0xADDR));
                         *(__m128*)((rbx + rdx)) = xmm0;
                         xmm1 = *(__m128*)(((rax + rdx) + 0xADDR));
                         eax = (rdx + 0xADDR);
@@ -1189,8 +1185,8 @@ void sub_140013154_l1(void) {
                                                                                                                                                                                 var_f8 = rax;
                                                                                                                                                                                 r12 = rax;
                                                                                                                                                                                 if (rax == 0) {
-                                                                                                                                                                                    r13d = (0xADDR | 0xADDR);
-                                                                                                                                                                                    var_d8 = r13d;
+                                                                                                                                                                                    r13d = 0xADDR;
+                                                                                                                                                                                    var_d8 = 0xADDR;
                                                                                                                                                                                     loc_ADDR:
                                                                                                                                                                                     ecx = var_108;
                                                                                                                                                                                     edi = ecx;
@@ -1555,9 +1551,8 @@ void sub_140013154_l1(void) {
                                         var_a44 = xmm0;
                                         var_98 = r12;
                                         do {
-                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edx");
-                                        } while (dword_ADDR != eax);
+                                        } while (dword_ADDR != 0);
                                         eax = dword_ADDR;
                                         if (eax != 0) {
                                             eax += edx;
@@ -1894,9 +1889,8 @@ void sub_140013154_l1(void) {
                                         var_da4 = cx;
                                         var_320 = xmm0;
                                         do {
-                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edx");
-                                        } while (dword_ADDR != eax);
+                                        } while (dword_ADDR != 0);
                                         eax = dword_ADDR;
                                         if (eax != 0) {
                                             eax += edx;
@@ -2362,13 +2356,12 @@ void sub_140013154_l1(void) {
                                                 }
                                                 xmm0 = 0;
                                                 eax = r12d;
-                                                r9d = 0;
                                                 var_f8 = r10d;
                                                 var_900 = xmm0;
                                                 ecx = *(u32*)((r11 + (rax * 4)));
                                                 rax = qword_ADDR;
                                                 var_910 = xmm0;
-                                                sub_140028010(*(u32*)((r11 + (rax * 4))), &var_df0, (r9 + 0xADDR));
+                                                sub_140028010(*(u32*)((r11 + (rax * 4))), &var_df0, 0xADDR);
                                                 ebx = 0;
                                                 if (eax != 0) {
                                                     rax = qword_ADDR;
@@ -2396,16 +2389,15 @@ void sub_140013154_l1(void) {
                                                     rcx += 2;
                                                     rdi -= r14;
                                                 } while (rdi != 0);
-                                                rdx = 0xADDR;
                                                 rcx = (rax + (rax * 2));
-                                                rax = *(u64*)(((rbp + (rax * 8)) + 0xADDR));
+                                                rax = *(u64*)(&var_d00 + (rax * 8));
                                                 var_68 = rax;
                                                 var_b8 = rax;
-                                                r8 = *(u64*)(((rbp + (rax * 8)) + 0xADDR));
-                                                eax = (uint32)(*(u8*)(((rcx + rdx) + 0xADDR)));
+                                                r8 = *(u64*)(&var_d00 + (rax * 8));
+                                                eax = (uint32)(byte_ADDR[rcx]);
                                                 var_90 = r8;
                                                 var_a0 = r8;
-                                                rbx = *(u64*)(((rbp + (rax * 8)) + 0xADDR));
+                                                rbx = *(u64*)(&var_d00 + (rax * 8));
                                                 var_88 = rbx;
                                                 var_e0 = rbx;
                                                 sub_140024bf8(0xADDR);
@@ -2675,8 +2667,7 @@ void sub_140013154_l1(void) {
                                                             var_c0 = r10d;
                                                             rax = rdi;
                                                             var_e8 = rbx;
-                                                            xmm0 = 0;
-                                                            *(__m128*)(rbx) = xmm0;
+                                                            *(__m128*)(rbx) = 0;
                                                             *(u64*)((rbx + 0xADDR)) = 0;
                                                             r11d = (r10 + 1);
                                                             rcx = &var_da0;
@@ -2686,14 +2677,13 @@ void sub_140013154_l1(void) {
                                                             rdx = rbx;
                                                             do {
                                                                 r9d = (uint32)(*(u16*)(rcx));
-                                                                rcx = 0xADDR;
                                                                 eax = r10d;
-                                                                while (r9w != *(u16*)(rcx)) {
+                                                                while (r9w != word_ADDR) {
                                                                     eax += r11d;
                                                                     rcx += 2;
                                                                     if (eax < 6) continue;
                                                                 }
-                                                                rax = *(u64*)(((rbp + (rax * 8)) + 0xADDR));
+                                                                rax = *(u64*)(&var_c90 + (rax * 8));
                                                                 r9 = -1;
                                                                 var_c8 = rax;
                                                                 do {
@@ -3349,9 +3339,8 @@ void sub_140013154_l1(void) {
                                         }
                                         ebx = 1;
                                         do {
-                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], ebx");
-                                        } while (dword_ADDR != eax);
+                                        } while (dword_ADDR != 0);
                                         eax = dword_ADDR;
                                         if (eax > 0 /* signed */) {
                                             eax -= ebx;
@@ -4751,9 +4740,8 @@ void sub_140013154_l1(void) {
                                         }
                                         edi = 1;
                                         do {
-                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edi");
-                                        } while (dword_ADDR != eax);
+                                        } while (dword_ADDR != 0);
                                         eax = dword_ADDR;
                                         if (eax > 0 /* signed */) {
                                             eax -= edi;
@@ -4832,9 +4820,8 @@ void sub_140013154_l1(void) {
                                         var_cd8 = xmm0;
                                         var_ce8 = xmm0;
                                         do {
-                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edi");
-                                        } while (dword_ADDR != eax);
+                                        } while (dword_ADDR != 0);
                                         eax = dword_ADDR;
                                         if (eax != 0) {
                                             eax += edi;
@@ -5183,13 +5170,13 @@ void sub_140013154_l1(void) {
                                                                         rbx += rax;
                                                                         if (r12d >= 0 /* signed */) {
                                                                             rax = off_1400360c0;
-                                                                            rcx = *(u64*)((rax + (rcx * 8)));
-                                                                            GetProcAddress(*(u64*)((rax + (rcx * 8))), rdx);
+                                                                            rcx = *(u64*)((off_1400360c0 + (rcx * 8)));
+                                                                            GetProcAddress(*(u64*)((off_1400360c0 + (rcx * 8))), rdx);
                                                                             r8d = 0;
                                                                             if (rax != 0) {
                                                                                 ecx = var_b8;
                                                                                 rdx = off_140034000;
-                                                                                *(u64*)((rdx + (rcx * 8))) = rax;
+                                                                                *(u64*)((off_140034000 + (rcx * 8))) = rax;
                                                                                 rcx = var_b0;
                                                                             }
                                                                         }
@@ -5231,9 +5218,8 @@ void sub_140013154_l1(void) {
                                         var_cf0 = edi;
                                         sub_140028010(0, 0xADDR, ebx, &var_cc0);
                                         do {
-                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edi");
-                                        } while (dword_ADDR != eax);
+                                        } while (dword_ADDR != 0);
                                         eax = dword_ADDR;
                                         if (eax > 0 /* signed */) {
                                             eax -= edi;
@@ -5469,7 +5455,7 @@ void sub_140013154_l1(void) {
                                                                                                                                 var_88 = rax;
                                                                                                                                 r12 = rax;
                                                                                                                                 if (rax == 0) {
-                                                                                                                                    r14d = (0xADDR | 0xADDR);
+                                                                                                                                    r14d = 0xADDR;
                                                                                                                                     r12d = 0;
                                                                                                                                     loc_ADDR:
                                                                                                                                     if (r14d >= 0 /* signed */) {
@@ -5745,9 +5731,8 @@ void sub_140013154_l1(void) {
                 }
                 r14d = 1;
                 do {
-                    eax = 0;
                     __asm("lock cmpxchg [0xADDR], r14d");
-                } while (dword_ADDR != eax);
+                } while (dword_ADDR != 0);
                 eax = dword_ADDR;
                 if (eax > 0 /* signed */) {
                     eax -= r14d;
@@ -5902,8 +5887,7 @@ void sub_140013154_l1(void) {
                 if (eax == 0) {
                     sub_14001e2bc(rsi);
                 } else {
-                    r9d = 0;
-                    PostMessageW(qword_ADDR, (r9 + 0xADDR), 0, 0);
+                    PostMessageW(qword_ADDR, 0xADDR, 0, 0);
                     eax = r13d;
                 }
             } else if (eax == ebx) {
@@ -5926,9 +5910,8 @@ void sub_140013154_l1(void) {
         r8d = 0;
         if (eax == 0) goto loc_ADDR;
         rax = *(u64*)(rdi);
-        ecx = 0xADDR;
         r14d = 0;
-        if (*(u16*)(rax) == cx) goto loc_ADDR;
+        if (*(u16*)(rax) == 0xADDR) goto loc_ADDR;
         loc_ADDR:
         do {
             r14d = 0xADDR;
@@ -5965,12 +5948,12 @@ void sub_140013154_l1(void) {
                 rbx += 1;
                 rbx += rax;
                 if (r14d >= 0 /* signed */) {
-                    GetProcAddress(*(u64*)((rax + (r12 * 8))), rdx);
+                    GetProcAddress(*(u64*)((off_1400360c0 + (r12 * 8))), rdx);
                     r8d = 0;
                     if (rax == 0) goto loc_ADDR;
                     ecx = var_a8;
                     rdx = off_140034000;
-                    *(u64*)((rdx + (rcx * 8))) = off_1400360c0;
+                    *(u64*)((off_140034000 + (rcx * 8))) = off_1400360c0;
                 }
                 var_a8 += 1;
                 edi += 1;
@@ -6439,15 +6422,15 @@ void sub_140013154_l1(void) {
     *(u64*)((r13 + 0xADDR)) = rax;
     rcx = rax;
     edx = 0xADDR;
-    rax = (0xADDR + 0xADDR);
-    *(__m128*)(rcx) = *(__m128*)(rax);
+    rax = 0xADDR;
+    *(__m128*)(rcx) = xmmword_ADDR;
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
-    *(__m128*)(((rcx + rdx) - 0xADDR)) = *(__m128*)((rax + 0xADDR));
+    *(__m128*)(((rcx + 0xADDR) - 0xADDR)) = *(__m128*)((rax + 0xADDR));
     xmm0 = *(__m128*)((rax + rdx));
     *(__m128*)((rcx + rdx)) = xmm0;
     xmm1 = *(__m128*)(((rax + rdx) + 0xADDR));
@@ -7087,10 +7070,9 @@ void sub_140013154_l1(void) {
         goto loc_ADDR;
         loc_ADDR:
         rax = *(u64*)((r13 + 8));
-        ecx = 0;
         var_d0 = rax;
         if (rax == 0) goto loc_ADDR;
-        if (*(u32*)(r13) == ecx) goto loc_ADDR;
+        if (*(u32*)(r13) == 0) goto loc_ADDR;
         eax = *(u32*)(r13);
         rax -= 0xADDR;
         var_110 = rax;
@@ -7817,9 +7799,8 @@ void sub_140013154_l1(void) {
     } while (r13d < 5);
     r11 = (rax + 4);
     if (r11 < rax) goto loc_ADDR;
-    r13d = 0;
     edi = 0;
-    rdi = ((*(u32*)(rax) != r13d) ? r11 : rdi);
+    rdi = ((*(u32*)(rax) != 0) ? r11 : rdi);
     if (*(u32*)(rax) != 4) goto loc_ADDR;
     edi = *(u32*)(rdi);
     if (var_b8 != rdx) {
@@ -7850,9 +7831,8 @@ void sub_140013154_l1(void) {
         r8d = 0;
         if (eax == 0) goto loc_ADDR;
         rax = *(u64*)(rdi);
-        ecx = 0xADDR;
         r12d = 0;
-        if (*(u16*)(rax) == cx) goto loc_ADDR;
+        if (*(u16*)(rax) == 0xADDR) goto loc_ADDR;
         loc_ADDR:
         do {
             r12d = 0xADDR;
@@ -7891,13 +7871,13 @@ void sub_140013154_l1(void) {
                 rbx += 1;
                 rbx += rax;
                 if (r12d >= 0 /* signed */) {
-                    rcx = *(u64*)((rax + (rcx * 8)));
-                    GetProcAddress(*(u64*)((rax + (rcx * 8))), rdx);
+                    rcx = *(u64*)((off_1400360c0 + (rcx * 8)));
+                    GetProcAddress(*(u64*)((off_1400360c0 + (rcx * 8))), rdx);
                     r8d = 0;
                     if (rax == 0) goto loc_ADDR;
                     ecx = var_78;
                     rdx = off_140034000;
-                    *(u64*)((rdx + (rcx * 8))) = off_1400360c0;
+                    *(u64*)((off_140034000 + (rcx * 8))) = off_1400360c0;
                     rcx = var_68;
                 }
                 var_78 += 1;
@@ -7928,9 +7908,8 @@ void sub_140013154_l1(void) {
         r8d = 0;
         if (eax == 0) goto loc_ADDR;
         rax = *(u64*)(r12);
-        ecx = 0xADDR;
         edi = 0;
-        if (*(u16*)(rax) == cx) goto loc_ADDR;
+        if (*(u16*)(rax) == 0xADDR) goto loc_ADDR;
         loc_ADDR:
         do {
             edi = 0xADDR;
@@ -7969,13 +7948,12 @@ void sub_140013154_l1(void) {
                 rbx += 1;
                 rbx += rax;
                 if (edi >= 0 /* signed */) {
-                    rcx = *(u64*)((rax + (rcx * 8)));
-                    GetProcAddress(*(u64*)((rax + (rcx * 8))), rdx);
+                    rcx = *(u64*)((off_1400360c0 + (rcx * 8)));
+                    GetProcAddress(*(u64*)((off_1400360c0 + (rcx * 8))), rdx);
                     r8d = 0;
                     if (rax == 0) goto loc_ADDR;
                     ecx = var_f8;
-                    rdx = off_140034000;
-                    *(u64*)((rdx + (rcx * 8))) = off_1400360c0;
+                    *(u64*)((off_140034000 + (rcx * 8))) = off_1400360c0;
                     rcx = var_80;
                 }
                 var_f8 += 1;
@@ -7986,8 +7964,7 @@ void sub_140013154_l1(void) {
         eax = 1;
         loc_ADDR:
         var_148 += 1;
-        r12d = 0;
-    } while (*(u8*)(rbx) != r12b);
+    } while (*(u8*)(rbx) != 0xADDR);
     goto loc_ADDR;
     loc_ADDR:
     edi = 0xADDR;
@@ -8518,15 +8495,15 @@ void sub_140013154_l1(void) {
     *(u64*)((r14 + 0xADDR)) = rax;
     rcx = rax;
     edx = 0xADDR;
-    rax = (0xADDR + 0xADDR);
-    *(__m128*)(rcx) = *(__m128*)(rax);
+    rax = 0xADDR;
+    *(__m128*)(rcx) = xmmword_ADDR;
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
     *(__m128*)((rcx + 0xADDR)) = *(__m128*)((rax + 0xADDR));
-    *(__m128*)(((rcx + rdx) - 0xADDR)) = *(__m128*)((rax + 0xADDR));
+    *(__m128*)(((rcx + 0xADDR) - 0xADDR)) = *(__m128*)((rax + 0xADDR));
     xmm0 = *(__m128*)((rax + rdx));
     *(__m128*)((rcx + rdx)) = xmm0;
     xmm1 = *(__m128*)(((rax + rdx) + 0xADDR));
@@ -9154,11 +9131,10 @@ void sub_140013154_l1(void) {
                     r14d = 0xADDR;
                     goto loc_ADDR;
                     loc_ADDR:
-                    rax = *(u64*)((r14 + 8));
-                    r11d = 0;
+                    rax = qword_ADDR;
                     var_70 = rax;
                     if (rax == 0) goto loc_ADDR;
-                } while (*(u32*)(r14) == r11d);
+                } while (dword_ADDR == 0);
                 ecx = *(u32*)(r14);
                 rcx -= 0xADDR;
                 var_90 = rcx;

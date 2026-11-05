@@ -13,15 +13,15 @@ void sub_140026c44_l1(void) {
         if (eax >= 0 /* signed */) {
             rdi = hstring2;
             rdx = off_14002a790;
-            hstring2 = rsi;
+            hstring2 = 0;
             var_30 = 1;
             sub_140001c90(0xADDR);
             rbx = rax;
             if (rax == 0) {
-                rbx = rsi;
+                rbx = 0;
             } else {
                 rcx = qword_ADDR;
-                *(u64*)(rbx) = "@)";
+                *(u64*)(0) = "@)";
                 *(u64*)(rbx) = off_140029578;
                 *(u32*)((rbx + 0xADDR)) = 1;
                 if (rcx != 0) {

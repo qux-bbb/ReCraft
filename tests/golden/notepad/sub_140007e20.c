@@ -11,11 +11,11 @@ void sub_140007e20_l1(void) {
     eax = (uint32)(*(u16*)((rdx + 0xADDR)));
     *(u16*)((rcx + 0xADDR)) = ax;
     *(u8*)((rcx + 0xADDR)) = *(u8*)(rdx);
-    *(u64*)((rcx + 0xADDR)) = r13;
+    *(u64*)((rcx + 0xADDR)) = 0;
     *(u64*)((rcx + 0xADDR)) = *(u64*)((rdx + 0xADDR));
     rax = *(u64*)((rdx + 0xADDR));
     *(u64*)((rcx + 0xADDR)) = rax;
-    *(u64*)((rcx + 0xADDR)) = r13;
+    *(u64*)((rcx + 0xADDR)) = 0;
     rcx = *(u64*)((rdx + 0xADDR));
     if (rcx != 0) {
         rax = r12;

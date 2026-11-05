@@ -24,14 +24,13 @@ void sub_14001f948_l1(void) {
         edx = var_40;
         ecx = (rbp + 0xADDR);
         edx -= var_48;
-        rsi = off_140036540;
         eax = var_48;
         ecx = ((edx < ecx) ? edx : ecx);
         rdx = (r8 + (rax * 2));
         rbx = (rcx + rcx);
         r8 = rbx;
         sub_1400274ac(rsi, (r8 + (rax * 2)));
-        *(u16*)((rbx + rsi)) = bp;
+        word_ADDR[rbx] = bp;
         LocalUnlock(rdi);
         al = 1;
     }

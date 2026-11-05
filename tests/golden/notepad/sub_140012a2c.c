@@ -178,7 +178,7 @@ void sub_140012a2c_l1(void) {
     sub_14001e9b0(var_30);
     rcx = var_30;
     rdx = "iWindowPosDX";
-    r8d = ebx;
+    r8d = 0xADDR;
     dword_ADDR = eax;
     sub_14001e9b0(var_30);
     rcx = var_30;

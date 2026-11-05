@@ -12,10 +12,8 @@ void sub_140001de4_l1(void) {
         dword_ADDR = 1;
         dword_ADDR = 1;
         eax = 8;
-        rax = 0;
-        rcx = off_140034d40;
         edx = var_30;
-        *(u64*)((rcx + rax)) = rdx;
+        qword_ADDR = rdx;
         sub_140001cb4(off_140029000);
         return;
     }

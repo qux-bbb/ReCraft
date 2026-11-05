@@ -43,7 +43,7 @@ void sub_1400037fc_l1(void) {
                     eax = 1;
                     return;
                 }
-                eax = edi;
+                eax = 1;
             } else {
                 rbx = (int64)(*(u32*)((rsi + 4)));
                 if (ebx == 0) {

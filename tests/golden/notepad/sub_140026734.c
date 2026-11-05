@@ -3,7 +3,7 @@ void sub_140026734_l1(void) {
     var_b0 = r8d;
     r14d = 0;
     rsi = rdx;
-    *(u16*)(rdx) = r14w;
+    *(u16*)(rdx) = 0xADDR;
     rax = *(u64*)(rcx);
     var_a0 = 0;
     rax = *(u64*)((rax + 0xADDR));
@@ -19,7 +19,7 @@ void sub_140026734_l1(void) {
         }
         xmm0 = xmmword_ADDR;
         rax = &var_a8;
-        var_a8 = r14;
+        var_a8 = 0;
         var_40 = rax;
         rax = &var_b0;
         var_b0 = r14d;
@@ -55,7 +55,6 @@ void sub_140026734_l1(void) {
             r8 = var_a8;
             r8 = *(u64*)(r8);
             sub_140008384(rsi, 0xADDR);
-            edi = 0;
             sub_1400253cc(&var_40);
             rcx = *(u64*)(rbx);
             rax = *(u64*)((rcx + 0xADDR));
@@ -68,7 +67,7 @@ void sub_140026734_l1(void) {
                 rax = *(u64*)((rdx + 0xADDR));
                 sub_140028010(rcx, *(u64*)(rcx));
             }
-            eax = edi;
+            eax = 0;
         }
     } else {
         r9d = eax;

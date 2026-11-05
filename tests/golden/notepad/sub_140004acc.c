@@ -25,14 +25,14 @@ void sub_140004acc_l1(void) {
     rax = (rcx - 2);
     rdx = r15;
     rax = ((rdx != 0) ? rcx : rax);
-    *(u16*)(rax) = r14w;
+    *(u16*)(rax) = 0xADDR;
     sub_1400082b0(&var_30, r15, "_");
     rsi = rbx;
     var_28 = 0xADDR;
     r8d = edi;
     rsi >>= 0xADDR;
     ebx &= 0xADDR;
-    var_20 = r14d;
+    var_20 = 0;
     r9 = &var_30;
     edx = ebx;
     __asm("cmova r8d, ebx");
@@ -43,7 +43,7 @@ void sub_140004acc_l1(void) {
         sub_140009488(rbp, rbx);
         sub_1400082b0(&var_30, r15, "h");
         var_28 = 0xADDR;
-        var_20 = r14d;
+        var_20 = 0;
         edi = ((esi != 0) ? esi : edi);
         CreateSemaphoreExW(0, esi, edi, &var_30, r14d, 0xADDR);
         rbx = rax;

@@ -12,7 +12,7 @@ void sub_14000a234_l1(void) {
     if (rcx != 0) {
         CoTaskMemFree(var_60);
     }
-    var_70 = rsi;
+    var_70 = 0;
     LoadStringW(qword_ADDR, ebx, &var_70, 0);
     sub_140009e44(&var_60, var_70, (int64)(eax));
     sub_14000a0c0(off_140036138, rax);
@@ -20,7 +20,7 @@ void sub_14000a234_l1(void) {
     if (rcx != 0) {
         CoTaskMemFree(var_60);
     }
-    var_78 = rsi;
+    var_78 = 0;
     LoadStringW(qword_ADDR, 0xADDR, &var_78, 0);
     sub_140009e44(&var_60, var_78, (int64)(eax));
     sub_14000a0c0(off_140036140, rax);

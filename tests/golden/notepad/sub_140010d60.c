@@ -20,7 +20,7 @@ void sub_140010d60_l1(void) {
         } while (rdx != 0);
         rax = (rbx - 2);
         rax = ((rdx != 0) ? rbx : rax);
-        *(u16*)(rax) = si;
+        *(u16*)(rax) = 0xADDR;
     } else {
         _o__wcsicmp(rax, ".log");
         if (eax == 0) {
@@ -38,7 +38,7 @@ void sub_140010d60_l1(void) {
                 if (rdx != 0) continue;
             }
         } else {
-            var_38 = esi;
+            var_38 = 0;
             rax = &var_60;
             var_30 = rax;
             var_28 = esi;

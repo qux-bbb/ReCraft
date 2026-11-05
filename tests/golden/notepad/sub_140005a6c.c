@@ -3,10 +3,10 @@ void sub_140005a6c_l1(void) {
     rbx = qword_ADDR;
     edi = 0;
     if (rbx != 0) {
-        if (*(u64*)((rbx + 8)) == rdi) {
-            var_38 &= rdi;
+        if (*(u64*)((rbx + 8)) == 0) {
+            var_38 &= 0;
             sub_140004264(*(u64*)(rbx), &var_38);
-            if (eax >= 0 /* signed */ && *(u64*)((rbx + 8)) == rdi) {
+            if (eax >= 0 /* signed */ && *(u64*)((rbx + 8)) == 0) {
                 *(u64*)((rbx + 8)) = var_38;
             }
         }

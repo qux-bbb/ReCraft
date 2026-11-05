@@ -14,7 +14,7 @@ void sub_14000f610_l1(void) {
     RoGetActivationFactory(hstring, off_14002e110, &var_28);
     eax >>= 0xADDR;
     al ^= 1;
-    hstring = r14;
+    hstring = 0;
     if (al != 0) {
         rbx = var_28;
         rax = *(u64*)(rbx);

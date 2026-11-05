@@ -12,7 +12,7 @@ void sub_140009e44_l1(void) {
             rbx = rbp;
             rax = ((rsi >= rcx) ? rcx : rax);
             if (rax != 0) {
-                while (*(u16*)(rbx) != r12w) {
+                while (*(u16*)(rbx) != 0xADDR) {
                     rbx += 2;
                     rax -= 1;
                     if (rax == 0) break;
@@ -27,7 +27,7 @@ void sub_140009e44_l1(void) {
         rdi = rax;
         if (rax != 0) {
             if (rbp == 0) {
-                *(u16*)(rax) = r12w;
+                *(u16*)(rax) = 0xADDR;
             } else {
                 rbx += rbx;
                 if (rbx != 0) {
@@ -45,7 +45,7 @@ void sub_140009e44_l1(void) {
                         sub_1400274ac();
                     }
                 }
-                *(u16*)((rbx + rdi)) = r12w;
+                *(u16*)((rbx + rdi)) = 0xADDR;
             }
             *(u16*)((rdi + (rsi * 2))) = r12w;
         }

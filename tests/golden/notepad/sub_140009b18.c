@@ -1,14 +1,13 @@
 // L1 structure recovery (9 blocks)
 void sub_140009b18_l1(void) {
     r9 = (rcx + 0xADDR);
-    edi = 0;
     *(u64*)(r9) = 0;
     rbx = rcx;
     rcx = *(u64*)(rdx);
     rdx = -1;
     do {
         rdx += 1;
-    } while (*(u16*)((rcx + (rdx * 2))) != di);
+    } while (*(u16*)((rcx + (rdx * 2))) != 0xADDR);
     if (rdx > 0xADDR) {
         sub_14000b320(0xADDR);
     }
