@@ -284,6 +284,17 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
     bodies = seeded;
     mark("seeded lift");
+    // Callees that are variadic take their argument count from their format string; the
+    // prologue is the only signal an unsymbolised binary gives (see `is_variadic_target`).
+    let mut variadic: BTreeSet<String> = BTreeSet::new();
+    for target in bodies.iter().flat_map(|body| body.calls.iter().copied()) {
+        let Some((target_start, target_end)) = ranges.get(&target).copied() else {
+            continue;
+        };
+        if is_variadic_target(session, target_start, target_end) {
+            variadic.insert(crate::resolve_name(session, Address::new(target))?);
+        }
+    }
     let mut literals: Vec<(String, Address)> = bodies
         .iter()
         .flat_map(|body| body.literals.iter().cloned())
@@ -542,6 +553,10 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     name_handle_slots(&mut lines);
     tidy_labels(&mut lines);
     hide_frame_pointer_setups(&mut lines);
+    // Runs after every pass that can move a call: the arguments are final here, and the
+    // trimmed call keeps the extra registers out of the L2 value flow (they would widen the
+    // variables they come from).
+    trim_variadic_calls(&mut lines, &variadic);
     mark("naming");
     lines.push(PseudoLine {
         addr: start,
@@ -1692,6 +1707,47 @@ fn pointer_width_of_slot(lines: &[PseudoLine], slot: &str) -> Option<Vec<u8>> {
 }
 
 /// The stack the prologue reserves (`sub rsp, imm`) in the entry block, if it is a constant.
+/// MSVC spills all four argument registers into the caller's home area at the top of a
+/// variadic function (`va_start` reads them back from there). A non-variadic function with the
+/// same number of arguments never writes that exact pattern, so it identifies a `printf`-style
+/// callee even when the image carries no symbol for it.
+fn is_variadic_target(session: &mut Session, start: Address, end: Address) -> bool {
+    use iced_x86::{Mnemonic, OpKind, Register};
+    // The four home-area slots of the x64 calling convention.
+    const HOME: [(u64, Register); 4] = [
+        (0x08, Register::RCX),
+        (0x10, Register::RDX),
+        (0x18, Register::R8),
+        (0x20, Register::R9),
+    ];
+    let mut spilled = 0u8;
+    let mut address = start;
+    for _ in 0..8 {
+        if address.get() >= end.get() {
+            break;
+        }
+        let Ok(Some(insn)) = session.insn_at(address) else {
+            return false;
+        };
+        if insn.mnemonic() == Mnemonic::Mov
+            && insn.op_kind(0) == OpKind::Memory
+            && insn.memory_base() == Register::RSP
+            && insn.op_kind(1) == OpKind::Register
+        {
+            let displacement = insn.memory_displacement64();
+            let source = insn.op_register(1);
+            if let Some(slot) = HOME
+                .iter()
+                .position(|(offset, register)| *offset == displacement && *register == source)
+            {
+                spilled |= 1 << slot;
+            }
+        }
+        address = insn.next_addr();
+    }
+    spilled == 0b1111
+}
+
 fn entry_frame_size(session: &mut recraft_core::Session, cfg: &Cfg) -> Option<u64> {
     let block = cfg.blocks.first()?;
     for cfg_insn in &block.insns {
@@ -2031,6 +2087,106 @@ fn call_arguments<'a>(text: &'a str, api: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+/// Drop the trailing register arguments a variadic call passes to a literal format string.
+///
+/// `printf("Enter flag: ")` reaches the printer as a call with the leftover `rdx`, `r8`, `r9`
+/// registers, because the call site loads their values for the ABI and nothing proves them
+/// dead. A format string with no conversions consumes no variadic arguments, and one with
+/// `%s`/`%d`/`%*d` consumes exactly as many as it names, so the source arity is recoverable
+/// from the call itself. Only callees whose prologue spills all four argument registers are
+/// treated as variadic (`is_variadic_target`), so a non-format literal is never touched.
+fn trim_variadic_calls(lines: &mut [PseudoLine], variadic: &BTreeSet<String>) {
+    if variadic.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        let text = line.text.clone();
+        let Some((_, name)) = variadic
+            .iter()
+            .map(|name| (&text, name))
+            .find(|(text, name)| text.contains(&format!("{name}(")))
+        else {
+            continue;
+        };
+        let Some(arguments) = call_arguments(&text, name) else {
+            continue;
+        };
+        let Some(format) = top_level_argument(arguments, 0).and_then(string_literal) else {
+            continue;
+        };
+        let wanted = 1 + format_argument_count(&format);
+        if count_arguments(arguments) <= wanted {
+            continue;
+        }
+        let kept: Vec<&str> = (0..wanted)
+            .filter_map(|index| top_level_argument(arguments, index))
+            .map(str::trim)
+            .collect();
+        let start = text.find(&format!("{name}(")).unwrap_or(0) + name.len() + 1;
+        line.text
+            .replace_range(start..start + arguments.len(), &kept.join(", "));
+    }
+}
+
+/// The string a literal argument spells, with any `L`/cast decoration removed.
+fn string_literal(argument: &str) -> Option<String> {
+    let mut text = argument.trim();
+    while let Some(stripped) = text.strip_prefix('(') {
+        // Drop a leading cast such as `(char*)`.
+        let close = stripped.find(')')?;
+        text = stripped[close + 1..].trim_start();
+    }
+    let text = text.strip_prefix('L').unwrap_or(text);
+    let text = text.strip_prefix('"')?.strip_suffix('"')?;
+    Some(text.to_owned())
+}
+
+/// How many variadic arguments a `printf`-style format string consumes.
+fn format_argument_count(format: &str) -> usize {
+    let bytes = format.as_bytes();
+    let mut index = 0usize;
+    let mut count = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if index < bytes.len() && bytes[index] == b'%' {
+            index += 1;
+            continue;
+        }
+        // Flags; `*` takes an argument for a width or precision.
+        while index < bytes.len() {
+            match bytes[index] {
+                b'*' => {
+                    count += 1;
+                    index += 1;
+                }
+                b'-' | b'+' | b' ' | b'#' | b'0' | b'\'' | b'.' => index += 1,
+                _ => break,
+            }
+        }
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        // Length modifiers (`h`, `l`, `ll`, `I64`, `z`, …).
+        while index < bytes.len()
+            && matches!(
+                bytes[index],
+                b'h' | b'l' | b'j' | b'z' | b't' | b'L' | b'I' | b'6' | b'4' | b'3' | b'2'
+            )
+        {
+            index += 1;
+        }
+        if index < bytes.len() {
+            index += 1;
+        }
+        count += 1;
+    }
+    count
 }
 
 /// The `index`-th top-level argument of `arguments`.
@@ -10268,6 +10424,42 @@ mod tests {
         name_global_data(&mut lines);
         assert_eq!(lines[0].text, "    v5 = (uint32)(byte_140018380[i]);");
         assert_eq!(lines[1].text, "    dword_1400183a0[i] = v5;");
+    }
+
+    #[test]
+    fn a_format_string_fixes_the_variadic_argument_count() {
+        assert_eq!(format_argument_count("Enter flag: "), 0);
+        assert_eq!(format_argument_count("flag{%s}"), 1);
+        assert_eq!(format_argument_count("%s and %d"), 2);
+        assert_eq!(format_argument_count("100%% of %u"), 1);
+        // `*` takes an argument of its own for the width or the precision.
+        assert_eq!(format_argument_count("%*d"), 2);
+        assert_eq!(format_argument_count("%.*s"), 2);
+        assert_eq!(format_argument_count("%I64x"), 1);
+        assert_eq!(
+            string_literal("(char*)\"[?] Hint\"").as_deref(),
+            Some("[?] Hint")
+        );
+        assert_eq!(string_literal("rdx"), None);
+    }
+
+    #[test]
+    fn a_variadic_call_drops_its_leftover_arguments() {
+        let mut lines = vec![
+            test_line("    sub_140001170(\"Enter flag: \", rdx, r8, r9);"),
+            test_line("    printf(\"%s: %d\", name, value);"),
+            test_line("    other(\"%s %s\", left, right, extra);"),
+        ];
+        let variadic = BTreeSet::from([
+            "sub_140001170".to_owned(),
+            "printf".to_owned(),
+            "other".to_owned(),
+        ]);
+        trim_variadic_calls(&mut lines, &variadic);
+        assert_eq!(lines[0].text, "    sub_140001170(\"Enter flag: \");");
+        assert_eq!(lines[1].text, "    printf(\"%s: %d\", name, value);");
+        // Two conversions keep two arguments; the leftover register argument goes.
+        assert_eq!(lines[2].text, "    other(\"%s %s\", left, right);");
     }
 
     #[test]
