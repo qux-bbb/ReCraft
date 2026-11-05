@@ -681,6 +681,8 @@ enum AiMessage {
     Reasoning(String),
     /// One tool call the agent made (shown in the tool trace).
     AgentTool(String),
+    /// The agent's conversation after a turn (kept for follow-up questions).
+    AgentHistory(Vec<recraft_ai::ChatMessage>),
     Done(std::result::Result<String, String>),
 }
 
@@ -966,6 +968,35 @@ fn sub_symbol_address(symbol: &str) -> Option<Address> {
     u64::from_str_radix(hex, 16).ok().map(Address::new)
 }
 
+/// Addresses a prose answer quotes (`0x...` with at least four hex digits, de-duplicated).
+///
+/// The agent and the explanation prompt both cite addresses; making them clickable is how
+/// a reader checks a claim without retyping the address into the jump box.
+fn address_links(text: &str) -> Vec<Address> {
+    let bytes = text.as_bytes();
+    let mut seen = BTreeSet::new();
+    let mut links = Vec::new();
+    let mut index = 0;
+    while index + 3 < bytes.len() {
+        if bytes[index] == b'0' && (bytes[index + 1] == b'x' || bytes[index + 1] == b'X') {
+            let mut end = index + 2;
+            while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
+                end += 1;
+            }
+            if end >= index + 6
+                && let Ok(value) = u64::from_str_radix(&text[index + 2..end], 16)
+                && seen.insert(value)
+            {
+                links.push(Address::new(value));
+            }
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+    links
+}
+
 /// Built-in AI endpoint choices exposed by the settings panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AiMode {
@@ -1075,6 +1106,8 @@ enum Action {
     AiQuery,
     /// Run the project-level agent on the question in the agent box.
     AiAgent,
+    /// Forget the agent conversation (next question starts from scratch).
+    AiAgentReset,
     NavigateToDisasm(Address),
     /// Centre a block in the graph view without leaving graph mode (Graph overview click).
     GraphGoTo(Address),
@@ -1244,6 +1277,8 @@ pub struct ReCraftApp {
     ai_agent_question: String,
     /// Tool calls the running or last agent made (`name + arguments` per line).
     ai_agent_trace: Vec<String>,
+    /// Conversation with the agent, kept so a follow-up question continues it.
+    ai_agent_history: Vec<recraft_ai::ChatMessage>,
     ai_job: Option<AiJob>,
     ai_sidebar: bool,
     ai_sidebar_width: f32,
@@ -1347,6 +1382,7 @@ impl Default for ReCraftApp {
             ai_answer: None,
             ai_agent_question: String::new(),
             ai_agent_trace: Vec::new(),
+            ai_agent_history: Vec::new(),
             ai_job: None,
             ai_sidebar: true,
             ai_sidebar_width: 360.0,
@@ -1609,6 +1645,7 @@ impl ReCraftApp {
         self.ai_answer = None;
         self.ai_agent_question.clear();
         self.ai_agent_trace.clear();
+        self.ai_agent_history.clear();
         self.ai_explanation = None;
         self.ai_result_kind = AiResultKind::Prose;
         self.ai_reasoning.clear();
@@ -2590,6 +2627,10 @@ impl ReCraftApp {
                         &[("count", &self.ai_agent_trace.len().to_string())],
                     );
                 }
+                Ok(AiMessage::AgentHistory(history)) => {
+                    self.ai_agent_history = history;
+                    received = true;
+                }
                 Ok(AiMessage::Done(Ok(text))) => {
                     let elapsed = job.started.elapsed().as_millis();
                     // Fold the chain-of-thought once the answer is complete.
@@ -2843,24 +2884,32 @@ impl ReCraftApp {
             return;
         };
         let settings = self.ai_request_settings();
+        let mut history = self.ai_agent_history.clone();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let result = match recraft_core::Session::open(&path) {
-                Ok(mut session) => recraft_ai::run_agent(
-                    &mut session,
-                    &settings,
-                    &question,
-                    recraft_ai::AGENT_MAX_ROUNDS,
-                    &mut |event| {
-                        if let recraft_ai::AgentEvent::Tool { name, arguments } = event {
-                            let _ =
-                                sender.send(AiMessage::AgentTool(format!("{name} {arguments}")));
-                        }
-                    },
-                )
-                .map_err(|error| error.to_string()),
+                Ok(mut session) => {
+                    let mut provider = recraft_ai::provider_from_settings(&settings);
+                    recraft_ai::run_agent_with_history(
+                        &mut session,
+                        provider.as_mut(),
+                        &mut history,
+                        &question,
+                        recraft_ai::AGENT_MAX_ROUNDS,
+                        &mut |event| {
+                            if let recraft_ai::AgentEvent::Tool { name, arguments } = event {
+                                let _ = sender
+                                    .send(AiMessage::AgentTool(format!("{name} {arguments}")));
+                            }
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+                }
                 Err(error) => Err(error.to_string()),
             };
+            // A failed turn may still have extended the conversation (tool results arrived
+            // before the HTTP error); keep whatever the loop produced.
+            let _ = sender.send(AiMessage::AgentHistory(history));
             let _ = sender.send(AiMessage::Done(result));
         });
         self.ai_agent_trace.clear();
@@ -5258,8 +5307,11 @@ impl ReCraftApp {
             let question_hint = self.t("ui_agent_question_hint");
             let run_label = self.t("ui_run_agent");
             let agent_hint = self.t("ui_agent_hint");
+            let new_label = self.t("ui_agent_new_chat");
+            let new_hint = self.t("ui_agent_new_chat_hint");
+            let has_history = !self.ai_agent_history.is_empty();
             ui.horizontal(|ui| {
-                let width = (ui.available_width() - 72.0).max(80.0);
+                let width = (ui.available_width() - 140.0).max(80.0);
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.ai_agent_question)
                         .desired_width(width)
@@ -5273,6 +5325,16 @@ impl ReCraftApp {
                     .clicked();
                 if (run || submitted) && self.ai_job.is_none() {
                     *action = Action::AiAgent;
+                }
+                if ui
+                    .add_enabled(
+                        has_history && self.ai_job.is_none(),
+                        egui::Button::new(RichText::new(new_label).size(11.0)),
+                    )
+                    .on_hover_text(new_hint)
+                    .clicked()
+                {
+                    *action = Action::AiAgentReset;
                 }
             });
             // Tool calls are the evidence for the answer: without them a confident prose
@@ -5413,6 +5475,35 @@ impl ReCraftApp {
                             ui.label(job);
                         });
                 });
+                // Addresses quoted in the answer are the evidence: make them clickable so
+                // the reader can check each one instead of hunting for the address.
+                let links: Vec<Address> = address_links(&text)
+                    .into_iter()
+                    .filter(|addr| {
+                        self.functions
+                            .iter()
+                            .any(|function| *addr >= function.start && *addr < function.end)
+                    })
+                    .take(10)
+                    .collect();
+                if !links.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(self.t("ui_answer_addresses"))
+                                .size(11.0)
+                                .color(pal.comment),
+                        );
+                        for addr in links {
+                            if ui
+                                .link(RichText::new(format!("{:#x}", addr.get())).size(11.0))
+                                .clicked()
+                            {
+                                *action = Action::Navigate(addr);
+                            }
+                        }
+                    });
+                }
             }
             None => {
                 card_frame(pal).show(ui, |ui| {
@@ -7891,6 +7982,15 @@ impl ReCraftApp {
             }
             Action::AiSuggest => self.start_suggest(ctx),
             Action::AiAgent => self.start_agent(ctx),
+            Action::AiAgentReset => {
+                self.ai_agent_history.clear();
+                self.ai_agent_trace.clear();
+                self.ai_explanation = None;
+                self.ai_result_kind = AiResultKind::Prose;
+                self.ai_result_target = None;
+                self.ai_status = self.t("ui_agent_new").to_owned();
+                self.set_status(self.ai_status.clone());
+            }
             Action::AiApply => {
                 self.apply_ai_selection();
             }
@@ -10971,10 +11071,20 @@ mod tests {
             ))
             .unwrap();
         sender
+            .send(AiMessage::AgentHistory(vec![
+                recraft_ai::ChatMessage::user("哪些函数在写注册表？"),
+            ]))
+            .unwrap();
+        sender
             .send(AiMessage::Done(Ok("这些函数负责注册表访问。".to_owned())))
             .unwrap();
         app.tick();
         assert_eq!(app.ai_agent_trace.len(), 1);
+        assert_eq!(
+            app.ai_agent_history.len(),
+            1,
+            "conversation kept for a follow-up"
+        );
         assert!(app.ai_agent_trace[0].starts_with("list_functions"));
         assert_eq!(
             app.ai_explanation.as_deref(),
@@ -13795,5 +13905,14 @@ mod tests {
             })
             .expect("egui's label selection must copy its text");
         assert!(copied.contains("hello"), "got {copied:?}");
+    }
+    #[test]
+    fn answer_addresses_are_extracted_and_deduplicated() {
+        let links = address_links(
+            "入口 0x1400019c0 调用 0x140001840，再到 0x1400019c0（重复）和 0x20（太短）",
+        );
+        let values: Vec<u64> = links.iter().map(|addr| addr.get()).collect();
+        assert_eq!(values, vec![0x1400019c0, 0x140001840]);
+        assert!(address_links("没有地址").is_empty());
     }
 }

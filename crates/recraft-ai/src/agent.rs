@@ -173,14 +173,38 @@ pub fn run_agent_with_provider(
     max_rounds: usize,
     on_event: &mut dyn FnMut(AgentEvent),
 ) -> Result<String> {
+    let mut history = Vec::new();
+    run_agent_with_history(
+        session,
+        provider,
+        &mut history,
+        question,
+        max_rounds,
+        on_event,
+    )
+}
+
+/// Multi-turn variant: `history` carries the conversation across questions, so a follow-up
+/// ("那它的调用者呢？") keeps the functions already read in context instead of starting over.
+/// The caller owns the vector; it is extended with the question, the assistant/tool turns
+/// and the answer.
+pub fn run_agent_with_history(
+    session: &mut Session,
+    provider: &mut dyn Provider,
+    history: &mut Vec<ChatMessage>,
+    question: &str,
+    max_rounds: usize,
+    on_event: &mut dyn FnMut(AgentEvent),
+) -> Result<String> {
     if question.trim().is_empty() {
         return Err(Error::invalid_argument("the agent needs a question"));
     }
     let tools = agent_tools();
-    let mut messages = vec![
-        ChatMessage::system(AGENT_SYSTEM),
-        ChatMessage::user(question),
-    ];
+    let messages = history;
+    if messages.is_empty() {
+        messages.push(ChatMessage::system(AGENT_SYSTEM));
+    }
+    messages.push(ChatMessage::user(question));
     let rounds = max_rounds.clamp(1, 16);
     for round in 0..=rounds {
         // The last turn is reserved for the answer: tools are withdrawn and the model is
@@ -192,8 +216,9 @@ pub fn run_agent_with_provider(
                 "Tool budget exhausted. Answer now using only the evidence already \
                  collected; state explicitly what you could not verify.",
             ));
-            return match provider.complete_chat(&messages, &[], false)? {
+            return match provider.complete_chat(messages.as_slice(), &[], false)? {
                 ToolReply::Text(text) => {
+                    messages.push(ChatMessage::assistant(text.clone(), Vec::new()));
                     on_event(AgentEvent::Answer(text.clone()));
                     Ok(text)
                 }
@@ -202,8 +227,10 @@ pub fn run_agent_with_provider(
                 )),
             };
         }
-        match provider.complete_chat(&messages, &tools, false)? {
+        match provider.complete_chat(messages.as_slice(), &tools, false)? {
             ToolReply::Text(text) => {
+                // Keep the answer in the conversation: the next question builds on it.
+                messages.push(ChatMessage::assistant(text.clone(), Vec::new()));
                 on_event(AgentEvent::Answer(text.clone()));
                 return Ok(text);
             }
@@ -684,6 +711,57 @@ mod tests {
         assert!(
             error.to_string().contains("tool budget was exhausted"),
             "{error}"
+        );
+    }
+    /// A follow-up question sees the previous answer: the conversation is carried, not
+    /// rebuilt from scratch.
+    #[test]
+    fn a_follow_up_question_keeps_the_previous_turn() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let mut provider = Scripted {
+            replies: VecDeque::from(vec![
+                ToolReply::Text("first answer".to_owned()),
+                ToolReply::Text("second answer".to_owned()),
+            ]),
+            seen: Vec::new(),
+        };
+        let mut history = Vec::new();
+        let first = run_agent_with_history(
+            &mut session,
+            &mut provider,
+            &mut history,
+            "first?",
+            2,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(first, "first answer");
+        let second = run_agent_with_history(
+            &mut session,
+            &mut provider,
+            &mut history,
+            "follow up?",
+            2,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(second, "second answer");
+        let second_turn = provider.seen.get(1).expect("second question");
+        assert!(
+            second_turn
+                .iter()
+                .any(|message| message.content == "first answer"),
+            "previous answer missing from the follow-up turn"
+        );
+        assert_eq!(
+            second_turn
+                .iter()
+                .filter(|message| message.role == ChatRole::System)
+                .count(),
+            1,
+            "the system prompt must appear once"
         );
     }
 }
