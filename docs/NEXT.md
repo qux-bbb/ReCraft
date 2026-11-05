@@ -241,35 +241,68 @@ if (rsp > *(u64*)((r14 + 0x10))) {
 目标寄存器往往在函数剩余部分不再被覆盖，而源寄存器很快被复用，窗口在第一个 `src` 写处就结束。
 **结论：必须做真正的变量重建，寄存器级拷贝传播无效。** 该 pass 已回退。
 
-## 1.5 数据地址与数组下标
+## 1.5 数据地址与数组下标（三项均已完成）
 
-> **2026-11-06 更新：1 与 2 已完成（`870a834`）**。`fold_constant_registers` 允许在
-> 寄存器"最后一次写"时折进嵌套块内的地址表达式，`merge_address_constants` +
-> `fold_literal_arithmetic` 把 `(x + 0x140000000) + 0x18380` 合成 `(x + 0x140018380)`，
-> `name_global_data` 再渲染成 `byte_140018380[i]`；打印器把 `[rsp + idx + disp]` 渲染成
-> `*(u8*)(&var_20 + idx)`，`rsp` 不再进 L2 变量表。crackme `main` 现在读作
-> `byte_140018380[i] / *(u8*)(&var_20 + perm) / byte_140018368[i & 0xf] / byte_1400183a0[i]`。
-> **剩下第 3 项（字节宽度变量）**，见下。
+> **2026-11-06 更新：三项全部完成（`870a834` / `6dc6f88` / `613bbcd`）**。
+> `fold_constant_registers` 允许在寄存器"最后一次写"时折进嵌套块内的地址表达式，
+> `merge_address_constants` + `fold_literal_arithmetic` 把 `(x + 0x140000000) + 0x18380`
+> 合成 `(x + 0x140018380)`，`name_global_data` 再渲染成 `byte_140018380[i]`；打印器把
+> `[rsp + idx + disp]` 渲染成 `*(u8*)(&var_20 + idx)`；变参调用的实参个数取自格式串；
+> L2 局部变量按"读取宽度"声明，逐位拼装退回 `v ^= …; v += …;`。crackme `main` 现在读作：
+>
+> ```c
+> v10 = 0;
+> do {
+>     v11 = (uint32)(byte_140018380[v10]);
+>     v12 = v10;
+>     v12 = (uint32)((uint32)v12 & 0xf);
+>     v13 = *(u8*)(&var_20 + v11);
+>     v13 ^= byte_140018368[v12];
+>     v13 += (uint8)v11;
+>     if (v13 != byte_1400183a0[v10]) goto loc_140001130;
+>     v10 += 1;
+> } while (v10 < 0x20);
+> ```
+>
+> 剩下的差距只剩**函数名**（`sub_140004cc4` = puts、`sub_140016b60` = strcmp、…）与
+> `v12 = v10; v12 &= 0xf;` 这类两行式更新，见 §1.6。
 
-crackme `main` 的结构已经和源码一致（`do { … } while (tries < 3)` + 32 字节校验环），
-剩下的差距全在**表达式**上：
+crackme `main` 的结构已经和源码一致（`do { … } while (tries < 3)` + 32 字节校验环）：
 
 ```c
 v3 = 0x140000000;
 v12 = (uint32)(*(u8*)(((v11 + v3) + 0x18380)));   // → byte_140018380[v11]（已完成）
 v14 = (uint32)(*(u8*)(((v15 + v12) + 0x20)));     // → *(u8*)(&var_20 + v12)（已完成）
-v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // v14 应声明为 uint8（待做）
+v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …（已完成）
 ```
 
-1. ~~基址常量 + 立即数常量合并成一次地址~~（已完成，见上）。
-2. ~~栈区的下标访问~~（已完成，见上）。
-3. **字节宽度变量（未做）**：变量只被 `mov r8b, …` 一类指令写过时，宽度推断仍保留 64 位
-   父寄存器，逐条打印 `(v & 0xffff…ff00) | (uint8)(…)`。按"所有写都是同宽低位写"判定即可
-   降为 `uint8`/`uint16`，与源码的 `unsigned char v` 对应；注意部分写（`dl ^= x`）与
-   复合赋值（`v += 1`）要一起处理。
+1. ~~基址常量 + 立即数常量合并成一次地址~~（已完成）。
+2. ~~栈区的下标访问~~（已完成）。
+3. ~~字节宽度变量~~（已完成）：声明宽度取"所有读的最大宽度"，定义更宽不撑大声明（赋值
+   会像寄存器写一样截断）；部分写不再被当成全宽读；冗余转换一并去掉。
 
-验收：crackme `main` 的 L2 里不再出现 `0xffffffffffffff00` 掩码与逐位拼装；notepad/crackme
-的 lint 仍 0 findings，789 张 golden 的 diff 逐条可解释。
+## 1.6 静态 CRT 函数命名（当前最大缺口）
+
+`crackme main` 里 `sub_140004cc4`（puts / printf）、`sub_140016b60`（strcmp）、
+`sub_140016be0`（strlen）、`sub_140004bd4`（fgets）、`sub_140006fd0`（strpbrk）、
+`sub_140004580`（`__acrt_iob_func`）、`sub_1400049f8`（fflush）都还是地址名。IDA 靠
+FLIRT 签名解决；本仓库目前只有用户原型（`scripts/case-crackme.ps1` 的原型表）。
+
+可用的通用信号（按可靠度）：
+
+1. **变参入口**（已实现）：入口把 rcx/rdx/r8/r9 存进 home area 的函数是 printf 家族；
+   若 `va_start` 之后把格式串传给另一个变参函数，它就是 `printf`/`vfprintf`。
+2. **单字符串实参 + 返回被忽略 + 体里调用 printf 家族**：`puts`（常实现为
+   `printf("%s\n", s)` 或 `fputs`+`putc('\n')`）。
+3. **体是纯循环扫描、按字节比较、无外部调用**：`strlen`/`strcmp`/`strpbrk` 一类；结合
+   SIMD（`pcmpeqb`/`pmovmskb`）与返回值形状（长度 vs 指针 vs 0/1）区分。
+4. **`__acrt_iob_func` 模式**：`mov ecx, 1; call X; mov rcx, rax` 之后调用 `fwrite`/`fputs`
+   的，是 `stdout` 的包装（`puts`/`printf` 的实现细节）。
+
+验收：`recraft-cli decompile .tmp/crackme.rcraft --addr 0x140001010 --l2` 不再出现
+`sub_1400…` 调用名（除真正的用户函数）；lint 五套 0 findings；golden 的 diff 逐条可解释
+（命名只改函数名，不改结构）。
+
 
 ## 2. 次要候选（收益小、风险低）
 

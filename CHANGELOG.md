@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A variadic call takes its argument count from the format string, and L2 locals are declared
+  at the width they are read.** `printf("Enter flag: ")` printed the leftover `rdx, r8, r9`
+  registers the call site had loaded for the ABI, and the verify loop's byte accumulator came
+  out as `uint64 v13` built by masks (`v13 = (v13 & 0xffff…ff00) | (uint8)(…)`). Two changes
+  close both: `is_variadic_target` recognises a variadic callee by the MSVC prologue that
+  spills all four argument registers into the caller's home area (`va_start` reads them back),
+  and `trim_variadic_calls` then keeps exactly the `1 + <conversions>` arguments a literal
+  format string consumes (`*` width/precision and `%%` included); in `variables.rs` the
+  declaration width now comes from the widest **read** (a definition may be wider — the
+  compiler works in a 32/64-bit register — and narrowing truncates exactly as the register
+  write did), a partial write no longer counts as a full-width read, and redundant
+  register-width casts are dropped (`v = (uint32)(x)` into a same/wider local becomes `v = x`,
+  `v = (uint32)((uint32)v & 0xf)` becomes `v &= 0xf`). `crackme main` now reads
+  `uint8 v13; … v13 = *(u8*)(&var_20 + v11); v13 ^= byte_140018368[v12]; v13 += (uint8)v11;
+  if (v13 != byte_1400183a0[v10]) …` and calls `sub_140001170("Enter flag: ")`. L1 changed in
+  one snapshot (crackme `main`); notepad/corpus/corpus86/go are unchanged. lint is 0 findings
+  on all five projects, 789 golden snapshots verified, five new unit tests.
 - **A constant image base folds into the address it is added to, and the address reads as an
   array subscript.** `crackme main`'s verify loop printed `v3 = 0x140000000;` above the loop
   and `*(u8*)(((i + v3) + 0x18380))` inside it, so the three flag tables never got names.
