@@ -154,6 +154,26 @@ advapi32 125 个（93.3%）——比例与 crackme（91.9%）相当，说明剩�
 - 五套 golden 的 diff 逐条可解释（`tests/golden/{notepad,crackme,corpus,corpus86,go}`，
   合计 785 个函数）。
 
+### 1.0 已确认的发射器 bug：循环体落空时没有 `break`（2026-11-06 实测）
+
+`sub_14000647c`（notepad，1 处 goto）暴露出一个**语义错误**：内层 `while (1)` 的闩锁块
+（`cmp rcx, rdi; jb header`）在"不跳回"时落到 `jmp 0x14000653f`（释放路径），但发射器把
+循环的 exit 选成了**另一条**出口（`jne` 的目标 = 找到路径），于是循环体落空后直接接上了
+找到路径，等于把原来的"退出循环"编译成了"再循环一次"。同类形状在 crackme 21 张、
+notepad 25 张快照里都存在（`sub_140001a14` 缺 `al = 1; return;`、`sub_1400025ec` 缺整段
+`loc_ADDR:` 代码），即**当前输出在这些函数上是死循环/丢代码**。
+
+**试过的修法（已回退，勿直接重试）**：在 `emit_linear` 的 `stop.contains(&current)` 早退处，
+若当前块在循环体外则补 `break;`（等于 loop exit）或 `goto loc_…;`（其他目标）。语义变正确了，
+但**结构化率下降**：crackme 455→437（91.9%→88.3%）、notepad 487→477（96.2%→94.3%），
+goto 与标签同时变多——因为新增的 `goto` 让外层区域失去可规约形状，emit_leftovers 又把块搬走。
+
+**下一步的正确方向**：在 `emit_unstructured_loop` 里先把"闩锁块的 not-taken 出口"选为 loop
+exit（而不是"body 里第一个外部后继"），再让 `emit_linear` 只对**非 exit** 的落空目标补 `goto`；
+这样 `break` 走的是真正的落空出口，另一条出口（找到路径）作为标签块留在原地，
+既修语义又不破坏外层结构。验收：上面两个函数补回缺失语句、crackme/notepad 结构化率不下降、
+lint 五套 0 findings。
+
 ## 1.1 实现地图（代码位置）
 
 - `crates/recraft-decompile/src/structuring.rs`
