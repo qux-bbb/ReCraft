@@ -681,6 +681,10 @@ enum AiMessage {
     Reasoning(String),
     /// One tool call the agent made (shown in the tool trace).
     AgentTool(String),
+    /// A model turn started (deltas after it belong to the same turn).
+    AgentTurnStart,
+    /// The deltas since AgentTurnStart were narration before tool calls: drop them.
+    AgentRetract,
     /// The agent's conversation after a turn (kept for follow-up questions).
     AgentHistory(Vec<recraft_ai::ChatMessage>),
     Done(std::result::Result<String, String>),
@@ -1281,6 +1285,9 @@ pub struct ReCraftApp {
     ai_agent_trace: Vec<String>,
     /// Conversation with the agent, kept so a follow-up question continues it.
     ai_agent_history: Vec<recraft_ai::ChatMessage>,
+    /// Character offset in i_explanation where the current model turn started; a turn
+    /// that ends in tool calls retracts the narration it streamed.
+    ai_agent_turn_mark: Option<usize>,
     ai_job: Option<AiJob>,
     ai_sidebar: bool,
     ai_sidebar_width: f32,
@@ -1385,6 +1392,7 @@ impl Default for ReCraftApp {
             ai_agent_question: String::new(),
             ai_agent_trace: Vec::new(),
             ai_agent_history: Vec::new(),
+            ai_agent_turn_mark: None,
             ai_job: None,
             ai_sidebar: true,
             ai_sidebar_width: 360.0,
@@ -2629,6 +2637,29 @@ impl ReCraftApp {
                         &[("count", &self.ai_agent_trace.len().to_string())],
                     );
                 }
+                Ok(AiMessage::AgentTurnStart) => {
+                    received = true;
+                    self.ai_agent_turn_mark = Some(
+                        self.ai_explanation
+                            .as_ref()
+                            .map_or(0, |text| text.chars().count()),
+                    );
+                }
+                Ok(AiMessage::AgentRetract) => {
+                    received = true;
+                    if let Some(mark) = self.ai_agent_turn_mark.take()
+                        && let Some(text) = self.ai_explanation.clone()
+                    {
+                        let head: String = text.chars().take(mark).collect();
+                        let tail: String = text.chars().skip(mark).collect();
+                        if !tail.trim().is_empty() {
+                            // Keep the narration as trace context instead of dropping it.
+                            self.ai_agent_trace
+                                .push(format!("… {}", recraft_ai::truncate_text(tail.trim(), 160)));
+                        }
+                        self.ai_explanation = (!head.is_empty()).then_some(head);
+                    }
+                }
                 Ok(AiMessage::AgentHistory(history)) => {
                     self.ai_agent_history = history;
                     received = true;
@@ -2928,11 +2959,21 @@ impl ReCraftApp {
                         &mut history,
                         &question,
                         recraft_ai::AGENT_MAX_ROUNDS,
-                        &mut |event| {
-                            if let recraft_ai::AgentEvent::Tool { name, arguments } = event {
+                        &mut |event| match event {
+                            recraft_ai::AgentEvent::Tool { name, arguments } => {
                                 let _ = sender
                                     .send(AiMessage::AgentTool(format!("{name} {arguments}")));
                             }
+                            recraft_ai::AgentEvent::TurnStart => {
+                                let _ = sender.send(AiMessage::AgentTurnStart);
+                            }
+                            recraft_ai::AgentEvent::Delta(chunk) => {
+                                let _ = sender.send(AiMessage::Chunk(chunk));
+                            }
+                            recraft_ai::AgentEvent::Retract => {
+                                let _ = sender.send(AiMessage::AgentRetract);
+                            }
+                            recraft_ai::AgentEvent::Answer(_) => {}
                         },
                     )
                     .map_err(|error| error.to_string())
@@ -11096,6 +11137,44 @@ mod tests {
         assert!(app.ai_job.is_none());
     }
 
+    /// Narration streamed before a tool call is dropped from the answer and kept as trace
+    /// context, so a Chinese answer never starts with "I'll look for…".
+    #[test]
+    fn agent_narration_is_retracted_into_the_trace() {
+        let (sender, receiver) = mpsc::channel();
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+                kind: AiJobKind::Agent,
+                prompt: None,
+                target: None,
+                suggestions: Vec::new(),
+            }),
+            ..ReCraftApp::default()
+        };
+        sender.send(AiMessage::AgentTurnStart).unwrap();
+        sender
+            .send(AiMessage::Chunk("I'll look for logging APIs.".to_owned()))
+            .unwrap();
+        sender.send(AiMessage::AgentRetract).unwrap();
+        sender.send(AiMessage::AgentTurnStart).unwrap();
+        sender
+            .send(AiMessage::Chunk("答案：会写日志。".to_owned()))
+            .unwrap();
+        sender
+            .send(AiMessage::Done(Ok("答案：会写日志。".to_owned())))
+            .unwrap();
+        app.tick();
+        assert_eq!(app.ai_explanation.as_deref(), Some("答案：会写日志。"));
+        assert!(
+            app.ai_agent_trace
+                .iter()
+                .any(|line| line.starts_with('…') && line.contains("logging")),
+            "narration missing from the trace: {:?}",
+            app.ai_agent_trace
+        );
+    }
     /// The agent job streams tool-call lines into the trace and its final answer into the
     /// result pane as prose (no pseudo-C colouring).
     #[test]
