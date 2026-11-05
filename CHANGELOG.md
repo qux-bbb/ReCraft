@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A variadic call's leftover arguments are no longer parameters of the caller, and a
+  constant folded into an argument no longer leaves its setup line behind.** `main`'s
+  signature was `(int64 arg1, int64 arg2, int64 arg3, int64 arg4)` because `recover_l2` saw
+  `rdx`/`r8`/`r9` consumed by `printf("Enter flag: ", rdx, r8, r9)` — values the call site
+  had loaded for the ABI, not arguments of the source function. `scan_incoming_args` now
+  counts a variadic callee's arguments from its format string (`1 + conversions`, falling back
+  to the callee's own count when the first argument is not a literal), so `crackme main` reads
+  `int32 sub_140001010(void)` like the source's `int main(void)`, and its caller prints the
+  setup explicitly (`r8 = rdi; rdx = rbx; sub_140001010(*(u32*)(rax));`). Comparing the L2
+  signatures of all 495 crackme and 506 notepad functions, only `main` changed. Separately, a
+  dead-write sweep now drops an argument setup whose constant the next call already spells
+  (`ecx = 0; call(0)` → `call(0)`, `edx = 0; ecx = 0; sub(0, 0, 0, 0)` → `sub(0, 0, 0, 0)`),
+  which removed 1–2 lines from 27 crackme/notepad functions. lint is 0 findings on all five
+  projects, all 789 golden snapshots are verified, and the 211 decompiler tests pass.
 - **A variadic call takes its argument count from the format string, and L2 locals are declared
   at the width they are read.** `printf("Enter flag: ")` printed the leftover `rdx, r8, r9`
   registers the call site had loaded for the ABI, and the verify loop's byte accumulator came
