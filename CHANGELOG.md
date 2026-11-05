@@ -273,6 +273,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and keeps explanation reports a single plain section. The copy button still copies the
   unmodified text, and the layout wraps at the pane width as before.
 
+### Fixed
+
+- **A `...` in a user prototype is no longer parsed as a parameter.** Naming a variadic
+  helper (`int printf(const char* format, ...)`) added a second, default-typed parameter, so
+  every call site grew an argument the source never passes
+  (`printf((char*)"Enter flag: ", v3);`, where `v3` was the call site's leftover `rdx`). The
+  phantom argument also pulled `rdx` into the value flow and expanded the verify loop's byte
+  updates into one long mask expression (`v3 = (((...) & 0xffffffffffffff00) | ...)`). The
+  marker is now skipped, the prototype keeps one parameter, and the call reads
+  `printf((char*)"Enter flag: ");` with the loop back to `v13 = …; v13 ^= …; v13 += …;`. The
+  demo script's prototype table was also corrected against the challenge's real source
+  (`src/crackme.c`): `0x140001170` is `printf` (not `puts`), `0x140004cc4` is `puts` (not
+  `printf`) and `0x140006fd0` is `strpbrk` (not `strchr`). One unit test was added; lint is 0
+  findings on all five projects and the 789 golden snapshots are unchanged.
+
 ### Changed
 
 - **The Graph overview behaves like IDA's: it exists only while a graph is displayed.** It
