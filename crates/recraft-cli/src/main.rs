@@ -62,6 +62,9 @@ enum AiCommand {
         /// Write the proposals JSON to this file for review/apply.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Ask the configured LLM provider for the names (evidence-only by default).
+        #[arg(long)]
+        llm: bool,
     },
     /// Sample triage: API categories, suspicious functions, URLs.
     Triage {
@@ -1502,7 +1505,8 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             json,
             limit,
             out,
-        } => cmd_ai_suggest(&project, json, limit, out.as_deref()),
+            llm,
+        } => cmd_ai_suggest(&project, json, limit, out.as_deref(), llm),
         AiCommand::Triage { project, json } => cmd_ai_triage(&project, json),
         AiCommand::Apply { project, file, yes } => cmd_ai_apply(&project, &file, yes),
         AiCommand::Query {
@@ -1543,7 +1547,6 @@ fn require_ai_provider(operation: &str) -> Result<recraft_ai::ProviderSettings> 
 }
 
 fn cmd_ai_query(project: &Path, text: &str, as_json: bool) -> Result<()> {
-    require_ai_provider("ai query")?;
     let mut session = Session::open(project)?;
     let answer = recraft_ai::answer_query(&mut session, text)?;
     if as_json {
@@ -1748,14 +1751,14 @@ fn cmd_ai_explain(
     llm: bool,
     no_cache: bool,
 ) -> Result<()> {
-    require_ai_provider("ai explain")?;
     let mut session = Session::open(project)?;
     let addr = match addr {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
     if llm {
-        let settings = recraft_ai::ProviderSettings::from_env();
+        // The offline report needs no provider; only the model path does.
+        let settings = require_ai_provider("ai explain")?;
         let mut provider = recraft_ai::provider_from_settings(&settings);
         let prompt = recraft_ai::build_explain_prompt(&mut session, addr, &settings)?;
         let template = recraft_ai::PROMPT_TEMPLATE_VERSION;
@@ -1870,10 +1873,29 @@ fn cmd_ai_explain(
     Ok(())
 }
 
-fn cmd_ai_suggest(project: &Path, as_json: bool, limit: usize, out: Option<&Path>) -> Result<()> {
-    require_ai_provider("ai suggest")?;
+fn cmd_ai_suggest(
+    project: &Path,
+    as_json: bool,
+    limit: usize,
+    out: Option<&Path>,
+    llm: bool,
+) -> Result<()> {
     let mut session = Session::open(project)?;
-    let proposals = recraft_ai::suggest_names(&mut session, limit)?;
+    let mut proposals = recraft_ai::suggest_names(&mut session, limit)?;
+    if llm && !proposals.is_empty() {
+        // The evidence-based proposals need no provider; only the model path does.
+        let settings = require_ai_provider("ai suggest")?;
+        let mut provider = recraft_ai::provider_from_settings(&settings);
+        let candidates: Vec<Address> = proposals.iter().map(|proposal| proposal.target).collect();
+        let prompt = recraft_ai::build_rename_prompt(&mut session, &candidates, &settings)?;
+        let reply = provider.complete(&prompt)?;
+        let updated = recraft_ai::apply_rename_reply(&mut proposals, &reply);
+        if updated == 0 {
+            eprintln!(
+                "warning: the model reply had no usable names; keeping the evidence-based proposals"
+            );
+        }
+    }
     let values: Vec<Value> = proposals
         .iter()
         .map(|proposal| proposal.to_json())
@@ -1910,7 +1932,6 @@ fn cmd_ai_suggest(project: &Path, as_json: bool, limit: usize, out: Option<&Path
 }
 
 fn cmd_ai_triage(project: &Path, as_json: bool) -> Result<()> {
-    require_ai_provider("ai triage")?;
     let mut session = Session::open(project)?;
     let triage = recraft_ai::triage(&mut session)?;
     if as_json {

@@ -15,8 +15,10 @@ corpus 基准：语义覆盖 97.4%、结构化成功率 100%；真实样本（no
 
 ## 3. AI 会把我的样本/伪代码发到云端吗？
 
-默认**不联网**：AI 功能需要先显式配置 provider（DeepSeek / OpenCode Go / 自定义
-OpenAI 兼容端点）、endpoint 和 API key，否则解释/建议/查询/润色都会提示先配置；
+默认**不联网**：只有真正调用模型的路径才需要先显式配置 provider（DeepSeek / OpenCode Go /
+自定义 OpenAI 兼容端点）、endpoint 和 API key——GUI 的**解释**/**建议命名**/**润色**三个按钮，
+以及 CLI 的 `ai explain --llm`、`ai suggest --llm`、`ai polish`；未配置时会提示先配置。
+CLI 不带 `--llm` 的 `ai explain`/`ai suggest` 与 `ai query`/`ai triage` 全程本地。
 配置后发送前仍会经过脱敏（URL/IP/邮箱）与 token 预算裁剪，并且可以用
 `recraft-cli ai prompt` 先审阅。详见 [docs/AI.md](AI.md)。
 

@@ -115,11 +115,12 @@ applied 3 proposal(s) through the command bus (undoable)
    引用出去）、Type（`c` call、`j` jump、`o` offset、`r` read、`w` write）、Address
    （`main:loc_1400010b9`）、Text（引用处指令，字符串以 `; 'flag{…}'` 附在行尾）**；
    单击选中、双击或 `OK`/Enter 跟随并关闭、`Cancel`/Esc 关闭，`Search` 过滤，`Help` 显示类型图例。
-5. 左侧 **AI** 页签 → **Suggest names**：列出 `置信度 地址 → 名称` 与证据地址；
-   选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），证据链接可跳转。
+5. 左侧 **AI** 页签 → **Suggest names**：把有证据的 `sub_*` 候选交给模型命名，列出
+   `置信度 地址 → 名称` 与证据地址；选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），
+   证据链接可跳转。
    **Query** 可输入 `urls` / `callers of CreateFileW` / `text http` 做离线检索（点击结果跳转）；
-   **Explain** 离线解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量
-   （保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），启用后 **Polish** 在后台线程润色。
+   **Explain** 走模型解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量
+   （保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），启用后 **Polish** 也在后台线程润色。
 6. **Strings/Imports** 页签与 **`X`** 交叉引用对话框展示引用与 API 分类；UI 支持 EN/zh-CN 切换。
 
 ## 对接 MCP 客户端

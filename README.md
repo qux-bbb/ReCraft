@@ -220,14 +220,17 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 
 ### AI 辅助
 
-离线（无网络）解释、重命名建议和样本初筛；提议携带证据地址，并且只能通过日志命令
-总线应用。GUI 的 **AI 侧栏**可以配置可选的 LLM provider（endpoint/model/API-key 环境
-变量，持久化到 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），并运行
-**解释**/**润色**，无需任何 CLI 配置：
+CLI 的 `ai explain`/`ai suggest` 默认离线（无网络）生成证据报告与命名建议，加 `--llm` 才把
+脱敏 prompt 交给模型；样本初筛始终离线。提议携带证据地址，并且只能通过日志命令总线应用。
+GUI 的 **AI 侧栏**配置 provider（endpoint/model/API-key，持久化到
+`%LOCALAPPDATA%\ReCraft\ai-settings.json`）后，**解释**/**建议命名**/**润色** 三个动作都走
+模型：
 
 ```powershell
 cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry
+cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry --llm   # 走模型
 cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json
+cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json --llm
 cargo run -p recraft-cli -- ai triage notepad.rcraft
 cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # undoable
 ```

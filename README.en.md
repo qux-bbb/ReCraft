@@ -225,15 +225,18 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft
 
 ### AI assist
 
-Provider-backed explanation, rename proposals and sample triage; proposals carry
-evidence addresses and are only applied through the journaled command bus. The GUI's **AI**
-sidebar can configure the optional LLM provider (endpoint/model/API-key env var, persisted to
-`%LOCALAPPDATA%\ReCraft\ai-settings.json`) and run **Explain**/**Polish** without any CLI
-configuration:
+The CLI builds explanations and rename proposals offline by default and only sends the
+redacted prompt with `--llm`; sample triage is always offline. Proposals carry evidence
+addresses and are only applied through the journaled command bus. After the GUI's **AI**
+sidebar configures a provider (endpoint/model/API-key, persisted to
+`%LOCALAPPDATA%\ReCraft\ai-settings.json`), **Explain**, **Suggest names** and **Polish** all
+call the model:
 
 ```powershell
 cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry
+cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry --llm
 cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json
+cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json --llm
 cargo run -p recraft-cli -- ai triage notepad.rcraft
 cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # undoable
 ```

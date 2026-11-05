@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The AI panel's Explain and Suggest names actions now ask the model.** Both looked
+  model-backed (they were gated on a configured provider) but only formatted local evidence,
+  so nothing left the process. Explain now builds the same redacted prompt as
+  `ai explain --llm` and streams a prose answer into the result pane; Suggest names feeds
+  the evidence-backed `sub_*` candidates to the rename prompt and parses the reply's
+  `0xADDR name -- rationale` lines back into proposals — unmatched candidates keep their
+  evidence-based fallback name, evidence addresses stay linked, confidence is lifted to at
+  least 0.7, and an unusable reply keeps the local list and says so. Both run on a worker
+  thread with the shared direct-answer token ceiling (8k on OpenCode Go), so the panel never
+  blocks. The rename template is now `rename-v2` with a strict line contract (parsed by
+  `parse_rename_reply` / `apply_rename_reply`, unit-tested offline), the CLI gained
+  `ai suggest --llm`, and `PROMPT_TEMPLATE_VERSION` is `rc-ai-2026-11-v1`, so cached
+  responses from the previous template miss once and are rewritten.
 - The AI panel has a **Re-polish** button once a polish answer is on screen. The panel's
   `PromptCache` normally answers a repeated Polish instantly with the same text, which made
   a second attempt on the same function look like a dead button. Re-polish rebuilds the

@@ -682,10 +682,25 @@ enum AiMessage {
     Done(std::result::Result<String, String>),
 }
 
+/// Which request a background AI job runs; the completion path differs per kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiJobKind {
+    /// Prose explanation shown in the result pane.
+    Explain,
+    /// Rename proposals merged into the suggestions list.
+    Suggest,
+    /// Reconstructed C shown (and syntax-coloured) in the result pane.
+    Polish,
+}
+
 struct AiJob {
     receiver: mpsc::Receiver<AiMessage>,
     started: Instant,
+    kind: AiJobKind,
     prompt: Option<recraft_ai::PromptRequest>,
+    /// Evidence-based rename proposals a [`AiJobKind::Suggest`] job merges the model's
+    /// names into when the reply arrives.
+    suggestions: Vec<recraft_ai::Proposal>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1086,8 +1101,9 @@ enum Action {
 }
 
 /// OpenCode Go's gateway turns a 64k completion allowance into a very long first-token
-/// wait. Polish outputs are normally a few thousand tokens, so cap this gateway only.
-fn polish_token_limit(endpoint: &str, configured: usize) -> usize {
+/// wait. A direct answer (explanation, names, polished C) is normally a few thousand
+/// tokens, so cap this gateway only; an explicit thinking request keeps the full budget.
+fn direct_answer_token_limit(endpoint: &str, configured: usize) -> usize {
     if endpoint.contains("opencode.ai") {
         configured.min(8192)
     } else {
@@ -2521,50 +2537,85 @@ impl ReCraftApp {
         }
     }
 
-    /// Poll a background polish request (spawned by [`Action::AiPolish`]).
+    /// Poll the running AI request (explain / suggest names / polish).
     fn poll_ai_job(&mut self) {
         let Some(job) = self.ai_job.take() else {
             return;
         };
+        // A suggest reply is a list of rename lines, so its stream is not shown as prose.
+        let mut received = false;
         loop {
             match job.receiver.try_recv() {
                 Ok(AiMessage::Chunk(chunk)) => {
-                    self.ai_explanation
-                        .get_or_insert_with(String::new)
-                        .push_str(&chunk);
+                    received = true;
+                    if job.kind != AiJobKind::Suggest {
+                        self.ai_explanation
+                            .get_or_insert_with(String::new)
+                            .push_str(&chunk);
+                    }
                     self.ai_status = self.t("ui_streaming").to_owned();
                 }
                 Ok(AiMessage::Reasoning(chunk)) => {
+                    received = true;
                     self.ai_reasoning.push_str(&chunk);
                     self.ai_reasoning_open = true;
                     self.ai_status = self.t("ui_thinking").to_owned();
                 }
                 Ok(AiMessage::Done(Ok(text))) => {
                     let elapsed = job.started.elapsed().as_millis();
-                    if let Some(prompt) = job.prompt.as_ref() {
-                        self.ai_cache.insert(prompt, &text);
-                    }
-                    self.ai_explanation = Some(text);
-                    // A completed AI job is always a polish answer: pseudo-C, so the result
-                    // pane colours it like the Decompile view.
-                    self.ai_result_kind = AiResultKind::Code;
                     // Fold the chain-of-thought once the answer is complete.
                     self.ai_reasoning_open = false;
-                    self.ai_status = self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
+                    match job.kind {
+                        AiJobKind::Polish => {
+                            if let Some(prompt) = job.prompt.as_ref() {
+                                self.ai_cache.insert(prompt, &text);
+                            }
+                            self.ai_explanation = Some(text);
+                            self.ai_result_kind = AiResultKind::Code;
+                            self.ai_status =
+                                self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
+                        }
+                        AiJobKind::Explain => {
+                            self.ai_explanation = Some(text);
+                            // The model answers with prose, not pseudo-C: no syntax colours.
+                            self.ai_result_kind = AiResultKind::Prose;
+                            self.ai_status =
+                                self.t_args("ui_explain_done", &[("ms", &elapsed.to_string())]);
+                        }
+                        AiJobKind::Suggest => {
+                            let mut proposals = job.suggestions;
+                            let updated = recraft_ai::apply_rename_reply(&mut proposals, &text);
+                            self.ai_proposals = proposals;
+                            self.ai_selected = None;
+                            self.ai_status = if updated == 0 {
+                                self.t("ui_suggest_unparsed").to_owned()
+                            } else {
+                                self.t_args(
+                                    "ui_suggest_done",
+                                    &[
+                                        ("count", &updated.to_string()),
+                                        ("ms", &elapsed.to_string()),
+                                    ],
+                                )
+                            };
+                        }
+                    }
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Ok(AiMessage::Done(Err(error))) => {
                     self.ai_reasoning_open = false;
-                    self.ai_status = self.t_args("ui_polish_failed", &[("error", &error)]);
+                    let key = match job.kind {
+                        AiJobKind::Polish => "ui_polish_failed",
+                        AiJobKind::Explain => "ui_explain_failed",
+                        AiJobKind::Suggest => "ui_suggest_failed",
+                    };
+                    self.ai_status = self.t_args(key, &[("error", &error)]);
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    if self.ai_explanation.is_none()
-                        && self.ai_reasoning.is_empty()
-                        && job.started.elapsed().as_secs() >= 3
-                    {
+                    if !received && job.started.elapsed().as_secs() >= 3 {
                         self.ai_status = self.t_args(
                             "ui_waiting_for_first_token",
                             &[("seconds", &job.started.elapsed().as_secs().to_string())],
@@ -2574,11 +2625,146 @@ impl ReCraftApp {
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.ai_status = self.t("ui_polish_worker_stopped");
+                    self.ai_status = self.t("ui_ai_worker_stopped").to_owned();
                     return;
                 }
             }
         }
+    }
+
+    /// Provider settings for one request. The direct-answer path keeps a token ceiling so a
+    /// reasoning endpoint does not spend a minute of budget before its first content token;
+    /// an explicit thinking request keeps the configured budget.
+    fn ai_request_settings(&self) -> recraft_ai::ProviderSettings {
+        let mut settings = self.ai_settings.clone();
+        if !self.ai_thinking {
+            settings.max_tokens =
+                direct_answer_token_limit(&settings.endpoint, settings.max_tokens);
+        }
+        settings
+    }
+
+    /// Stream one prompt on a worker thread (HTTP never runs on the UI thread).
+    fn spawn_ai_job(
+        &mut self,
+        ctx: &egui::Context,
+        settings: recraft_ai::ProviderSettings,
+        prompt: recraft_ai::PromptRequest,
+        kind: AiJobKind,
+        suggestions: Vec<recraft_ai::Proposal>,
+    ) {
+        let (sender, receiver) = mpsc::channel();
+        // Only polished C is cached for the session; explanations and names are cheap to
+        // re-request and a rename makes an older answer misleading.
+        let job_prompt = (kind == AiJobKind::Polish).then(|| prompt.clone());
+        std::thread::spawn(move || {
+            let mut provider = recraft_ai::provider_from_settings(&settings);
+            let result = provider.complete_stream_with_reasoning(
+                &prompt,
+                &mut |chunk| {
+                    let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
+                },
+                &mut |reasoning| {
+                    let _ = sender.send(AiMessage::Reasoning(reasoning.to_owned()));
+                },
+            );
+            let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
+        });
+        self.ai_job = Some(AiJob {
+            receiver,
+            started: Instant::now(),
+            kind,
+            prompt: job_prompt,
+            suggestions,
+        });
+        self.ai_status = self.t("ui_calling_provider").to_owned();
+        self.set_status(self.ai_status.clone());
+        ctx.request_repaint();
+    }
+
+    /// Build the explanation prompt for the function under the cursor and stream the model's
+    /// answer into the result pane.
+    fn start_explain(&mut self, ctx: &egui::Context) {
+        if self.ai_job.is_some() {
+            return;
+        }
+        if !self.require_ai_provider() {
+            return;
+        }
+        let Some((start, _)) = self.current_function() else {
+            self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
+            return;
+        };
+        let settings = self.ai_request_settings();
+        let Some(session) = self.session.as_mut() else {
+            self.set_status(self.t("ui_open_a_project_first").to_owned());
+            return;
+        };
+        let prompt = match recraft_ai::build_explain_prompt(session, start, &settings) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        let prompt = if self.ai_thinking {
+            prompt.with_thinking()
+        } else {
+            prompt
+        };
+        self.ai_explanation = None;
+        // The model answers with prose: the result pane must not colour it as C.
+        self.ai_result_kind = AiResultKind::Prose;
+        self.ai_reasoning.clear();
+        self.ai_reasoning_open = self.ai_thinking;
+        self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Explain, Vec::new());
+    }
+
+    /// Ask the model to name the evidence-backed `sub_*` functions.
+    ///
+    /// The local `suggest_names` proposals supply the candidates, their evidence and their
+    /// fallback names; the reply only replaces names and rationales, so a partial answer
+    /// still leaves applicable proposals on screen.
+    fn start_suggest(&mut self, ctx: &egui::Context) {
+        if self.ai_job.is_some() {
+            return;
+        }
+        if !self.require_ai_provider() {
+            return;
+        }
+        let settings = self.ai_request_settings();
+        let Some(session) = self.session.as_mut() else {
+            self.set_status(self.t("ui_open_a_project_first").to_owned());
+            return;
+        };
+        let proposals = match recraft_ai::suggest_names(session, 50) {
+            Ok(proposals) => proposals,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        if proposals.is_empty() {
+            self.ai_status = self
+                .t("ui_no_suggestions_yet_run_analyze_then_press_suggest_names")
+                .to_owned();
+            return;
+        }
+        let candidates: Vec<Address> = proposals.iter().map(|proposal| proposal.target).collect();
+        let prompt = match recraft_ai::build_rename_prompt(session, &candidates, &settings) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        let prompt = if self.ai_thinking {
+            prompt.with_thinking()
+        } else {
+            prompt
+        };
+        self.ai_selected = None;
+        self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Suggest, proposals);
     }
 
     /// Build the polish prompt for the function under the cursor and start the model
@@ -2601,14 +2787,7 @@ impl ReCraftApp {
             self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
             return;
         };
-        let mut settings = self.ai_settings.clone();
-        // OpenCode Go allocates very long reasoning budgets when asked for 64k
-        // completion tokens; a polish answer is typically < 4k, and the high cap
-        // delays the first token by tens of seconds. Keep an 8k ceiling on the
-        // direct-answer path; an explicit thinking request needs the full budget.
-        if !self.ai_thinking {
-            settings.max_tokens = polish_token_limit(&settings.endpoint, settings.max_tokens);
-        }
+        let settings = self.ai_request_settings();
         let fingerprint = format!(
             "{}|{}|{}",
             settings.endpoint, settings.model, settings.max_tokens
@@ -2646,29 +2825,7 @@ impl ReCraftApp {
             self.set_status(self.ai_status.clone());
             return;
         }
-        let job_prompt = prompt.clone();
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut provider = recraft_ai::provider_from_settings(&settings);
-            let result = provider.complete_stream_with_reasoning(
-                &prompt,
-                &mut |chunk| {
-                    let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
-                },
-                &mut |reasoning| {
-                    let _ = sender.send(AiMessage::Reasoning(reasoning.to_owned()));
-                },
-            );
-            let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
-        });
-        self.ai_job = Some(AiJob {
-            receiver,
-            started: Instant::now(),
-            prompt: Some(job_prompt),
-        });
-        self.ai_status = self.t("ui_calling_provider").to_owned();
-        self.set_status(self.ai_status.clone());
-        ctx.request_repaint();
+        self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Polish, Vec::new());
     }
 
     /// Data row for the stored string at `index`, starting at `addr`.
@@ -7468,31 +7625,7 @@ impl ReCraftApp {
                     self.set_status(self.t("ui_cancelling").to_owned());
                 }
             }
-            Action::AiSuggest => {
-                if !self.require_ai_provider() {
-                    return;
-                }
-                let result = self
-                    .session
-                    .as_mut()
-                    .map(|session| recraft_ai::suggest_names(session, 50));
-                match result {
-                    Some(Ok(proposals)) => {
-                        self.ai_status = self.t_args(
-                            "ui_n_suggestions",
-                            &[("count", &proposals.len().to_string())],
-                        );
-                        self.ai_proposals = proposals;
-                        self.ai_selected = None;
-                        self.set_status(
-                            self.t("ui_ai_suggestions_ready_review_before_applying")
-                                .to_owned(),
-                        );
-                    }
-                    Some(Err(error)) => self.set_error(error),
-                    None => self.set_status(self.t("ui_no_project_2").to_owned()),
-                }
-            }
+            Action::AiSuggest => self.start_suggest(ctx),
             Action::AiApply => {
                 self.apply_ai_selection();
             }
@@ -7535,28 +7668,7 @@ impl ReCraftApp {
                     Err(error) => self.set_error(error),
                 }
             }
-            Action::AiExplain => {
-                if !self.require_ai_provider() {
-                    return;
-                }
-                let Some((start, _)) = self.current_function() else {
-                    self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
-                    return;
-                };
-                let Some(session) = self.session.as_mut() else {
-                    self.set_status(self.t("ui_open_a_project_first").to_owned());
-                    return;
-                };
-                match recraft_ai::explain(session, start) {
-                    Ok(explanation) => {
-                        self.ai_status = explanation.summary.clone();
-                        self.ai_explanation = Some(format_explanation(&explanation));
-                        // The offline explanation is a prose report, not pseudo-C.
-                        self.ai_result_kind = AiResultKind::Prose;
-                    }
-                    Err(error) => self.set_error(error),
-                }
-            }
+            Action::AiExplain => self.start_explain(ctx),
             Action::AiPolish => self.start_polish(ctx, true),
             Action::AiRepolish => self.start_polish(ctx, false),
             Action::TogglePalette => {
@@ -8234,40 +8346,6 @@ fn function_matches(filter: &str, start: Address, name: &str) -> bool {
         return true;
     }
     name.to_lowercase().contains(filter) || format!("{:#x}", start.get()).contains(filter)
-}
-
-/// Human-readable offline explanation shown in the AI panel.
-fn format_explanation(explanation: &recraft_ai::Explanation) -> String {
-    let name = explanation
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("sub_{:x}", explanation.start.get()));
-    let mut text = format!(
-        "{name}  {:#x}..{:#x}  {} insn(s)\n\n{}\n",
-        explanation.start.get(),
-        explanation.end.get(),
-        explanation.instructions,
-        explanation.summary
-    );
-    if !explanation.apis.is_empty() {
-        text.push_str("\nAPIs:\n");
-        for (addr, api, category) in &explanation.apis {
-            text.push_str(&format!("  {:#x}  {api}  [{category}]\n", addr.get()));
-        }
-    }
-    if !explanation.strings.is_empty() {
-        text.push_str("\nStrings:\n");
-        for (addr, value) in explanation.strings.iter().take(20) {
-            text.push_str(&format!("  {:#x}  {value}\n", addr.get()));
-        }
-    }
-    if !explanation.calls.is_empty() {
-        text.push_str("\nCalls:\n");
-        for (addr, callee) in &explanation.calls {
-            text.push_str(&format!("  {:#x}  {callee}\n", addr.get()));
-        }
-    }
-    text
 }
 
 fn xref_kind_name(kind: i64) -> &'static str {
@@ -10356,30 +10434,6 @@ mod tests {
     }
 
     #[test]
-    fn ai_explanation_formats_offline_report() {
-        let explanation = recraft_ai::Explanation {
-            name: Some("start".to_owned()),
-            start: Address::new(0x140001000),
-            end: Address::new(0x140001050),
-            instructions: 12,
-            apis: vec![(
-                Address::new(0x140001010),
-                "kernel32!VirtualAlloc".to_owned(),
-                "memory".to_owned(),
-            )],
-            strings: vec![(Address::new(0x140002000), "http://example.test".to_owned())],
-            calls: vec![(Address::new(0x140001020), "sub_140001100".to_owned())],
-            summary: "allocates memory then calls a helper".to_owned(),
-        };
-        let text = format_explanation(&explanation);
-        assert!(text.contains("0x140001000"));
-        assert!(text.contains("VirtualAlloc"));
-        assert!(text.contains("http://example.test"));
-        assert!(text.contains("sub_140001100"));
-        assert!(text.contains("allocates memory"));
-    }
-
-    #[test]
     fn ai_panel_renders_without_a_project() {
         let mut app = ReCraftApp::default();
         app.focus_pane(Pane::Ai);
@@ -10459,6 +10513,145 @@ mod tests {
                 || app.ai_status.to_lowercase().contains("configure"),
             "polish should ask for a provider: {}",
             app.ai_status
+        );
+        app.apply_action(&ctx, Action::AiSuggest);
+        assert!(
+            app.ai_status.to_lowercase().contains("provider")
+                || app.ai_status.to_lowercase().contains("configure"),
+            "suggest names should ask for a provider: {}",
+            app.ai_status
+        );
+        assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_explain_and_suggest_ask_the_model() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ai-jobs.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        app.refresh_functions();
+        app.tick();
+        if app.functions.is_empty() || app.disasm_rows.is_empty() {
+            return;
+        }
+        // A closed local port fails fast, so a job can be observed without a model.
+        app.ai_settings.endpoint = "http://127.0.0.1:1".to_owned();
+        app.ai_settings.model = "test-model".to_owned();
+        app.ai_settings.api_key = Some("test-key".to_owned());
+        app.ai_settings.refresh_enabled();
+        assert!(app.ai_settings.enabled);
+        let ctx = egui::Context::default();
+
+        // Explain asks the model instead of formatting the local report.
+        app.apply_action(&ctx, Action::AiExplain);
+        assert!(app.ai_job.is_some(), "explain must call the provider");
+        assert_eq!(app.ai_result_kind, AiResultKind::Prose);
+        assert!(
+            app.ai_explanation.is_none(),
+            "the explanation streams in later"
+        );
+        app.ai_job = None;
+
+        // Suggest names asks for names shaped like the local proposals (same targets).
+        let candidates = recraft_ai::suggest_names(app.session.as_mut().unwrap(), 50).unwrap();
+        if candidates.is_empty() {
+            return;
+        }
+        app.apply_action(&ctx, Action::AiSuggest);
+        assert!(
+            app.ai_job.is_some(),
+            "suggest names must call the provider: {}",
+            app.ai_status
+        );
+        assert!(
+            app.ai_proposals.is_empty(),
+            "proposals appear with the model's reply"
+        );
+        app.ai_job = None;
+    }
+
+    #[test]
+    fn ai_explain_job_result_is_prose() {
+        let (sender, receiver) = mpsc::channel();
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+                kind: AiJobKind::Explain,
+                prompt: None,
+                suggestions: Vec::new(),
+            }),
+            ..ReCraftApp::default()
+        };
+        sender
+            .send(AiMessage::Done(Ok(
+                "This function reads a configuration file.".to_owned(),
+            )))
+            .unwrap();
+        app.tick();
+        assert_eq!(
+            app.ai_explanation.as_deref(),
+            Some("This function reads a configuration file.")
+        );
+        assert_eq!(
+            app.ai_result_kind,
+            AiResultKind::Prose,
+            "an explanation is prose, not pseudo-C"
+        );
+        assert!(
+            app.ai_status.starts_with("explanation"),
+            "{}",
+            app.ai_status
+        );
+        assert!(app.ai_job.is_none());
+    }
+
+    #[test]
+    fn ai_suggest_job_merges_model_names() {
+        let (sender, receiver) = mpsc::channel();
+        let target = Address::new(0x140001000);
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+                kind: AiJobKind::Suggest,
+                prompt: None,
+                suggestions: vec![recraft_ai::Proposal {
+                    kind: recraft_ai::ProposalKind::Rename,
+                    target,
+                    value: "file_140001000".to_owned(),
+                    confidence: 0.5,
+                    rationale: "calls CreateFileW".to_owned(),
+                    evidence: Vec::new(),
+                }],
+            }),
+            ..ReCraftApp::default()
+        };
+        sender
+            .send(AiMessage::Done(Ok(format!(
+                "{:#x} open_config -- opens the configuration file",
+                target.get()
+            ))))
+            .unwrap();
+        app.tick();
+        assert_eq!(app.ai_proposals.len(), 1);
+        assert_eq!(app.ai_proposals[0].value, "open_config");
+        assert!(app.ai_proposals[0].confidence >= 0.7);
+        assert!(app.ai_status.starts_with("named"), "{}", app.ai_status);
+        assert!(
+            app.ai_explanation.is_none(),
+            "a rename reply is not shown as the result"
         );
         assert!(app.ai_job.is_none());
     }
@@ -11829,7 +12022,9 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
+                kind: AiJobKind::Polish,
                 prompt: None,
+                suggestions: Vec::new(),
             }),
             ..ReCraftApp::default()
         };
@@ -11887,7 +12082,9 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
+                kind: AiJobKind::Polish,
                 prompt: None,
+                suggestions: Vec::new(),
             }),
             ..ReCraftApp::default()
         };
@@ -11913,7 +12110,9 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
+                kind: AiJobKind::Polish,
                 prompt: None,
+                suggestions: Vec::new(),
             }),
             ai_thinking: true,
             ..ReCraftApp::default()
@@ -11949,13 +12148,16 @@ mod tests {
     }
 
     #[test]
-    fn opencode_polish_budget_is_capped() {
+    fn direct_answer_budget_is_capped_for_opencode() {
         assert_eq!(
-            polish_token_limit("https://opencode.ai/inference/go/openai", 65536),
+            direct_answer_token_limit("https://opencode.ai/inference/go/openai", 65536),
             8192
         );
-        assert_eq!(polish_token_limit("https://api.deepseek.com", 65536), 65536);
-        assert_eq!(polish_token_limit("https://opencode.ai", 2048), 2048);
+        assert_eq!(
+            direct_answer_token_limit("https://api.deepseek.com", 65536),
+            65536
+        );
+        assert_eq!(direct_answer_token_limit("https://opencode.ai", 2048), 2048);
     }
 
     #[test]

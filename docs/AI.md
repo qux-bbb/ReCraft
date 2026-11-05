@@ -1,7 +1,8 @@
 # AI assist（M3）
 
-DESIGN §9 的 AI 层分两半：**确定性的离线能力** 与 **可插拔 LLM**。本里程碑先交付离线
-能力 + 写操作协议；LLM provider（OpenAI 兼容 / 本地 Ollama）之后接入同一套 Proposals。
+DESIGN §9 的 AI 层分两半：**确定性的离线能力**（解释证据、命名候选、样本初筛）与
+**可插拔 LLM**（解释、命名、润色的最终产出）。离线证据负责“选哪个函数、凭什么”，模型
+负责措辞与命名，两条路径共用同一套 `Proposal` 协议与 prompt 层。
 
 核心原则（DESIGN §9.1）：**LLM/启发式只能产生 `Proposal`，禁止静默改库**。Proposal 必须带
 证据地址与置信度，用户 review 后经 `Command` 总线（journaled、可 undo）应用。
@@ -9,11 +10,12 @@ DESIGN §9 的 AI 层分两半：**确定性的离线能力** 与 **可插拔 LL
 ## 命令
 
 ```powershell
-# 函数解释：API 标签、引用字符串、直接调用、指令数（离线，无网络）
-recraft-cli ai explain notepad.rcraft --addr entry [--json]
+# 函数解释：API 标签、引用字符串、直接调用、指令数；--llm 时把脱敏 prompt 交给模型
+recraft-cli ai explain notepad.rcraft --addr entry [--json] [--llm]
 
-# 命名建议：只针对 sub_* 函数，输出 Proposal（证据 + 置信度 + 理由），不修改项目
-recraft-cli ai suggest notepad.rcraft [--limit 20] [--json] [--out proposals.json]
+# 命名建议：只针对 sub_* 函数，输出 Proposal（证据 + 置信度 + 理由），不修改项目；
+# --llm 时由模型给出名字（回复按 `0xADDR name -- rationale` 解析）
+recraft-cli ai suggest notepad.rcraft [--limit 20] [--json] [--out proposals.json] [--llm]
 
 # 样本摘要：API 分类统计、可疑函数 top-N、URL
 recraft-cli ai triage notepad.rcraft [--json]
@@ -101,12 +103,16 @@ recraft-cli ai polish notepad.rcraft --addr entry [--json] [--no-cache]
 
 左侧新增 **AI** 页签：
 
-- **Suggest names**：调用 `suggest_names`，把 Proposal 列表展示为 `置信度 地址 -> 名称`，
-  下方显示理由与证据数量；证据链接可跳转到对应地址。
+- **Suggest names**：先用本地 `suggest_names` 选出有证据的 `sub_*` 候选（证据地址、置信度、
+  回退名字），再把候选的摘要/API/字符串按 rename prompt 交给已启用的 provider；模型按
+  `0xADDR name -- rationale` 逐行回答，解析后替换名字与理由，未命中的候选保留本地回退名。
+  结果显示为 `置信度 地址 -> 名称`，证据链接可跳转到对应地址。请求在后台线程流式执行，
+  UI 不阻塞；回复解析不出任何名字时提示并保留本地建议。
 - 单选 proposal → **Apply selected**：经 `Command` 总线执行（journaled，`Ctrl+Z` 可撤销），
   应用后从列表移除并刷新反汇编/函数列表。
-- **Explain**：离线解释当前光标所在函数（summary/API/字符串/调用），结果显示在面板内，
-  不依赖网络与配置。
+- **Explain**：把当前光标所在函数的摘要/API 标签/引用字符串/L2 伪代码组成脱敏 prompt，
+  交给已启用的 provider 流式解释，结果显示在面板内（prose，不做语法着色）；未配置
+  provider 时提示先配置。
 - **Query（离线 NL 查询）**：输入 `urls`、`callers of CreateFileW`、`text http` 等自然语言，
   复用 `answer_query` 意图解析；结果显示 kind/地址/文本与相关函数，点击条目反跳反汇编。
 - **Polish**：对当前函数构建润色 prompt 并调用已启用的 provider；未启用时提示先配置。
@@ -136,14 +142,16 @@ recraft-cli ai polish notepad.rcraft --addr entry
 recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 ```
 
-- **默认离线**：`ProviderSettings` 默认 `heuristic`/`disabled`；启用 HTTP provider 必须同时
-  设置 `RECRAFT_AI_PROVIDER=openai|ollama`、`RECRAFT_AI_ENDPOINT`，且
+- **默认未配置**：`ProviderSettings` 默认 `disabled`（无 endpoint / key）；启用 HTTP provider
+  必须同时设置 `RECRAFT_AI_PROVIDER=openai|ollama`、`RECRAFT_AI_ENDPOINT`，且
   `RECRAFT_AI_API_KEY`（变量名可配）非空，否则 `enabled=false`。UI 设置与文件配置同样遵守。
+  GUI 的 Explain / Suggest names / Polish 三个动作都要求已启用的 provider；CLI 的
+  `ai explain` / `ai suggest` 默认只跑本地证据，加 `--llm` 才发请求。
 - **持久化**：`ProviderSettings::save()` 写入 `%LOCALAPPDATA%\ReCraft\ai-settings.json`；
   `load()` 优先读该文件，缺省回退环境变量，并按当前环境重算 `enabled`。
 - **配置项**：`RECRAFT_AI_PROVIDER`、`RECRAFT_AI_ENDPOINT`、`RECRAFT_AI_MODEL`、
   `RECRAFT_AI_API_KEY_ENV`、`RECRAFT_AI_MAX_TOKENS`。
-- **桌面端内置模式**（AI 面板 → Provider settings）：`Offline`、`DeepSeek`、
+- **桌面端内置模式**（AI 面板 → Provider settings）：`DeepSeek`、
   `OpenCode Go`、`Custom OpenAI-compatible`。选内模式会自动填 endpoint 和模型列表；
   `API key` 输入框会**按当前用户加密保存**（Windows DPAPI，写入 `ai-settings.json`
   的 `api_key_sealed`；其他平台用 `plain:` 前缀的 base64 仅作混淆），点 **Save** 后下次
@@ -173,7 +181,8 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   并明确要求模型以分支目标为准，不要照抄伪代码的块顺序；当调用形状能唯一确定 CRT 函数时，
   允许把 `sub_XXX` 写成 `fgets`/`strcmp`/`strlen` 等规范名，并要求补齐 `extern` 声明。
   `build_explain_prompt`（函数摘要 +
-  API 标签 + 引用字符串 + L2 伪代码）与 `build_rename_prompt`（候选函数列表），都经过：
+  API 标签 + 引用字符串 + L2 伪代码）与 `build_rename_prompt`（候选函数的摘要 + API 标签 +
+  引用字符串，末尾给出 `0xADDR new_name -- rationale` 的行格式要求），都经过：
   - **脱敏**：URL → `<url>`、IPv4 → `<ip>`、邮箱 → `<email>`（`redact`，保留行结构）；
   - **token 预算**：约 4 字符/token，超限截断并标注 `…[truncated]`；
   - **缓存**：`PromptCache`（prompt hash → response）；**审计**：`AuditLog`
@@ -184,11 +193,11 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   `MockTransport` 用于无网络单测。
 - Provider：`OllamaProvider`（`POST /api/chat`, `stream:false`）与
   `OpenAiCompatibleProvider`（`POST {endpoint}/v1/chat/completions`，Bearer key 从
-  配置的环境变量读取）；`provider_from_settings` 在 disabled/heuristic 时返回
-  `HeuristicProvider`（拒绝假装是模型）。
+  配置的环境变量读取）；`provider_from_settings` 在未配置时返回 `UnavailableProvider`
+  （直接报 "no LLM provider configured"，不会假装是模型）。
 - 使用：`recraft-cli ai explain notepad.rcraft --addr entry --llm` 会在启用 provider 后把
-  脱敏 prompt 发送出去，并打印模型回答（`--json` 含 provider/tokens/response）；默认配置
-  下会明确报 "no LLM provider configured"。
+  脱敏 prompt 发送出去，并打印模型回答（`--json` 含 provider/tokens/response）；
+  `ai suggest --llm` 走同一条路，把模型回复解析成带证据的 rename Proposal。
 
 ## 结果缓存与审计（M3）
 
@@ -203,8 +212,12 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 
 ## Prompt 模板与评测基座（M3）
 
-- **模板版本**：`PROMPT_TEMPLATE_VERSION = "rc-ai-2026-10-v1"`；`EXPLAIN_SYSTEM` /
-  `RENAME_SYSTEM` 是导出的模板常量，改文案需同步 bump 版本与评测期望。
+- **模板版本**：`PROMPT_TEMPLATE_VERSION = "rc-ai-2026-11-v1"`；`EXPLAIN_SYSTEM` /
+  `RENAME_SYSTEM` 是导出的模板常量，改文案需同步 bump 版本与评测期望。`rename-v2` 要求模型
+  按 `0xADDR name -- rationale` 逐行回答，`parse_rename_reply` 解析（容忍列表符号、反引号、
+  代码围栏、缺省理由，丢弃非法标识符与重名），`apply_rename_reply` 把结果合并回本地
+  Proposal（未命中的候选保留回退名，证据地址不变，置信度抬到至少 0.7）。两条函数都有离线
+  单测，不需要模型。
 - **离线评测**（无需模型/网络）：`crates/recraft-ai/src/eval.rs`
   - `EVAL_VERSION = "prompt-eval-2026-10-v1"`，内置 corpus 用例（`field_probe`、
     `array_probe`、`str_probe`、`float_math`、`branchy`）；
@@ -225,6 +238,6 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
 - **网络可达性**：开发环境仅放行部分域名；TLS 栈通过 `https://crates.io/` 的忽略测试
   （`cargo test -p recraft-ai https_tls_handshake_to_crates_io -- --ignored`）验证，
   `api.openai.com` 在本环境不可达，未做端到端 OpenAI 账号测试。
-- 命名质量有限（类别前缀 + 地址）；接入 LLM 后应结合字符串/调用关系生成更自然的名字。
+- **命名质量取决于模型**：GUI 的 Suggest names 与 `ai suggest --llm` 都让模型基于证据起名，
+  仍可能给出与语义不符的名字，apply 前需要人工 review；离线回退名仍是「类别前缀 + 地址」。
 - 写工具仅 `rename`/`comment`；`set_prototype` / `define_function` / `apply_type` 尚未实现。
-- 自然语言查询（"找所有引用 URL 的函数"）与伪代码润色未实现。

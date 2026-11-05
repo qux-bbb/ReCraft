@@ -3,8 +3,8 @@
 
 //! AI assist layer (DESIGN §9.2/§9.3).
 //!
-//! This milestone ships the **deterministic, offline** half of the AI surface and the
-//! write protocol:
+//! Evidence gathering is deterministic and offline; only the provider layer touches the
+//! network:
 //!
 //! - `explain`  – function explanation built from API tags, referenced strings and call
 //!   edges (no network, no model).
@@ -14,8 +14,9 @@
 //! - `apply` – the only way a proposal reaches the project; it goes through the
 //!   `Command` bus (journaled, undoable). Nothing is ever changed silently.
 //!
-//! Pluggable LLM providers (OpenAI-compatible / local Ollama) will produce the same
-//! `Proposal` shape; the UI diff → manual confirm → apply path stays identical.
+//! The same evidence feeds the provider prompts (`build_explain_prompt`,
+//! `build_rename_prompt`, `build_polish_prompt`); model replies are parsed back into the
+//! same `Proposal` shape (`apply_rename_reply`), so confirm → apply stays identical.
 
 // DPAPI is the one OS FFI exception; it is isolated in `secret`.
 #![deny(unsafe_code)]
@@ -37,8 +38,9 @@ pub use provider::{
     AuditEntry, AuditLog, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS, EXPLAIN_SYSTEM, OPENCODE_GO_ENDPOINT,
     OPENCODE_GO_MODELS, OllamaProvider, OpenAiCompatibleProvider, POLISH_SYSTEM,
     PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest, Provider, ProviderKind, ProviderPreset,
-    ProviderSettings, RENAME_SYSTEM, TokenBudget, UnavailableProvider, build_explain_prompt,
-    build_polish_prompt, build_rename_prompt, provider_from_settings, redact,
+    ProviderSettings, RENAME_SYSTEM, RenameSuggestion, TokenBudget, UnavailableProvider,
+    apply_rename_reply, build_explain_prompt, build_polish_prompt, build_rename_prompt,
+    parse_rename_reply, provider_from_settings, redact,
 };
 pub use query::{QueryAnswer, QueryItem, answer_query};
 pub use transport::{

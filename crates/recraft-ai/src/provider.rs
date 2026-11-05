@@ -15,11 +15,13 @@
 //! - [`PromptCache`] and [`AuditLog`] are offline-safe bookkeeping structures used by
 //!   the future transport.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
+
+use crate::Proposal;
 
 /// Which provider backend a session is configured to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -446,17 +448,23 @@ impl PromptRequest {
 
 /// Version of the built-in prompt templates (bump whenever wording changes; the eval
 /// baseline and audit entries reference it).
-pub const PROMPT_TEMPLATE_VERSION: &str = "rc-ai-2026-10-v1";
+pub const PROMPT_TEMPLATE_VERSION: &str = "rc-ai-2026-11-v1";
 
 /// System prompt for function explanation (template `explain-v1`).
 pub const EXPLAIN_SYSTEM: &str = "You are ReCraft's reverse-engineering assistant. \
 Explain what the given function does in plain language. Use only the supplied evidence \
 (API calls, strings, pseudo-code); never invent behaviour. Mention uncertainty explicitly.";
 
-/// System prompt for rename proposals (template `rename-v1`).
+/// System prompt for rename proposals (template `rename-v2`). The reply contract is strict
+/// because [`parse_rename_reply`] turns it straight into rename proposals.
 pub const RENAME_SYSTEM: &str = "You are ReCraft's symbol-naming assistant. Propose concise \
-snake_case names for the listed functions. Base every suggestion on the supplied API \
-calls, strings and pseudo-code, and keep the evidence addresses in your rationale.";
+snake_case names for the listed functions. Base every suggestion only on the supplied API \
+calls, strings and pseudo-code; never invent evidence. Reply with exactly one line per \
+function, in the order given, in the form `<address> <name> -- <rationale>`: copy the address \
+verbatim from the input (`0x140001000`), write a bare lowercase C identifier for the name (no \
+quotes, no `sub_` prefix, no address suffix), and give a one-sentence rationale naming the \
+calls or strings that justify it. Output nothing else: no headings, no markdown, no \
+numbering, no blank lines.";
 
 /// System prompt for pseudo-code polishing (DESIGN §9.2: post-processing, never stored).
 pub const POLISH_SYSTEM: &str = "You are a reverse-engineering decompiler. Reconstruct the \
@@ -548,6 +556,10 @@ pub fn build_explain_prompt(
 }
 
 /// Build a naming prompt for up to `limit` candidate functions (typically `sub_*`).
+///
+/// Each candidate is described by its summary, API tags and referenced strings, so the
+/// model names it from evidence rather than from the address. The reply contract matches
+/// [`parse_rename_reply`].
 pub fn build_rename_prompt(
     session: &mut Session,
     candidates: &[Address],
@@ -565,8 +577,110 @@ pub fn build_rename_prompt(
         for (site, rule, _) in explanation.apis.iter().take(8) {
             user.push_str(&format!("  api {:#x} {rule}\n", site.get()));
         }
+        for (site, text) in explanation.strings.iter().take(4) {
+            user.push_str(&format!("  str {:#x} {}\n", site.get(), redact(text)));
+        }
     }
+    user.push_str("\nreply with one line per function: 0xADDR new_name -- rationale\n");
     Ok(PromptRequest::new(budget, RENAME_SYSTEM, &user))
+}
+
+/// One name the model proposed in reply to [`RENAME_SYSTEM`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameSuggestion {
+    pub target: Address,
+    pub name: String,
+    pub rationale: String,
+}
+
+/// Parse a reply that follows the rename contract (`0xADDR name -- rationale`).
+///
+/// Tolerant on purpose: bullets, backticks, code fences, a trailing colon after the name
+/// and an omitted rationale are accepted, and a line without a parsable address or
+/// identifier is skipped rather than failing the whole answer. A name repeated for two
+/// functions is dropped the second time, so applying the reply cannot create twins.
+pub fn parse_rename_reply(reply: &str) -> Vec<RenameSuggestion> {
+    let mut seen = BTreeSet::new();
+    let mut suggestions = Vec::new();
+    for raw in reply.lines() {
+        let line = raw.trim();
+        let line = line.trim_start_matches(['-', '*', '•', '·']).trim();
+        let line = line.trim_matches('`').trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("```") {
+            continue;
+        }
+        let (head, rationale) = match line.split_once("--") {
+            Some((head, rationale)) => (head.trim(), rationale.trim()),
+            None => (line, ""),
+        };
+        let mut parts = head.split_whitespace();
+        let Some(address) = parts.next() else {
+            continue;
+        };
+        let Some(name) = parts.next().and_then(normalize_identifier) else {
+            continue;
+        };
+        let Some(target) = crate::parse_address(address) else {
+            continue;
+        };
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        suggestions.push(RenameSuggestion {
+            target,
+            name,
+            rationale: rationale.to_owned(),
+        });
+    }
+    suggestions
+}
+
+/// Accept `name`, `` `name` ``, `name:` or `name,` and return a bare C identifier.
+fn normalize_identifier(word: &str) -> Option<String> {
+    let trimmed = word.trim_matches(|ch: char| {
+        matches!(ch, '`' | '"' | '\'' | ':' | ',' | '.' | ';' | '(' | ')')
+    });
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return None;
+    }
+    let mut chars = trimmed.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// Merge a model reply into locally built rename proposals and return how many changed.
+///
+/// Only the targets the model named are touched: its identifier replaces the heuristic
+/// one, its rationale replaces the padded evidence summary (the evidence addresses stay,
+/// so the panel still links into the listing), and confidence is lifted to at least 0.7
+/// because model and local evidence now agree. Unnamed proposals keep the heuristic name.
+pub fn apply_rename_reply(proposals: &mut [Proposal], reply: &str) -> usize {
+    let suggestions = parse_rename_reply(reply);
+    let mut updated = 0;
+    for proposal in proposals.iter_mut() {
+        let Some(suggestion) = suggestions
+            .iter()
+            .find(|suggestion| suggestion.target == proposal.target)
+        else {
+            continue;
+        };
+        proposal.value = suggestion.name.clone();
+        if !suggestion.rationale.is_empty() {
+            proposal.rationale = suggestion.rationale.clone();
+        }
+        proposal.confidence = proposal.confidence.max(0.7);
+        updated += 1;
+    }
+    updated
 }
 
 /// Build a pseudo-code polishing prompt from the function's L1 output. The result is a
@@ -1726,5 +1840,65 @@ mod tests {
     fn disabled_settings_select_the_unavailable_provider() {
         let provider = provider_from_settings(&ProviderSettings::default());
         assert_eq!(provider.name(), "unconfigured");
+    }
+
+    #[test]
+    fn rename_reply_parses_the_documented_line_format() {
+        let reply = "0x140001000 read_config -- calls CreateFileW and reads a path\n\
+                     - 0x140001200 `send_beacon` -- posts to a URL\n\
+                     0x140001300 not-an-identifier -- skipped\n\
+                     garbage line\n";
+        let suggestions = parse_rename_reply(reply);
+        assert_eq!(suggestions.len(), 2, "{suggestions:?}");
+        assert_eq!(suggestions[0].target, Address::new(0x140001000));
+        assert_eq!(suggestions[0].name, "read_config");
+        assert!(suggestions[0].rationale.contains("CreateFileW"));
+        assert_eq!(suggestions[1].name, "send_beacon", "backticks are stripped");
+        assert_eq!(suggestions[1].target, Address::new(0x140001200));
+    }
+
+    #[test]
+    fn rename_reply_rejects_bad_identifiers_and_duplicate_names() {
+        let reply = "0x1000 9lives -- starts with a digit\n\
+                     0x1000 -- no name\n\
+                     0x2000 valid_name -- ok\n\
+                     0x3000 valid_name -- duplicate name\n";
+        let suggestions = parse_rename_reply(reply);
+        assert_eq!(suggestions.len(), 1, "{suggestions:?}");
+        assert_eq!(suggestions[0].target, Address::new(0x2000));
+    }
+
+    #[test]
+    fn rename_reply_merges_model_names_into_evidence_proposals() {
+        let mut proposals = vec![crate::Proposal {
+            kind: crate::ProposalKind::Rename,
+            target: Address::new(0x140001000),
+            value: "file_140001000".to_owned(),
+            confidence: 0.5,
+            rationale: "calls CreateFileW; 1 string ref(s)".to_owned(),
+            evidence: vec![crate::Evidence {
+                addr: Address::new(0x140001010),
+                kind: "api_tag",
+                text: "CreateFileW".to_owned(),
+            }],
+        }];
+        let updated = apply_rename_reply(
+            &mut proposals,
+            "0x140001000 read_config_file -- opens the configuration path",
+        );
+        assert_eq!(updated, 1);
+        assert_eq!(proposals[0].value, "read_config_file");
+        assert_eq!(proposals[0].rationale, "opens the configuration path");
+        assert!(
+            proposals[0].confidence >= 0.7,
+            "model + evidence raises confidence: {}",
+            proposals[0].confidence
+        );
+        assert_eq!(proposals[0].evidence.len(), 1, "evidence addresses stay");
+
+        // A target the model skipped keeps its heuristic name.
+        let updated = apply_rename_reply(&mut proposals, "0xdead1234 unknown_name -- nope");
+        assert_eq!(updated, 0);
+        assert_eq!(proposals[0].value, "read_config_file");
     }
 }
