@@ -535,6 +535,20 @@ pub fn build_explain_prompt(
     let budget = TokenBudget::new(settings.max_tokens);
     let mut user = String::new();
     user.push_str(&format!("function: {}\n", explanation.summary));
+    // Who calls this function is often the strongest semantic hint ("called from the
+    // command-line handler"), and it costs a few lines.
+    if !explanation.callers.is_empty() {
+        user.push_str("callers:\n");
+        for (site, name) in explanation.callers.iter().take(8) {
+            user.push_str(&format!("- {:#x} in {name}\n", site.get()));
+        }
+    }
+    if !explanation.calls.is_empty() {
+        user.push_str("calls:\n");
+        for (site, name) in explanation.calls.iter().take(16) {
+            user.push_str(&format!("- {:#x} {name}\n", site.get()));
+        }
+    }
     user.push_str("api calls:\n");
     for (site, rule, category) in explanation.apis.iter().take(24) {
         user.push_str(&format!("- {:#x} {rule} [{category}]\n", site.get()));
@@ -547,7 +561,9 @@ pub fn build_explain_prompt(
     }
     let pseudo = recraft_decompile::pseudocode_l2(session, explanation.start)?;
     user.push_str("pseudo-code:\n");
-    for line in pseudo.lines.iter().take(80) {
+    // The old 80-line cap showed 2% of a large function; the budget below is the real
+    // limit and reports truncation.
+    for line in pseudo.lines.iter().take(400) {
         user.push_str(&line.text);
         user.push('\n');
     }
@@ -555,34 +571,150 @@ pub fn build_explain_prompt(
     Ok(PromptRequest::new(budget, EXPLAIN_SYSTEM, &user))
 }
 
+/// Upper bound on functions described in one naming request. Bodies make each block
+/// much larger than the old evidence-only text, so the budget does the real packing;
+/// this cap only keeps one click from decompiling an entire binary.
+const MAX_RENAME_CANDIDATES: usize = 32;
+
+/// Lines of pseudo-code shown per naming candidate.
+const RENAME_BODY_LINES: usize = 14;
+
+/// Functions larger than this are described by evidence only: decompiling a giant
+/// function for a 14-line excerpt costs more than the excerpt is worth.
+const RENAME_BODY_MAX_FUNCTION_BYTES: u64 = 16 * 1024;
+
 /// Build a naming prompt for up to `limit` candidate functions (typically `sub_*`).
 ///
-/// Each candidate is described by its summary, API tags and referenced strings, so the
-/// model names it from evidence rather than from the address. The reply contract matches
-/// [`parse_rename_reply`].
+/// Each candidate is described by its summary, API tags, referenced strings and a body
+/// excerpt, so the model names it from evidence rather than from the address. Candidates
+/// are packed until the token budget is 80% used: `TokenBudget::fit` would otherwise cut
+/// the list mid-candidate. The reply contract matches [`parse_rename_reply`].
 pub fn build_rename_prompt(
     session: &mut Session,
     candidates: &[Address],
     settings: &ProviderSettings,
 ) -> Result<PromptRequest> {
+    build_rename_prompt_impl(session, candidates, settings, false)
+}
+
+/// [`build_rename_prompt`] with each candidate's current symbol hidden. The
+/// naming-accuracy benchmark uses this so the model cannot read the answer it is
+/// being scored on.
+pub fn build_rename_prompt_blinded(
+    session: &mut Session,
+    candidates: &[Address],
+    settings: &ProviderSettings,
+) -> Result<PromptRequest> {
+    build_rename_prompt_impl(session, candidates, settings, true)
+}
+
+fn build_rename_prompt_impl(
+    session: &mut Session,
+    candidates: &[Address],
+    settings: &ProviderSettings,
+    blind: bool,
+) -> Result<PromptRequest> {
     let budget = TokenBudget::new(settings.max_tokens);
+    // ~4 characters per token; keep a fifth of the budget for the reply.
+    let max_chars = budget.max_tokens.saturating_mul(4) / 5 * 4;
     let mut user = String::from("propose names for these functions:\n");
-    for addr in candidates.iter().take(12) {
-        let explanation = crate::explain(session, *addr)?;
-        user.push_str(&format!(
+    for (included, addr) in candidates.iter().enumerate() {
+        if included >= MAX_RENAME_CANDIDATES {
+            break;
+        }
+        let explanation = crate::explain_with(session, *addr, blind)?;
+        // Decompiling every candidate happens on the caller's thread (the panel builds the
+        // prompt before spawning the request), so a 500 KB function would freeze the UI
+        // for half a second. Its API/string evidence still travels; the body does not.
+        let body = if explanation
+            .end
+            .get()
+            .saturating_sub(explanation.start.get())
+            <= RENAME_BODY_MAX_FUNCTION_BYTES
+        {
+            body_excerpt(session, explanation.start)
+        } else {
+            String::new()
+        };
+        let mut block = String::new();
+        block.push_str(&format!(
             "\n- {:#x}: {}\n",
             explanation.start.get(),
             redact(&explanation.summary)
         ));
         for (site, rule, _) in explanation.apis.iter().take(8) {
-            user.push_str(&format!("  api {:#x} {rule}\n", site.get()));
+            block.push_str(&format!("  api {:#x} {rule}\n", site.get()));
         }
         for (site, text) in explanation.strings.iter().take(4) {
-            user.push_str(&format!("  str {:#x} {}\n", site.get(), redact(text)));
+            block.push_str(&format!("  str {:#x} {}\n", site.get(), redact(text)));
         }
+        if !body.is_empty() {
+            block.push_str("  code:\n");
+            for line in body.lines() {
+                block.push_str("    ");
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+        if blind && let Some(name) = explanation.name.as_deref().filter(|name| !name.is_empty()) {
+            // Recursion prints the function's own name; scrub whole identifiers only so
+            // a string like "restart_service" is not mangled by the name "start".
+            let placeholder = format!("sub_{:x}", explanation.start.get());
+            block = scrub_identifier(&block, name, &placeholder);
+        }
+        if included > 0 && user.len() + block.len() > max_chars {
+            break;
+        }
+        user.push_str(&block);
     }
     user.push_str("\nreply with one line per function: 0xADDR new_name -- rationale\n");
     Ok(PromptRequest::new(budget, RENAME_SYSTEM, &user))
+}
+
+/// Replace whole identifier tokens only (`start` must not touch `restart_service`).
+fn scrub_identifier(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+        if !token.is_empty() {
+            if token == from {
+                out.push_str(to);
+            } else {
+                out.push_str(&token);
+            }
+            token.clear();
+        }
+        out.push(ch);
+    }
+    if !token.is_empty() {
+        if token == from {
+            out.push_str(to);
+        } else {
+            out.push_str(&token);
+        }
+    }
+    out
+}
+
+/// First [`RENAME_BODY_LINES`] lines of the L2 body (the signature line is redundant
+/// with the summary and would leak the current symbol to the blinded benchmark).
+fn body_excerpt(session: &mut Session, start: Address) -> String {
+    let Ok(pseudo) = recraft_decompile::pseudocode_l2(session, start) else {
+        return String::new();
+    };
+    let mut body = String::new();
+    for line in pseudo.lines.iter().skip(1).take(RENAME_BODY_LINES) {
+        body.push_str(line.text.trim_end());
+        body.push('\n');
+    }
+    if pseudo.lines.len() > RENAME_BODY_LINES + 1 {
+        body.push_str("…\n");
+    }
+    body
 }
 
 /// One name the model proposed in reply to [`RENAME_SYSTEM`].
@@ -674,6 +806,7 @@ pub fn apply_rename_reply(proposals: &mut [Proposal], reply: &str) -> usize {
             continue;
         };
         proposal.value = suggestion.name.clone();
+        proposal.source = crate::ProposalSource::Model;
         if !suggestion.rationale.is_empty() {
             proposal.rationale = suggestion.rationale.clone();
         }
@@ -1881,6 +2014,7 @@ mod tests {
                 kind: "api_tag",
                 text: "CreateFileW".to_owned(),
             }],
+            source: crate::ProposalSource::Heuristic,
         }];
         let updated = apply_rename_reply(
             &mut proposals,
@@ -1900,5 +2034,58 @@ mod tests {
         let updated = apply_rename_reply(&mut proposals, "0xdead1234 unknown_name -- nope");
         assert_eq!(updated, 0);
         assert_eq!(proposals[0].value, "read_config_file");
+    }
+
+    #[test]
+    fn scrub_identifier_only_touches_whole_tokens() {
+        assert_eq!(
+            scrub_identifier("return recursive(n - 1);", "recursive", "sub_140"),
+            "return sub_140(n - 1);"
+        );
+        assert_eq!(
+            scrub_identifier("RestartService(start);", "start", "sub_140"),
+            "RestartService(sub_140);"
+        );
+        assert_eq!(
+            scrub_identifier("restart_service = 1;", "start", "sub_140"),
+            "restart_service = 1;"
+        );
+    }
+
+    /// The prompt must carry a body excerpt (naming from API names alone is guesswork)
+    /// and pack more than the old hard-coded 12 candidates.
+    #[test]
+    fn rename_prompt_packs_body_excerpts_beyond_twelve_candidates() {
+        use crate::suggest_names;
+        let bytes = std::fs::read("C:/Windows/System32/notepad.exe");
+        let Ok(bytes) = bytes else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("rename-prompt.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).unwrap();
+        recraft_analysis::persist_strings(&mut session, &strings).unwrap();
+
+        let proposals = suggest_names(&mut session, 40).unwrap();
+        if proposals.len() < 13 {
+            return;
+        }
+        let candidates: Vec<Address> = proposals.iter().map(|proposal| proposal.target).collect();
+        let settings = ProviderSettings {
+            max_tokens: 65_536,
+            ..ProviderSettings::default()
+        };
+        let prompt = build_rename_prompt(&mut session, &candidates, &settings).unwrap();
+        let blocks = prompt.user.matches("\n- 0x").count();
+        assert!(blocks > 12, "packed only {blocks} candidates");
+        assert!(
+            prompt.user.contains("  code:\n"),
+            "no body excerpt in the rename prompt"
+        );
+        assert!(
+            prompt.user.len() < settings.max_tokens * 4,
+            "prompt over the character budget"
+        );
     }
 }

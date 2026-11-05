@@ -23,6 +23,7 @@
 
 mod cache;
 mod eval;
+mod eval_names;
 mod provider;
 mod query;
 #[allow(unsafe_code)]
@@ -34,13 +35,17 @@ pub use cache::{
     default_dir,
 };
 pub use eval::{CORPUS_CASES, EVAL_VERSION, EvalCase, EvalReport, ensure_eval, evaluate_explain};
+pub use eval_names::{
+    NAME_EVAL_VERSION, NameCase, NameEvalReport, NameScore, evaluate_names_heuristic,
+    evaluate_names_with_provider, score_name,
+};
 pub use provider::{
     AuditEntry, AuditLog, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS, EXPLAIN_SYSTEM, OPENCODE_GO_ENDPOINT,
     OPENCODE_GO_MODELS, OllamaProvider, OpenAiCompatibleProvider, POLISH_SYSTEM,
     PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest, Provider, ProviderKind, ProviderPreset,
     ProviderSettings, RENAME_SYSTEM, RenameSuggestion, TokenBudget, UnavailableProvider,
     apply_rename_reply, build_explain_prompt, build_polish_prompt, build_rename_prompt,
-    parse_rename_reply, provider_from_settings, redact,
+    build_rename_prompt_blinded, parse_rename_reply, provider_from_settings, redact,
 };
 pub use query::{QueryAnswer, QueryItem, answer_query};
 pub use transport::{
@@ -107,6 +112,36 @@ impl ProposalKind {
     }
 }
 
+/// Where a proposal's value came from. The panel labels this so a heuristic fallback
+/// name (`network_1400012a8`) is never mistaken for a model suggestion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalSource {
+    /// Category prefix + address, produced locally from API tags and strings.
+    Heuristic,
+    /// The model named this target; the local evidence still backs the proposal.
+    Model,
+    /// Read back from a proposals JSON file (CLI `ai apply`, MCP client, hand-written).
+    External,
+}
+
+impl ProposalSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ProposalSource::Heuristic => "heuristic",
+            ProposalSource::Model => "model",
+            ProposalSource::External => "external",
+        }
+    }
+
+    fn from_str(text: &str) -> Self {
+        match text {
+            "model" => ProposalSource::Model,
+            "heuristic" => ProposalSource::Heuristic,
+            _ => ProposalSource::External,
+        }
+    }
+}
+
 /// One piece of evidence backing a proposal; every entry points at a real address.
 #[derive(Debug, Clone)]
 pub struct Evidence {
@@ -126,6 +161,8 @@ pub struct Proposal {
     pub confidence: f32,
     pub rationale: String,
     pub evidence: Vec<Evidence>,
+    /// Which stage produced `value`; see [`ProposalSource`].
+    pub source: ProposalSource,
 }
 
 impl Proposal {
@@ -136,6 +173,7 @@ impl Proposal {
             "value": self.value,
             "confidence": self.confidence,
             "rationale": self.rationale,
+            "source": self.source.as_str(),
             "evidence": self.evidence.iter().map(|evidence| json!({
                 "addr": format!("{:#x}", evidence.addr.get()),
                 "kind": evidence.kind,
@@ -190,6 +228,11 @@ impl Proposal {
                 });
             }
         }
+        let source = value
+            .get("source")
+            .and_then(Value::as_str)
+            .map(ProposalSource::from_str)
+            .unwrap_or(ProposalSource::External);
         Ok(Proposal {
             kind,
             target,
@@ -197,6 +240,7 @@ impl Proposal {
             confidence,
             rationale,
             evidence,
+            source,
         })
     }
 
@@ -288,10 +332,22 @@ pub struct Explanation {
     pub strings: Vec<(Address, String)>,
     /// `(call site, callee name/address)`.
     pub calls: Vec<(Address, String)>,
+    /// `(call site, caller function name)` of direct calls into this function.
+    pub callers: Vec<(Address, String)>,
     pub summary: String,
 }
 
 pub fn explain(session: &mut Session, addr: Address) -> Result<Explanation> {
+    explain_with(session, addr, false)
+}
+
+/// Build the deterministic explanation. `blind` hides the function's own symbol in
+/// `summary`; the naming benchmark uses it so the model is not shown the answer.
+pub(crate) fn explain_with(
+    session: &mut Session,
+    addr: Address,
+    blind: bool,
+) -> Result<Explanation> {
     let functions = session.functions()?;
     let Some(function) = functions
         .iter()
@@ -324,15 +380,21 @@ pub fn explain(session: &mut Session, addr: Address) -> Result<Explanation> {
         .collect();
     let strings = referenced_strings(session, function.start, function.end)?;
     let calls = outgoing_calls(session, function.start, function.end)?;
+    let callers = incoming_callers(session, function.start, &functions)?;
 
     let mut parts = Vec::new();
-    parts.push(match &name {
-        Some(name) => format!(
+    parts.push(match (&name, blind) {
+        (Some(name), false) => format!(
             "{name} ({:x}..{:x})",
             function.start.get(),
             function.end.get()
         ),
-        None => format!("sub_{:x}", function.start.get()),
+        _ => format!(
+            "sub_{:x} ({:x}..{:x})",
+            function.start.get(),
+            function.start.get(),
+            function.end.get()
+        ),
     });
     parts.push(format!("{instructions} instructions"));
     if !apis.is_empty() {
@@ -375,13 +437,91 @@ pub fn explain(session: &mut Session, addr: Address) -> Result<Explanation> {
         apis,
         strings,
         calls,
+        callers,
         summary,
     })
 }
 
 // ------------------------------------------------------------ name suggest ----
 
-/// Propose names for `sub_*` functions based on API categories and referenced strings.
+/// Evidence-backed name for one function: category prefix, a stable address tail and
+/// the rationale shown in the panel. Shared by [`suggest_names`] and the naming
+/// benchmark, so the benchmark scores the naming that actually ships.
+pub(crate) fn heuristic_proposal(
+    start: Address,
+    apis: &[(Address, String, String)],
+    strings: &[(Address, String)],
+) -> Proposal {
+    let categories: BTreeSet<String> = apis
+        .iter()
+        .map(|(_, _, category)| category.clone())
+        .collect();
+    let prefix = categories
+        .iter()
+        .find_map(|category| match category.as_str() {
+            "injection" => Some("inject"),
+            "anti-analysis" => Some("anti_debug"),
+            "network" => Some("network"),
+            "memory" => Some("memory"),
+            "file" => Some("file"),
+            "process" => Some("process"),
+            "thread" => Some("thread"),
+            "registry" => Some("registry"),
+            "service" => Some("service"),
+            "crypto" => Some("crypto"),
+            "callback" => Some("callback"),
+            "ui" => Some("ui"),
+            _ => None,
+        })
+        .unwrap_or("interesting");
+    let value = format!("{prefix}_{:x}", start.get());
+    let mut evidence: Vec<Evidence> = apis
+        .iter()
+        .map(|(site, rule, _)| Evidence {
+            addr: *site,
+            kind: "api_tag",
+            text: rule.clone(),
+        })
+        .collect();
+    evidence.extend(strings.iter().map(|(addr, text)| Evidence {
+        addr: *addr,
+        kind: "string",
+        text: text.clone(),
+    }));
+    let confidence = (0.35 + 0.15 * evidence.len() as f32).min(0.9);
+    let api_names: Vec<String> = apis
+        .iter()
+        .map(|(_, rule, _)| rule.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let rationale = if api_names.is_empty() {
+        format!("references {} string(s)", strings.len())
+    } else {
+        format!(
+            "calls {}; {} string ref(s)",
+            api_names.join(", "),
+            strings.len()
+        )
+    };
+    Proposal {
+        kind: ProposalKind::Rename,
+        target: start,
+        value,
+        confidence,
+        rationale,
+        evidence,
+        source: ProposalSource::Heuristic,
+    }
+}
+
+/// Propose names for `sub_*` functions, most informative candidates first.
+///
+/// Evidence is required (API tags or referenced strings): a function with none cannot be
+/// named from this pipeline, and inventing a name for it would be noise. Candidates are
+/// ranked by evidence weight + caller count, because the integration point of a feature
+/// (many callers, several APIs, a string) is worth naming before a leaf helper. The old
+/// address order burned the model's batch on the first `sub_*` functions in the image.
 pub fn suggest_names(session: &mut Session, limit: usize) -> Result<Vec<Proposal>> {
     let limit = limit.clamp(1, MAX_SUGGESTIONS);
     let functions = session.functions()?;
@@ -393,11 +533,12 @@ pub fn suggest_names(session: &mut Session, limit: usize) -> Result<Vec<Proposal
         .map(|entry| (entry.addr.get(), (entry.len, entry.enc)))
         .collect();
     let data_refs = session.all_xrefs(Some(XREF_DATA))?;
-    let mut proposals = Vec::new();
+    let mut caller_counts: BTreeMap<u64, usize> = BTreeMap::new();
+    for xref in session.all_xrefs(Some(XREF_CALL))? {
+        *caller_counts.entry(xref.to.get()).or_default() += 1;
+    }
+    let mut ranked: Vec<(i64, Proposal)> = Vec::new();
     for function in &functions {
-        if proposals.len() >= limit {
-            break;
-        }
         let current = session.name_at(function.start)?;
         if current
             .as_deref()
@@ -420,68 +561,24 @@ pub fn suggest_names(session: &mut Session, limit: usize) -> Result<Vec<Proposal
         if apis.is_empty() && strings.is_empty() {
             continue;
         }
-        let categories: BTreeSet<String> = apis
-            .iter()
-            .map(|(_, _, category)| category.clone())
-            .collect();
-        let prefix = categories
-            .iter()
-            .find_map(|category| match category.as_str() {
-                "injection" => Some("inject"),
-                "anti-analysis" => Some("anti_debug"),
-                "network" => Some("network"),
-                "memory" => Some("memory"),
-                "file" => Some("file"),
-                "process" => Some("process"),
-                "thread" => Some("thread"),
-                "registry" => Some("registry"),
-                "service" => Some("service"),
-                "crypto" => Some("crypto"),
-                "callback" => Some("callback"),
-                "ui" => Some("ui"),
-                _ => None,
-            })
-            .unwrap_or("interesting");
-        let value = format!("{prefix}_{:x}", function.start.get());
-        let mut evidence: Vec<Evidence> = apis
-            .iter()
-            .map(|(site, rule, _)| Evidence {
-                addr: *site,
-                kind: "api_tag",
-                text: rule.clone(),
-            })
-            .collect();
-        evidence.extend(strings.iter().map(|(addr, text)| Evidence {
-            addr: *addr,
-            kind: "string",
-            text: text.clone(),
-        }));
-        let confidence = (0.35 + 0.15 * evidence.len() as f32).min(0.9);
-        let api_names: Vec<String> = apis
-            .iter()
-            .map(|(_, rule, _)| rule.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let rationale = if api_names.is_empty() {
-            format!("references {} string(s)", strings.len())
-        } else {
-            format!(
-                "calls {}; {} string ref(s)",
-                api_names.join(", "),
-                strings.len()
-            )
-        };
-        proposals.push(Proposal {
-            kind: ProposalKind::Rename,
-            target: function.start,
-            value,
-            confidence,
-            rationale,
-            evidence,
-        });
+        let callers = caller_counts
+            .get(&function.start.get())
+            .copied()
+            .unwrap_or(0)
+            .min(10) as i64;
+        let score = 2 * apis.len().min(8) as i64 + 3 * strings.len().min(8) as i64 + callers;
+        ranked.push((score, heuristic_proposal(function.start, &apis, &strings)));
     }
-    Ok(proposals)
+    ranked.sort_by(|(left_score, left), (right_score, right)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left.target.get().cmp(&right.target.get()))
+    });
+    Ok(ranked
+        .into_iter()
+        .take(limit)
+        .map(|(_, proposal)| proposal)
+        .collect())
 }
 
 // ------------------------------------------------------------------ triage ----
@@ -661,6 +758,34 @@ fn outgoing_calls(
     Ok(found)
 }
 
+/// Direct calls into `start` with the name of the enclosing caller function.
+fn incoming_callers(
+    session: &mut Session,
+    start: Address,
+    functions: &[recraft_core::FunctionInfo],
+) -> Result<Vec<(Address, String)>> {
+    let mut seen = BTreeSet::new();
+    let mut found = Vec::new();
+    for xref in session.xrefs_to(start)? {
+        if xref.kind != XREF_CALL || !seen.insert(xref.from.get()) {
+            continue;
+        }
+        let owner = functions
+            .iter()
+            .find(|function| xref.from >= function.start && xref.from < function.end);
+        let name = match owner {
+            Some(owner) => session.name_at(owner.start)?,
+            None => None,
+        }
+        .unwrap_or_else(|| format!("sub_{:x}", xref.from.get()));
+        found.push((xref.from, name));
+        if found.len() >= 16 {
+            break;
+        }
+    }
+    Ok(found)
+}
+
 fn read_string(session: &mut Session, addr: Address, len: u32, encoding: i64) -> String {
     let bytes = session
         .read_bytes(addr, (len as usize).max(2))
@@ -804,6 +929,7 @@ mod tests {
             confidence: 0.5,
             rationale: "user-confirmed prototype".to_owned(),
             evidence: Vec::new(),
+            source: ProposalSource::External,
         };
         assert_eq!(apply_proposals(&mut session, &[proposal]).unwrap(), 1);
         assert_eq!(
@@ -840,6 +966,7 @@ mod tests {
             confidence: 0.4,
             rationale: "test".to_owned(),
             evidence: Vec::new(),
+            source: ProposalSource::External,
         };
         assert_eq!(apply_proposals(&mut session, &[proposal]).unwrap(), 1);
         assert_eq!(
@@ -863,6 +990,7 @@ mod tests {
                 kind: "api_tag",
                 text: "VirtualAlloc".to_owned(),
             }],
+            source: ProposalSource::External,
         };
         let value = proposal.to_json();
         let parsed = Proposal::from_json(&value).unwrap();

@@ -120,6 +120,21 @@ enum AiCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Score proposed names against the symbols the binary actually carries.
+    ///
+    /// Offline by default (the heuristic fallback); `--llm` runs the real naming pipeline
+    /// with each candidate's symbol blinded, so the model cannot read the answer.
+    EvalNames {
+        project: PathBuf,
+        #[arg(long)]
+        json: bool,
+        /// Use the configured LLM provider instead of the offline heuristic.
+        #[arg(long)]
+        llm: bool,
+        /// Maximum number of named functions to score.
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1532,6 +1547,12 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             Ok(())
         }
         AiCommand::Eval { project, json } => cmd_ai_eval(&project, json),
+        AiCommand::EvalNames {
+            project,
+            json,
+            llm,
+            limit,
+        } => cmd_ai_eval_names(&project, json, llm, limit),
     }
 }
 
@@ -1711,6 +1732,78 @@ fn cmd_ai_eval(project: &Path, as_json: bool) -> Result<()> {
         }
     }
     recraft_ai::ensure_eval(&report)
+}
+
+/// Naming-accuracy benchmark: score proposals against symbols the binary still carries.
+fn cmd_ai_eval_names(project: &Path, as_json: bool, llm: bool, limit: usize) -> Result<()> {
+    let mut session = Session::open(project)?;
+    let report = if llm {
+        let settings = require_ai_provider("ai eval-names")?;
+        recraft_ai::evaluate_names_with_provider(&mut session, &settings, limit)?
+    } else {
+        recraft_ai::evaluate_names_heuristic(&mut session, limit)?
+    };
+    if as_json {
+        let rows: Vec<_> = report
+            .cases
+            .iter()
+            .map(|case| {
+                json!({
+                    "addr": format!("{:#x}", case.addr.get()),
+                    "truth": case.truth,
+                    "proposal": case.proposal,
+                    "source": case.source,
+                    "exact": case.score.exact,
+                    "partial": case.score.partial,
+                    "overlap": case.score.overlap,
+                    "apis": case.apis,
+                    "strings": case.strings,
+                })
+            })
+            .collect();
+        return json_result(&json!({
+            "eval": report.version,
+            "mode": report.mode.as_str(),
+            "template": report.template,
+            "cases": report.total(),
+            "exact": report.exact,
+            "partial": report.partial,
+            "missing": report.missing,
+            "mean_overlap": report.mean_overlap,
+            "rows": rows,
+        }));
+    }
+    println!("{}", report.summary());
+    if report.cases.is_empty() {
+        println!(
+            "  (no function carries a real symbol; import a binary with exports or build \
+             corpus/naming first)"
+        );
+        return Ok(());
+    }
+    for case in &report.cases {
+        let mark = if case.score.exact {
+            "=="
+        } else if case.score.partial {
+            "~ "
+        } else {
+            "  "
+        };
+        println!(
+            "  {mark} {:#x}  {:<26} -> {:<32} overlap {:.2}  apis={} strings={}",
+            case.addr.get(),
+            case.truth,
+            if case.proposal.is_empty() {
+                "<missing>"
+            } else {
+                case.proposal.as_str()
+            },
+            case.score.overlap,
+            case.apis,
+            case.strings
+        );
+    }
+    Ok(())
 }
 
 fn cmd_ai_prompt(
