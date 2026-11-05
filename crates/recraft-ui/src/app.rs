@@ -1108,6 +1108,8 @@ enum Action {
     AiAgent,
     /// Forget the agent conversation (next question starts from scratch).
     AiAgentReset,
+    /// Ask the agent to dig into the function under the cursor.
+    AiAgentDig,
     NavigateToDisasm(Address),
     /// Centre a block in the graph view without leaving graph mode (Graph overview click).
     GraphGoTo(Address),
@@ -2861,6 +2863,36 @@ impl ReCraftApp {
         self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Suggest, None, proposals);
     }
 
+    /// Question the "dig deeper" button asks about the function under the cursor.
+    ///
+    /// The agent already knows how to look things up, so the question only has to name the
+    /// starting point; the function's callers/callees are its job to find.
+    fn agent_dig_question(&self) -> Option<String> {
+        let (start, _) = self.current_function()?;
+        let name = self
+            .session
+            .as_ref()
+            .and_then(|session| session.name_at(start).ok().flatten())
+            .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+        Some(self.t_args(
+            "ui_agent_dig_question",
+            &[("name", &name), ("addr", &format!("{:#x}", start.get()))],
+        ))
+    }
+
+    /// Prefill the agent box with the current function and run the loop (history kept).
+    fn start_agent_dig(&mut self, ctx: &egui::Context) {
+        if self.ai_job.is_some() {
+            return;
+        }
+        let Some(question) = self.agent_dig_question() else {
+            self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
+            self.set_status(self.ai_status.clone());
+            return;
+        };
+        self.ai_agent_question = question;
+        self.start_agent(ctx);
+    }
     /// Run the project-level agent: the model chooses which read-only tools to call.
     ///
     /// The worker opens its own SQLite connection so the UI thread never waits on HTTP or
@@ -5167,6 +5199,8 @@ impl ReCraftApp {
         let suggest = self.t("ui_suggest_names");
         let apply_label = self.t("ui_apply_selected");
         let explain_label = self.t("ui_explain");
+        let dig_label = self.t("ui_agent_dig");
+        let dig_hint = self.t("ui_agent_dig_hint");
         let polish_label = self.t("ui_polish");
         let repolish_label = self.t("ui_repolish");
         let repolish_hint = self.t("ui_repolish_hint");
@@ -5249,6 +5283,18 @@ impl ReCraftApp {
                 }
                 if ui.button(explain_label).clicked() {
                     *action = Action::AiExplain;
+                }
+                // Explain stays the fast one-request path; this hands the same function to
+                // the agent when the reader wants callers/behaviour, with history kept.
+                if ui
+                    .add_enabled(
+                        self.ai_job.is_none() && self.current_function().is_some(),
+                        egui::Button::new(RichText::new(dig_label).size(11.0)),
+                    )
+                    .on_hover_text(dig_hint)
+                    .clicked()
+                {
+                    *action = Action::AiAgentDig;
                 }
                 if ui
                     .add(
@@ -7982,6 +8028,7 @@ impl ReCraftApp {
             }
             Action::AiSuggest => self.start_suggest(ctx),
             Action::AiAgent => self.start_agent(ctx),
+            Action::AiAgentDig => self.start_agent_dig(ctx),
             Action::AiAgentReset => {
                 self.ai_agent_history.clear();
                 self.ai_agent_trace.clear();
@@ -13914,5 +13961,36 @@ mod tests {
         let values: Vec<u64> = links.iter().map(|addr| addr.get()).collect();
         assert_eq!(values, vec![0x1400019c0, 0x140001840]);
         assert!(address_links("没有地址").is_empty());
+    }
+    /// "Dig deeper" hands the function under the cursor to the agent by name and address.
+    #[test]
+    fn dig_question_names_the_function_under_the_cursor() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("dig.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_functions();
+        app.refresh_disasm();
+        if app.disasm_rows.is_empty() {
+            return;
+        }
+        app.selected = 0;
+        let question = app.agent_dig_question().expect("question");
+        let entry = app.disasm_rows[0].addr;
+        assert!(question.contains("0x"), "{question}");
+        assert!(
+            question.contains(&format!("{:#x}", entry.get())),
+            "{question}"
+        );
+        assert!(question.contains("start"), "{question}");
     }
 }
