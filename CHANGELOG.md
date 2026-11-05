@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A constant image base folds into the address it is added to, and the address reads as an
+  array subscript.** `crackme main`'s verify loop printed `v3 = 0x140000000;` above the loop
+  and `*(u8*)(((i + v3) + 0x18380))` inside it, so the three flag tables never got names.
+  Three text passes now work the chain: `fold_constant_registers` folds a constant register
+  into a nested block when the assignment is that register's last write (the image base is
+  loaded once in the prologue; the old "same block, ten lines" window could never reach the
+  loop body), and treats a read inside a `*(T*)(…)` operand as a fold site;
+  `merge_address_constants` merges `(x + 0x140000000) + 0x18380` into `(x + 0x140018380)`
+  while keeping the parentheses balanced, and `fold_literal_arithmetic` evaluates the pairs
+  that only meet after a fold (`(0 + 0x…)`, `(0x… - 0x…)`); `name_global_data` then renders
+  `*(u8*)((i + 0x140018380))` as `byte_140018380[i]`. The verify loop now reads
+  `byte_140018380[i]`, `*(u8*)(&var_20 + perm)`, `byte_140018368[i & 0xf]` and
+  `byte_1400183a0[i]`, matching the source's `perm`/`key_str`/`enc`. The printer also renders
+  `[rsp + index + disp]` as `*(u8*)(&var_20 + i)`; the old `((rsp + i) + 0x20)` spelling let
+  the L2 variable pass turn `rsp` into an uninitialised local (a correctness bug). Structured
+  rate and goto counts are unchanged (crackme 455/495, notepad 487/506); notepad drops
+  dead constant assignments (`r9d = 1; SendMessageW(…, r9d, …)` becomes a literal argument)
+  for 24 fewer lines in the 9 777-line function; lint is 0 findings on all five projects and
+  all 789 golden snapshots were refreshed. Four unit tests cover the new folds.
 - **A project-level agent that calls read-only tools.** The panel could only answer about
   the function under the cursor; "where is persistence handled?" needs the model to choose
   what to read. `ai ask <project> "<question>"` and the panel's Analysis agent box run a
