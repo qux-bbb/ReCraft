@@ -31,15 +31,17 @@ mod query;
 mod secret;
 mod transport;
 
-pub use agent::{AGENT_MAX_ROUNDS, AGENT_SYSTEM, AgentEvent, agent_tools, run_agent};
+pub use agent::{
+    AGENT_MAX_ROUNDS, AGENT_SYSTEM, AgentEvent, agent_tools, run_agent, run_agent_with_history,
+};
 pub use cache::{
     AUDIT_FILE, AiCache, AuditRecord, CACHE_FILE, CacheEntry, append_audit, append_default_audit,
     default_dir,
 };
 pub use eval::{CORPUS_CASES, EVAL_VERSION, EvalCase, EvalReport, ensure_eval, evaluate_explain};
 pub use eval_names::{
-    NAME_EVAL_VERSION, NameCase, NameEvalReport, NameScore, evaluate_names_heuristic,
-    evaluate_names_with_provider, score_name,
+    AliasTable, NAME_EVAL_VERSION, NameCase, NameEvalReport, NameScore, evaluate_names_heuristic,
+    evaluate_names_with_provider, score_name, score_name_against,
 };
 pub use provider::{
     AuditEntry, AuditLog, ChatMessage, ChatRole, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS,

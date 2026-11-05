@@ -145,6 +145,10 @@ enum AiCommand {
         /// Maximum number of named functions to score.
         #[arg(long, default_value_t = 40)]
         limit: usize,
+        /// JSON manifest of acceptable aliases per real symbol
+        /// (`{"open_config_file": ["read_config_file", ...]}`).
+        #[arg(long)]
+        aliases: Option<PathBuf>,
     },
 }
 
@@ -1569,7 +1573,8 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             json,
             llm,
             limit,
-        } => cmd_ai_eval_names(&project, json, llm, limit),
+            aliases,
+        } => cmd_ai_eval_names(&project, json, llm, limit, aliases.as_deref()),
     }
 }
 
@@ -1801,14 +1806,57 @@ fn cmd_ai_eval(project: &Path, as_json: bool) -> Result<()> {
     recraft_ai::ensure_eval(&report)
 }
 
+/// Load the curated alias manifest: symbol -> acceptable alternative names.
+fn load_name_aliases(path: Option<&Path>) -> Result<recraft_ai::AliasTable> {
+    let Some(path) = path else {
+        return Ok(recraft_ai::AliasTable::new());
+    };
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        recraft_common::Error::invalid_argument(format!(
+            "cannot read aliases {}: {error}",
+            path.display()
+        ))
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+        recraft_common::Error::invalid_argument(format!("aliases JSON: {error}"))
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        recraft_common::Error::invalid_argument("aliases JSON must be an object of arrays")
+    })?;
+    let mut aliases = recraft_ai::AliasTable::new();
+    for (symbol, names) in object {
+        let names: Vec<String> = names
+            .as_array()
+            .ok_or_else(|| {
+                recraft_common::Error::invalid_argument(format!(
+                    "aliases for {symbol:?} must be an array of strings"
+                ))
+            })?
+            .iter()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect();
+        if !names.is_empty() {
+            aliases.insert(symbol.clone(), names);
+        }
+    }
+    Ok(aliases)
+}
+
 /// Naming-accuracy benchmark: score proposals against symbols the binary still carries.
-fn cmd_ai_eval_names(project: &Path, as_json: bool, llm: bool, limit: usize) -> Result<()> {
+fn cmd_ai_eval_names(
+    project: &Path,
+    as_json: bool,
+    llm: bool,
+    limit: usize,
+    alias_path: Option<&Path>,
+) -> Result<()> {
     let mut session = Session::open(project)?;
+    let aliases = load_name_aliases(alias_path)?;
     let report = if llm {
         let settings = require_ai_provider("ai eval-names")?;
-        recraft_ai::evaluate_names_with_provider(&mut session, &settings, limit)?
+        recraft_ai::evaluate_names_with_provider(&mut session, &settings, limit, &aliases)?
     } else {
-        recraft_ai::evaluate_names_heuristic(&mut session, limit)?
+        recraft_ai::evaluate_names_heuristic(&mut session, limit, &aliases)?
     };
     if as_json {
         let rows: Vec<_> = report
@@ -1821,6 +1869,7 @@ fn cmd_ai_eval_names(project: &Path, as_json: bool, llm: bool, limit: usize) -> 
                     "proposal": case.proposal,
                     "source": case.source,
                     "exact": case.score.exact,
+                    "accepted_by": case.accepted_by,
                     "partial": case.score.partial,
                     "overlap": case.score.overlap,
                     "apis": case.apis,
@@ -1834,6 +1883,7 @@ fn cmd_ai_eval_names(project: &Path, as_json: bool, llm: bool, limit: usize) -> 
             "template": report.template,
             "cases": report.total(),
             "exact": report.exact,
+            "accepted": report.accepted,
             "partial": report.partial,
             "missing": report.missing,
             "mean_overlap": report.mean_overlap,

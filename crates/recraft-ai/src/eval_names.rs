@@ -74,8 +74,16 @@ pub struct NameCase {
     pub source: &'static str,
     pub apis: usize,
     pub strings: usize,
+    /// Exact against the real symbol (the strict number).
     pub score: NameScore,
+    /// Accepted alias that matched exactly, when the proposal differs from the symbol but
+    /// names the same thing (`read_config_file` for `open_config_file`).
+    pub accepted_by: Option<String>,
 }
+
+/// Curated acceptable names per real symbol: the benchmark manifest
+/// (`corpus/naming/aliases.json`). Absent symbols only accept the symbol itself.
+pub type AliasTable = BTreeMap<String, Vec<String>>;
 
 /// Aggregate result of one benchmark run.
 #[derive(Debug, Clone)]
@@ -85,6 +93,8 @@ pub struct NameEvalReport {
     pub template: &'static str,
     pub cases: Vec<NameCase>,
     pub exact: usize,
+    /// Exact against the symbol or one of its accepted aliases.
+    pub accepted: usize,
     pub partial: usize,
     /// Functions the model did not name at all (empty proposal).
     pub missing: usize,
@@ -107,15 +117,23 @@ impl NameEvalReport {
         percent(self.partial, self.total())
     }
 
+    /// Share of names accepted by the symbol or one of its aliases, in percent.
+    pub fn accepted_pct(&self) -> f32 {
+        percent(self.accepted, self.total())
+    }
+
     /// One-line summary for the CLI and tests.
     pub fn summary(&self) -> String {
         format!(
-            "name eval {} ({}): {}/{} exact ({:.1}%), {}/{} partial ({:.1}%), mean overlap {:.2}, {} missing",
+            "name eval {} ({}): {}/{} exact ({:.1}%), {}/{} accepted ({:.1}%), {}/{} partial ({:.1}%), mean overlap {:.2}, {} missing",
             self.version,
             self.mode.as_str(),
             self.exact,
             self.total(),
             self.exact_pct(),
+            self.accepted,
+            self.total(),
+            self.accepted_pct(),
             self.partial,
             self.total(),
             self.partial_pct(),
@@ -142,8 +160,8 @@ struct Seed {
 }
 
 impl Seed {
-    fn into_case(self, proposal: String, source: &'static str) -> NameCase {
-        let score = score_name(&self.truth, &proposal);
+    fn into_case(self, proposal: String, source: &'static str, aliases: &AliasTable) -> NameCase {
+        let (score, accepted_by) = score_name_against(&self.truth, &proposal, aliases);
         NameCase {
             addr: self.addr,
             truth: self.truth,
@@ -152,6 +170,7 @@ impl Seed {
             apis: self.apis,
             strings: self.strings,
             score,
+            accepted_by,
         }
     }
 }
@@ -221,8 +240,8 @@ pub fn score_name(truth: &str, proposal: &str) -> NameScore {
     }
 }
 
-/// Lowercase snake_case, with a trailing `_<address>` removed. The heuristic appends the
-/// function address to keep names unique; that tail says nothing about the semantics.
+/// Lowercase snake_case, with a trailing `_<address>` removed. The heuristic appends
+/// the function address to keep names unique; that tail says nothing about the semantics.
 pub fn normalize_symbol(name: &str) -> String {
     let mut text = String::with_capacity(name.len() + 8);
     let mut previous: Option<char> = None;
@@ -275,8 +294,37 @@ fn tokens(symbol: &str) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
+/// Score proposal against the real symbol and its accepted aliases.
+///
+/// Returns the strict score (symbol only) plus the alias that matched exactly, if any.
+pub fn score_name_against(
+    truth: &str,
+    proposal: &str,
+    aliases: &AliasTable,
+) -> (NameScore, Option<String>) {
+    let mut score = score_name(truth, proposal);
+    let mut accepted_by = None;
+    if let Some(names) = aliases.get(truth) {
+        for alias in names {
+            let alias_score = score_name(alias, proposal);
+            if alias_score.exact && accepted_by.is_none() {
+                accepted_by = Some(alias.to_string());
+            }
+            score.partial |= alias_score.partial;
+            if alias_score.overlap > score.overlap {
+                score.overlap = alias_score.overlap;
+            }
+        }
+    }
+    (score, accepted_by)
+}
+
 /// Score the offline heuristic naming for every function that still has a real symbol.
-pub fn evaluate_names_heuristic(session: &mut Session, limit: usize) -> Result<NameEvalReport> {
+pub fn evaluate_names_heuristic(
+    session: &mut Session,
+    limit: usize,
+    aliases: &AliasTable,
+) -> Result<NameEvalReport> {
     let seeds = collect(session, limit)?;
     let mut cases = Vec::with_capacity(seeds.len());
     for seed in seeds {
@@ -287,7 +335,7 @@ pub fn evaluate_names_heuristic(session: &mut Session, limit: usize) -> Result<N
         let mut seed = seed;
         seed.apis = explanation.apis.len();
         seed.strings = explanation.strings.len();
-        cases.push(seed.into_case(proposal.value, "heuristic"));
+        cases.push(seed.into_case(proposal.value, "heuristic", aliases));
     }
     Ok(report(NameEvalMode::Heuristic, cases))
 }
@@ -300,6 +348,7 @@ pub fn evaluate_names_with_provider(
     session: &mut Session,
     settings: &crate::ProviderSettings,
     limit: usize,
+    aliases: &AliasTable,
 ) -> Result<NameEvalReport> {
     const MAX_BATCH: usize = 16;
     let seeds = collect(session, limit)?;
@@ -325,7 +374,7 @@ pub fn evaluate_names_with_provider(
             } else {
                 "model"
             };
-            seed.into_case(proposal, source)
+            seed.into_case(proposal, source, aliases)
         })
         .collect();
     Ok(report(NameEvalMode::Model, cases))
@@ -333,6 +382,10 @@ pub fn evaluate_names_with_provider(
 
 fn report(mode: NameEvalMode, cases: Vec<NameCase>) -> NameEvalReport {
     let exact = cases.iter().filter(|case| case.score.exact).count();
+    let accepted = cases
+        .iter()
+        .filter(|case| case.score.exact || case.accepted_by.is_some())
+        .count();
     let partial = cases.iter().filter(|case| case.score.partial).count();
     let missing = cases
         .iter()
@@ -349,6 +402,7 @@ fn report(mode: NameEvalMode, cases: Vec<NameCase>) -> NameEvalReport {
         template: crate::PROMPT_TEMPLATE_VERSION,
         cases,
         exact,
+        accepted,
         partial,
         missing,
         mean_overlap,
@@ -387,5 +441,31 @@ mod tests {
         assert_eq!(normalize_symbol("dispatch_401050"), "dispatch");
         // A short hex tail is part of the word, not an address.
         assert_eq!(normalize_symbol("sha256"), "sha256");
+    }
+    #[test]
+    fn aliases_accept_equivalent_names_without_weakening_the_strict_score() {
+        let mut aliases = AliasTable::new();
+        aliases.insert(
+            "open_config_file".to_owned(),
+            vec!["read_config_file".to_owned(), "load_config".to_owned()],
+        );
+        let (score, accepted_by) =
+            score_name_against("open_config_file", "read_config_file", &aliases);
+        assert!(!score.exact, "the strict score stays symbol-only");
+        assert_eq!(accepted_by.as_deref(), Some("read_config_file"));
+        assert!(score.partial);
+
+        // Word order/separators still normalise; unrelated names stay rejected.
+        let (_, accepted_by) = score_name_against("open_config_file", "LoadConfig", &aliases);
+        assert_eq!(accepted_by.as_deref(), Some("load_config"));
+        let (score, accepted_by) = score_name_against("open_config_file", "parse_flags", &aliases);
+        assert!(accepted_by.is_none());
+        assert!(!score.partial);
+
+        // A symbol with no alias entry keeps the strict behaviour.
+        let (score, accepted_by) =
+            score_name_against("field_probe", "probe_field", &AliasTable::new());
+        assert!(score.exact);
+        assert!(accepted_by.is_none());
     }
 }

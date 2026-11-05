@@ -1,0 +1,170 @@
+{
+  "open_config_file": [
+    "read_config_file",
+    "load_config",
+    "open_config",
+    "read_config",
+    "load_config_file",
+    "read_configuration_file"
+  ],
+  "save_config_file": [
+    "write_config_file",
+    "save_config",
+    "write_config",
+    "store_config",
+    "write_configuration_file"
+  ],
+  "read_registry_string": [
+    "read_registry_value",
+    "get_registry_string",
+    "read_install_path",
+    "reg_read_string"
+  ],
+  "write_registry_dword": [
+    "write_registry_value",
+    "set_registry_dword",
+    "reg_write_dword",
+    "write_enabled_flag"
+  ],
+  "delete_registry_tree": [
+    "delete_registry_key",
+    "remove_registry_key",
+    "reg_delete_key",
+    "delete_old_registry_key"
+  ],
+  "download_update_file": [
+    "download_file",
+    "download_update",
+    "fetch_update",
+    "http_download",
+    "download_content"
+  ],
+  "resolve_host_address": [
+    "resolve_host",
+    "resolve_hostname",
+    "resolve_address",
+    "getaddrinfo_host"
+  ],
+  "check_single_instance": [
+    "ensure_single_instance",
+    "single_instance_check",
+    "check_instance",
+    "mutex_check"
+  ],
+  "load_plugin_library": [
+    "load_plugin",
+    "load_library",
+    "load_dll",
+    "load_plugin_dll"
+  ],
+  "get_temp_directory": [
+    "get_temp_path",
+    "temp_directory",
+    "temp_dir",
+    "get_temp_folder"
+  ],
+  "copy_file_bytes": [
+    "copy_file",
+    "backup_file",
+    "copy_config_file",
+    "duplicate_file"
+  ],
+  "delete_file_silently": [
+    "delete_file",
+    "remove_file",
+    "delete_temp_file",
+    "delete_temp_config"
+  ],
+  "fill_random_bytes": [
+    "fill_random",
+    "generate_random_bytes",
+    "gen_random_bytes",
+    "random_bytes",
+    "crypt_random"
+  ],
+  "hash_password_text": [
+    "hash_password",
+    "password_hash",
+    "hash_secret",
+    "sha1_password"
+  ],
+  "enumerate_running_processes": [
+    "enumerate_processes",
+    "list_processes",
+    "process_snapshot",
+    "enum_processes"
+  ],
+  "read_clipboard_text": [
+    "read_clipboard",
+    "get_clipboard_text",
+    "clipboard_text",
+    "get_clipboard"
+  ],
+  "show_error_message": [
+    "show_error",
+    "message_box",
+    "show_message_box",
+    "error_message_box"
+  ],
+  "format_hex_string": [
+    "format_hex",
+    "hex_string",
+    "wsprintf_hex",
+    "format_hex_value"
+  ],
+  "count_text_lines": [
+    "count_lines",
+    "line_count",
+    "count_text_line",
+    "count_newlines"
+  ],
+  "split_command_line": [
+    "parse_command_line",
+    "command_line_args",
+    "get_command_line_args",
+    "parse_args"
+  ],
+  "query_disk_free_space": [
+    "get_disk_free_space",
+    "disk_free_space",
+    "free_disk_space",
+    "query_free_space"
+  ],
+  "start_service_process": [
+    "start_service",
+    "create_service",
+    "create_and_start_service",
+    "install_service"
+  ],
+  "compute_crc32": [
+    "crc32",
+    "compute_crc",
+    "crc32_checksum",
+    "crc_checksum"
+  ],
+  "base64_encoded_length": [
+    "base64_length",
+    "base64_len",
+    "base64_size",
+    "encoded_length"
+  ],
+  "compare_version_strings": [
+    "compare_versions",
+    "compare_version",
+    "version_compare",
+    "version_compare_strings"
+  ],
+  "write_log_line": [
+    "write_log",
+    "log_line",
+    "append_log",
+    "write_log_file"
+  ],
+  "start": [
+    "entry_point",
+    "entry",
+    "main",
+    "startup",
+    "_start"
+  ]
+}
