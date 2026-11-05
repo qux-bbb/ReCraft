@@ -19,39 +19,29 @@ void sub_14000f1d0_l1(void) {
         if (eax != 6) {
             switch (edx) {
                 case 0xADDR: {
-                    edx -= 0xADDR;
                     r8 = qword_ADDR;
                     break;
                 }
                 case 0xADDR: {
-                    edx -= 0xADDR;
                     r8 = qword_ADDR;
                     break;
                 }
                 case 0xADDR: {
-                    edx -= 0xADDR;
                     r8 = qword_ADDR;
                     break;
                 }
                 case 0xADDR: {
-                    edx -= 0xADDR;
                     r8 = qword_ADDR;
                     break;
                 }
                 case 0xADDR: {
-                    edx -= 0xADDR;
                     r8 = qword_ADDR;
-                    break;
-                }
-                default: {
-                    edx -= 0xADDR;
                     break;
                 }
             }
         } else {
             r8 = "GB18030";
         }
-        edx = 0;
         sub_14000cec0(rcx, 0);
     }
     eax = 0;

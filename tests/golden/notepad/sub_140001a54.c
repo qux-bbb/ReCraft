@@ -10,7 +10,6 @@ void sub_140001a54_l1(void) {
         if (al != 0) {
             al = 1;
         } else {
-            ecx = 0;
             sub_140002088(0);
             al = 0;
         }

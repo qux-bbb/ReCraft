@@ -26,7 +26,6 @@ void sub_14000491c_l1(void) {
             }
         }
     } else {
-        ecx = 0;
         sub_1400047c8(0);
         edi = eax;
     }

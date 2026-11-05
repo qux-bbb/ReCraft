@@ -11,7 +11,6 @@ void sub_1400066f4_l1(void) {
     if (rdi != 0) {
         ReleaseSRWLockExclusive(rdi);
     }
-    edx = 0;
     sub_1400093f0(&var_30, 0);
     rbx = var_30;
     if (rbx != 0) {

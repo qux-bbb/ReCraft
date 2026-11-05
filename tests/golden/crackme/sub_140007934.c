@@ -12,12 +12,10 @@ void sub_140007934_l1(void) {
             } else {
                 edi = -1;
             }
-            ecx = 0;
             sub_140008ee0(0);
             sub_140008ee0(rbx);
             eax = edi;
         } else {
-            ecx = 0;
             sub_140008ee0(0);
             eax = -1;
         }

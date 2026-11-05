@@ -28,9 +28,7 @@ void sub_140007924_l1(void) {
             }
             return;
         }
-        edx = 0;
         sub_140009488((rdi + 0xADDR), 0);
-        edx = 0;
         sub_140009488((rdi + 0xADDR), 0);
         if (rbx == 0) {
             sub_140003b20((rdi + 0xADDR));

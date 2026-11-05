@@ -2109,6 +2109,14 @@ fn call_arguments<'a>(text: &'a str, api: &str) -> Option<&'a str> {
     None
 }
 
+/// Drop trailing parameters the body never mentions, and write `(void)` when none are left.
+///
+/// `recover_l2` infers the x64 argument registers from incoming-value reads. A register that
+/// only fed a variadic call's leftover slots — or that nothing touches at all — is not a
+/// parameter of the source function, and the signature should not promise it. Only trailing
+/// parameters are dropped: removing a middle one would rename the ABI slot of every argument
+/// after it. The body is scanned rather than the lift because every pass that can rename or
+/// remove a use has already run.
 /// Drop the trailing register arguments a variadic call passes to a literal format string.
 ///
 /// `printf("Enter flag: ")` reaches the printer as a call with the leftover `rdx`, `r8`, `r9`
@@ -6153,17 +6161,54 @@ fn drop_unused_register_writes(lines: &mut Vec<PseudoLine>) {
         // `rax`/`eax` is the return value: L1 prints a bare `return;` and the caller still
         // reads it, so a write that only looks unused at this level must stay. Argument
         // registers stay too — a call prints only the arguments it could recover, and the
-        // setup line is the only record of the rest.
+        // setup line is the only record of the rest. The exception is a constant the next
+        // call already spells: the printer folded the setup into the argument list, so the
+        // line left behind only repeats it (`ecx = 0; call(0)` → `call(0)`).
+        let folded_constant = plain_assignment(&lines[index].text).is_some_and(|(_, value)| {
+            is_constant(value.trim()) && next_call_takes_constant(lines, index, value.trim())
+        });
         if matches!(base, 0 | 1 | 2 | 8 | 9) {
+            let used_later = lines[index + 1..]
+                .iter()
+                .any(|line| mentions_register_base(&line.text, base));
+            if !folded_constant || used_later {
+                index += 1;
+                continue;
+            }
+        } else if mentions[base as usize] != 1 {
             index += 1;
             continue;
         }
-        if mentions[base as usize] == 1 {
-            lines.remove(index);
-        } else {
-            index += 1;
-        }
+        lines.remove(index);
     }
+}
+
+/// Whether `text` names any spelling of the register family `base`.
+fn mentions_register_base(text: &str, base: u8) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| register_base_any(token) == Some(base))
+}
+
+/// Whether the statement after `index` is a call that already spells `value` as one of its
+/// arguments. The printer folds a constant argument setup into the call, so the setup line is
+/// left repeating a value the call already carries.
+fn next_call_takes_constant(lines: &[PseudoLine], index: usize, value: &str) -> bool {
+    let Some(line) = lines.get(index + 1) else {
+        return false;
+    };
+    let text = line.text.trim();
+    if !is_call_line(text) {
+        return false;
+    }
+    let Some((name, _)) = text.split_once('(') else {
+        return false;
+    };
+    let Some(arguments) = call_arguments(text, name.trim()) else {
+        return false;
+    };
+    (0..count_arguments(arguments)).any(|slot| {
+        top_level_argument(arguments, slot).is_some_and(|argument| argument.trim() == value)
+    })
 }
 
 /// A `while (1)` body often starts by preparing a value the first test needs — typically the

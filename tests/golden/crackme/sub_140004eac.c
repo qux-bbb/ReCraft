@@ -14,7 +14,6 @@ void sub_140004eac_l1(void) {
                     dil = 1;
                     *(u64*)((rbp + 0xADDR)) = rsi;
                 }
-                ecx = 0;
                 sub_140008ee0(0);
                 al = dil;
             } else {

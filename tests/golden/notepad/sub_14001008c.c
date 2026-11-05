@@ -8,7 +8,6 @@ void sub_14001008c_l1(void) {
         DragQueryFileW(rdi, 0, 0, 0);
         if (eax != 0) {
             ebx = (rax + 1);
-            edx = 0;
             sub_140009e44(&var_60, 0, (int64)(ebx));
             r9d = ebx;
             rbx = var_60;
@@ -27,8 +26,6 @@ void sub_14001008c_l1(void) {
                     sub_140010b30(rbx);
                     qword_ADDR = rsi;
                 } else {
-                    r8d = 0;
-                    edx = 0;
                     sub_140010f48(&var_60, 0, 0);
                     rbx = var_60;
                 }

@@ -1,7 +1,6 @@
 // L1 structure recovery (4 blocks)
 void sub_14000fcd0_l1(void) {
     rbx = rcx;
-    edx = 0;
     sub_1400029dc(&var_20, 0, 0xADDR);
     sub_1400083f8(&var_20, 0xADDR, rbx, r9);
     if (eax >= 0 /* signed */) {

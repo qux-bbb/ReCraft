@@ -33,7 +33,6 @@ void sub_1400118a0_l1(void) {
         eax = dword_ADDR;
         dword_ADDR = eax;
         sub_14000f9f0();
-        ecx = 0;
         sub_14000c980(0);
         if (edi != 0) {
             ebx = dword_ADDR;

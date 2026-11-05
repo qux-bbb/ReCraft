@@ -16,7 +16,6 @@ void sub_140002198_l1(void) {
                     rbp = rax;
                     rbx = rax;
                     if (rax == 0) {
-                        edx = 0;
                         sub_14000257c(rcx, 0);
                     } else {
                         sub_14000257c(rcx, rax);

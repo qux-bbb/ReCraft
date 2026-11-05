@@ -7,7 +7,6 @@ void sub_140020598_l1(void) {
         dword_ADDR &= 0xADDR;
         rbx = qword_ADDR;
     }
-    edx = 0;
     sub_1400029dc(&var_20, 0, 0xADDR);
     rax = qword_ADDR;
     var_a0 = -1;

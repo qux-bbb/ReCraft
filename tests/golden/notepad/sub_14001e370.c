@@ -69,7 +69,6 @@ void sub_14001e370_l1(void) {
                 }
             }
             if (qword_ADDR != -1) {
-                r8d = 0;
                 sub_140010f48(&var_68, dword_ADDR, 0);
                 rbx = var_68;
                 if (al == 0) {

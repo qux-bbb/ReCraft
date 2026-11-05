@@ -21,7 +21,6 @@ void sub_140008624_l1(void) {
                         ReleaseSRWLockExclusive(rbp);
                     }
                 }
-                r9d = 0;
                 sub_140008748((rbx + 0xADDR), rsi, r15, 0);
                 rax = *(u64*)(rsi);
                 if (rax != 0) {

@@ -3,7 +3,6 @@ void sub_14000c7f0_l1(void) {
     rbp = &var_100;
     var_40 = 0;
     rbx = rcx;
-    edx = 0;
     sub_1400029dc(&var_60, 0, 0xADDR);
     rax = qword_ADDR;
     rcx = qword_ADDR;

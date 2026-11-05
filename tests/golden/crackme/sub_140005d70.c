@@ -206,8 +206,6 @@ void sub_140005d70_l1(void) {
                 r9d = 0;
                 var_20 = rsi;
                 r8d = 0;
-                edx = 0;
-                ecx = 0;
                 sub_140008bd0(0, 0, 0, 0, rsi);
                 eax = ebp;
                 return;

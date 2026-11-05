@@ -4,14 +4,12 @@ void sub_14000d2e8_l1(void) {
     r14 = rdx;
     rsi = rcx;
     edi = 0xADDR;
-    edx = 0;
     sub_140009e44(&var_50, 0, edi);
     rbx = var_50;
     r12d = 0;
     if (rbx == 0) {
         edi = 0xADDR;
     } else {
-        edx = 0;
         sub_1400029dc(&var_60, 0, (rdi - 0xADDR));
         rax = qword_ADDR;
         rcx = rbx;

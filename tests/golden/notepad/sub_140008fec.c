@@ -10,7 +10,6 @@ void sub_140008fec_l1(void) {
         rcx = rbx;
         sub_140028010(rbx);
     }
-    edx = 0;
     sub_1400029dc(&var_20, 0, 0xADDR);
     rcx = *(u64*)((rbx + 0xADDR));
     var_38 = 1;

@@ -90,7 +90,6 @@ void sub_14000c520_l1(void) {
                 ecx = dword_ADDR;
                 r9d = 0;
                 dword_ADDR = ecx;
-                r8d = 0;
                 sub_140011af8(dword_ADDR, 0xADDR, 0, 0);
                 if (al == 0) {
                     edx = dword_ADDR;

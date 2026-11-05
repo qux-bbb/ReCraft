@@ -45,9 +45,7 @@ void sub_140007ab4_l1(void) {
             r11 = &var_e0;
             return;
         }
-        edx = 0;
         sub_140009488((rdi + 0xADDR), 0);
-        edx = 0;
         sub_140009488((rdi + 0xADDR), 0);
         if (rbx == 0) {
             sub_140003cdc((rdi + 0xADDR));

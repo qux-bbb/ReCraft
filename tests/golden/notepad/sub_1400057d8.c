@@ -14,7 +14,6 @@ void sub_1400057d8_l1(void) {
         var_28 = rax;
         edx = 0;
         var_20 = 0;
-        ecx = 0;
         sub_1400032f0(0, 0, 0, 0, 0, var_48, 0xADDR);
         eax = (uint32)(ax);
         eax |= 0xADDR;

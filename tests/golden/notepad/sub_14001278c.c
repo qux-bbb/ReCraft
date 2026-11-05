@@ -54,7 +54,6 @@ void sub_14001278c_l1(void) {
         sub_14000a0c0(&var_28, &var_20);
         rbx = var_20;
     }
-    edx = 0;
     sub_1400029dc(&var_30, 0, 0xADDR);
     rdi = var_28;
     FindFirstFileW(rdi, &var_30);
@@ -66,7 +65,6 @@ void sub_14001278c_l1(void) {
                 rax += 1;
             } while (*(u16*)((rdi + (rax * 2))) != r13w);
             r15 = (rax + 5);
-            edx = 0;
             sub_140009e44(&var_20, 0, r15);
             rsi = var_20;
             if (rsi != 0) {

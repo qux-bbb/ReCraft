@@ -40,12 +40,10 @@ void sub_1400079a8_l1(void) {
             }
             rsi += rbp;
         }
-        ecx = 0;
         sub_140008ee0(0);
         rax = rbx;
         return;
     }
-    ecx = 0;
     sub_140008ee0(0);
     eax = 0;
     return;

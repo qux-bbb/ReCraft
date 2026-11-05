@@ -7,7 +7,6 @@ void sub_140012308_l1(void) {
     sub_14000c980(0);
     var_30 = 0;
     var_38 = 0;
-    edx = 0;
     sub_1400029dc(&var_40, 0, 0xADDR);
     sub_140010a74(rsi, &var_30);
     r14d = 1;
