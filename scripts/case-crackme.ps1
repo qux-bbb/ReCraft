@@ -77,12 +77,12 @@ Write-Host '== disassembly (tail of the checker) ==' -ForegroundColor Cyan
 Write-Host '== name the statically linked CRT helpers (sample-specific) ==' -ForegroundColor Cyan
 $prototypes = [ordered]@{
     '0x140001010' = 'int main(void)'
-    '0x140001170' = 'int puts(const char* text)'
+    '0x140001170' = 'int printf(const char* format, ...)'
     '0x140004580' = 'void* __acrt_iob_func(uint32 index)'
     '0x1400049f8' = 'int fflush(void* stream)'
     '0x140004bd4' = 'char* fgets(char* buf, int size, void* stream)'
-    '0x140004cc4' = 'int printf(const char* text)'
-    '0x140006fd0' = 'char* strchr(const char* text, int ch)'
+    '0x140004cc4' = 'int puts(const char* text)'
+    '0x140006fd0' = 'char* strpbrk(const char* text, const char* set)'
     '0x140016b60' = 'int strcmp(const char* left, const char* right)'
     '0x140016be0' = 'uint64 strlen(const char* text)'
 }

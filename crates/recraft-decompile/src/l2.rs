@@ -1427,6 +1427,11 @@ pub fn parse_prototype(text: &str) -> Option<ProtoSig> {
     } else {
         let mut params = Vec::new();
         for (index, raw) in inside.split(',').enumerate() {
+            // `...` is the variadic marker, not a parameter: the call prints exactly the
+            // arguments its format string names, so a prototype must not add one.
+            if raw.trim() == "..." {
+                continue;
+            }
             let param = parse_param(raw, index)?;
             params.push(param);
         }
@@ -1569,6 +1574,11 @@ mod tests {
         assert_eq!(ptr.params[0].ty, ArgType::CharPtr);
 
         assert!(parse_prototype("int (*callback)(int)").is_none());
+
+        // `...` marks a variadic callee; it is not a parameter of its own.
+        let variadic = parse_prototype("int printf(const char* format, ...)").expect("variadic");
+        assert_eq!(variadic.params.len(), 1);
+        assert_eq!(variadic.params[0].name, "format");
     }
 
     #[test]
