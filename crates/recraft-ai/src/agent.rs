@@ -20,7 +20,8 @@ use recraft_core::{FunctionInfo, Session};
 use serde_json::{Value, json};
 
 use crate::provider::{
-    ChatMessage, Provider, ProviderSettings, ToolCall, ToolReply, ToolSpec, provider_from_settings,
+    ChatMessage, ChatRole, Provider, ProviderSettings, ToolCall, ToolReply, ToolSpec,
+    provider_from_settings,
 };
 
 /// System prompt for the agent. Kept short: the tool descriptions carry the detail.
@@ -35,6 +36,10 @@ the project: propose renames as plain text and leave applying them to the user."
 /// Default number of model turns `run_agent` allows (each may contain several tool calls).
 /// One extra turn is always reserved for the answer after the tool budget is spent.
 pub const AGENT_MAX_ROUNDS: usize = 10;
+
+/// Conversation cap before the oldest turns are dropped. Tool results are large, so a long
+/// session would otherwise crowd out the question being asked.
+pub const AGENT_HISTORY_MAX_MESSAGES: usize = 60;
 
 /// Progress the caller can show while the loop runs.
 #[derive(Debug, Clone)]
@@ -204,6 +209,7 @@ pub fn run_agent_with_history(
     if messages.is_empty() {
         messages.push(ChatMessage::system(AGENT_SYSTEM));
     }
+    trim_history(messages);
     messages.push(ChatMessage::user(question));
     let rounds = max_rounds.clamp(1, 16);
     for round in 0..=rounds {
@@ -244,6 +250,7 @@ pub fn run_agent_with_history(
                     let result = execute_tool(session, &call);
                     messages.push(ChatMessage::tool(call.id.clone(), result));
                 }
+                trim_history(messages);
             }
         }
     }
@@ -538,6 +545,29 @@ fn tool_disassemble(session: &mut Session, args: &Value) -> Result<Value> {
     Ok(json!({"lines": lines, "count": lines.len()}))
 }
 
+/// Keep the system prompt and the newest turns, cutting only at a user message so an
+/// assistant `tool_calls` turn is never separated from the tool results that answer it.
+pub(crate) fn trim_history(history: &mut Vec<ChatMessage>) {
+    if history.len() <= AGENT_HISTORY_MAX_MESSAGES {
+        return;
+    }
+    let has_system = history
+        .first()
+        .is_some_and(|message| message.role == ChatRole::System);
+    // Smallest index whose removal still fits the cap; move forward to the next question
+    // so the oldest surviving turn is a complete one.
+    let system = usize::from(has_system);
+    let mut cut = history.len() + system - AGENT_HISTORY_MAX_MESSAGES;
+    while cut < history.len() && history[cut].role != ChatRole::User {
+        cut += 1;
+    }
+    if cut >= history.len() {
+        // No question boundary to cut at: keeping the history is safer than orphaning a
+        // tool result, and the round limit already bounds a single answer.
+        return;
+    }
+    history.drain(system..cut);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -763,5 +793,49 @@ mod tests {
             1,
             "the system prompt must appear once"
         );
+    }
+    /// The conversation is capped, and the cut never separates an assistant tool call from
+    /// the tool messages that answer it.
+    #[test]
+    fn history_trimming_keeps_system_and_tool_pairs() {
+        let mut history = vec![ChatMessage::system("sys")];
+        for turn in 0..30 {
+            history.push(ChatMessage::user(format!("q{turn}")));
+            history.push(ChatMessage::assistant(
+                "",
+                vec![ToolCall {
+                    id: format!("call_{turn}"),
+                    name: "list_functions".to_owned(),
+                    arguments: Value::Null,
+                }],
+            ));
+            history.push(ChatMessage::tool(format!("call_{turn}"), "result"));
+            history.push(ChatMessage::assistant(format!("a{turn}"), Vec::new()));
+        }
+        assert!(history.len() > AGENT_HISTORY_MAX_MESSAGES);
+        trim_history(&mut history);
+        assert!(
+            history.len() <= AGENT_HISTORY_MAX_MESSAGES,
+            "trimmed to {}",
+            history.len()
+        );
+        assert_eq!(history[0].role, ChatRole::System);
+        assert_eq!(history[1].role, ChatRole::User, "must start on a question");
+
+        // Every remaining tool result still follows the assistant turn that asked for it.
+        let mut open_calls = 0usize;
+        for message in history.iter().skip(1) {
+            match message.role {
+                ChatRole::Assistant if !message.tool_calls.is_empty() => {
+                    open_calls += message.tool_calls.len();
+                }
+                ChatRole::Tool => {
+                    assert!(open_calls > 0, "orphan tool result");
+                    open_calls -= 1;
+                }
+                ChatRole::User => assert_eq!(open_calls, 0, "turn cut mid tool pair"),
+                _ => {}
+            }
+        }
     }
 }
