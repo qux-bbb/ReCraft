@@ -120,6 +120,17 @@ enum AiCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Ask a question about the project; the model calls read-only tools to answer.
+    Ask {
+        project: PathBuf,
+        /// Question, e.g. "which functions write to the registry?".
+        question: String,
+        #[arg(long)]
+        json: bool,
+        /// Maximum model turns (each may run several tools).
+        #[arg(long, default_value_t = recraft_ai::AGENT_MAX_ROUNDS)]
+        rounds: usize,
+    },
     /// Score proposed names against the symbols the binary actually carries.
     ///
     /// Offline by default (the heuristic fallback); `--llm` runs the real naming pipeline
@@ -1546,6 +1557,12 @@ fn cmd_ai(command: AiCommand) -> Result<()> {
             println!("{}", settings.describe());
             Ok(())
         }
+        AiCommand::Ask {
+            project,
+            question,
+            json,
+            rounds,
+        } => cmd_ai_ask(&project, &question, json, rounds),
         AiCommand::Eval { project, json } => cmd_ai_eval(&project, json),
         AiCommand::EvalNames {
             project,
@@ -1706,6 +1723,56 @@ fn cmd_ai_polish(project: &Path, addr: Option<&str>, as_json: bool, no_cache: bo
     println!("// The project is not modified; L1 output stays authoritative.");
     println!("{response}");
     Ok(())
+}
+
+/// Project-level agent: the model answers by calling read-only tools.
+fn cmd_ai_ask(project: &Path, question: &str, as_json: bool, rounds: usize) -> Result<()> {
+    let settings = require_ai_provider("ai ask")?;
+    let mut session = Session::open(project)?;
+    let mut trace: Vec<serde_json::Value> = Vec::new();
+    let mut answer = String::new();
+    let result =
+        recraft_ai::run_agent(
+            &mut session,
+            &settings,
+            question,
+            rounds,
+            &mut |event| match event {
+                recraft_ai::AgentEvent::Tool { name, arguments } => {
+                    if !as_json {
+                        eprintln!("  → {name} {arguments}");
+                    }
+                    trace.push(json!({"name": name, "arguments": arguments}));
+                }
+                recraft_ai::AgentEvent::Answer(text) => answer = text,
+            },
+        );
+    let answer = match result {
+        Ok(text) => text,
+        Err(error) => {
+            if as_json {
+                return json_result(&json!({
+                    "provider": settings.describe(),
+                    "question": question,
+                    "tools": trace,
+                    "error": error.to_string(),
+                }));
+            }
+            return Err(error);
+        }
+    };
+    if as_json {
+        json_result(&json!({
+            "provider": settings.describe(),
+            "question": question,
+            "answer": answer,
+            "tools": trace,
+        }))
+    } else {
+        println!();
+        println!("{answer}");
+        Ok(())
+    }
 }
 
 fn cmd_ai_eval(project: &Path, as_json: bool) -> Result<()> {

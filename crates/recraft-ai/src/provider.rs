@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::Session;
+use serde_json::Value;
 
 use crate::Proposal;
 
@@ -959,10 +960,159 @@ impl AuditLog {
     }
 }
 
+/// One function the model may call (an OpenAI `tools` entry).
+#[derive(Debug, Clone)]
+pub struct ToolSpec {
+    pub name: &'static str,
+    pub description: &'static str,
+    /// JSON Schema object describing the arguments.
+    pub parameters: Value,
+}
+
+impl ToolSpec {
+    fn to_json(&self) -> Value {
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        })
+    }
+}
+
+/// A tool invocation requested by the model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    /// Provider-assigned id; the tool result must echo it back.
+    pub id: String,
+    pub name: String,
+    /// Parsed JSON arguments (an unparsable payload becomes `{"_raw": "..."}`).
+    pub arguments: Value,
+}
+
+/// What one assistant turn contains: final text, or tools to run.
+#[derive(Debug, Clone)]
+pub enum ToolReply {
+    Text(String),
+    Calls(Vec<ToolCall>),
+}
+
+/// Who wrote one message in a tool-calling conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+impl ChatRole {
+    const fn as_str(self) -> &'static str {
+        match self {
+            ChatRole::System => "system",
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+            ChatRole::Tool => "tool",
+        }
+    }
+}
+
+/// One message in a tool-calling conversation.
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+    /// Only for [`ChatRole::Assistant`] turns that call tools.
+    pub tool_calls: Vec<ToolCall>,
+    /// Only for [`ChatRole::Tool`] turns: the call this result answers.
+    pub tool_call_id: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::System,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::User,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: ChatRole::Assistant,
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool(call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::Tool,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(call_id.into()),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let mut value = serde_json::json!({
+            "role": self.role.as_str(),
+            "content": self.content,
+        });
+        if let Some(call_id) = &self.tool_call_id {
+            value["tool_call_id"] = serde_json::json!(call_id);
+        }
+        if !self.tool_calls.is_empty() {
+            value["tool_calls"] = Value::Array(
+                self.tool_calls
+                    .iter()
+                    .map(|call| {
+                        serde_json::json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.arguments.to_string(),
+                            },
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        value
+    }
+}
+
 /// The offline-safe provider trait a future HTTP transport implements.
 pub trait Provider {
     fn name(&self) -> &'static str;
     fn complete(&mut self, request: &PromptRequest) -> Result<String>;
+
+    /// Run one tool-calling turn. Providers without tool support must refuse: silently
+    /// dropping the tools would leave the agent asking for them forever.
+    fn complete_chat(
+        &mut self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSpec],
+        _thinking: bool,
+    ) -> Result<ToolReply> {
+        Err(Error::unsupported(
+            "this provider does not support tool calls; configure an OpenAI-compatible endpoint",
+        ))
+    }
 
     /// Streaming variant used by the desktop UI. The default preserves providers that
     /// do not implement SSE by delivering the completed answer as one chunk.
@@ -1071,6 +1221,22 @@ impl OpenAiCompatibleProvider {
             .then_some(request.thinking)
     }
 
+    /// Headers every JSON request carries (auth, user agent, OpenCode session affinity).
+    fn json_headers(&self) -> Vec<(String, String)> {
+        let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
+        headers.push((
+            "User-Agent".to_owned(),
+            format!("recraft/{}", env!("CARGO_PKG_VERSION")),
+        ));
+        if self.settings.endpoint.contains("opencode.ai") {
+            headers.push(("x-opencode-session".to_owned(), opencode_session_id()));
+        }
+        if let Some(key) = &self.api_key {
+            headers.push(("Authorization".to_owned(), format!("Bearer {key}")));
+        }
+        headers
+    }
+
     fn stream_request(&self, request: &PromptRequest) -> crate::transport::HttpRequest {
         let url = format!(
             "{}/v1/chat/completions",
@@ -1142,21 +1308,10 @@ impl Provider for OpenAiCompatibleProvider {
             });
         }
         let body = body.to_string();
-        let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
-        headers.push((
-            "User-Agent".to_owned(),
-            format!("recraft/{}", env!("CARGO_PKG_VERSION")),
-        ));
-        if self.settings.endpoint.contains("opencode.ai") {
-            headers.push(("x-opencode-session".to_owned(), opencode_session_id()));
-        }
-        if let Some(key) = &self.api_key {
-            headers.push(("Authorization".to_owned(), format!("Bearer {key}")));
-        }
         let response = self.transport.send(&crate::transport::HttpRequest {
             method: "POST",
             url,
-            headers,
+            headers: self.json_headers(),
             body,
         })?;
         if response.status != 200 {
@@ -1176,6 +1331,47 @@ impl Provider for OpenAiCompatibleProvider {
             )));
         }
         Ok(strip_code_fences(&text))
+    }
+
+    fn complete_chat(
+        &mut self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        thinking: bool,
+    ) -> Result<ToolReply> {
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.settings.endpoint.trim_end_matches('/')
+        );
+        let mut body = serde_json::json!({
+            "model": self.settings.model,
+            "max_tokens": self.settings.max_tokens,
+            "stream": false,
+            "tool_choice": "auto",
+            "messages": messages.iter().map(ChatMessage::to_json).collect::<Vec<_>>(),
+            "tools": tools.iter().map(ToolSpec::to_json).collect::<Vec<_>>(),
+        });
+        if self.settings.endpoint.contains("api.deepseek.com")
+            || self.settings.endpoint.contains("opencode.ai")
+        {
+            body["thinking"] = serde_json::json!({
+                "type": if thinking { "enabled" } else { "disabled" },
+            });
+        }
+        let response = self.transport.send(&crate::transport::HttpRequest {
+            method: "POST",
+            url,
+            headers: self.json_headers(),
+            body: body.to_string(),
+        })?;
+        if response.status != 200 {
+            return Err(Error::internal(format!(
+                "openai HTTP {}: {}",
+                response.status,
+                response.body.chars().take(800).collect::<String>()
+            )));
+        }
+        parse_tool_reply(&response.body)
     }
 
     fn complete_stream(
@@ -1212,6 +1408,62 @@ impl Provider for OpenAiCompatibleProvider {
         }
         Ok(strip_code_fences(&text))
     }
+}
+
+/// Parse an OpenAI-compatible chat completion that may contain `tool_calls`.
+///
+/// Models differ in how they encode `arguments` (JSON string, already-decoded object, or
+/// invalid text); the value is normalised here so the agent never sees a string it has to
+/// re-parse. Missing ids get a stable synthetic id so the tool result can be paired back.
+pub fn parse_tool_reply(body: &str) -> Result<ToolReply> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| Error::internal(format!("openai JSON: {error}")))?;
+    let message = value
+        .pointer("/choices/0/message")
+        .ok_or_else(|| Error::internal("openai response has no choices[0].message"))?;
+    let mut calls = Vec::new();
+    if let Some(items) = message.get("tool_calls").and_then(Value::as_array) {
+        for (index, item) in items.iter().enumerate() {
+            let Some(name) = item
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("call_{index}"));
+            let arguments = match item.pointer("/function/arguments") {
+                Some(Value::String(text)) => serde_json::from_str(text)
+                    .unwrap_or_else(|_| serde_json::json!({"_raw": text.clone()})),
+                Some(value) => value.clone(),
+                None => Value::Null,
+            };
+            calls.push(ToolCall {
+                id,
+                name: name.to_owned(),
+                arguments,
+            });
+        }
+    }
+    if !calls.is_empty() {
+        return Ok(ToolReply::Calls(calls));
+    }
+    let text = message
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if text.is_empty() {
+        return Err(Error::internal(
+            "openai returned no assistant content and no tool calls",
+        ));
+    }
+    Ok(ToolReply::Text(text))
 }
 
 /// Incremental parser for the OpenAI `text/event-stream` wire format.
@@ -2087,5 +2339,41 @@ mod tests {
             prompt.user.len() < settings.max_tokens * 4,
             "prompt over the character budget"
         );
+    }
+    #[test]
+    fn parse_tool_reply_reads_calls_and_text() {
+        let calls = parse_tool_reply(
+            r#"{"choices":[{"message":{"content":null,"tool_calls":[
+                {"id":"call_a","type":"function","function":{"name":"list_functions","arguments":"{\"limit\":5}"}}
+            ]}}]}"#,
+        )
+        .unwrap();
+        match calls {
+            ToolReply::Calls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id, "call_a");
+                assert_eq!(calls[0].name, "list_functions");
+                assert_eq!(calls[0].arguments["limit"], 5);
+            }
+            ToolReply::Text(text) => panic!("expected calls, got {text:?}"),
+        }
+
+        // A missing id still yields a usable pairing id for the tool result.
+        let no_id = parse_tool_reply(
+            r#"{"choices":[{"message":{"tool_calls":[
+                {"type":"function","function":{"name":"x","arguments":{}}}
+            ]}}]}"#,
+        )
+        .unwrap();
+        match no_id {
+            ToolReply::Calls(calls) => assert_eq!(calls[0].id, "call_0"),
+            ToolReply::Text(text) => panic!("expected calls, got {text:?}"),
+        }
+
+        match parse_tool_reply(r#"{"choices":[{"message":{"content":"hello"}}]}"#).unwrap() {
+            ToolReply::Text(text) => assert_eq!(text, "hello"),
+            ToolReply::Calls(_) => panic!("expected text"),
+        }
+        assert!(parse_tool_reply("{}").is_err());
     }
 }

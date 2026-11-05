@@ -21,6 +21,7 @@
 // DPAPI is the one OS FFI exception; it is isolated in `secret`.
 #![deny(unsafe_code)]
 
+mod agent;
 mod cache;
 mod eval;
 mod eval_names;
@@ -30,6 +31,7 @@ mod query;
 mod secret;
 mod transport;
 
+pub use agent::{AGENT_MAX_ROUNDS, AGENT_SYSTEM, AgentEvent, agent_tools, run_agent};
 pub use cache::{
     AUDIT_FILE, AiCache, AuditRecord, CACHE_FILE, CacheEntry, append_audit, append_default_audit,
     default_dir,
@@ -40,12 +42,13 @@ pub use eval_names::{
     evaluate_names_with_provider, score_name,
 };
 pub use provider::{
-    AuditEntry, AuditLog, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS, EXPLAIN_SYSTEM, OPENCODE_GO_ENDPOINT,
-    OPENCODE_GO_MODELS, OllamaProvider, OpenAiCompatibleProvider, POLISH_SYSTEM,
-    PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest, Provider, ProviderKind, ProviderPreset,
-    ProviderSettings, RENAME_SYSTEM, RenameSuggestion, TokenBudget, UnavailableProvider,
-    apply_rename_reply, build_explain_prompt, build_polish_prompt, build_rename_prompt,
-    build_rename_prompt_blinded, parse_rename_reply, provider_from_settings, redact,
+    AuditEntry, AuditLog, ChatMessage, ChatRole, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS,
+    EXPLAIN_SYSTEM, OPENCODE_GO_ENDPOINT, OPENCODE_GO_MODELS, OllamaProvider,
+    OpenAiCompatibleProvider, POLISH_SYSTEM, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest,
+    Provider, ProviderKind, ProviderPreset, ProviderSettings, RENAME_SYSTEM, RenameSuggestion,
+    TokenBudget, ToolCall, ToolReply, ToolSpec, UnavailableProvider, apply_rename_reply,
+    build_explain_prompt, build_polish_prompt, build_rename_prompt, build_rename_prompt_blinded,
+    parse_rename_reply, parse_tool_reply, provider_from_settings, redact,
 };
 pub use query::{QueryAnswer, QueryItem, answer_query};
 pub use transport::{
@@ -786,7 +789,17 @@ fn incoming_callers(
     Ok(found)
 }
 
-fn read_string(session: &mut Session, addr: Address, len: u32, encoding: i64) -> String {
+/// Truncate to `max_chars` characters on a char boundary, appending `…`.
+pub(crate) fn truncate_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+pub(crate) fn read_string(session: &mut Session, addr: Address, len: u32, encoding: i64) -> String {
     let bytes = session
         .read_bytes(addr, (len as usize).max(2))
         .unwrap_or_default();
