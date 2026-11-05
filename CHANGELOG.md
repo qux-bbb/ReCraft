@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A `/* signed */` note that the operands already spell is removed from L2.** The printer
+  writes `(a < b /* signed */)` when it cannot retype the operands, but the value flow often
+  puts a signed cast back on the first operand (`(int32)v1 < 3`), and then the note only
+  repeats the cast. A pass after variable recovery drops it when the enclosing parenthesised
+  group starts with a signed cast: crackme's L2 went from 191 notes to 69, notepad keeps 35,
+  and `main`'s loop reads `while ((int32)v1 < 3)`. One unit test covers both shapes; lint is 0
+  findings on all five projects (Go's 3261 L2 texts included) and the 789 golden snapshots are
+  unchanged.
 - **`fgets` is recognised too, and the classifier now follows incremental-linking thunks.**
   `main` called `sub_140004bd4`, which is a one-instruction `jmp` thunk to the real
   `sub_140004a60`; a role is now resolved through up to two thunk hops. `fgets`' evidence is a
