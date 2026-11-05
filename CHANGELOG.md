@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **4/27 accepted (14.8%)**, 18/27 partial (66.7%), mean overlap 0.52 (heuristic: 0 accepted,
   3/27 partial). Model output is stochastic, so the docs present a range and treat
   accepted/partial as the stable numbers.
+- **Agent answers stream, and pre-tool narration is retracted.** Tool-calling turns now use
+  an SSE decoder that forwards `delta.content` while accumulating `delta.tool_calls`
+  fragments (index/id/name/arguments split across events), so the final answer types out
+  instead of appearing after a dead spinner. Models often narrate before a tool call ("I'll
+  look for logging APIs"); `AgentEvent::TurnStart/Retract` makes the panel drop that text and
+  keep it as trace context, and the CLI prints it to stderr — a Chinese answer no longer
+  starts with an English aside. A gateway that ignores `stream: true` still works through the
+  one-shot fallback. The decoder and the retraction sequence are unit-tested (content, split
+  arguments, two calls, narration ordering).
 - **"Dig deeper" bridges the fast Explain path and the agent.** Explain stays one request
   about one function; the small **Dig deeper** button next to it prefills the agent question
   with the function's name and address and runs the loop in the existing conversation, so a
