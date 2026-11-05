@@ -64,8 +64,87 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> boo
         *lines = candidate;
     }
     strip_parameter_registers(lines);
+    fold_copy_then_update(lines);
     drop_write_only_locals(lines);
     true
+}
+
+/// Fold `v = x;` followed by a self-update of `v` into a single definition.
+///
+/// The emitter prints `rcx = rax; ecx = (ecx & 0xf)` for a copy followed by a 32-bit mask,
+/// which the value flow names as two definitions of one local. The two statements are
+/// adjacent, so nothing can observe the intermediate value and substituting the copy into the
+/// update is exact: `v = (uint32)((uint32)x & 0xf);`.
+fn fold_copy_then_update(lines: &mut Vec<PseudoLine>) {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let indent = crate::structuring::leading_spaces(&lines[index].text);
+        if crate::structuring::leading_spaces(&lines[index + 1].text) != indent {
+            index += 1;
+            continue;
+        }
+        let (Some((name, value)), Some((next_name, next_value))) = (
+            plain_definition(&lines[index].text),
+            plain_definition(&lines[index + 1].text),
+        ) else {
+            index += 1;
+            continue;
+        };
+        if name != next_name || !mentions_name(next_value, name) {
+            index += 1;
+            continue;
+        }
+        // A compound value needs parentheses once it sits inside the update expression.
+        let value = if is_primary_expression(value) {
+            value.to_owned()
+        } else {
+            format!("({value})")
+        };
+        let substituted = crate::structuring::replace_token(next_value, name, &value);
+        let substituted = collapse_repeated_cast(&substituted);
+
+        /// Collapse a cast of a cast to the same type: `(uint32)(uint32)(x)` is `(uint32)(x)`.
+        fn collapse_repeated_cast(text: &str) -> String {
+            let mut text = text.to_owned();
+            for ty in [
+                "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64",
+            ] {
+                let repeated = format!("({ty})({ty})");
+                let single = format!("({ty})");
+                while text.contains(&repeated) {
+                    text = text.replace(&repeated, &single);
+                }
+            }
+            text
+        }
+
+        lines[index].text = format!("{}{name} = {substituted};", " ".repeat(indent));
+        lines.remove(index + 1);
+    }
+}
+
+/// `name = value;` at statement level, with no compound operator.
+fn plain_definition(text: &str) -> Option<(&str, &str)> {
+    let inner = text.trim().strip_suffix(';')?;
+    let (lhs, rhs) = inner.split_once(" = ")?;
+    let lhs = lhs.trim();
+    if lhs.is_empty()
+        || !lhs
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    Some((lhs, rhs.trim()))
+}
+
+/// Whether `text` is a primary expression, so it can be substituted without parentheses.
+fn is_primary_expression(text: &str) -> bool {
+    const OPERATORS: [&str; 13] = [
+        " + ", " - ", " * ", " / ", " % ", " & ", " | ", " ^ ", " << ", " >> ", " == ", " != ",
+        " < ",
+    ];
+    !OPERATORS.iter().any(|operator| text.contains(operator))
 }
 
 /// Drop a local whose only definition is a constant the very next call already spells.
@@ -3104,11 +3183,16 @@ mod tests {
     }
 
     #[test]
-    fn wide_compound_assignment_casts_the_read() {
+    fn a_wide_compound_update_folds_the_copy_it_reads() {
+        // `eax = arg1; eax += 1` copies into a 64-bit local and then updates the low 32 bits.
+        // The copy folds into the update, and the truncation the update relies on stays.
         let text = run(&["    eax = arg1;", "    eax += 1;", "    return rax;"]);
-        assert_eq!(text.matches("uint32 v1;").count(), 0, "{text}");
+        assert!(!text.contains("uint32 v1;"), "{text}");
         assert!(text.contains("uint64 v1;"), "{text}");
-        assert!(text.contains("v1 = (uint32)((uint32)v1 + 1);"), "{text}");
+        assert!(
+            text.contains("v1 = (uint32)((uint32)(arg1) + 1);"),
+            "{text}"
+        );
         assert_no_registers(&text);
     }
 

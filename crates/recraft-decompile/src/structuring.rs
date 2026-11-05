@@ -5412,7 +5412,7 @@ fn drop_unreachable_tails(lines: &mut Vec<PseudoLine>) {
     }
 }
 
-fn leading_spaces(text: &str) -> usize {
+pub(crate) fn leading_spaces(text: &str) -> usize {
     text.len() - text.trim_start().len()
 }
 
@@ -7152,7 +7152,7 @@ fn fold_single_use_temporaries(lines: &mut Vec<PseudoLine>) {
 
 /// Replace whole identifier tokens, never substrings (`rax` inside `rax2`), and never
 /// inside a quoted string literal.
-fn replace_token(text: &str, token: &str, replacement: &str) -> String {
+pub(crate) fn replace_token(text: &str, token: &str, replacement: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut word = String::new();
     let mut quoted = false;
