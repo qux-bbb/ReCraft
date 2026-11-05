@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop (tool result paired by `tool_call_id`, unknown-tool recovery, round limit) and the
   panel path (trace + answer state); `docs/AI.md` documents the tools and the read-only
   contract.
+- **The naming benchmark accepts curated aliases.** `ai eval-names --aliases
+  corpus/naming/aliases.json` reports an `accepted` count next to the strict `exact`:
+  `read_config_file` for `open_config_file` is a hit, not a miss, while `exact` keeps
+  comparing against the real symbol only. The manifest is hand-written per benchmark
+  function and the CLI rejects malformed JSON. Measured on `deepseek-flash`: 0–1/27 exact,
+  **4/27 accepted (14.8%)**, 18/27 partial (66.7%), mean overlap 0.52 (heuristic: 0 accepted,
+  3/27 partial). Model output is stochastic, so the docs present a range and treat
+  accepted/partial as the stable numbers.
+- **The agent keeps the conversation, and answers link their addresses.** A follow-up
+  question ("and its callers?") now builds on the previous turn instead of starting over: the
+  panel stores the whole message history (system prompt once, question, tool traffic and the
+  answer), and a **New chat** button drops it. `run_agent_with_history` owns the conversation
+  so the GUI and the unit tests drive the same path. Addresses quoted in an explanation or
+  agent answer become clickable links under the result pane (de-duplicated, only addresses
+  inside a known function, at most 10), so a claim can be checked without retyping the
+  address.
 - **A measurable naming pipeline, and a benchmark that scores it.** Suggest names used to
   burn its batch on the lowest-address `sub_*` functions (evidence order, then a hard cap of
   12 in the prompt) and present heuristic fallbacks as if the model had named them. Candidates

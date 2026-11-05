@@ -253,13 +253,16 @@ recraft-cli analyze naming.rcraft
 recraft-cli ai eval-names naming.rcraft            # 离线启发式基线（无需 key）
 recraft-cli ai eval-names naming.rcraft --llm      # 真实模型路径
 recraft-cli ai eval-names naming.rcraft --json     # 逐函数行（truth/proposal/overlap/apis/strings）
+recraft-cli ai eval-names naming.rcraft --aliases corpus\naming\aliases.json   # 计入可接受同义名
 ```
 
 评分（`crates/recraft-ai/src/eval_names.rs`，`NAME_EVAL_VERSION = name-eval-2026-11-v1`）：
 先归一化（小写、驼峰拆词、去掉启发式追加的 `_<地址>` 尾巴），`exact` 比较词集合（词序
 无关，`probe_field` == `field_probe`），`partial` 为词重叠 ≥ 0.5（Jaccard），`overlap` 为
-平均词重叠。**这是下界**：`read_config_file` 对 `open_config_file` 只算 partial，同义改写
-不会被算作 exact；给每个函数配可接受别名集是下一步。
+平均词重叠。**exact 只认真实符号**，这是严格口径；`--aliases` 的清单给每个函数一组
+可接受的同义名（`corpus/naming/aliases.json`，人工整理），命中别名计入独立的 **accepted**
+指标，不污染 exact。`read_config_file` 对 `open_config_file` 因此是 accepted + partial，
+而不是 partial-only。
 
 `corpus/naming/naming.c` 是基准二进制：26 个语义函数，覆盖文件/注册表/网络/加密/服务/
 剪贴板/进程快照等真实 Win32 API 与字符串，用 CRT 编译并导出（导出表即 ground truth）。
@@ -268,16 +271,21 @@ recraft-cli ai eval-names naming.rcraft --json     # 逐函数行（truth/propos
 
 **实测基线（2026-11-05，`deepseek-flash`，27 个带符号函数）**：
 
-| 模式 | exact | partial | 平均词重叠 | 备注 |
+| 模式 | exact（真值） | accepted（含别名） | partial | 平均词重叠 |
 |---|---|---|---|---|
-| 离线启发式 | 0/27（0%） | 0/27（0%） | 0.10 | 类别前缀 + 地址，只作回退 |
-| 模型（全部） | 1/27（3.7%） | 9/27（33.3%） | 0.31 | 5 个无 API/字符串证据的函数全是 0 分 |
-| 模型（有证据的 22 个） | 1/22（4.5%） | 9/22（40.9%） | 0.38 | 与 `suggest_names` 的实际候选集一致 |
+| 离线启发式 | 0/27 | 0/27 | 3/27（11.1%） | 0.13 |
+| 模型 | 0–1/27 | 4/27（14.8%） | 18/27（66.7%） | 0.52 |
 
-结论与用法：**有证据的函数值得一用**（`check_single_instance` 完全命中，
-`read_config_file`/`get_temp_path`/`generate_random_bytes`/`load_sample_plugin` 只差同义词），
-**没有 API/字符串证据的函数不要交给模型**——`suggest_names` 已经这样过滤，基准里的 0 分
-样本只是导出表里恰好有名字。改 prompt/候选排序后重跑这三行，数字下降即回退。
+模型输出有随机性（同一 prompt 两次运行可能是 `read_config_file` 或 `open_config_file`），
+exact 一列标成区间；accepted/partial 才是稳定的判断口径。逐条看：`read_config_file`、
+`get_temp_path`、`generate_random_bytes`、`delete_old_registry_key` 完全是人会接受的名字，
+`check_single_instance_mutex`、`install_and_start_service`、`append_log_started` 只多了修饰词；
+剩下的 0 分集中在**没有 API/字符串证据**的函数（`base64_encoded_length`、`compute_crc32`、
+`compare_version_strings`、`start`）——`suggest_names` 本来就不会把这类函数交给模型，
+所以真实候选集上的质量高于全表。
+
+结论与用法：**有证据的函数值得一用**，**没有证据的函数不要交给模型**；改 prompt/候选排序后
+重跑这三行，数字下降即回退。
 
 顺带修掉了一个证据缺口：函数扫描把 `call qword ptr [IAT]` 当成死路，导致每个函数在第一个
 导入 API 调用处就停止，后面的调用、块和 API 标签全部丢失（notepad 448 个标签）。改为继续
@@ -303,11 +311,13 @@ recraft-cli ai eval-names naming.rcraft --json     # 逐函数行（truth/propos
 - **只读**：工具只查库与反编译，不写项目；重命名仍然走 Proposal/apply。模型给出的重命名
   只是正文建议。
 - **有界**：轮数上限、每次结果都截断（列表/行数/字符串长度），未知工具或坏参数以
-  `{"error": …}` 返回给模型让它可以自我纠正；一直不回答会明确报错。
+  `{"error": …}` 返回给模型让它可以自我纠正；预算用尽时会收回工具并要求“用已有证据作答”。
+- **多轮追问**：面板保留整段对话（系统提示只出现一次，答案也写回历史），下一个问题可以
+  直接接着问“那它的调用者呢”；**新对话**按钮清空上下文。CLI 的 `ai ask` 是一次性问答。
 - 桌面端在**工作线程**里打开第二个 SQLite 连接跑整个循环，UI 只接收工具调用轨迹与最终答案；
-  工具轨迹显示在「工具调用 · N」折叠区，用来核对答案的证据。
-- 当前是**单轮问答**（没有多轮追问、没有工具结果的点选跳转），模型也不做流式输出——工具
-  轮次之间没有可流的内容，最终答案一次性到达。
+  工具轨迹显示在「工具调用 · N」折叠区，用来核对答案的证据。答案里引用的 `0x…` 地址会被
+  提取成可点链接（只保留落在已知函数内、去重后最多 10 个），点一下即跳转反汇编。
+- 当前**不做流式输出**：工具轮次之间没有可流的内容，最终答案一次性到达。
 
 实测（naming 基准样本）：问“哪些函数在操作注册表”，模型依次调用
 `find_api_callers("Reg")` → `search_strings("Software\\")` → 三个 `function_info`/`pseudocode`
@@ -316,8 +326,9 @@ recraft-cli ai eval-names naming.rcraft --json     # 逐函数行（truth/propos
 
 ## 限制与后续
 
-- **评分的同义词问题**：`exact` 只认词集合，`read_config_file` 与 `open_config_file` 算
-  partial。下一步给基准函数配别名集（`expected.json`），把同义改写纳入 exact 统计。
+- **评分的同义词问题**：`exact` 只认真实符号；`--aliases corpus/naming/aliases.json` 的
+  人工别名集给出 accepted 指标（4/27），但别名由人工整理，换一个样本需要重新整理；模型
+  输出有随机性，单次运行的数字应结合 accepted/partial 看，不要只盯 exact。
 - **单条 diff 预览**：批量 apply 已支持，但 apply 前没有 before/after 名称对比视图。
 - **网络可达性**：开发环境仅放行部分域名；TLS 栈通过 `https://crates.io/` 的忽略测试
   （`cargo test -p recraft-ai https_tls_handshake_to_crates_io -- --ignored`）验证，
