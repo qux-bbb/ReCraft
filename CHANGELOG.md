@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **4/27 accepted (14.8%)**, 18/27 partial (66.7%), mean overlap 0.52 (heuristic: 0 accepted,
   3/27 partial). Model output is stochastic, so the docs present a range and treat
   accepted/partial as the stable numbers.
+- **"Dig deeper" bridges the fast Explain path and the agent.** Explain stays one request
+  about one function; the small **Dig deeper** button next to it prefills the agent question
+  with the function's name and address and runs the loop in the existing conversation, so a
+  reader who wants callers/behaviour does not have to type the address. The conversation is
+  also capped at 60 messages: the oldest turns are dropped at a question boundary, which
+  keeps every `tool_calls` turn next to the tool results that answer it (unit-tested).
 - **The agent keeps the conversation, and answers link their addresses.** A follow-up
   question ("and its callers?") now builds on the previous turn instead of starting over: the
   panel stores the whole message history (system prompt once, question, tool traffic and the
