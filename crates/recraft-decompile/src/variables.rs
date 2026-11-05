@@ -2047,6 +2047,10 @@ fn is_non_call_identifier(ident: &str) -> bool {
 struct Vars {
     parent: Vec<usize>,
     width: Vec<u8>,
+    /// Widest width at which the value is *read*. A definition can be wider than any read
+    /// (the compiler works in a 32- or 64-bit register); declaring the local at the observed
+    /// width truncates exactly as the register write did.
+    observed: Vec<u8>,
     signed: Vec<u32>,
     unsigned: Vec<u32>,
     /// A value produced by a machine instruction the lifter could not model. It has no C
@@ -2060,6 +2064,7 @@ impl Vars {
         Vars {
             parent: Vec::new(),
             width: Vec::new(),
+            observed: Vec::new(),
             signed: Vec::new(),
             unsigned: Vec::new(),
             raw: Vec::new(),
@@ -2071,6 +2076,7 @@ impl Vars {
         let id = self.parent.len();
         self.parent.push(id);
         self.width.push(width);
+        self.observed.push(0);
         self.signed.push(0);
         self.unsigned.push(0);
         self.raw.push(false);
@@ -2109,6 +2115,7 @@ impl Vars {
 
     fn add_use(&mut self, var: usize, width: u8, signed: bool) {
         self.width[var] = self.width[var].max(width);
+        self.observed[var] = self.observed[var].max(width);
         if signed {
             self.signed[var] += 1;
         } else {
@@ -2352,16 +2359,15 @@ impl Program {
                             write.prev = previous;
                             nodes[index].write_var = previous;
                             vars.add_def(previous, write.width);
-                            if write.partial {
-                                let full = full_width(write.reg, is_64);
-                                vars.add_use(previous, full, false);
-                            }
+                            // A partial write only *preserves* the upper bits, it does not
+                            // observe them: counting that as a full-width read would declare
+                            // every partially written register 64-bit even when nothing ever
+                            // reads above the byte.
                         }
                     }
                 } else if write.partial && prev != NONE {
                     write.prev = prev;
-                    let full = full_width(write.reg, is_64);
-                    vars.add_use(prev, full, false);
+                    // See above: preserving the upper bits is not observing them.
                 }
                 nodes[index].write = Some(write);
             }
@@ -2377,9 +2383,29 @@ impl Program {
         let mut signed_uses = vec![0u32; total];
         let mut unsigned_uses = vec![0u32; total];
         let mut raw = vec![false; total];
+        let mut extents = vec![0u8; total];
+        for node in &nodes {
+            if let Some(write) = &node.write
+                && write.partial
+            {
+                let root = roots[node.write_var];
+                extents[root] = extents[root].max(write.offset + write.width);
+            }
+        }
         for (id, root) in roots.iter().enumerate() {
             let root = *root;
-            widths[root] = widths[root].max(vars.width[id]);
+            // Only reads observe value bits. A wide definition of a variable that is always
+            // read byte-wise is an unsigned char in the source that the compiler widened for
+            // convenience; narrowing the declaration truncates just like the register write.
+            // A variable nothing reads keeps its definition width. A partial write still needs
+            // the declaration to cover the bit range it writes.
+            let observed = vars.observed[id];
+            let width = if observed > 0 {
+                observed.max(extents[root])
+            } else {
+                vars.width[id]
+            };
+            widths[root] = widths[root].max(width);
             signed_uses[root] += vars.signed[id];
             unsigned_uses[root] += vars.unsigned[id];
             raw[root] |= vars.raw[id];
@@ -2630,12 +2656,145 @@ fn render_write_line(
     }
     if width > write.width {
         let ty = type_name(write.width, false);
-        if rhs.trim_start().starts_with(&format!("({ty})")) {
+        if let Some(rest) = rhs.trim().strip_prefix(&format!("({ty})")) {
+            // `v = (uint32)(0)` into a wider local: the constant already has its final value.
+            let rest = rest.trim();
+            let inner = rest
+                .strip_prefix('(')
+                .and_then(|inner| inner.strip_suffix(')'))
+                .filter(|inner| {
+                    inner
+                        .strip_prefix("0x")
+                        .map(|digits| digits.chars().all(|ch| ch.is_ascii_hexdigit()))
+                        .unwrap_or_else(|| {
+                            !inner.is_empty() && inner.chars().all(|ch| ch.is_ascii_digit())
+                        })
+                });
+            if let Some(inner) = inner {
+                return format!("{indent}{name} = {inner};");
+            }
             return format!("{indent}{name} = {rhs};");
+        }
+        // A constant already has its final value; wrapping it in the register-width cast only
+        // prints the compiler's register choice ( = (uint32)(0) for  = 0).
+        let constant = rhs.trim();
+        if is_constant_text(constant) {
+            return format!("{indent}{name} = {constant};");
         }
         return format!("{indent}{name} = ({ty})({rhs});");
     }
+    // The L1 statement spells the register width as a cast (`v = (uint32)(x)`); assigning to
+    // a variable of that type — or of a narrower one, which truncates the same way — makes
+    // the cast noise.
+    let declared = type_name(width, var_signed);
+    let written = type_name(write.width, write.signed);
+    let mut rhs = strip_redundant_cast(rhs, declared);
+    if written != declared {
+        rhs = strip_redundant_cast(rhs, written);
+    }
+    // `v = (uint32)((uint32)v & 0xf)` is the register-shaped spelling of `v &= 0xf`.
+    if let Some((operator, operand)) = same_variable_update(rhs, name) {
+        return format!("{indent}{name} {operator}= {operand};");
+    }
     format!("{indent}{name} = {rhs};")
+}
+
+/// A decimal, `0x`-hex or negated literal, as the printer spells constants.
+fn is_constant_text(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if let Some(hex) = digits.strip_prefix("0x") {
+        return !hex.is_empty() && hex.chars().all(|ch| ch.is_ascii_hexdigit());
+    }
+    !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// Drop a leading cast to `declared` from an expression: `(uint32)(x)` assigned to a
+/// `uint32` local means the same as `x`. Any other cast is kept (it narrows the value).
+fn strip_redundant_cast<'a>(rhs: &'a str, declared: &str) -> &'a str {
+    let trimmed = rhs.trim();
+    let head = format!("({declared})");
+    let Some(rest) = trimmed.strip_prefix(&head) else {
+        return rhs;
+    };
+    let rest = rest.trim();
+    // The cast's own parentheses wrap a single term: `(uint32)(x)` → `x`.
+    match matching_close_index(rest) {
+        Some(close) if close + 1 == rest.len() && rest.starts_with('(') => &rest[1..close],
+        _ => rest,
+    }
+}
+
+/// `v & 0xf`, `(uint32)v + 1`, `(uint32)((uint32)v >> 3)`: an update of the variable being
+/// assigned, with the operator and the other operand.
+fn same_variable_update<'a>(rhs: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+    let text = unwrap_value_text(rhs).strip_prefix(name)?;
+    for operator in [" + ", " - ", " * ", " & ", " | ", " ^ ", " << ", " >> "] {
+        if let Some(rest) = text.strip_prefix(operator) {
+            let operand = rest.trim();
+            if !operand.is_empty() {
+                return Some((operator.trim(), operand));
+            }
+        }
+    }
+    None
+}
+
+/// Peel casts and wrapping parentheses: `(uint32)((uint32)v & 0xf)` → `(uint32)v & 0xf` →
+/// `v & 0xf`. Only a known scalar type counts as a cast; anything else is left alone.
+fn unwrap_value_text(text: &str) -> &str {
+    let mut text = text.trim();
+    loop {
+        let Some(rest) = text.strip_prefix('(') else {
+            return text;
+        };
+        if let Some(close) = rest.find(')')
+            && is_scalar_type(&rest[..close])
+        {
+            text = rest[close + 1..].trim_start();
+            continue;
+        }
+        match matching_close_index(text) {
+            Some(close) if close + 1 == text.len() => text = &text[1..close],
+            _ => return text,
+        }
+    }
+}
+
+fn is_scalar_type(text: &str) -> bool {
+    matches!(
+        text,
+        "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "__m128"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+    )
+}
+
+/// Index of the `)` that closes the `(` at the start of `text`.
+fn matching_close_index(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn width_mask(width: u8) -> u64 {
@@ -2845,6 +3004,44 @@ mod tests {
             text.contains("v2 = (v1 & 0xffffffffffffff00) | (uint8)(1);"),
             "{text}"
         );
+        assert_no_registers(&text);
+    }
+
+    #[test]
+    fn a_register_width_cast_is_dropped_from_a_matching_local() {
+        assert_eq!(
+            strip_redundant_cast("(uint32)(byte_x[i])", "uint32"),
+            "byte_x[i]"
+        );
+        assert_eq!(
+            strip_redundant_cast("(uint32)((uint32)v3 & 0xf)", "uint64"),
+            "(uint32)((uint32)v3 & 0xf)"
+        );
+    }
+
+    #[test]
+    fn a_self_update_keeps_the_compound_form() {
+        assert_eq!(
+            same_variable_update("(uint32)((uint32)v3 & 0xf)", "v3"),
+            Some(("&", "0xf"))
+        );
+        assert_eq!(same_variable_update("(v3 + 1)", "v3"), Some(("+", "1")));
+        assert_eq!(same_variable_update("v4 + 1", "v3"), None);
+    }
+
+    #[test]
+    fn a_byte_read_narrows_the_local() {
+        // The definition is a 32-bit `movzx`, but every read observes the low byte, so the
+        // source local is an `unsigned char` and the partial writes are plain updates.
+        let text = run(&[
+            "    edx = (uint32)(*(u8*)(&var_20));",
+            "    dl ^= (uint8)(1);",
+            "    if (dl != 0) {",
+            "    }",
+            "    return;",
+        ]);
+        assert!(text.contains("uint8 v1;"), "{text}");
+        assert!(text.contains("v1 ^= "), "{text}");
         assert_no_registers(&text);
     }
 
