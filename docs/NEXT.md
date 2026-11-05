@@ -281,23 +281,33 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
 3. ~~字节宽度变量~~（已完成）：声明宽度取"所有读的最大宽度"，定义更宽不撑大声明（赋值
    会像寄存器写一样截断）；部分写不再被当成全宽读；冗余转换一并去掉。
 
-## 1.6 静态 CRT 函数命名（当前最大缺口）
+## 1.6 静态 CRT 函数命名（机制已落地，覆盖 printf/strlen/strcmp）
 
-`crackme main` 里 `sub_140004cc4`（puts / printf）、`sub_140016b60`（strcmp）、
-`sub_140016be0`（strlen）、`sub_140004bd4`（fgets）、`sub_140006fd0`（strpbrk）、
-`sub_140004580`（`__acrt_iob_func`）、`sub_1400049f8`（fflush）都还是地址名。IDA 靠
-FLIRT 签名解决；本仓库目前只有用户原型（`scripts/case-crackme.ps1` 的原型表）。
+> **2026-11-06 更新（`617f6b8`）**：机制已实现——`infer_library_names`（调用点证据）+
+> `infer_library_role`（被调用者自身的指令证据）产出 `sub_… → 名字` 映射，
+> `apply_inferred_names` 只在渲染文本里替换，函数头写 `// inferred: sub_… = name`，
+> **不写回项目**。已覆盖：
+>
+> | 名字 | 证据 |
+> |---|---|
+> | `printf`/`wprintf` | 入口把 rcx/rdx/r8/r9 存进 home area（变参）+ 当前函数里每个调用点首参都是字符串字面量（宽字面量 → `wprintf`） |
+> | `strlen` | 被调用者无 call + 含 `0x7efefefefefefeff` + 入口只读 rcx |
+> | `strcmp` | 被调用者无 call + 含 `0x8080808080808080` + 入口读 rcx/rdx + 有 `sbb`（-1/0/1 无分支返回）；`memcmp` 读第三个实参（长度）被排除 |
+>
+> 四套样本实测只命名 2 个被调用者 + 1 个变参函数，无误判。
 
-可用的通用信号（按可靠度）：
+`crackme main` 里 `sub_140004cc4`（puts）、`sub_140004bd4`（fgets）、
+`sub_140006fd0`（strpbrk）、`sub_140004580`（`__acrt_iob_func`）、
+`sub_1400049f8`（fflush）仍是地址名。剩下可用的信号：
 
-1. **变参入口**（已实现）：入口把 rcx/rdx/r8/r9 存进 home area 的函数是 printf 家族；
-   若 `va_start` 之后把格式串传给另一个变参函数，它就是 `printf`/`vfprintf`。
-2. **单字符串实参 + 返回被忽略 + 体里调用 printf 家族**：`puts`（常实现为
-   `printf("%s\n", s)` 或 `fputs`+`putc('\n')`）。
-3. **体是纯循环扫描、按字节比较、无外部调用**：`strlen`/`strcmp`/`strpbrk` 一类；结合
-   SIMD（`pcmpeqb`/`pmovmskb`）与返回值形状（长度 vs 指针 vs 0/1）区分。
-4. **`__acrt_iob_func` 模式**：`mov ecx, 1; call X; mov rcx, rax` 之后调用 `fwrite`/`fputs`
-   的，是 `stdout` 的包装（`puts`/`printf` 的实现细节）。
+1. ~~变参入口~~（已实现，见上）。
+2. **单字符串实参 + 返回被忽略 + 体里调用 printf 家族**：`puts`。风险是普通日志函数
+   也会满足，需要再加一条"体内调用 printf 家族或引用 stdout"的证据。
+3. **纯循环扫描、按字节比较、无外部调用**：`strlen`/`strcmp` 已用零字节常量覆盖；
+   `strpbrk`/`strchr` 用同一组常量，需要按"第二个实参是指针还是字节"再区分，
+   `fgets` 则是"读入缓冲区 + 长度 + 流"的三实参形状。
+4. **`__acrt_iob_func` 模式**：`mov ecx, 1; call X; mov rcx, rax` 之后调用
+   `fwrite`/`fputs` 的，是 `stdout` 的包装（`puts`/`printf` 的实现细节）。
 
 验收：`recraft-cli decompile .tmp/crackme.rcraft --addr 0x140001010 --l2` 不再出现
 `sub_1400…` 调用名（除真正的用户函数）；lint 五套 0 findings；golden 的 diff 逐条可解释

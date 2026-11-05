@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Statically linked CRT helpers get names inferred from their structure, not from a symbol
+  table.** IDA names these with FLIRT signatures; ReCraft has only user prototypes, so
+  `crackme main` still called `sub_140001170("Enter flag: ")`, `sub_140016b60(&var_20, …)`
+  and `sub_140016be0(&var_20)`. Two evidence rules now name them at render time — nothing is
+  written to the project, and the function header lists what was inferred and why
+  (`// inferred: sub_140001170 = printf, …`). A callee whose entry spills all four argument
+  registers into the home area is variadic, and when every call site feeds it a string
+  literal as the first argument it is `printf` (or `wprintf` for a wide literal) — `fprintf`/
+  `sprintf` callers pass a stream or buffer first, so they cannot match. A callee with no
+  calls that materialises the MSVC zero-byte-scan constant is `strlen` when the registers it
+  reads on entry are exactly `{rcx}`, and `strcmp` when they are `{rcx, rdx}` plus an `sbb`
+  (the branchless -1/0/1 return); `memcmp` reads a third argument and is excluded. Across
+  crackme (495 functions), notepad (506), corpus (31) and corpus86 (32) only two callees and
+  one variadic function were named, with no false positives, and `main` now reads
+  `printf("Enter flag: ")`, `strcmp(&var_20, "flag{…}")`, `strlen(&var_20)`. lint is 0
+  findings on all five projects, all 789 golden snapshots verify, two unit tests were added.
 - **A variadic call's leftover arguments are no longer parameters of the caller, and a
   constant folded into an argument no longer leaves its setup line behind.** `main`'s
   signature was `(int64 arg1, int64 arg2, int64 arg3, int64 arg4)` because `recover_l2` saw
