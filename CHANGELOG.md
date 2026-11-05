@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`fgets` is recognised too, and the classifier now follows incremental-linking thunks.**
+  `main` called `sub_140004bd4`, which is a one-instruction `jmp` thunk to the real
+  `sub_140004a60`; a role is now resolved through up to two thunk hops. `fgets`' evidence is a
+  three-argument shape (buffer, size, stream), byte stores into memory, the `EINVAL` (0x16) and
+  newline (0xa) constants, and — the part that separates it from `_read` — a return value that
+  is a copy of the first argument, tracked by propagating the entry `r12 = rcx` alias to the
+  `rax` write. Without that last check the same sample's `_read` (`sub_140010950`: three
+  arguments, byte stores, `0x16`) matched as well; with it, the four samples (1064 functions)
+  still name only three callees and one variadic function. The instruction scan also compared
+  32-bit operand spellings against 64-bit argument registers, so `mov eax, ecx` never marked
+  `rcx` as incoming; operands are normalised with `full_register()` first, which is what makes
+  the three-argument shapes visible at all. `main` now reads
+  `fgets(&var_20, 0x100, v5)`; lint is 0 findings on all five projects, the 789 golden
+  snapshots verify (one crackme snapshot follows the name), and the 214 tests pass.
 - **A copy followed by a self-update of the same local folds into one assignment.** MSVC
   compiles `i % 16` into `mov rcx, rax; and ecx, 0xf`, which the value flow named as two
   assignments to one local (`v12 = v10; v12 = (uint32)((uint32)v12 & 0xf);`). The statements

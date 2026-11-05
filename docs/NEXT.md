@@ -281,7 +281,7 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
 3. ~~字节宽度变量~~（已完成）：声明宽度取"所有读的最大宽度"，定义更宽不撑大声明（赋值
    会像寄存器写一样截断）；部分写不再被当成全宽读；冗余转换一并去掉。
 
-## 1.6 静态 CRT 函数命名（机制已落地，覆盖 printf/strlen/strcmp）
+## 1.6 静态 CRT 函数命名（机制已落地，覆盖 printf/strlen/strcmp/fgets）
 
 > **2026-11-06 更新（`617f6b8`）**：机制已实现——`infer_library_names`（调用点证据）+
 > `infer_library_role`（被调用者自身的指令证据）产出 `sub_… → 名字` 映射，
@@ -293,6 +293,8 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
 > | `printf`/`wprintf` | 入口把 rcx/rdx/r8/r9 存进 home area（变参）+ 当前函数里每个调用点首参都是字符串字面量（宽字面量 → `wprintf`） |
 > | `strlen` | 被调用者无 call + 含 `0x7efefefefefefeff` + 入口只读 rcx |
 > | `strcmp` | 被调用者无 call + 含 `0x8080808080808080` + 入口读 rcx/rdx + 有 `sbb`（-1/0/1 无分支返回）；`memcmp` 读第三个实参（长度）被排除 |
+> | `fgets` | 三入参（缓冲区/长度/流）+ 体内字节写入 + `0x16`(EINVAL) 与 `0xa`(换行) 常量 + **返回第一个实参**（寄存器别名传播）；先跟进链接 thunk（`jmp` 到真实实现，最多两层） |
+> | — | 指令扫描需先把操作数寄存器 `full_register()` 归一化，否则 `mov eax, ecx` 里的 `ecx` 匹配不到 `Register::RCX` |
 >
 > 四套样本实测只命名 2 个被调用者 + 1 个变参函数，无误判。
 
