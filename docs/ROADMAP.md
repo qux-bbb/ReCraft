@@ -22,7 +22,8 @@
 - 调用参数与类型：x64/x86 实参、栈参数恢复、原型覆盖与指针 cast、间接调用/IAT 尾调用。
 - AI（DESIGN §9.2 全部条目）：函数解释、命名建议、样本摘要、**自然语言查询**、**伪代码
   润色**（LLM 建议、不写回），provider 抽象/缓存/审计/prompt 评测齐备；命名准确率基准
-  `ai eval-names`（`corpus/naming` 基准二进制，盲化候选符号）给出可回归的数字。
+  `ai eval-names`（`corpus/naming` 基准二进制，盲化候选符号）给出可回归的数字；**项目级
+  Agent**（`ai ask`，8 个只读工具 + 工具轨迹）回答需要跨函数取证的问题。
 - MCP：stdio + HTTP（bearer token），只读工具/资源，单测 + E2E 真实服务断言。
 - CLI：import/analyze/disasm/decompile/strings/imports/funcs/xrefs/cfg/search/callgraph/
   metrics/golden/batch/serve-mcp/ai 全部可用并带 `--json`。

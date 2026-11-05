@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A project-level agent that calls read-only tools.** The panel could only answer about
+  the function under the cursor; "where is persistence handled?" needs the model to choose
+  what to read. `ai ask <project> "<question>"` and the panel's Analysis agent box run a
+  tool loop (max 8 model turns) over `list_functions`, `function_info`, `pseudocode`,
+  `xrefs_to`, `xrefs_from`, `find_api_callers`, `search_strings` and `disassemble` — the same
+  evidence the MCP server exposes. Every tool is read-only and bounded (list/line/length
+  limits); a bad tool name or argument comes back to the model as `{"error": …}` so it can
+  correct itself, and a model that never answers fails with an explicit message. The desktop
+  runs the loop on a worker thread that opens its own SQLite connection, streams one trace
+  line per call into a collapsible "tool calls · N" section, and renders the answer as prose.
+  Renames remain text suggestions: the agent never writes to the project. Tests script the
+  loop (tool result paired by `tool_call_id`, unknown-tool recovery, round limit) and the
+  panel path (trace + answer state); `docs/AI.md` documents the tools and the read-only
+  contract.
 - **A measurable naming pipeline, and a benchmark that scores it.** Suggest names used to
   burn its batch on the lowest-address `sub_*` functions (evidence order, then a hard cap of
   12 in the prompt) and present heuristic fallbacks as if the model had named them. Candidates

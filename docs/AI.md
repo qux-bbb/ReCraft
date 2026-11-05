@@ -30,6 +30,9 @@ recraft-cli ai query notepad.rcraft "which functions call CreateFileW"
 
 # 伪代码润色（DESIGN §9.2）：需要已配置 LLM；只输出建议，不写回项目
 recraft-cli ai polish notepad.rcraft --addr entry [--json] [--no-cache]
+
+# 项目级 Agent：模型自己调用只读工具（函数列表/伪代码/xref/字符串/API 调用者）后作答
+recraft-cli ai ask notepad.rcraft "哪些函数在操作注册表？" [--json] [--rounds 8]
 ```
 
 ## 自然语言查询（离线）
@@ -280,6 +283,36 @@ recraft-cli ai eval-names naming.rcraft --json     # 逐函数行（truth/propos
 导入 API 调用处就停止，后面的调用、块和 API 标签全部丢失（notepad 448 个标签）。改为继续
 扫描后 notepad 有 **1 637** 个标签，命名/解释/初筛的证据才够用；同时发现 4 个此前不可达的
 函数（502 → 506）。
+
+## 项目级 Agent（工具调用）
+
+一次性按钮回答不了“这个样本的持久化在哪”“谁解析命令行”这类问题——它们需要模型自己决定
+看哪个函数、看多少。`ai ask` 与面板里的 **分析助手** 把项目暴露成 8 个只读工具，让模型在
+最多 `AGENT_MAX_ROUNDS=8` 轮内自己取证：
+
+| 工具 | 作用 |
+|---|---|
+| `list_functions` | 按名字子串列函数（地址/大小），先找候选 |
+| `function_info` | 名字、范围、指令数、API 标签、引用字符串、直接调用与调用者（复用 `explain`） |
+| `pseudocode` | 读该函数的 L2 伪 C（默认 150 行、上限 400 行） |
+| `xrefs_to` / `xrefs_from` | 谁引用它 / 它引用谁（附所属函数名） |
+| `find_api_callers` | 哪些函数调用某个导入 API（如 `CreateFileW`） |
+| `search_strings` | 按内容搜字符串表 |
+| `disassemble` | 原始反汇编（最多 60 条） |
+
+- **只读**：工具只查库与反编译，不写项目；重命名仍然走 Proposal/apply。模型给出的重命名
+  只是正文建议。
+- **有界**：轮数上限、每次结果都截断（列表/行数/字符串长度），未知工具或坏参数以
+  `{"error": …}` 返回给模型让它可以自我纠正；一直不回答会明确报错。
+- 桌面端在**工作线程**里打开第二个 SQLite 连接跑整个循环，UI 只接收工具调用轨迹与最终答案；
+  工具轨迹显示在「工具调用 · N」折叠区，用来核对答案的证据。
+- 当前是**单轮问答**（没有多轮追问、没有工具结果的点选跳转），模型也不做流式输出——工具
+  轮次之间没有可流的内容，最终答案一次性到达。
+
+实测（naming 基准样本）：问“哪些函数在操作注册表”，模型依次调用
+`find_api_callers("Reg")` → `search_strings("Software\\")` → 三个 `function_info`/`pseudocode`
+→ `xrefs_to`，给出三个注册表函数的逐条分析，并额外发现 `read_registry_string` 调用了反调试桩、
+以及 `delete_registry_tree` 只删子键不递归。这类结论单看一个函数的伪代码得不到。
 
 ## 限制与后续
 
