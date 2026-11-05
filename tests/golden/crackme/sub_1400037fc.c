@@ -1,4 +1,5 @@
 // L1 structure recovery (29 blocks)
+// inferred: sub_140016b60 = strcmp
 void sub_1400037fc_l1(void) {
     rbx = (int64)(*(u32*)((rcx + 4)));
     edi = 0;
@@ -57,7 +58,7 @@ void sub_1400037fc_l1(void) {
                 sub_140002b44(rcx);
                 rdx = (rbx + 0xADDR);
                 rdx += rax;
-                sub_140016b60((rbp + 0xADDR), rdx);
+                strcmp((rbp + 0xADDR), rdx);
                 if (eax != 0) {
                     eax = 0;
                 }

@@ -1,4 +1,5 @@
 // L1 structure recovery (12 blocks)
+// inferred: sub_140001170 = printf, sub_140016b60 = strcmp, sub_140016be0 = strlen
 void sub_140001010_l1(void) {
 // some loops keep labels (an inner loop exits its parent)
     sub_140004cc4("==========================================");
@@ -7,7 +8,7 @@ void sub_140001010_l1(void) {
     sub_140004cc4("==========================================");
     ebx = 0;
     do {
-        sub_140001170("Enter flag: ");
+        printf("Enter flag: ");
         sub_140004580(1);
         sub_1400049f8(rax);
         ecx = 0;
@@ -22,9 +23,9 @@ void sub_140001010_l1(void) {
         if (rax != 0) {
             *(u8*)(rax) = 0;
         }
-        sub_140016b60(&var_20, "flag{strings_are_not_enough_you_know}");
+        strcmp(&var_20, "flag{strings_are_not_enough_you_know}");
         if (eax != 0) {
-            sub_140016be0(&var_20);
+            strlen(&var_20);
             if (rax == 0xADDR) {
                 eax = 0;
                 do {

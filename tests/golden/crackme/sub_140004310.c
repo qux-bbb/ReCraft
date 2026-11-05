@@ -1,4 +1,5 @@
 // L1 structure recovery (7 blocks)
+// inferred: sub_140016be0 = strlen
 void sub_140004310_l1(void) {
     rdi = rdx;
     rbx = rcx;
@@ -12,7 +13,7 @@ void sub_140004310_l1(void) {
             *(u8*)((rdx + 8)) = 0;
             return;
         }
-        sub_140016be0(rcx);
+        strlen(rcx);
         rbp = (rax + 1);
         sub_1400087d0(rbp);
         rsi = rax;

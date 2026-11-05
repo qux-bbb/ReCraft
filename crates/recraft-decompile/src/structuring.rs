@@ -287,12 +287,16 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // Callees that are variadic take their argument count from their format string; the
     // prologue is the only signal an unsymbolised binary gives (see `is_variadic_target`).
     let mut variadic: BTreeSet<String> = BTreeSet::new();
+    let mut library_names: BTreeMap<String, String> = BTreeMap::new();
     for target in bodies.iter().flat_map(|body| body.calls.iter().copied()) {
         let Some((target_start, target_end)) = ranges.get(&target).copied() else {
             continue;
         };
+        let name = crate::resolve_name(session, Address::new(target))?;
         if is_variadic_target(session, target_start, target_end) {
-            variadic.insert(crate::resolve_name(session, Address::new(target))?);
+            variadic.insert(name);
+        } else if let Some(role) = infer_library_role(session, target_start, target_end) {
+            library_names.insert(name, role.to_owned());
         }
     }
     let mut literals: Vec<(String, Address)> = bodies
@@ -560,6 +564,25 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // trimmed call keeps the extra registers out of the L2 value flow (they would widen the
     // variables they come from).
     trim_variadic_calls(&mut lines, &variadic);
+    // Names inferred from structure, not from a symbol table. They are display-only: nothing is
+    // written back to the project, and the header lists what was inferred and why.
+    let mut inferred = infer_library_names(&lines, &variadic);
+    inferred.extend(library_names);
+    if !inferred.is_empty() {
+        apply_inferred_names(&mut lines, &inferred);
+        let note = inferred
+            .iter()
+            .map(|(from, to)| format!("{from} = {to}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.insert(
+            1,
+            PseudoLine {
+                addr: start,
+                text: format!("// inferred: {note}"),
+            },
+        );
+    }
     mark("naming");
     lines.push(PseudoLine {
         addr: start,
@@ -1731,6 +1754,106 @@ fn pointer_width_of_slot(lines: &[PseudoLine], slot: &str) -> Option<Vec<u8>> {
 /// variadic function (`va_start` reads them back from there). A non-variadic function with the
 /// same number of arguments never writes that exact pattern, so it identifies a `printf`-style
 /// callee even when the image carries no symbol for it.
+/// What a function's own instructions prove about its role, independent of any symbol.
+#[derive(Default)]
+struct LibraryFacts {
+    /// Direct calls in the body. A library primitive such as `strlen` calls nothing.
+    calls: usize,
+    /// Immediates the body materialises: the MSVC string-scan idioms show up here.
+    immediates: BTreeSet<u64>,
+    /// Argument registers whose incoming value is read before the first write.
+    incoming: [bool; 4],
+    /// A `sbb` in the body: how a comparison returns -1/0/1 without a branch.
+    sbb: bool,
+}
+
+/// Classify a statically linked helper from its own instructions. Only roles whose machine
+/// code is a fixed idiom are recognised — the MSVC "has a zero byte" scans — so a false
+/// positive needs a function that materialises the same magic constant *and* has the same
+/// incoming-register shape.
+fn infer_library_role(session: &mut Session, start: Address, end: Address) -> Option<&'static str> {
+    let facts = library_facts(session, start, end)?;
+    if facts.calls > 0 {
+        return None;
+    }
+    let incoming = facts.incoming;
+    // `strlen`: one string argument and the has-zero-byte constant.
+    if facts.immediates.contains(&0x7efefefefefefeff) && incoming == [true, false, false, false] {
+        return Some("strlen");
+    }
+    // `strcmp`: two strings, the same idiom, and the branchless -1/0/1 return. `memcmp` reads a
+    // third argument (the length), which keeps it out.
+    if facts.immediates.contains(&0x8080808080808080)
+        && facts.sbb
+        && incoming == [true, true, false, false]
+    {
+        return Some("strcmp");
+    }
+    None
+}
+
+fn library_facts(session: &mut Session, start: Address, end: Address) -> Option<LibraryFacts> {
+    use iced_x86::{Mnemonic, OpKind, Register};
+    const ARGUMENTS: [Register; 4] = [Register::RCX, Register::RDX, Register::R8, Register::R9];
+    let mut facts = LibraryFacts::default();
+    let mut written = [false; 4];
+    let mut address = start;
+    // A library primitive is small; anything longer is user code and is not classified.
+    for _ in 0..512 {
+        if address.get() >= end.get() {
+            break;
+        }
+        let insn = session.insn_at(address).ok().flatten()?;
+        match insn.mnemonic() {
+            Mnemonic::Call => facts.calls += 1,
+            Mnemonic::Sbb => facts.sbb = true,
+            _ => {}
+        }
+        for index in 0..insn.op_count() {
+            let kind = insn.op_kind(index);
+            if matches!(
+                kind,
+                OpKind::Immediate8
+                    | OpKind::Immediate8to16
+                    | OpKind::Immediate8to32
+                    | OpKind::Immediate8to64
+                    | OpKind::Immediate16
+                    | OpKind::Immediate32
+                    | OpKind::Immediate32to64
+                    | OpKind::Immediate64
+            ) {
+                facts.immediates.insert(insn.immediate64());
+                facts.immediates.insert(u64::from(insn.immediate32()));
+            }
+            if kind != OpKind::Register {
+                continue;
+            }
+            let register = insn.op_register(index);
+            let Some(slot) = ARGUMENTS.iter().position(|argument| *argument == register) else {
+                continue;
+            };
+            // iced's access flags are not on the instruction itself; the first operand is a
+            // destination except for the pure-read forms, and a destination that is not a
+            // plain mov also reads its old value (sub rdx, rcx).
+            let mnemonic = insn.mnemonic();
+            let pure_read = matches!(mnemonic, Mnemonic::Cmp | Mnemonic::Test | Mnemonic::Push);
+            let write_only = matches!(
+                mnemonic,
+                Mnemonic::Mov | Mnemonic::Lea | Mnemonic::Movzx | Mnemonic::Movsx | Mnemonic::Pop
+            );
+            let reads = index > 0 || !write_only;
+            let writes = index == 0 && !pure_read;
+            if reads && !written[slot] {
+                facts.incoming[slot] = true;
+            }
+            if writes {
+                written[slot] = true;
+            }
+        }
+        address = insn.next_addr();
+    }
+    Some(facts)
+}
 pub(crate) fn is_variadic_target(session: &mut Session, start: Address, end: Address) -> bool {
     use iced_x86::{Mnemonic, OpKind, Register};
     // The four home-area slots of the x64 calling convention.
@@ -2109,14 +2232,56 @@ fn call_arguments<'a>(text: &'a str, api: &str) -> Option<&'a str> {
     None
 }
 
-/// Drop trailing parameters the body never mentions, and write `(void)` when none are left.
-///
-/// `recover_l2` infers the x64 argument registers from incoming-value reads. A register that
-/// only fed a variadic call's leftover slots — or that nothing touches at all — is not a
-/// parameter of the source function, and the signature should not promise it. Only trailing
-/// parameters are dropped: removing a middle one would rename the ABI slot of every argument
-/// after it. The body is scanned rather than the lift because every pass that can rename or
-/// remove a use has already run.
+/// Names for callees whose role the body structure proves, keyed by the `sub_…` spelling the
+/// lift used. Only the printf family for now: a variadic callee that every visible call site
+/// feeds a string literal as its first argument is a formatter writing to an implicit stream
+/// (`printf`, or `wprintf` for a wide literal). `fprintf`/`sprintf` callers pass a stream or a
+/// buffer first, so they cannot match. Nothing is persisted — the caller renders these names
+/// and lists them in a header comment.
+fn infer_library_names(
+    lines: &[PseudoLine],
+    variadic: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let mut inferred = BTreeMap::new();
+    for name in variadic {
+        let mut calls = 0usize;
+        let mut wide = false;
+        let mut literal_format = true;
+        for line in lines {
+            let Some(arguments) = call_arguments(&line.text, name) else {
+                continue;
+            };
+            calls += 1;
+            match top_level_argument(arguments, 0).map(str::trim) {
+                Some(argument) if argument.starts_with('"') => {}
+                Some(argument) if argument.starts_with("L\"") => wide = true,
+                _ => {
+                    literal_format = false;
+                    break;
+                }
+            }
+        }
+        if calls > 0 && literal_format {
+            inferred.insert(
+                name.clone(),
+                if wide { "wprintf" } else { "printf" }.to_owned(),
+            );
+        }
+    }
+    inferred
+}
+
+/// Replace every whole-token occurrence of the lifted `sub_…` names by their inferred names.
+fn apply_inferred_names(lines: &mut [PseudoLine], inferred: &BTreeMap<String, String>) {
+    for line in lines.iter_mut() {
+        for (from, to) in inferred {
+            if line.text.contains(from.as_str()) {
+                line.text = replace_token(&line.text, from, to);
+            }
+        }
+    }
+}
+
 /// Drop the trailing register arguments a variadic call passes to a literal format string.
 ///
 /// `printf("Enter flag: ")` reaches the printer as a call with the leftover `rdx`, `r8`, `r9`
@@ -10527,6 +10692,43 @@ mod tests {
             Some("[?] Hint")
         );
         assert_eq!(string_literal("rdx"), None);
+    }
+
+    #[test]
+    fn a_variadic_literal_formatter_is_named_printf() {
+        let lines = vec![
+            test_line("    sub_140001170(\"Enter flag: \", rdx, r8, r9);"),
+            test_line("    sub_140002000(\"other\");"),
+        ];
+        let variadic = BTreeSet::from(["sub_140001170".to_owned()]);
+        let inferred = infer_library_names(&lines, &variadic);
+        assert_eq!(
+            inferred.get("sub_140001170").map(String::as_str),
+            Some("printf")
+        );
+        assert!(!inferred.contains_key("sub_140002000"));
+        // A wide literal is the wide-character formatter.
+        let lines = vec![test_line("    sub_140001170(L\"wide\");")];
+        let inferred = infer_library_names(&lines, &variadic);
+        assert_eq!(
+            inferred.get("sub_140001170").map(String::as_str),
+            Some("wprintf")
+        );
+        // A non-literal first argument proves nothing about the role.
+        let lines = vec![test_line("    sub_140001170(buffer);")];
+        assert!(infer_library_names(&lines, &variadic).is_empty());
+    }
+
+    #[test]
+    fn inferred_names_replace_whole_tokens_only() {
+        let mut lines = vec![
+            test_line("    v1 = sub_140001170(\"x\");"),
+            test_line("    v2 = sub_1400011700;"),
+        ];
+        let inferred = BTreeMap::from([("sub_140001170".to_owned(), "printf".to_owned())]);
+        apply_inferred_names(&mut lines, &inferred);
+        assert_eq!(lines[0].text, "    v1 = printf(\"x\");");
+        assert_eq!(lines[1].text, "    v2 = sub_1400011700;");
     }
 
     #[test]
