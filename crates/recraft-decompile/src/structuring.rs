@@ -295,7 +295,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         let name = crate::resolve_name(session, Address::new(target))?;
         if is_variadic_target(session, target_start, target_end) {
             variadic.insert(name);
-        } else if let Some(role) = infer_library_role(session, target_start, target_end) {
+        } else if let Some(role) = infer_library_role(session, target_start, target_end, &ranges) {
             library_names.insert(name, role.to_owned());
         }
     }
@@ -1759,35 +1759,76 @@ fn pointer_width_of_slot(lines: &[PseudoLine], slot: &str) -> Option<Vec<u8>> {
 struct LibraryFacts {
     /// Direct calls in the body. A library primitive such as `strlen` calls nothing.
     calls: usize,
+    /// Instructions decoded (a thunk is one `jmp`).
+    instructions: usize,
     /// Immediates the body materialises: the MSVC string-scan idioms show up here.
     immediates: BTreeSet<u64>,
     /// Argument registers whose incoming value is read before the first write.
     incoming: [bool; 4],
     /// A `sbb` in the body: how a comparison returns -1/0/1 without a branch.
     sbb: bool,
+    /// Byte stores into memory (`mov [buf], al`): how a reader fills a buffer.
+    byte_stores: usize,
+    /// The function returns a copy of its first argument (`fgets`/`strcpy` shape).
+    returns_first_argument: bool,
+    /// The function is an incremental-linking thunk: its only instruction is a `jmp`.
+    thunk: Option<u64>,
 }
 
 /// Classify a statically linked helper from its own instructions. Only roles whose machine
-/// code is a fixed idiom are recognised — the MSVC "has a zero byte" scans — so a false
-/// positive needs a function that materialises the same magic constant *and* has the same
-/// incoming-register shape.
-fn infer_library_role(session: &mut Session, start: Address, end: Address) -> Option<&'static str> {
+/// code is a fixed idiom are recognised, so a false positive needs a function that
+/// materialises the same constants *and* has the same incoming-register shape.
+fn infer_library_role(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Option<&'static str> {
+    infer_library_role_at(session, start, end, ranges, 0)
+}
+
+fn infer_library_role_at(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+    ranges: &HashMap<u64, (Address, Address)>,
+    depth: usize,
+) -> Option<&'static str> {
     let facts = library_facts(session, start, end)?;
-    if facts.calls > 0 {
-        return None;
+    // A thunk carries no behaviour of its own; classify what it jumps to.
+    if let Some(target) = facts.thunk
+        && depth < 2
+        && let Some((next_start, next_end)) = ranges.get(&target).copied()
+        && next_start != start
+    {
+        return infer_library_role_at(session, next_start, next_end, ranges, depth + 1);
     }
     let incoming = facts.incoming;
     // `strlen`: one string argument and the has-zero-byte constant.
-    if facts.immediates.contains(&0x7efefefefefefeff) && incoming == [true, false, false, false] {
+    if facts.calls == 0
+        && facts.immediates.contains(&0x7efefefefefefeff)
+        && incoming == [true, false, false, false]
+    {
         return Some("strlen");
     }
     // `strcmp`: two strings, the same idiom, and the branchless -1/0/1 return. `memcmp` reads a
     // third argument (the length), which keeps it out.
-    if facts.immediates.contains(&0x8080808080808080)
+    if facts.calls == 0
+        && facts.immediates.contains(&0x8080808080808080)
         && facts.sbb
         && incoming == [true, true, false, false]
     {
         return Some("strcmp");
+    }
+    // `fgets`: a buffer, a size and a stream. It stores `EINVAL` (0x16) when an argument is
+    // bad, fills the buffer one byte at a time, and stops at a newline.
+    if incoming == [true, true, true, false]
+        && facts.returns_first_argument
+        && facts.byte_stores > 0
+        && facts.immediates.contains(&0x16)
+        && facts.immediates.contains(&0xa)
+    {
+        return Some("fgets");
     }
     None
 }
@@ -1797,6 +1838,9 @@ fn library_facts(session: &mut Session, start: Address, end: Address) -> Option<
     const ARGUMENTS: [Register; 4] = [Register::RCX, Register::RDX, Register::R8, Register::R9];
     let mut facts = LibraryFacts::default();
     let mut written = [false; 4];
+    // `alias` marks the registers that hold a copy of the incoming first argument.
+    let mut alias = [false; 16];
+    alias[1] = true;
     let mut address = start;
     // A library primitive is small; anything longer is user code and is not classified.
     for _ in 0..512 {
@@ -1804,6 +1848,35 @@ fn library_facts(session: &mut Session, start: Address, end: Address) -> Option<
             break;
         }
         let insn = session.insn_at(address).ok().flatten()?;
+        if facts.instructions == 0
+            && insn.mnemonic() == Mnemonic::Jmp
+            && let Some(target) = insn.branch_target()
+        {
+            facts.thunk = Some(target.get());
+        }
+        if insn.mnemonic() == Mnemonic::Mov
+            && insn.op_count() > 1
+            && insn.op_kind(0) == OpKind::Memory
+            && insn.op_kind(1) == OpKind::Register
+            && insn.memory_size() == iced_x86::MemorySize::UInt8
+        {
+            facts.byte_stores += 1;
+        }
+        facts.instructions += 1;
+        if insn.mnemonic() == Mnemonic::Mov
+            && insn.op_count() == 2
+            && insn.op_kind(0) == OpKind::Register
+            && insn.op_kind(1) == OpKind::Register
+        {
+            let destination = insn.op_register(0).full_register().number();
+            let source = insn.op_register(1).full_register().number();
+            if destination < 16 && source < 16 {
+                alias[destination] = alias[source];
+                if destination == 0 && alias[source] {
+                    facts.returns_first_argument = true;
+                }
+            }
+        }
         match insn.mnemonic() {
             Mnemonic::Call => facts.calls += 1,
             Mnemonic::Sbb => facts.sbb = true,
@@ -1828,7 +1901,7 @@ fn library_facts(session: &mut Session, start: Address, end: Address) -> Option<
             if kind != OpKind::Register {
                 continue;
             }
-            let register = insn.op_register(index);
+            let register = insn.op_register(index).full_register();
             let Some(slot) = ARGUMENTS.iter().position(|argument| *argument == register) else {
                 continue;
             };

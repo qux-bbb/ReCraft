@@ -1,5 +1,5 @@
 // L1 structure recovery (12 blocks)
-// inferred: sub_140001170 = printf, sub_140016b60 = strcmp, sub_140016be0 = strlen
+// inferred: sub_140001170 = printf, sub_140004bd4 = fgets, sub_140016b60 = strcmp, sub_140016be0 = strlen
 void sub_140001010_l1(void) {
 // some loops keep labels (an inner loop exits its parent)
     sub_140004cc4("==========================================");
@@ -13,7 +13,7 @@ void sub_140001010_l1(void) {
         sub_1400049f8(rax);
         ecx = 0;
         sub_140004580(0);
-        sub_140004bd4(&var_20, 0xADDR, rax);
+        fgets(&var_20, 0xADDR, rax);
         if (rax == 0) {
             sub_140004cc4("[?] Hint: it is shuffled, xored, and shifted.");
             eax = 1;
