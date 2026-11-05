@@ -679,6 +679,8 @@ enum AiMessage {
     Chunk(String),
     /// Chain-of-thought delta (`reasoning_content`), shown in a collapsible section.
     Reasoning(String),
+    /// One tool call the agent made (shown in the tool trace).
+    AgentTool(String),
     Done(std::result::Result<String, String>),
 }
 
@@ -691,6 +693,8 @@ enum AiJobKind {
     Suggest,
     /// Reconstructed C shown (and syntax-coloured) in the result pane.
     Polish,
+    /// Project-level agent: the model calls read-only tools, then answers in prose.
+    Agent,
 }
 
 struct AiJob {
@@ -1069,6 +1073,8 @@ enum Action {
     /// Run the polish request again for the current function, ignoring the session cache.
     AiRepolish,
     AiQuery,
+    /// Run the project-level agent on the question in the agent box.
+    AiAgent,
     NavigateToDisasm(Address),
     /// Centre a block in the graph view without leaving graph mode (Graph overview click).
     GraphGoTo(Address),
@@ -1234,6 +1240,10 @@ pub struct ReCraftApp {
     ai_thinking: bool,
     ai_query: String,
     ai_answer: Option<recraft_ai::QueryAnswer>,
+    /// Question typed into the agent box.
+    ai_agent_question: String,
+    /// Tool calls the running or last agent made (`name + arguments` per line).
+    ai_agent_trace: Vec<String>,
     ai_job: Option<AiJob>,
     ai_sidebar: bool,
     ai_sidebar_width: f32,
@@ -1335,6 +1345,8 @@ impl Default for ReCraftApp {
             ai_thinking: false,
             ai_query: String::new(),
             ai_answer: None,
+            ai_agent_question: String::new(),
+            ai_agent_trace: Vec::new(),
             ai_job: None,
             ai_sidebar: true,
             ai_sidebar_width: 360.0,
@@ -1595,6 +1607,8 @@ impl ReCraftApp {
         self.ai_status.clear();
         self.ai_query.clear();
         self.ai_answer = None;
+        self.ai_agent_question.clear();
+        self.ai_agent_trace.clear();
         self.ai_explanation = None;
         self.ai_result_kind = AiResultKind::Prose;
         self.ai_reasoning.clear();
@@ -2568,6 +2582,14 @@ impl ReCraftApp {
                     self.ai_reasoning_open = true;
                     self.ai_status = self.t("ui_thinking").to_owned();
                 }
+                Ok(AiMessage::AgentTool(line)) => {
+                    received = true;
+                    self.ai_agent_trace.push(line);
+                    self.ai_status = self.t_args(
+                        "ui_agent_tool",
+                        &[("count", &self.ai_agent_trace.len().to_string())],
+                    );
+                }
                 Ok(AiMessage::Done(Ok(text))) => {
                     let elapsed = job.started.elapsed().as_millis();
                     // Fold the chain-of-thought once the answer is complete.
@@ -2590,6 +2612,13 @@ impl ReCraftApp {
                             self.ai_result_target = job.target;
                             self.ai_status =
                                 self.t_args("ui_explain_done", &[("ms", &elapsed.to_string())]);
+                        }
+                        AiJobKind::Agent => {
+                            self.ai_explanation = Some(text);
+                            self.ai_result_kind = AiResultKind::Prose;
+                            self.ai_result_target = None;
+                            self.ai_status =
+                                self.t_args("ui_agent_done", &[("ms", &elapsed.to_string())]);
                         }
                         AiJobKind::Suggest => {
                             let mut proposals = job.suggestions;
@@ -2620,13 +2649,17 @@ impl ReCraftApp {
                         AiJobKind::Polish => "ui_polish_failed",
                         AiJobKind::Explain => "ui_explain_failed",
                         AiJobKind::Suggest => "ui_suggest_failed",
+                        AiJobKind::Agent => "ui_agent_failed",
                     };
                     self.ai_status = self.t_args(key, &[("error", &error)]);
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    if !received && job.started.elapsed().as_secs() >= 3 {
+                    if !received
+                        && job.kind != AiJobKind::Agent
+                        && job.started.elapsed().as_secs() >= 3
+                    {
                         self.ai_status = self.t_args(
                             "ui_waiting_for_first_token",
                             &[("seconds", &job.started.elapsed().as_secs().to_string())],
@@ -2785,6 +2818,68 @@ impl ReCraftApp {
         };
         self.ai_checked.clear();
         self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Suggest, None, proposals);
+    }
+
+    /// Run the project-level agent: the model chooses which read-only tools to call.
+    ///
+    /// The worker opens its own SQLite connection so the UI thread never waits on HTTP or
+    /// decompilation; tool calls are streamed back as trace lines, the answer as prose.
+    fn start_agent(&mut self, ctx: &egui::Context) {
+        if self.ai_job.is_some() {
+            return;
+        }
+        if !self.require_ai_provider() {
+            return;
+        }
+        let question = self.ai_agent_question.trim().to_owned();
+        if question.is_empty() {
+            self.ai_status = self.t("ui_agent_question_empty").to_owned();
+            self.set_status(self.ai_status.clone());
+            return;
+        }
+        let Some(path) = self.project.clone() else {
+            self.ai_status = self.t("ui_open_a_project_first").to_owned();
+            self.set_status(self.ai_status.clone());
+            return;
+        };
+        let settings = self.ai_request_settings();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match recraft_core::Session::open(&path) {
+                Ok(mut session) => recraft_ai::run_agent(
+                    &mut session,
+                    &settings,
+                    &question,
+                    recraft_ai::AGENT_MAX_ROUNDS,
+                    &mut |event| {
+                        if let recraft_ai::AgentEvent::Tool { name, arguments } = event {
+                            let _ =
+                                sender.send(AiMessage::AgentTool(format!("{name} {arguments}")));
+                        }
+                    },
+                )
+                .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            let _ = sender.send(AiMessage::Done(result));
+        });
+        self.ai_agent_trace.clear();
+        self.ai_explanation = None;
+        self.ai_result_kind = AiResultKind::Prose;
+        self.ai_result_target = None;
+        self.ai_reasoning.clear();
+        self.ai_reasoning_open = false;
+        self.ai_job = Some(AiJob {
+            receiver,
+            started: Instant::now(),
+            kind: AiJobKind::Agent,
+            prompt: None,
+            target: None,
+            suggestions: Vec::new(),
+        });
+        self.ai_status = self.t("ui_agent_running").to_owned();
+        self.set_status(self.ai_status.clone());
+        ctx.request_repaint();
     }
 
     /// Build the polish prompt for the function under the cursor and start the model
@@ -5147,6 +5242,65 @@ impl ReCraftApp {
                 ui.checkbox(&mut self.ai_thinking, thinking_mode.as_str())
                     .on_hover_text(thinking_hint.as_str());
             });
+        });
+
+        // Project-level agent: unlike the one-shot buttons above, the model decides which
+        // read-only tools to call (list functions, read a function, follow xrefs, ...).
+        card_frame(pal).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                RichText::new(self.t("ai_agent_title"))
+                    .strong()
+                    .size(13.0)
+                    .color(pal.text),
+            );
+            ui.add_space(4.0);
+            let question_hint = self.t("ui_agent_question_hint");
+            let run_label = self.t("ui_run_agent");
+            let agent_hint = self.t("ui_agent_hint");
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 72.0).max(80.0);
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.ai_agent_question)
+                        .desired_width(width)
+                        .hint_text(question_hint),
+                );
+                let submitted =
+                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let run = ui
+                    .add_enabled(self.ai_job.is_none(), egui::Button::new(run_label))
+                    .on_hover_text(agent_hint)
+                    .clicked();
+                if (run || submitted) && self.ai_job.is_none() {
+                    *action = Action::AiAgent;
+                }
+            });
+            // Tool calls are the evidence for the answer: without them a confident prose
+            // answer is unverifiable.
+            if !self.ai_agent_trace.is_empty() {
+                let title = self.t_args(
+                    "ui_agent_trace",
+                    &[("count", &self.ai_agent_trace.len().to_string())],
+                );
+                egui::CollapsingHeader::new(RichText::new(title).size(11.0).color(pal.comment))
+                    .id_salt("ai_agent_trace")
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("ai_agent_trace_scroll")
+                            .max_height(140.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for line in &self.ai_agent_trace {
+                                    ui.label(
+                                        RichText::new(line)
+                                            .monospace()
+                                            .size(10.0)
+                                            .color(pal.tab_inactive_text),
+                                    );
+                                }
+                            });
+                    });
+            }
         });
 
         // Chain-of-thought stream (only when the toggle asked for thinking). Expanded while
@@ -7736,6 +7890,7 @@ impl ReCraftApp {
                 }
             }
             Action::AiSuggest => self.start_suggest(ctx),
+            Action::AiAgent => self.start_agent(ctx),
             Action::AiApply => {
                 self.apply_ai_selection();
             }
@@ -7749,6 +7904,7 @@ impl ReCraftApp {
                 self.ai_reasoning.clear();
                 self.ai_reasoning_open = false;
                 self.ai_answer = None;
+                self.ai_agent_trace.clear();
             }
             Action::AiQuery => {
                 if !self.require_ai_provider() {
@@ -10793,6 +10949,40 @@ mod tests {
         assert!(app.ai_job.is_none());
     }
 
+    /// The agent job streams tool-call lines into the trace and its final answer into the
+    /// result pane as prose (no pseudo-C colouring).
+    #[test]
+    fn agent_job_trace_and_answer_are_applied() {
+        let (sender, receiver) = mpsc::channel();
+        let mut app = ReCraftApp {
+            ai_job: Some(AiJob {
+                receiver,
+                started: Instant::now(),
+                kind: AiJobKind::Agent,
+                prompt: None,
+                target: None,
+                suggestions: Vec::new(),
+            }),
+            ..ReCraftApp::default()
+        };
+        sender
+            .send(AiMessage::AgentTool(
+                "list_functions {\"filter\":\"sub_\"}".to_owned(),
+            ))
+            .unwrap();
+        sender
+            .send(AiMessage::Done(Ok("这些函数负责注册表访问。".to_owned())))
+            .unwrap();
+        app.tick();
+        assert_eq!(app.ai_agent_trace.len(), 1);
+        assert!(app.ai_agent_trace[0].starts_with("list_functions"));
+        assert_eq!(
+            app.ai_explanation.as_deref(),
+            Some("这些函数负责注册表访问。")
+        );
+        assert_eq!(app.ai_result_kind, AiResultKind::Prose);
+        assert!(app.ai_job.is_none());
+    }
     #[test]
     fn ai_suggest_job_merges_model_names() {
         let (sender, receiver) = mpsc::channel();
