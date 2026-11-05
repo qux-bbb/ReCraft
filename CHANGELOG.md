@@ -1390,6 +1390,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A folded constant no longer reaches a path the definition does not dominate.**
+  `fold_constant_registers` may fold a register's final constant into a nested block (that
+  is how the image base reaches a loop body), but it did not stop when the defining block
+  closed: after `if (rax == 0) { eax = 1; return; }` the store `*(u8*)(rax) = 0;` became
+  `*(u8*)(1) = 0;`, and notepad's `sub_140010798` lost a whole `if` to a constant return.
+  The scan now ends when the depth drops below the definition's or when a
+  `return`/`goto`/`break`/`continue`/`} while` appears at its level, so the fold only
+  happens where the definition dominates the use. Twenty-six notepad and ten crackme
+  snapshots went back to the correct register reads (`*(u64*)(0)` → `*(u64*)(rax)`,
+  `eax = 0x…` → `eax = ebx`); structured rate and goto counts are unchanged. A second
+  dead-write sweep after the constant folds also removes the argument setup they leave
+  behind (`ecx = 0; call(0)` → `call(0)`), and one unit test covers the dominance rule.
 - **A conditional's fallthrough edge is no longer assumed to be the next block in the
   listing.** The flat fallback emits a loop body in address order, so when a block's
   `not_taken` successor was not the block that came next the emitted text fell through into
