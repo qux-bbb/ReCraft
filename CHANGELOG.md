@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Function signatures export and import, so a name learned once reaches another binary.**
+  `recraft-decompile::signature` turns a function head into a byte pattern where the bytes that
+  encode an address are wildcarded: relative branches, RIP-relative displacements and any
+  immediate large enough to be an address (`>= 0x10000`) match anything, every other byte must
+  match exactly. An incremental-linking thunk has no bytes worth matching, so both export and
+  match look through it to the implementation. Two commands use it:
+  `signature-export --out <json> <project>` writes one `{name, pattern}` entry per function the
+  project has named (through `rename`, or the name inside a `prototype`), and
+  `signature-import --from <json> <project> [--dry-run]` names every function whose head
+  matches. A name already in use is skipped — thunks are matched first, so a call site reads the
+  source-level name — and a function that already has a name is never renamed. On the crackme
+  sample the export writes ten signatures (`main`, `printf`, `puts`, `fgets`, `fflush`,
+  `strpbrk`, `strcmp`, `strlen`, `__acrt_iob_func`, `start`) and importing them into a fresh
+  project makes `main` read `puts(…)`, `printf(…)`, `fgets(…)`, `strpbrk(…)`, `strcmp(…)`,
+  `strlen(…)` and `fflush(__acrt_iob_func(1))` without any prototype; notepad, which links the
+  CRT dynamically, matches nothing, as expected. Callees that already carry a name no longer
+  produce a self-referential `// inferred: printf = printf` header note. Two unit tests cover
+  the pattern format; lint is 0 findings on all five projects and the 789 golden snapshots are
+  unchanged.
 - **A `/* signed */` note that the operands already spell is removed from L2.** The printer
   writes `(a < b /* signed */)` when it cannot retype the operands, but the value flow often
   puts a signed cast back on the first operand (`(int32)v1 < 3`), and then the note only
