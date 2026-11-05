@@ -100,7 +100,17 @@ corpus 62 + corpus86 64 份文本，另抽查 kernel32 5 134、user32 6 080、ad
 （历史决定：跨 MSVC 版本保持形状稳定），所以常量折叠、case 值这类"数字"变化只能靠人工
 review，快照本身不覆盖。
 
-`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels`、`inline asm statements`、`switch statements` 与 `max nesting depth`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 502（L1+L2 共 1004 份）、crackme 493、corpus 31、corpus86 32、Go **3261**（L1）——**全部 0 findings**。
+**2026-11-05 复核（间接调用继续扫描之后）**：函数扫描不再把 `call qword ptr [IAT]` 当死路，
+notepad **502 → 506** 个函数（新增 4 个此前不可达的调用目标）、结构化 **489（96.6%）**、
+覆盖率 **99.6%**、标签 **269**、`__asm` 103、API 标签 **448 → 1 637**；crackme **495** /
+**455（91.9%）** / 覆盖率 98.5% / 标签 218 / `__asm` 258；corpus 31、corpus86 32 结构不变。
+快照刷新 **6 份**：notepad 2 份内容变化（`sub_140013154` 的栈偏移整体 +8、`sub_140010f48`
+补回一个此前丢弃的实参）、4 份新增函数，corpus86 `indirect.c` 补回一个缺失的 `return;`；
+五套 `--check` 全绿（notepad **506** + crackme 160 + corpus 31 + corpus86 32 + go 60），
+`lint` 在 notepad/crackme/corpus/corpus86 仍 0 findings。上面的 502/487 表格保留为
+2026-11-02–04 的历史基线。
+
+`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels`、`inline asm statements`、`switch statements` 与 `max nesting depth`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 506（L1+L2 共 1012 份）、crackme 495、corpus 31、corpus86 32 在 2026-11-05 复测 **0 findings**；Go 3261 个函数只复测了前 300 个（L1，0 findings）与 60 份快照（`--check` 无变化），全量 lint 未重跑（耗时超过 15 分钟，改动只影响扫描可达性、不改变 Go 的函数集合与快照）。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
 `xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是
@@ -276,8 +286,8 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 ## golden 快照
 
-- 目录（合计 **785** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
-  （32 位语料，32）、`tests/golden/notepad/`（notepad **全部 502 个函数**，含 45 KB 的多入口循环参考函数）、
+- 目录（合计 **789** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
+  （32 位语料，32）、`tests/golden/notepad/`（notepad **全部 506 个函数**，含 45 KB 的多入口循环参考函数）、
   `tests/golden/crackme/`（前 160，`--limit 160`）、`tests/golden/go/`（Go 前 60，`--limit 60`，含 `internal/abi.Name.ReadVarint` 这一参考例；
   Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数
   一个 `.c` 文件，**按符号名命名**（插入新函数不会重排已有文件；重名函数追加地址后缀）。

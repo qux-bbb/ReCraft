@@ -16,12 +16,13 @@
 
 已达成（可验证）：
 
-- 反编译质量门禁：corpus 覆盖率 97.4% / 结构化 100%，真实样本 notepad 覆盖率 99.5% /
-  结构化 97.0%，crackme 91.9%，Go 二进制 92.1%（3003/3261，覆盖率 98.8%）；阈值 95% / 70%，
-  golden **785** 份快照（notepad 全部 502 个函数）+ CI 回环。
+- 反编译质量门禁：corpus 覆盖率 97.4% / 结构化 100%，真实样本 notepad 覆盖率 99.6% /
+  结构化 96.6%（489/506），crackme 91.9%，Go 二进制 92.1%（3003/3261，覆盖率 98.8%）；
+  阈值 95% / 70%，golden **789** 份快照（notepad 全部 506 个函数）+ CI 回环。
 - 调用参数与类型：x64/x86 实参、栈参数恢复、原型覆盖与指针 cast、间接调用/IAT 尾调用。
 - AI（DESIGN §9.2 全部条目）：函数解释、命名建议、样本摘要、**自然语言查询**、**伪代码
-  润色**（LLM 建议、不写回），provider 抽象/缓存/审计/prompt 评测齐备。
+  润色**（LLM 建议、不写回），provider 抽象/缓存/审计/prompt 评测齐备；命名准确率基准
+  `ai eval-names`（`corpus/naming` 基准二进制，盲化候选符号）给出可回归的数字。
 - MCP：stdio + HTTP（bearer token），只读工具/资源，单测 + E2E 真实服务断言。
 - CLI：import/analyze/disasm/decompile/strings/imports/funcs/xrefs/cfg/search/callgraph/
   metrics/golden/batch/serve-mcp/ai 全部可用并带 `--json`。

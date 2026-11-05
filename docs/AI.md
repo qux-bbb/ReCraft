@@ -104,12 +104,18 @@ recraft-cli ai polish notepad.rcraft --addr entry [--json] [--no-cache]
 左侧新增 **AI** 页签：
 
 - **Suggest names**：先用本地 `suggest_names` 选出有证据的 `sub_*` 候选（证据地址、置信度、
-  回退名字），再把候选的摘要/API/字符串按 rename prompt 交给已启用的 provider；模型按
-  `0xADDR name -- rationale` 逐行回答，解析后替换名字与理由，未命中的候选保留本地回退名。
-  结果显示为 `置信度 地址 -> 名称`，证据链接可跳转到对应地址。请求在后台线程流式执行，
-  UI 不阻塞；回复解析不出任何名字时提示并保留本地建议。
-- 单选 proposal → **Apply selected**：经 `Command` 总线执行（journaled，`Ctrl+Z` 可撤销），
-  应用后从列表移除并刷新反汇编/函数列表。
+  回退名字），再把候选的摘要/API/字符串/函数体片段按 rename prompt 交给已启用的 provider；
+  模型按 `0xADDR name -- rationale` 逐行回答，解析后替换名字与理由，未命中的候选保留本地
+  回退名。**候选按证据权重与调用者数排序**（API×2 + 字符串×3 + 调用者数），不再按地址取
+  前 N 个；prompt 在 token 预算 80% 内装批（单次最多 32 个），每个候选带最多 14 行 L2 函数体
+  ——只给 API 名与字符串时命名基本靠猜。结果显示为 `置信度 地址 -> 名称` 并标注来源
+  （`[模型]` / `[本地]` / `[外部]`），证据链接可跳转到对应地址。请求在后台线程流式执行，
+  UI 不阻塞；回复解析不出任何名字时提示并保留本地建议；状态栏报告“模型命名 N/M 个候选”。
+- **批量 review 与 apply**：每行有勾选框，另有 **全选 / 清空选择**；**Apply selected (N)**
+  把勾选的 proposal 逐条经 `Command` 总线执行（journaled，`Ctrl+Z` 逐条撤销）。中途被拒绝
+  （例如重名）时提示“已应用 N 条，随后失败：…”，不会假装整批成功。
+- **Explain / Polish 结果锚定函数**：结果区顶部显示结果所属函数（名称 + 地址）并提供跳转；
+  光标移到别的函数后显示“光标已移到别的函数”，避免旧答案看起来仍属当前函数。
 - **Explain**：把当前光标所在函数的摘要/API 标签/引用字符串/L2 伪代码组成脱敏 prompt，
   交给已启用的 provider 流式解释，结果显示在面板内（prose，不做语法着色）；未配置
   provider 时提示先配置。
@@ -228,16 +234,62 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
     cargo test -p recraft-ai --test prompt_eval
     recraft-cli ai eval corpus-project.rcraft [--json]     # 5/5 passed，失败时非 0 退出
     ```
-- 这只保证 **prompt 输入质量**；LLM 回答的准确率/命名质量仍需模型评测集（后续版本）。
+- 这只保证 **prompt 输入质量**；模型回答的准确率由下面的命名基准度量。
+
+## 命名准确率基准（2026-11-05）
+
+`ai eval-names` 把命名管线跑在**还带真实符号**的函数上，再按符号给分。候选函数取当前
+名称不是 `sub_*`/`loc_*`、且是合法 C 标识符的函数（导出、入口、用户命名）；打分前把每个
+候选自己的符号——以及递归调用里的自引用——替换成 `sub_<addr>`，模型看不到要被评分的答案。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File corpus\build-naming.ps1
+recraft-cli import corpus\build\x64\naming.exe -o naming.rcraft
+recraft-cli analyze naming.rcraft
+
+recraft-cli ai eval-names naming.rcraft            # 离线启发式基线（无需 key）
+recraft-cli ai eval-names naming.rcraft --llm      # 真实模型路径
+recraft-cli ai eval-names naming.rcraft --json     # 逐函数行（truth/proposal/overlap/apis/strings）
+```
+
+评分（`crates/recraft-ai/src/eval_names.rs`，`NAME_EVAL_VERSION = name-eval-2026-11-v1`）：
+先归一化（小写、驼峰拆词、去掉启发式追加的 `_<地址>` 尾巴），`exact` 比较词集合（词序
+无关，`probe_field` == `field_probe`），`partial` 为词重叠 ≥ 0.5（Jaccard），`overlap` 为
+平均词重叠。**这是下界**：`read_config_file` 对 `open_config_file` 只算 partial，同义改写
+不会被算作 exact；给每个函数配可接受别名集是下一步。
+
+`corpus/naming/naming.c` 是基准二进制：26 个语义函数，覆盖文件/注册表/网络/加密/服务/
+剪贴板/进程快照等真实 Win32 API 与字符串，用 CRT 编译并导出（导出表即 ground truth）。
+不用 `corpus/c/functions.c` 做命名基准，是因为它 CRT-free、几乎没有 API/字符串，命名证据
+为零，只能测出“没有证据时模型会瞎猜”。
+
+**实测基线（2026-11-05，`deepseek-flash`，27 个带符号函数）**：
+
+| 模式 | exact | partial | 平均词重叠 | 备注 |
+|---|---|---|---|---|
+| 离线启发式 | 0/27（0%） | 0/27（0%） | 0.10 | 类别前缀 + 地址，只作回退 |
+| 模型（全部） | 1/27（3.7%） | 9/27（33.3%） | 0.31 | 5 个无 API/字符串证据的函数全是 0 分 |
+| 模型（有证据的 22 个） | 1/22（4.5%） | 9/22（40.9%） | 0.38 | 与 `suggest_names` 的实际候选集一致 |
+
+结论与用法：**有证据的函数值得一用**（`check_single_instance` 完全命中，
+`read_config_file`/`get_temp_path`/`generate_random_bytes`/`load_sample_plugin` 只差同义词），
+**没有 API/字符串证据的函数不要交给模型**——`suggest_names` 已经这样过滤，基准里的 0 分
+样本只是导出表里恰好有名字。改 prompt/候选排序后重跑这三行，数字下降即回退。
+
+顺带修掉了一个证据缺口：函数扫描把 `call qword ptr [IAT]` 当成死路，导致每个函数在第一个
+导入 API 调用处就停止，后面的调用、块和 API 标签全部丢失（notepad 448 个标签）。改为继续
+扫描后 notepad 有 **1 637** 个标签，命名/解释/初筛的证据才够用；同时发现 4 个此前不可达的
+函数（502 → 506）。
 
 ## 限制与后续
 
-- **单条选择**：UI 当前一次应用一条 proposal；批量勾选/全选与 diff 预览（before/after
-  名称对比）在后续版本补全。
-- **无评测集**：LLM 输出的命名准确率/解释质量尚无固定 prompt 回归集。
+- **评分的同义词问题**：`exact` 只认词集合，`read_config_file` 与 `open_config_file` 算
+  partial。下一步给基准函数配别名集（`expected.json`），把同义改写纳入 exact 统计。
+- **单条 diff 预览**：批量 apply 已支持，但 apply 前没有 before/after 名称对比视图。
 - **网络可达性**：开发环境仅放行部分域名；TLS 栈通过 `https://crates.io/` 的忽略测试
   （`cargo test -p recraft-ai https_tls_handshake_to_crates_io -- --ignored`）验证，
   `api.openai.com` 在本环境不可达，未做端到端 OpenAI 账号测试。
 - **命名质量取决于模型**：GUI 的 Suggest names 与 `ai suggest --llm` 都让模型基于证据起名，
-  仍可能给出与语义不符的名字，apply 前需要人工 review；离线回退名仍是「类别前缀 + 地址」。
+  仍可能给出与语义不符的名字，apply 前需要人工 review；离线回退名仍是「类别前缀 + 地址」，
+  面板用 `[本地]` 标注，不要当成模型建议。
 - 写工具仅 `rename`/`comment`；`set_prototype` / `define_function` / `apply_type` 尚未实现。

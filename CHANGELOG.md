@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A measurable naming pipeline, and a benchmark that scores it.** Suggest names used to
+  burn its batch on the lowest-address `sub_*` functions (evidence order, then a hard cap of
+  12 in the prompt) and present heuristic fallbacks as if the model had named them. Candidates
+  are now ranked by evidence weight and caller count, each prompt block carries up to 14 lines
+  of decompiled body (the old prompt had none, so naming was guesswork), candidates are packed
+  until 80% of the token budget instead of a fixed count, and every proposal carries a
+  `source` (`model` / `heuristic` / `external`) shown in the panel. `ai eval-names` scores
+  proposals against the symbols a binary still carries, blinding each candidate's own symbol
+  (and recursive self-references) so the model cannot read the answer; `--llm` runs the real
+  pipeline, the offline mode scores the heuristic floor without a key. `corpus/naming/` is a
+  new benchmark binary with 26 semantic functions over real Win32 APIs and strings, built by
+  `corpus/build-naming.ps1`. Baseline on it: heuristic 0/27 exact, mean token overlap 0.10;
+  `deepseek-flash` 1/27 exact, 9/27 partial (overlap ≥ 0.5), mean 0.31 — on the 22 candidates
+  that carry evidence, 1 exact and 9 partial (mean 0.38), while evidence-free functions score
+  0. Scoring is deliberately a lower bound: `read_config_file` for `open_config_file` is
+  partial, not exact; curated alias sets are the documented next step.
+- **The AI panel applies suggestions in batches and keeps answers attached to their
+  function.** Rename rows have checkboxes plus Check all / Clear checks, and Apply selected
+  applies every ticked proposal through the command bus (each rename is its own journal record,
+  so undo takes them back one at a time); a refused proposal reports how many landed instead of
+  pretending the batch succeeded. The explanation/polish result pane names the function it
+  belongs to, links to it, and warns when the cursor has moved to another function — previously
+  an old answer silently looked current.
+
 - **The AI panel's Explain and Suggest names actions now ask the model.** Both looked
   model-backed (they were gated on a configured provider) but only formatted local evidence,
   so nothing left the process. Explain now builds the same redacted prompt as
@@ -1285,7 +1309,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`F5`/`Tab` no longer pan the pseudo-C listing sideways.** `scroll_to_rect(Align::Center)`
+- **`call qword ptr [IAT]` no longer ends a function scan.** The analysis walk treated an
+  indirect call as a dead end, so every function stopped at its first imported API and the
+  blocks, calls and API tags after it were missing: notepad held 448 API tags and naming
+  evidence was often a single API per function. An indirect call now falls through to the next
+  instruction (it returns), which raised notepad to **1 637 tags** and found **four functions**
+  that were previously unreachable (502 → 506; structured 489/506, 96.6%). Six golden
+  snapshots were refreshed: the two changed ones gain call arguments that were previously
+  dropped (`sub_140013154`'s stack offsets shift by 8), corpus86 `indirect.c` gains a missing
+  `return;`, and the four notepad additions are new functions. `lint` stays at 0 findings on
+  notepad/crackme/corpus/corpus86; the golden check is clean at 506 + 32 + 160 + 31 snapshots.
+- **Renaming now rejects names that would break the listing.** `Command::Rename` accepted any
+  text: a duplicate symbol made two addresses indistinguishable, and a C keyword made the
+  pseudo-code unparsable — reachable from `rename`, from `ai apply` (proposals JSON) and from
+  a model reply. The command validates a C identifier (ASCII, ≤ 64 bytes), refuses reserved
+  words (C11/C17 plus the C++ spellings the corpus can emit) and refuses a name another
+  address owns; re-applying an address's own name stays a no-op. A test covers empty, invalid,
+  keyword, duplicate and self-rename cases.
+ `scroll_to_rect(Align::Center)`
   centres both axes, and the target was the whole allocated row — wider than the pane, because
   the view keeps at least 1100 pt of code — so re-centring the cursor line also pushed the
   listing (and its line numbers) to the right, while opening the view by clicking its tab left
