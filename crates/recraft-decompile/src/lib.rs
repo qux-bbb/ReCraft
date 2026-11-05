@@ -24,6 +24,7 @@ use recraft_ir::{
 
 mod l2;
 mod quality;
+pub mod signature;
 mod structuring;
 mod variables;
 

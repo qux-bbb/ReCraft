@@ -436,6 +436,21 @@ enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Export the signature of every named function to a JSON file.
+    SignatureExport {
+        project: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Name functions from a signature file; addresses that already have a name are kept.
+    SignatureImport {
+        project: PathBuf,
+        #[arg(long = "from")]
+        from: PathBuf,
+        /// Print the matches without renaming anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Delete the user prototype at a function.
     Unprototype {
         project: PathBuf,
@@ -717,6 +732,12 @@ fn run(cli: Cli) -> Result<()> {
             text,
         } => cmd_prototype(&project, &addr, Some(&text)),
         Commands::Unprototype { project, addr } => cmd_prototype(&project, &addr, None),
+        Commands::SignatureExport { project, out } => cmd_signature_export(&project, &out),
+        Commands::SignatureImport {
+            project,
+            from,
+            dry_run,
+        } => cmd_signature_import(&project, &from, dry_run),
         Commands::DefineStruct {
             project,
             name,
@@ -3299,6 +3320,131 @@ fn cmd_prototype(project: &Path, addr: &str, text: Option<&str>) -> Result<()> {
         Some(text) => println!("prototype at {:#x}: {text}", addr.get()),
         None => println!("prototype at {:#x} removed", addr.get()),
     }
+    Ok(())
+}
+
+/// The name a project gave a function, if it is more than the default `sub_…` spelling.
+fn user_name(session: &Session, addr: Address) -> Result<Option<String>> {
+    if let Some(name) = session.name_at(addr)?
+        && name != format!("sub_{:x}", addr.get())
+    {
+        return Ok(Some(name));
+    }
+    // A prototype carries the name the user declared: `int printf(const char* format, ...)`.
+    let Some(text) = session.prototype_at(addr)? else {
+        return Ok(None);
+    };
+    let Some(open) = text.find('(') else {
+        return Ok(None);
+    };
+    Ok(text[..open].split_whitespace().last().map(str::to_owned))
+}
+
+/// Write the signature of every named function to a JSON file.
+fn cmd_signature_export(project: &Path, out: &Path) -> Result<()> {
+    use recraft_decompile::signature;
+
+    let mut session = Session::open(project)?;
+    let functions = session.functions()?;
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    for function in &functions {
+        let Some(name) = user_name(&session, function.start)? else {
+            continue;
+        };
+        let Some(signature) = signature::build(&mut session, function.start, function.end, &name)
+        else {
+            continue;
+        };
+        entries.push(serde_json::json!({
+            "name": signature.name,
+            "pattern": signature.render(),
+        }));
+    }
+    let document = serde_json::json!({ "format": 1, "signatures": entries });
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| Error::internal(format!("signature JSON: {error}")))?;
+    std::fs::write(out, text)?;
+    println!("wrote {} signatures to {}", entries.len(), out.display());
+    Ok(())
+}
+
+/// Name functions that match a signature file; a name the project already has wins.
+fn cmd_signature_import(project: &Path, from: &Path, dry_run: bool) -> Result<()> {
+    use recraft_decompile::signature::Signature;
+
+    let text = std::fs::read_to_string(from)?;
+    let document: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| Error::invalid_argument(format!("{}: {error}", from.display())))?;
+    let Some(entries) = document
+        .get("signatures")
+        .and_then(|value| value.as_array())
+    else {
+        return Err(Error::unsupported(format!(
+            "{} has no `signatures` array",
+            from.display()
+        )));
+    };
+    let mut signatures = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (Some(name), Some(pattern)) = (
+            entry.get("name").and_then(|value| value.as_str()),
+            entry.get("pattern").and_then(|value| value.as_str()),
+        ) else {
+            continue;
+        };
+        if let Some(signature) = Signature::parse(name, pattern) {
+            signatures.push(signature);
+        }
+    }
+
+    let mut session = Session::open(project)?;
+    let functions = session.functions()?;
+    let mut matches: Vec<(Address, String)> = Vec::new();
+    for function in &functions {
+        if user_name(&session, function.start)?.is_some() {
+            continue;
+        }
+        if let Some(name) = recraft_decompile::signature::find_match(
+            &mut session,
+            function.start,
+            function.end,
+            &signatures,
+        ) {
+            matches.push((function.start, name.to_owned()));
+        }
+    }
+    // A thunk and its target carry the same signature; the thunk is what call sites name, so it
+    // takes the name and the target is left alone (names are unique per project).
+    let mut ordered = matches.clone();
+    ordered.sort_by_key(|(addr, _)| {
+        recraft_decompile::signature::thunk_target(&mut session, *addr).is_none()
+    });
+    let mut taken: std::collections::BTreeSet<String> = functions
+        .iter()
+        .filter_map(|function| user_name(&session, function.start).ok().flatten())
+        .collect();
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    for (addr, name) in &ordered {
+        if taken.contains(name) {
+            skipped += 1;
+            continue;
+        }
+        taken.insert(name.clone());
+        println!("{:#x} -> {name}", addr.get());
+        if !dry_run {
+            session.execute(Command::Rename {
+                addr: *addr,
+                name: Some(name.clone()),
+            })?;
+        }
+        applied += 1;
+    }
+    println!(
+        "matched {applied} function(s) from {} signature(s), {skipped} name(s) already taken{}",
+        signatures.len(),
+        if dry_run { " (dry run)" } else { "" }
+    );
     Ok(())
 }
 

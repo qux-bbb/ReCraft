@@ -296,7 +296,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         if is_variadic_target(session, target_start, target_end) {
             variadic.insert(name);
         } else if let Some(role) = infer_library_role(session, target_start, target_end, &ranges) {
-            library_names.insert(name, role.to_owned());
+            if name.starts_with("sub_") {
+                library_names.insert(name, role.to_owned());
+            }
         }
     }
     let mut literals: Vec<(String, Address)> = bodies
@@ -2334,7 +2336,9 @@ fn infer_library_names(
                 }
             }
         }
-        if calls > 0 && literal_format {
+        // A callee that already carries a name needs no inference; the header would only
+        // repeat it (`printf = printf`).
+        if calls > 0 && literal_format && name.starts_with("sub_") {
             inferred.insert(
                 name.clone(),
                 if wide { "wprintf" } else { "printf" }.to_owned(),
