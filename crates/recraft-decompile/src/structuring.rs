@@ -2750,7 +2750,8 @@ impl Structurer {
             });
             self.labeled[header] = true;
         }
-        for block in body.iter().copied() {
+        let order: Vec<usize> = body.iter().copied().collect();
+        for (position, &block) in order.iter().enumerate() {
             if self.emitted[block] {
                 continue;
             }
@@ -2763,7 +2764,11 @@ impl Structurer {
                 self.labeled[block] = true;
             }
             self.emit_simple(lines, block, level);
-            self.emit_raw_flow(lines, block, level);
+            let next = order[position + 1..]
+                .iter()
+                .copied()
+                .find(|&other| !self.emitted[other]);
+            self.emit_raw_flow_next(lines, block, level, next);
         }
         Some(exit)
     }
@@ -3316,21 +3321,8 @@ impl Structurer {
         // inside the loop: `continue`/`break` would be invalid C there. Pop the loop before
         // emitting them and let the jump become a labelled `goto`.
         self.loop_stack.pop();
-        for block in &body {
-            if !self.emitted[*block] {
-                self.emitted[*block] = true;
-                lines.push(PseudoLine {
-                    addr: self.blocks[*block].entry,
-                    text: format!(
-                        "{}loc_{:x}:",
-                        indent(level),
-                        self.blocks[*block].entry.get()
-                    ),
-                });
-                self.emit_simple(lines, *block, level);
-                self.emit_raw_flow(lines, *block, level);
-            }
-        }
+        self.emit_leftovers(lines, &body, level);
+
         Some(exit)
     }
 
@@ -3379,21 +3371,8 @@ impl Structurer {
             addr: self.blocks[header].entry,
             text: format!("{}}}", indent(level)),
         });
-        for block in body {
-            if !self.emitted[*block] {
-                self.emitted[*block] = true;
-                lines.push(PseudoLine {
-                    addr: self.blocks[*block].entry,
-                    text: format!(
-                        "{}loc_{:x}:",
-                        indent(level + 1),
-                        self.blocks[*block].entry.get()
-                    ),
-                });
-                self.emit_simple(lines, *block, level + 1);
-                self.emit_raw_flow(lines, *block, level + 1);
-            }
-        }
+        self.emit_leftovers(lines, body, level + 1);
+
         Some(exit)
     }
 
@@ -3469,21 +3448,8 @@ impl Structurer {
         // are outside the loop now, so a jump back to the header must be a `goto`, not
         // `continue`/`break`.
         self.loop_stack.pop();
-        for block in body {
-            if !self.emitted[*block] {
-                self.emitted[*block] = true;
-                lines.push(PseudoLine {
-                    addr: self.blocks[*block].entry,
-                    text: format!(
-                        "{}loc_{:x}:",
-                        indent(level + 1),
-                        self.blocks[*block].entry.get()
-                    ),
-                });
-                self.emit_simple(lines, *block, level + 1);
-                self.emit_raw_flow(lines, *block, level + 1);
-            }
-        }
+        self.emit_leftovers(lines, body, level + 1);
+
         Some(exit)
     }
 
@@ -3705,6 +3671,79 @@ impl Structurer {
                 text: format!("{}{}", indent(level), statement.text),
             });
         }
+    }
+
+    /// Emit the blocks of `body` that no structured construct consumed, in address order,
+    /// each behind its own label. The lookahead keeps each block fallthrough edge honest when the
+    /// address order does not match the CFG's fallthrough successor.
+    fn emit_leftovers(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        body: &BTreeSet<usize>,
+        level: usize,
+    ) {
+        let order: Vec<usize> = body.iter().copied().collect();
+        for &block in &order {
+            if self.emitted[block] {
+                continue;
+            }
+            self.emitted[block] = true;
+            lines.push(PseudoLine {
+                addr: self.blocks[block].entry,
+                text: format!("{}loc_{:x}:", indent(level), self.blocks[block].entry.get()),
+            });
+            self.emit_simple(lines, block, level);
+            self.emit_raw_flow(lines, block, level);
+        }
+    }
+    /// Emit a block's own flow as raw jumps. `next` is the block that will be emitted right
+    /// after this one, when the caller knows it: a conditional's fallthrough edge only reads
+    /// as "fall through" when the next emitted block really is its `not_taken` successor, so
+    /// a reordered (address-ordered) listing has to spell that edge out as a jump.
+    fn emit_raw_flow_next(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        block: usize,
+        level: usize,
+        next: Option<usize>,
+    ) {
+        let falls_through = matches!(
+            self.blocks[block].flow,
+            Flow::CondGoto { .. } | Flow::Fallthrough
+        );
+        self.emit_raw_flow(lines, block, level);
+        if !falls_through {
+            return;
+        }
+        let Some(not_taken) = self.blocks[block].not_taken else {
+            return;
+        };
+        match next {
+            Some(next) => {
+                if not_taken == next {
+                    return;
+                }
+            }
+            // No block follows in this listing: the region ends here, so its fallthrough
+            // successor has to be named. A block that was already emitted keeps its own
+            // placement and is reached through the label the emitter gave it.
+            None => {
+                if self.emitted[not_taken] {
+                    return;
+                }
+            }
+        }
+        if not_taken == block || self.blocks[not_taken].entry.get() >= self.end.get() {
+            return;
+        }
+        lines.push(PseudoLine {
+            addr: self.blocks[block].entry,
+            text: format!(
+                "{}goto loc_{:x};",
+                indent(level),
+                self.blocks[not_taken].entry.get()
+            ),
+        });
     }
 
     fn emit_raw_flow(&mut self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
@@ -5152,6 +5191,15 @@ fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
 /// that tail. Unlike the last-label pass this works for any label and needs no epilogue:
 /// the return is part of the copied block.
 fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
+    // A label that some jump names is a second entry point into the region: the tail cannot
+    // run past it, because the copied text would then include a block another jump already
+    // targets (the copy would silently duplicate it).
+    let mut referenced: BTreeSet<u64> = BTreeSet::new();
+    for line in lines.iter() {
+        if let Some(target) = goto_target(&line.text) {
+            referenced.insert(target);
+        }
+    }
     let mut tails = BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         let text = line.text.trim();
@@ -5179,9 +5227,15 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                 tail.clear();
                 break;
             }
-            // An inner label only names a block inside the shared tail; the copied body
+            // An inner label only names a block inside the shared tail, so the copied body
             // does not need it and the original label still serves jumps into its block.
+            // A labelled block that is itself a jump target is a different entry point: the
+            // region stops there.
             if text.starts_with("loc_") && text.ends_with(':') {
+                if label_address(text).is_some_and(|address| referenced.contains(&address)) {
+                    tail.clear();
+                    break;
+                }
                 continue;
             }
             if text.starts_with('}') {
@@ -5193,7 +5247,13 @@ fn fold_return_tail_labels(lines: &mut Vec<PseudoLine>) {
                     .count()
                     .saturating_sub(usize::from(text.starts_with('}'))),
             );
+            let terminates = depth == 0 && (text == "return;" || text.ends_with(" return;"));
             tail.push(text.to_owned());
+            // A return ends the straight-line tail; anything after it is unreachable from
+            // this label and belongs to the next block.
+            if terminates {
+                break;
+            }
             if depth == 0 && tail.len() > 48 {
                 break;
             }
@@ -8636,6 +8696,53 @@ mod tests {
             !text.contains("        return rax;\n        case"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_return_tail_stops_at_its_return() {
+        let mut lines = vec![
+            test_line("    goto loc_30;"),
+            test_line("loc_30:"),
+            test_line("    x = 1;"),
+            test_line("    return;"),
+            test_line("    y = 2;"),
+            test_line("    return;"),
+        ];
+        fold_return_tail_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // `y` runs only when the label is entered at its own `return`; it is not part of
+        // loc_30's straight-line tail.
+        assert_eq!(text.matches("x = 1;").count(), 2, "{text}");
+        assert_eq!(text.matches("y = 2;").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_return_tail_stops_at_a_referenced_label() {
+        let mut lines = vec![
+            test_line("    goto loc_20;"),
+            test_line("    goto loc_30;"),
+            test_line("loc_20:"),
+            test_line("    x = 1;"),
+            test_line("loc_30:"),
+            test_line("    y = 2;"),
+            test_line("    return;"),
+        ];
+        fold_return_tail_labels(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // loc_20's region ends at loc_30, which some jump names, so it has no return tail
+        // to copy and its jump stays; loc_30's own tail still folds.
+        assert!(text.contains("goto loc_20;"), "{text}");
+        assert!(!text.contains("goto loc_30;"), "{text}");
+        assert_eq!(text.matches("x = 1;").count(), 1, "{text}");
+        assert_eq!(text.matches("y = 2;").count(), 2, "{text}");
     }
 
     #[test]

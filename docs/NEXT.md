@@ -49,6 +49,17 @@ crackme **455/495（91.9%）**、标签 218；corpus x64/x86 均 100%；Go **300
 含寄存器名的行 **146（严格口径）**、函数体内无寄存器名 **477/502** 是 **502 函数基线**上
 的实测，4 个新函数尚未单独统计（见 `docs/REPORT-2026-11-05.md`）。
 
+> **2026-11-05 晚（fallthrough 修复，`fix(decompile)`）**：平坦回退按地址序发射块，
+> 条件跳转的 fallthrough 后继只在下一条发射的块恰好是它时才成立，否则文本会**静默落进
+> 错误的块**——crackme 的 `main` 因此让循环耗尽路径打印 "Correct!" 而不是 hint。
+> `emit_raw_flow_next` 在平坦区域记录"下一个块"，fallthrough 后继不一致时补
+> `goto loc_…`；`fold_return_tail_labels` 的返回尾在第一个 `return;` 与被引用的内层标签
+> 处截止。结果：crackme `main` **17 处 goto → 1 处**，变成 `do { … } while (tries < 3)`
+> 套 32 字节校验环；crackme 标签 **218 → 201**；notepad 结构化 **489 → 487**（两个平坦回退
+> 函数各多一个如实的 `goto`）、标签 **269 → 268**；corpus/corpus86 不变，Go 只少了死代码。
+> lint 五套 0 findings，golden 789 张刷新，新增 2 个单测（201 个 decompile 单测）。
+
+
 ## 1. 多入口循环规范化（唯一能显著提升结构化率的方向）
 
 > **2026-11-03 更新（已部分落地，结论先行）**：复核发现 notepad 15 个回退函数里 **12 个不是

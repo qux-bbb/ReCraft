@@ -54,6 +54,7 @@ void sub_140008d40_l1(void) {
         sub_14000647c((rdx + 0xADDR), qword_ADDR);
         rcx = qword_ADDR;
         return sub_140006f64();
+        return;
     }
     sub_140028010(rcx);
     if (al != 0) return;

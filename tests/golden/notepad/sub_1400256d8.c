@@ -63,6 +63,7 @@ void sub_1400256d8_l1(void) {
                 rax = *(u64*)((rax + 0xADDR));
                 sub_140028010(rcx, rdx, r8);
             }
+            loc_ADDR:
             rcx = var_28;
             if (rcx != 0) {
                 var_28 = r14;
@@ -83,23 +84,7 @@ void sub_1400256d8_l1(void) {
         }
         r9d = eax;
         sub_140007cf0(var_88, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
-        rcx = var_28;
-        if (rcx != 0) {
-            var_28 = r14;
-            rax = *(u64*)(rcx);
-            rax = *(u64*)((rax + 0xADDR));
-            sub_140028010(rcx, rdx, r8);
-        }
-        rcx = var_20;
-        if (rcx != 0) {
-            var_20 = r14;
-            rax = *(u64*)(rcx);
-            rax = *(u64*)((rax + 0xADDR));
-            sub_140028010(rcx, rdx, r8);
-        }
-        eax = ebx;
-        r11 = &var_70;
-        return;
+        goto loc_ADDR;
     }
     r9d = eax;
     sub_140007cf0(var_88, (r14 + 0xADDR), "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");

@@ -27,8 +27,9 @@ void internal/abi.Name.ReadVarint_l1(void) {
                 r9 = var_20;
                 rbx = (rsi + r9);
             } while ((r8b & 0xADDR) != 0);
+            rax = (rdx + 1);
+            return;
             loc_ADDR:
-            runtime.panicshift();
         }
         runtime.morestack_noctxt();
     }

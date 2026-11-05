@@ -1354,6 +1354,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A conditional's fallthrough edge is no longer assumed to be the next block in the
+  listing.** The flat fallback emits a loop body in address order, so when a block's
+  `not_taken` successor was not the block that came next the emitted text fell through into
+  the wrong code: `crackme main` (`sub_140001010`) printed "Correct! Nice reversing." on the
+  loop's exhausted path where the hint belongs. `emit_raw_flow_next` takes the block that
+  will be emitted next and spells the edge out as `goto loc_…` whenever it disagrees with the
+  fallthrough successor (the flat region passes the lookahead; the leftover emitters keep the
+  implicit fallthrough). `fold_return_tail_labels` got the matching guard: a return tail stops
+  at its first `return;` and at an inner label another jump names, instead of copying the next
+  block's code into every jump site. With both, crackme `main` went from **17 goto to 1** and
+  became a `do { … } while (tries < 3)` loop with the 32-byte verify loop inside it; crackme
+  labels 218 → 201, notepad structured 489 → 487 (two flat-fallback functions now carry one
+  honest `goto` each) with labels 269 → 268, corpus/corpus86/go unchanged. `lint` is 0
+  findings on all five projects, the affected golden snapshots were refreshed (789 checked),
+  and the decompiler gained two unit tests for the tail guards.
 - **`call qword ptr [IAT]` no longer ends a function scan.** The analysis walk treated an
   indirect call as a dead end, so every function stopped at its first imported API and the
   blocks, calls and API tags after it were missing: notepad held 448 API tags and naming

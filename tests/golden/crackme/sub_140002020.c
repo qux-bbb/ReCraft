@@ -2,7 +2,8 @@
 void sub_140002020_l1(void) {
     rdi = *(u64*)(rcx);
     rbx = rcx;
-    if ((*(u32*)(rdi) == 0xADDR) || (*(u32*)(rdi) == 0xADDR)) {
+    if (*(u32*)(rdi) == 0xADDR) {
+        loc_ADDR:
         sub_14000217c(rcx);
         if (*(u32*)((rax + 0xADDR)) > 0 /* signed */) {
             sub_14000217c(rcx);
@@ -11,6 +12,7 @@ void sub_140002020_l1(void) {
         eax = 0;
         return;
     }
+    if (*(u32*)(rdi) == 0xADDR) goto loc_ADDR;
     if (*(u32*)(rdi) == 0xADDR) {
         sub_14000217c(rcx);
         *(u64*)((rax + 0xADDR)) = rdi;
