@@ -27,11 +27,12 @@ use crate::provider::{
 /// System prompt for the agent. Kept short: the tool descriptions carry the detail.
 pub const AGENT_SYSTEM: &str = "You are ReCraft's reverse-engineering agent. Answer questions \
 about the open project by calling the read-only tools; never invent functions, addresses or \
-strings you have not read. Start broad (list_functions, find_api_callers), then read the one \
-or two functions that matter (function_info, pseudocode). Two to four tool calls are usually \
-enough: answer as soon as the evidence supports it instead of reading everything. Cite \
-addresses as 0x... in the answer. Answer in the language of the question. You cannot modify \
-the project: propose renames as plain text and leave applying them to the user.";
+strings you have not read. Call tools silently (no \"I will look for…\" narration): start \
+broad (list_functions, find_api_callers), then read the one or two functions that matter \
+(function_info, pseudocode). Two to four tool calls are usually enough: answer as soon as the \
+evidence supports it instead of reading everything. Cite addresses as 0x... in the answer. \
+Answer in the language of the question. You cannot modify the project: propose renames as \
+plain text and leave applying them to the user.";
 
 /// Default number of model turns `run_agent` allows (each may contain several tool calls).
 /// One extra turn is always reserved for the answer after the tool budget is spent.
@@ -46,6 +47,13 @@ pub const AGENT_HISTORY_MAX_MESSAGES: usize = 60;
 pub enum AgentEvent {
     /// A tool is about to run.
     Tool { name: String, arguments: String },
+    /// A model turn started; content deltas that follow belong to it.
+    TurnStart,
+    /// A content delta of the answer being streamed.
+    Delta(String),
+    /// The text streamed since [AgentEvent::TurnStart] was narration before tool calls,
+    /// not part of the answer: drop it (the panel moves it into the tool trace).
+    Retract,
     /// The final answer (identical to `run_agent`'s return value).
     Answer(String),
 }
@@ -222,8 +230,17 @@ pub fn run_agent_with_history(
                 "Tool budget exhausted. Answer now using only the evidence already \
                  collected; state explicitly what you could not verify.",
             ));
-            return match provider.complete_chat(messages.as_slice(), &[], false)? {
+            on_event(AgentEvent::TurnStart);
+            return match provider.complete_chat_stream(
+                messages.as_slice(),
+                &[],
+                false,
+                &mut |chunk| on_event(AgentEvent::Delta(chunk.to_owned())),
+            )? {
                 ToolReply::Text(text) => {
+                    if text.trim().is_empty() {
+                        return Err(Error::internal("the model returned an empty answer"));
+                    }
                     messages.push(ChatMessage::assistant(text.clone(), Vec::new()));
                     on_event(AgentEvent::Answer(text.clone()));
                     Ok(text)
@@ -233,14 +250,24 @@ pub fn run_agent_with_history(
                 )),
             };
         }
-        match provider.complete_chat(messages.as_slice(), &tools, false)? {
+        on_event(AgentEvent::TurnStart);
+        match provider.complete_chat_stream(messages.as_slice(), &tools, false, &mut |chunk| {
+            on_event(AgentEvent::Delta(chunk.to_owned()))
+        })? {
             ToolReply::Text(text) => {
+                if text.trim().is_empty() {
+                    return Err(Error::internal("the model returned an empty answer"));
+                }
                 // Keep the answer in the conversation: the next question builds on it.
                 messages.push(ChatMessage::assistant(text.clone(), Vec::new()));
                 on_event(AgentEvent::Answer(text.clone()));
                 return Ok(text);
             }
             ToolReply::Calls(calls) => {
+                // Any text streamed before the calls was narration ("I'll look for…"), not
+                // an answer: let the caller drop it instead of mixing languages into the
+                // final answer.
+                on_event(AgentEvent::Retract);
                 messages.push(ChatMessage::assistant("", calls.clone()));
                 for call in calls {
                     on_event(AgentEvent::Tool {
@@ -601,6 +628,22 @@ mod tests {
                 .pop_front()
                 .ok_or_else(|| Error::internal("script exhausted"))
         }
+
+        fn complete_chat_stream(
+            &mut self,
+            messages: &[ChatMessage],
+            tools: &[ToolSpec],
+            thinking: bool,
+            on_chunk: &mut dyn FnMut(&str),
+        ) -> Result<ToolReply> {
+            let reply = self.complete_chat(messages, tools, thinking)?;
+            match &reply {
+                ToolReply::Text(text) => on_chunk(text),
+                // Models often narrate before calling a tool; the loop must retract it.
+                ToolReply::Calls(_) => on_chunk("narration"),
+            }
+            Ok(reply)
+        }
     }
 
     fn notepad() -> Option<(Session, tempfile::TempDir)> {
@@ -837,5 +880,47 @@ mod tests {
                 _ => {}
             }
         }
+    }
+    /// Text streamed before a tool call is retracted so it cannot leak into the answer.
+    #[test]
+    fn narration_before_tools_is_retracted() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let mut provider = Scripted {
+            replies: VecDeque::from(vec![
+                ToolReply::Calls(vec![ToolCall {
+                    id: "c".to_owned(),
+                    name: "list_functions".to_owned(),
+                    arguments: json!({"limit": 1}),
+                }]),
+                ToolReply::Text("final".to_owned()),
+            ]),
+            seen: Vec::new(),
+        };
+        let mut events = Vec::new();
+        let answer = run_agent_with_provider(&mut session, &mut provider, "q", 4, &mut |event| {
+            events.push(match event {
+                AgentEvent::TurnStart => "start".to_owned(),
+                AgentEvent::Delta(chunk) => format!("delta:{chunk}"),
+                AgentEvent::Retract => "retract".to_owned(),
+                AgentEvent::Tool { .. } => "tool".to_owned(),
+                AgentEvent::Answer(_) => "answer".to_owned(),
+            });
+        })
+        .unwrap();
+        assert_eq!(answer, "final");
+        assert_eq!(
+            events,
+            vec![
+                "start",
+                "delta:narration",
+                "retract",
+                "tool",
+                "start",
+                "delta:final",
+                "answer"
+            ]
+        );
     }
 }

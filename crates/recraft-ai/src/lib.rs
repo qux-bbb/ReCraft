@@ -792,7 +792,7 @@ fn incoming_callers(
 }
 
 /// Truncate to `max_chars` characters on a char boundary, appending `…`.
-pub(crate) fn truncate_text(text: &str, max_chars: usize) -> String {
+pub fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_owned();
     }

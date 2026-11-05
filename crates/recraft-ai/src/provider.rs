@@ -1114,6 +1114,23 @@ pub trait Provider {
         ))
     }
 
+    /// Streaming variant of [Provider::complete_chat]: content deltas go to on_chunk
+    /// while tool-call fragments are accumulated. The default delivers the finished answer
+    /// as one chunk, so providers without SSE keep working.
+    fn complete_chat_stream(
+        &mut self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        thinking: bool,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<ToolReply> {
+        let reply = self.complete_chat(messages, tools, thinking)?;
+        if let ToolReply::Text(text) = &reply {
+            on_chunk(text);
+        }
+        Ok(reply)
+    }
+
     /// Streaming variant used by the desktop UI. The default preserves providers that
     /// do not implement SSE by delivering the completed answer as one chunk.
     fn complete_stream(
@@ -1219,6 +1236,32 @@ impl OpenAiCompatibleProvider {
         // send an explicit toggle: direct answer by default, reasoning when the UI opts in.
         (endpoint.contains("api.deepseek.com") || endpoint.contains("opencode.ai"))
             .then_some(request.thinking)
+    }
+
+    /// Request body for a tool-calling turn (`stream` selects SSE).
+    fn chat_body(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        thinking: bool,
+        stream: bool,
+    ) -> Value {
+        let mut body = serde_json::json!({
+            "model": self.settings.model,
+            "max_tokens": self.settings.max_tokens,
+            "stream": stream,
+            "tool_choice": "auto",
+            "messages": messages.iter().map(ChatMessage::to_json).collect::<Vec<_>>(),
+            "tools": tools.iter().map(ToolSpec::to_json).collect::<Vec<_>>(),
+        });
+        if self.settings.endpoint.contains("api.deepseek.com")
+            || self.settings.endpoint.contains("opencode.ai")
+        {
+            body["thinking"] = serde_json::json!({
+                "type": if thinking { "enabled" } else { "disabled" },
+            });
+        }
+        body
     }
 
     /// Headers every JSON request carries (auth, user agent, OpenCode session affinity).
@@ -1343,26 +1386,11 @@ impl Provider for OpenAiCompatibleProvider {
             "{}/v1/chat/completions",
             self.settings.endpoint.trim_end_matches('/')
         );
-        let mut body = serde_json::json!({
-            "model": self.settings.model,
-            "max_tokens": self.settings.max_tokens,
-            "stream": false,
-            "tool_choice": "auto",
-            "messages": messages.iter().map(ChatMessage::to_json).collect::<Vec<_>>(),
-            "tools": tools.iter().map(ToolSpec::to_json).collect::<Vec<_>>(),
-        });
-        if self.settings.endpoint.contains("api.deepseek.com")
-            || self.settings.endpoint.contains("opencode.ai")
-        {
-            body["thinking"] = serde_json::json!({
-                "type": if thinking { "enabled" } else { "disabled" },
-            });
-        }
         let response = self.transport.send(&crate::transport::HttpRequest {
             method: "POST",
             url,
             headers: self.json_headers(),
-            body: body.to_string(),
+            body: self.chat_body(messages, tools, thinking, false).to_string(),
         })?;
         if response.status != 200 {
             return Err(Error::internal(format!(
@@ -1372,6 +1400,37 @@ impl Provider for OpenAiCompatibleProvider {
             )));
         }
         parse_tool_reply(&response.body)
+    }
+
+    fn complete_chat_stream(
+        &mut self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        thinking: bool,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<ToolReply> {
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.settings.endpoint.trim_end_matches('/')
+        );
+        let request = crate::transport::HttpRequest {
+            method: "POST",
+            url,
+            headers: self.json_headers(),
+            body: self.chat_body(messages, tools, thinking, true).to_string(),
+        };
+        let mut decoder = ToolStreamDecoder::default();
+        let response = self
+            .transport
+            .send_stream(&request, &mut |raw| decoder.push(raw, on_chunk))?;
+        if response.status != 200 {
+            return Err(Error::internal(format!(
+                "openai HTTP {}: {}",
+                response.status,
+                response.body.chars().take(800).collect::<String>()
+            )));
+        }
+        decoder.finish()
     }
 
     fn complete_stream(
@@ -1555,6 +1614,121 @@ impl OpenAiSseDecoder {
         {
             self.reasoning_chars += reasoning.chars().count();
             on_reasoning(reasoning);
+        }
+    }
+}
+
+/// Accumulates tool-call fragments from an OpenAI SSE stream while forwarding content.
+///
+/// In a streamed turn the assistant content arrives as `delta.content` fragments and the
+/// calls as `delta.tool_calls[{index, id, function{name, arguments}}]`, where `arguments`
+/// is a JSON *string fragment*: joining them in order is what makes the call usable.
+#[derive(Debug, Default)]
+struct ToolStreamDecoder {
+    pending: String,
+    raw: String,
+    content: String,
+    calls: BTreeMap<usize, PartialCall>,
+    error: Option<String>,
+    saw_data: bool,
+}
+
+#[derive(Debug, Default)]
+struct PartialCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl ToolStreamDecoder {
+    fn push(&mut self, raw: &str, on_chunk: &mut dyn FnMut(&str)) {
+        self.raw.push_str(raw);
+        self.pending.push_str(raw);
+        while let Some(position) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=position).collect();
+            self.line(line.trim_end_matches(['\r', '\n']), on_chunk);
+        }
+    }
+
+    fn finish(mut self) -> Result<ToolReply> {
+        if !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            self.line(line.trim_end_matches(['\r', '\n']), &mut |_| {});
+        }
+        if let Some(error) = self.error.take() {
+            return Err(Error::internal(format!("openai stream error: {error}")));
+        }
+        if !self.saw_data {
+            // A gateway that ignores `stream: true` returns one JSON body.
+            return parse_tool_reply(&self.raw);
+        }
+        if !self.calls.is_empty() {
+            let calls = std::mem::take(&mut self.calls)
+                .into_iter()
+                .filter(|(_, call)| !call.name.is_empty())
+                .map(|(index, call)| {
+                    let arguments = serde_json::from_str(&call.arguments)
+                        .unwrap_or_else(|_| serde_json::json!({"_raw": call.arguments}));
+                    ToolCall {
+                        id: if call.id.is_empty() {
+                            format!("call_{index}")
+                        } else {
+                            call.id
+                        },
+                        name: call.name,
+                        arguments,
+                    }
+                })
+                .collect();
+            return Ok(ToolReply::Calls(calls));
+        }
+        Ok(ToolReply::Text(self.content))
+    }
+
+    fn line(&mut self, line: &str, on_chunk: &mut dyn FnMut(&str)) {
+        let Some(data) = line.strip_prefix("data:") else {
+            return;
+        };
+        self.saw_data = true;
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        if let Some(error) = value.get("error") {
+            self.error = Some(error.to_string());
+            return;
+        }
+        let delta = &value["choices"][0]["delta"];
+        if let Some(content) = delta["content"].as_str()
+            && !content.is_empty()
+        {
+            self.content.push_str(content);
+            on_chunk(content);
+        }
+        if let Some(items) = delta["tool_calls"].as_array() {
+            for (position, item) in items.iter().enumerate() {
+                let index = item["index"]
+                    .as_u64()
+                    .map_or(position, |value| value as usize);
+                let call = self.calls.entry(index).or_default();
+                if let Some(id) = item["id"].as_str()
+                    && !id.is_empty()
+                {
+                    call.id = id.to_owned();
+                }
+                if let Some(name) = item["function"]["name"].as_str()
+                    && !name.is_empty()
+                    && !call.name.ends_with(name)
+                {
+                    call.name.push_str(name);
+                }
+                if let Some(arguments) = item["function"]["arguments"].as_str() {
+                    call.arguments.push_str(arguments);
+                }
+            }
         }
     }
 }
@@ -2375,5 +2549,67 @@ mod tests {
             ToolReply::Calls(_) => panic!("expected text"),
         }
         assert!(parse_tool_reply("{}").is_err());
+    }
+    #[test]
+    fn tool_stream_decoder_accumulates_content_and_call_fragments() {
+        use serde_json::json;
+        let mut decoder = ToolStreamDecoder::default();
+        let mut text = String::new();
+        let sse = [
+            json!({"choices":[{"delta":{"content":"Hello "}}]}).to_string(),
+            json!({"choices":[{"delta":{"content":"world"}}]}).to_string(),
+            "[DONE]".to_owned(),
+        ]
+        .iter()
+        .map(|line| format!("data: {line}\n"))
+        .collect::<String>();
+        decoder.push(&sse, &mut |chunk| text.push_str(chunk));
+        assert_eq!(text, "Hello world");
+        match decoder.finish().unwrap() {
+            ToolReply::Text(answer) => assert_eq!(answer, "Hello world"),
+            ToolReply::Calls(calls) => panic!("expected text, got {calls:?}"),
+        }
+
+        // Two calls whose argument JSON arrives split across deltas.
+        let mut decoder = ToolStreamDecoder::default();
+        let sse = [
+            json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"a","function":{"name":"list_functions","arguments":"{\"lim"}}
+            ]}}]})
+            .to_string(),
+            json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"function":{"arguments":"it\":5}"}}
+            ]}}]})
+            .to_string(),
+            json!({"choices":[{"delta":{"tool_calls":[
+                {"index":1,"id":"b","function":{"name":"pseudocode","arguments":"{}"}}
+            ]}}]})
+            .to_string(),
+            "[DONE]".to_owned(),
+        ]
+        .iter()
+        .map(|line| format!("data: {line}\n"))
+        .collect::<String>();
+        decoder.push(&sse, &mut |_| {});
+        match decoder.finish().unwrap() {
+            ToolReply::Calls(calls) => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].name, "list_functions");
+                assert_eq!(calls[0].arguments["limit"], 5);
+                assert_eq!(calls[1].id, "b");
+            }
+            ToolReply::Text(text) => panic!("expected calls, got {text:?}"),
+        }
+
+        // A gateway that ignores stream:true returns one plain JSON body.
+        let mut decoder = ToolStreamDecoder::default();
+        decoder.push(
+            r#"{"choices":[{"message":{"content":"one shot"}}]}"#,
+            &mut |_| {},
+        );
+        match decoder.finish().unwrap() {
+            ToolReply::Text(text) => assert_eq!(text, "one shot"),
+            ToolReply::Calls(_) => panic!("expected text"),
+        }
     }
 }

@@ -1736,6 +1736,7 @@ fn cmd_ai_ask(project: &Path, question: &str, as_json: bool, rounds: usize) -> R
     let mut session = Session::open(project)?;
     let mut trace: Vec<serde_json::Value> = Vec::new();
     let mut answer = String::new();
+    let mut turn_text = String::new();
     let result =
         recraft_ai::run_agent(
             &mut session,
@@ -1748,6 +1749,16 @@ fn cmd_ai_ask(project: &Path, question: &str, as_json: bool, rounds: usize) -> R
                         eprintln!("  → {name} {arguments}");
                     }
                     trace.push(json!({"name": name, "arguments": arguments}));
+                }
+                recraft_ai::AgentEvent::TurnStart => turn_text.clear(),
+                recraft_ai::AgentEvent::Delta(chunk) => turn_text.push_str(&chunk),
+                recraft_ai::AgentEvent::Retract => {
+                    // Narration before a tool call, not part of the answer: show it as trace
+                    // context and drop it from the answer.
+                    if !as_json && !turn_text.trim().is_empty() {
+                        eprintln!("  … {}", recraft_ai::truncate_text(turn_text.trim(), 160));
+                    }
+                    turn_text.clear();
                 }
                 recraft_ai::AgentEvent::Answer(text) => answer = text,
             },
