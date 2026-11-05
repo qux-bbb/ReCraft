@@ -1541,6 +1541,61 @@ mod tests {
         assert!(!reopened.can_redo().unwrap());
     }
 
+    /// A rename must be emittable C and must not make two addresses share one symbol:
+    /// AI proposals and `rename`/`apply` take free text, so this is the last line of
+    /// defence before the listing becomes ambiguous.
+    #[test]
+    fn rename_rejects_invalid_reserved_and_duplicate_names() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        // Any other address can own a name; no second function record is needed.
+        let other = Address::new(entry.get() + 0x100);
+
+        for (name, expected) in [
+            ("", "must not be empty"),
+            ("1st_name", "not a C identifier"),
+            ("has space", "not a C identifier"),
+            ("dash-name", "not a C identifier"),
+            ("while", "reserved word"),
+            ("struct", "reserved word"),
+        ] {
+            let error = session
+                .execute(Command::Rename {
+                    addr: entry,
+                    name: Some(name.to_owned()),
+                })
+                .expect_err(name);
+            assert!(
+                error.to_string().contains(expected),
+                "{name:?}: {error} (want {expected:?})"
+            );
+        }
+
+        // A name another address already owns is refused; its own name is not a conflict.
+        session
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("owned_name".to_owned()),
+            })
+            .unwrap();
+        let error = session
+            .execute(Command::Rename {
+                addr: other,
+                name: Some("owned_name".to_owned()),
+            })
+            .expect_err("duplicate must be refused");
+        assert!(error.to_string().contains("already used"), "{error}");
+        session
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("owned_name".to_owned()),
+            })
+            .expect("re-applying a function's own name is a no-op");
+    }
+
     #[test]
     fn search_bytes_finds_known_patterns() {
         let dir = TempDir::new().unwrap();

@@ -22,6 +22,161 @@ pub const NAME_KIND_USER: i64 = 1;
 /// Name records produced by automatic analysis (e.g. `sub_140001000`); derived data.
 pub const NAME_KIND_AUTO: i64 = 2;
 
+/// Reserved words that can never be a symbol name: emitting one would make the
+/// pseudo-code unparsable. C11/C17 keywords plus the C++ spellings the corpus and
+/// real C++ samples can produce.
+const RESERVED_NAMES: &[&str] = &[
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "_Alignas",
+    "_Alignof",
+    "_Atomic",
+    "_Bool",
+    "_Complex",
+    "_Generic",
+    "_Imaginary",
+    "_Noreturn",
+    "_Static_assert",
+    "_Thread_local",
+    "alignas",
+    "alignof",
+    "and",
+    "and_eq",
+    "asm",
+    "bitand",
+    "bitor",
+    "bool",
+    "catch",
+    "class",
+    "compl",
+    "concept",
+    "constexpr",
+    "const_cast",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "decltype",
+    "delete",
+    "dynamic_cast",
+    "explicit",
+    "export",
+    "false",
+    "friend",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "not",
+    "not_eq",
+    "nullptr",
+    "operator",
+    "or",
+    "or_eq",
+    "private",
+    "protected",
+    "public",
+    "reinterpret_cast",
+    "requires",
+    "static_assert",
+    "static_cast",
+    "template",
+    "this",
+    "thread_local",
+    "throw",
+    "true",
+    "try",
+    "typeid",
+    "typename",
+    "using",
+    "virtual",
+    "wchar_t",
+    "xor",
+    "xor_eq",
+];
+
+/// Reject names that cannot be emitted as a C identifier.
+fn validate_identifier(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::internal("symbol name must not be empty"));
+    }
+    if name.len() > 64 {
+        return Err(Error::internal(format!(
+            "symbol name is {} bytes; the limit is 64",
+            name.len()
+        )));
+    }
+    let mut chars = name.chars();
+    let first = chars.next().expect("name checked non-empty");
+    if !(first.is_ascii_alphabetic() || first == '_')
+        || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Err(Error::internal(format!(
+            "{name:?} is not a C identifier (use ASCII letters, digits and underscore)"
+        )));
+    }
+    if RESERVED_NAMES.contains(&name) {
+        return Err(Error::internal(format!(
+            "{name:?} is a reserved word and cannot be a symbol name"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a rename and refuse a name another address already owns.
+///
+/// Uniqueness is enforced in the database, not only in the AI reply parser: `ai apply`
+/// reads proposals from JSON and the CLI `rename` command takes free text, so a
+/// duplicate would otherwise reach the listing and make the disassembly ambiguous.
+fn validate_rename(conn: &Connection, addr: Address, name: &str) -> Result<()> {
+    validate_identifier(name)?;
+    let owner: Option<i64> = conn
+        .query_row(
+            "SELECT addr FROM name WHERE text = ?1 AND addr <> ?2 LIMIT 1",
+            params![name, addr.get() as i64],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_err)?;
+    if let Some(owner) = owner {
+        return Err(Error::internal(format!(
+            "name {name:?} is already used at {owner:#x}"
+        )));
+    }
+    Ok(())
+}
+
 /// Which comment slot to address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommentKind {
@@ -288,6 +443,7 @@ pub(crate) fn apply(
     match command {
         Command::Rename { addr, name } => match name {
             Some(name) => {
+                validate_rename(conn, *addr, name)?;
                 conn.execute(
                     "INSERT INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)
                      ON CONFLICT(addr) DO UPDATE SET text = excluded.text,
