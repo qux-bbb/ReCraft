@@ -906,8 +906,9 @@ void sub_140013154_l1(void) {
                                         var_d8 = r13d;
                                         if (eax >= ecx) {
                                             edi = 0;
+                                            r8 = &var_1f8;
                                             var_1f8 = 0;
-                                            sub_140024e6c(rcx, rdx, &var_1f8);
+                                            sub_140024e6c(rcx);
                                             if (eax >= 0 /* signed */) {
                                                 rax = var_1f8;
                                                 r8d = 0xADDR;
@@ -1059,9 +1060,10 @@ void sub_140013154_l1(void) {
                                                                                                                                 r10d += r11d;
                                                                                                                                 r11d = var_2f4;
                                                                                                                                 loc_ADDR:
+                                                                                                                                r8 = &var_200;
                                                                                                                                 var_2f0 = r10d;
                                                                                                                                 var_200 = r13;
-                                                                                                                                sub_140024e6c(rcx, rdx, &var_200);
+                                                                                                                                sub_140024e6c(rcx);
                                                                                                                                 if (eax < 0 /* signed */) {
                                                                                                                                     r13d = 0xADDR;
                                                                                                                                     goto loc_ADDR;

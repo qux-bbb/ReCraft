@@ -522,6 +522,7 @@ fn scan_function(
         if !visited.insert(addr.get()) {
             continue;
         }
+
         if !is_code(segments, addr) {
             continue;
         }
@@ -589,8 +590,14 @@ fn scan_function(
                     }
                 }
             }
+            FlowKind::IndirectCall => {
+                // A call returns to the next instruction, even when its target is only
+                // known at run time. Treating `call [IAT]` as a dead end stopped every
+                // function at its first imported-API call, so all later API tags (and
+                // the blocks after them) were missing from the database.
+                stack.push(next);
+            }
             FlowKind::IndirectBranch
-            | FlowKind::IndirectCall
             | FlowKind::Return
             | FlowKind::Interrupt
             | FlowKind::Trap
@@ -1016,5 +1023,37 @@ mod tests {
             session.addr_of_name("main.main").unwrap().map(|a| a.get()),
             Some(main_start)
         );
+    }
+    /// `call qword ptr [IAT]` returns to the next instruction, so the walk must continue:
+    /// before this, every function stopped at its first imported API and the tag table
+    /// only ever held one API per function (starving naming/triage evidence).
+    #[test]
+    fn indirect_calls_do_not_truncate_api_tags() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/build/x64/naming.exe");
+        if !path.exists() {
+            return;
+        }
+        let bytes = std::fs::read(path).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("naming-tags.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        let start = session
+            .addr_of_name("open_config_file")
+            .unwrap()
+            .expect("exported benchmark function");
+        let tags: Vec<String> = result
+            .api_refs
+            .iter()
+            .filter(|(addr, _, _)| *addr >= start && addr.get() < start.get() + 0x200)
+            .map(|(_, rule, _)| rule.clone())
+            .collect();
+        for api in ["CreateFileW", "ReadFile", "CloseHandle"] {
+            assert!(
+                tags.iter().any(|tag| tag.ends_with(api)),
+                "{api} missing from {tags:?}"
+            );
+        }
     }
 }

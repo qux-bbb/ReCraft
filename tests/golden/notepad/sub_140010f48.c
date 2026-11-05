@@ -201,8 +201,7 @@ void sub_140010f48_l1(void) {
                             r8 += r8;
                             sub_1400274ac();
                         } else {
-                            r8d = edi;
-                            sub_140011abc(r12, (r14 + 2));
+                            sub_140011abc(r12, (r14 + 2), edi);
                         }
                     } else {
                         rdx = (r14 + 2);
