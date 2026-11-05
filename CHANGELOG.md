@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A copy followed by a self-update of the same local folds into one assignment.** MSVC
+  compiles `i % 16` into `mov rcx, rax; and ecx, 0xf`, which the value flow named as two
+  assignments to one local (`v12 = v10; v12 = (uint32)((uint32)v12 & 0xf);`). The statements
+  are adjacent, so nothing observes the intermediate value and substituting the copy into the
+  update is exact: `v12 = (uint32)((uint32)v10 & 0xf);`. The fold only applies at the same
+  indentation to a plain `=` whose target the next line reads, parenthesises a compound value
+  before substituting it (so `a + b & 0xf` cannot change meaning), and collapses a repeated
+  cast afterwards (`v1 = (uint32)((uint32)(arg1) + 1)`). crackme's L2 lost another 61 lines;
+  lint is 0 findings on all five projects, the 789 golden snapshots are unchanged, and the 214
+  decompiler tests pass.
 - **A local whose only definition is a constant the next call already spells is removed from
   the L2 body.** The constant argument setup `ecx = 0; call(0)` is folded into the call at the
   text level, but the dead-write sweep cannot drop the assignment when the register is reused
