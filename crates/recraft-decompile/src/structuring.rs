@@ -6256,7 +6256,7 @@ fn plain_assignment(text: &str) -> Option<(&str, &str)> {
 }
 
 /// True when the expression calls a function (`sub_...(...)`, an API, `__asm(...)`).
-fn contains_call(text: &str) -> bool {
+pub(crate) fn contains_call(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut index = 0;
     while index < bytes.len() {

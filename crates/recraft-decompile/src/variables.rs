@@ -64,7 +64,122 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> boo
         *lines = candidate;
     }
     strip_parameter_registers(lines);
+    drop_write_only_locals(lines);
     true
+}
+
+/// Drop a local whose only definition is a constant the very next call already spells.
+///
+/// The register value flow names every definition, so the constant argument setup in front of
+/// a call (`ecx = 0; call(0)`) leaves a write-only local behind when the register is reused
+/// later in the function. Only that shape is removed: the value must be a constant, nothing
+/// may read the local, and the next statement must be a call carrying the same constant — a
+/// definition that merely looks unread can still reach a join the value flow could not name.
+fn drop_write_only_locals(lines: &mut Vec<PseudoLine>) {
+    let Some(signature) = lines.iter().position(|line| signature_line(&line.text)) else {
+        return;
+    };
+    let mut declared: Vec<(usize, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate().skip(signature + 1) {
+        let text = line.text.trim();
+        if text == "}" || text.is_empty() {
+            break;
+        }
+        if text.starts_with("//") {
+            continue;
+        }
+        match declaration_name(text) {
+            Some(name) => declared.push((index, name)),
+            None => break,
+        }
+    }
+    for (index, name) in declared.iter().rev() {
+        let mut read = false;
+        let mut definition: Option<(usize, String)> = None;
+        for (position, line) in lines.iter().enumerate() {
+            if position == *index {
+                continue;
+            }
+            let text = line.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if let Some((lhs, rhs)) = text.split_once(" = ")
+                && lhs.trim() == name
+            {
+                if definition.is_some() {
+                    read = true;
+                    break;
+                }
+                definition = Some((position, rhs.trim().trim_end_matches(';').trim().to_owned()));
+                continue;
+            }
+            if mentions_name(text, name) {
+                read = true;
+                break;
+            }
+        }
+        let Some((position, value)) = definition else {
+            continue;
+        };
+        if read || !is_constant_text(&value) {
+            continue;
+        }
+        // The call that consumed the setup must already carry the constant, and the statement
+        // must not be the only body of an unbraced `if`/`while`.
+        let carries = lines
+            .get(position + 1)
+            .is_some_and(|line| line.text.contains('(') && mentions_name(&line.text, &value));
+        let safe = lines.get(position.wrapping_sub(1)).is_some_and(|line| {
+            let text = line.text.trim_end();
+            text.ends_with('{') || text.ends_with(';') || text.ends_with('}') || text.ends_with(':')
+        });
+        if !carries || !safe {
+            continue;
+        }
+        lines.remove(position);
+        lines.remove(*index);
+    }
+}
+/// The name a declaration line introduces: uint32 v4; -> v4.
+fn declaration_name(text: &str) -> Option<String> {
+    if !text.ends_with(';') || text.contains('=') || text.contains('(') {
+        return None;
+    }
+    let inner = text.trim_end_matches(';').trim();
+    let mut parts = inner.split_whitespace();
+    let ty = parts.next()?;
+    let name = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    if !ty
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+    {
+        return None;
+    }
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    if matches!(
+        name,
+        "return" | "break" | "continue" | "case" | "default" | "else"
+    ) {
+        return None;
+    }
+    Some(name.to_owned())
+}
+
+/// Whether the text mentions the name as a whole token.
+fn mentions_name(text: &str, name: &str) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| token == name)
 }
 
 /// Lines that still name a register outside an `__asm` string.
@@ -3102,6 +3217,18 @@ mod tests {
         assert!(text.contains("v1 = 1;"), "{text}");
         assert!(text.contains("v1 = 2;"), "{text}");
         assert_no_registers(&text);
+    }
+
+    #[test]
+    fn a_consumed_constant_setup_leaves_no_local() {
+        let text = run(&[
+            "    ecx = 0;",
+            "    sub_140004580(0);",
+            "    rcx = rax;",
+            "    return;",
+        ]);
+        // The call already spells the constant; the setup local has no reader.
+        assert!(!text.contains("= 0;"), "{text}");
     }
 
     #[test]
