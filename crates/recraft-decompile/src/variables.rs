@@ -66,6 +66,60 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> boo
     strip_parameter_registers(lines);
     fold_copy_then_update(lines);
     drop_write_only_locals(lines);
+    drop_redundant_signed_notes(lines);
+
+    /// Drop the `/* signed */` note when the comparison already carries a signed cast.
+    ///
+    /// The printer writes `(a < b /* signed */)` because it cannot retype the operands. Once the
+    /// value flow has put a signed cast on the first operand (`(int32)v1 < 3`), the note only
+    /// repeats what the cast says.
+    fn drop_redundant_signed_notes(lines: &mut [PseudoLine]) {
+        const NOTE: &str = "/* signed */";
+        const SIGNED: [&str; 4] = ["(int8)", "(int16)", "(int32)", "(int64)"];
+        for line in lines.iter_mut() {
+            while let Some(position) = line.text.find(NOTE) {
+                let Some(start) = enclosing_group_start(&line.text, position) else {
+                    break;
+                };
+                if !SIGNED
+                    .iter()
+                    .any(|cast| line.text[start + 1..].starts_with(cast))
+                {
+                    break;
+                }
+                let mut end = position + NOTE.len();
+                if line.text[..position].ends_with(' ') {
+                    end = position;
+                    while line.text[..end].ends_with(' ') {
+                        end -= 1;
+                    }
+                }
+                line.text.replace_range(end..position + NOTE.len(), "");
+            }
+        }
+    }
+
+    /// The `(` that opens the group containing `position`.
+    fn enclosing_group_start(text: &str, position: usize) -> Option<usize> {
+        let bytes = text.as_bytes();
+        let mut depth = 0i32;
+        let mut index = position;
+        while index > 0 {
+            index -= 1;
+            match bytes[index] {
+                b')' => depth += 1,
+                b'(' => {
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     true
 }
 
@@ -3301,6 +3355,19 @@ mod tests {
         assert!(text.contains("v1 = 1;"), "{text}");
         assert!(text.contains("v1 = 2;"), "{text}");
         assert_no_registers(&text);
+    }
+
+    #[test]
+    fn a_signed_note_goes_away_when_the_cast_says_it() {
+        let text = run(&[
+            "    if ((int32)ecx < 3 /* signed */) {",
+            "    }",
+            "    if (ecx < 3 /* signed */) {",
+            "    }",
+        ]);
+        // The first comparison already carries the signed cast; the second has no cast.
+        assert!(text.contains("if ((int32)v1 < 3) {"), "{text}");
+        assert_eq!(text.matches("/* signed */").count(), 1, "{text}");
     }
 
     #[test]
