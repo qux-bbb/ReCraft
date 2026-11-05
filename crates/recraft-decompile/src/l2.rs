@@ -718,7 +718,14 @@ fn scan_incoming_args(
             // A call consumes the argument registers its callee declares. Without this a
             // wrapper that forwards its incoming `rcx` to a helper (`call_str` 鈫?            // `str_probe`) looks argument-less, and the call site loses the argument too.
             if let Stmt::Call { target, args } = stmt {
-                let count = call_arity(session, *target, depth, memo, ranges)?;
+                // A variadic callee takes exactly the arguments its format string names; the
+                // registers behind the rest are leftovers the call site happened to hold and
+                // are not incoming parameters of this function.
+                let count =
+                    match variadic_argument_count(session, target.get(), args, &exprs, ranges) {
+                        Some(count) => count,
+                        None => call_arity(session, *target, depth, memo, ranges)?,
+                    };
                 for reg in X64_ARG_REGS.iter().take(count.min(args.len())) {
                     if !written.contains(reg) {
                         incoming.insert(*reg);
@@ -747,6 +754,27 @@ fn scan_incoming_args(
 }
 
 /// Visit the byte sizes of floating-point memory operands inside an expression.
+/// The number of arguments a call to a variadic callee consumes: the format string plus one
+/// per conversion. None when the callee is not variadic or its first argument is not a
+/// literal format string, so the callee's own parameter count is used instead.
+fn variadic_argument_count(
+    session: &mut Session,
+    target: u64,
+    args: &[ExprId],
+    exprs: &[Expr],
+    ranges: &HashMap<u64, (Address, Address)>,
+) -> Option<usize> {
+    let (start, end) = ranges.get(&target).copied()?;
+    if !crate::structuring::is_variadic_target(session, start, end) {
+        return None;
+    }
+    let Expr::Const(address) = exprs[*args.first()? as usize] else {
+        return None;
+    };
+    let format = session.string_at(Address::new(address)).ok().flatten()?;
+    Some(1 + crate::structuring::format_argument_count(&format))
+}
+
 fn walk_float_sizes(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(u8)) {
     match &exprs[id as usize] {
         Expr::Const(_) | Expr::Temp(_) | Expr::Reg(_) => {}

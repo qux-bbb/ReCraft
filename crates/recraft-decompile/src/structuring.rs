@@ -1731,7 +1731,7 @@ fn pointer_width_of_slot(lines: &[PseudoLine], slot: &str) -> Option<Vec<u8>> {
 /// variadic function (`va_start` reads them back from there). A non-variadic function with the
 /// same number of arguments never writes that exact pattern, so it identifies a `printf`-style
 /// callee even when the image carries no symbol for it.
-fn is_variadic_target(session: &mut Session, start: Address, end: Address) -> bool {
+pub(crate) fn is_variadic_target(session: &mut Session, start: Address, end: Address) -> bool {
     use iced_x86::{Mnemonic, OpKind, Register};
     // The four home-area slots of the x64 calling convention.
     const HOME: [(u64, Register); 4] = [
@@ -2172,7 +2172,7 @@ fn string_literal(argument: &str) -> Option<String> {
 }
 
 /// How many variadic arguments a `printf`-style format string consumes.
-fn format_argument_count(format: &str) -> usize {
+pub(crate) fn format_argument_count(format: &str) -> usize {
     let bytes = format.as_bytes();
     let mut index = 0usize;
     let mut count = 0usize;

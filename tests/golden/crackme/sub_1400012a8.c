@@ -51,7 +51,9 @@ void sub_1400012a8_l1(void) {
         sub_1400080c0();
         rbx = *(u64*)(rax);
         sub_1400080b8();
-        sub_140001010(*(u32*)(rax), rbx, rdi);
+        r8 = rdi;
+        rdx = rbx;
+        sub_140001010(*(u32*)(rax));
         ebx = eax;
         sub_1400018f4();
         if (al == 0) {
@@ -100,7 +102,9 @@ void sub_1400012a8_l1(void) {
         sub_1400080c0();
         rbx = *(u64*)(rax);
         sub_1400080b8();
-        sub_140001010(*(u32*)(rax), rbx, rdi);
+        r8 = rdi;
+        rdx = rbx;
+        sub_140001010(*(u32*)(rax));
         ebx = eax;
         sub_1400018f4();
         if (al == 0) {
