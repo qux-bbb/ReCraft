@@ -15,7 +15,7 @@ void sub_14001ed0c_l1(void) {
     var_30 = xmm1;
     if (rax != 0) {
         if (ebx == 0) {
-            r8d = 1;
+            r8d = esi;
             edx = ebx;
             ecx = 0xADDR;
             sub_140028010(r15d, ebx, esi);
@@ -76,13 +76,13 @@ void sub_14001ed0c_l1(void) {
         }
     }
     if (edi != 0) {
+        esi = 0;
     } else {
         rax = qword_ADDR;
         if (rax != 0) {
             sub_140028010(r15d, ebx, var_c8);
         }
     }
-    r11 = &var_70;
-    eax = 0;
+    eax = esi;
     return;
 }

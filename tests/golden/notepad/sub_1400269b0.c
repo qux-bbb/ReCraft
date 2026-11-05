@@ -87,6 +87,5 @@ void sub_1400269b0_l1(void) {
             }
         }
     }
-    r11 = &var_70;
     return;
 }

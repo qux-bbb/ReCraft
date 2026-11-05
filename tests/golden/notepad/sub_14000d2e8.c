@@ -81,6 +81,5 @@ void sub_14000d2e8_l1(void) {
         }
     }
     eax = edi;
-    r11 = &var_1b0;
     return;
 }

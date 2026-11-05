@@ -314,8 +314,9 @@ void sub_140013154_l1(void) {
                 var_138 = r14;
                 var_118 = r14d;
                 do {
+                    eax = 0;
                     __asm("lock cmpxchg [0xADDR], r13d");
-                } while (dword_ADDR != 0);
+                } while (dword_ADDR != eax);
                 eax = dword_ADDR;
                 r12 = off_140029260;
                 rsi = off_140034000;
@@ -983,10 +984,11 @@ void sub_140013154_l1(void) {
                                                                         if (rbx != 0) {
                                                                             if (edi == 0) {
                                                                                 loc_ADDR:
+                                                                                r13d = 0xADDR;
                                                                                 goto loc_ADDR;
                                                                             } else if (var_2f8 != r13) {
                                                                                 r8 = var_2f8;
-                                                                                r9d = 0xADDR;
+                                                                                r9d = r13d;
                                                                                 if (r10d == 0) {
                                                                                     r10 = (r8 + 4);
                                                                                     var_78 = edx;
@@ -1551,8 +1553,9 @@ void sub_140013154_l1(void) {
                                         var_a44 = xmm0;
                                         var_98 = r12;
                                         do {
+                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edx");
-                                        } while (dword_ADDR != 0);
+                                        } while (dword_ADDR != eax);
                                         eax = dword_ADDR;
                                         if (eax != 0) {
                                             eax += edx;
@@ -1889,8 +1892,9 @@ void sub_140013154_l1(void) {
                                         var_da4 = cx;
                                         var_320 = xmm0;
                                         do {
+                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edx");
-                                        } while (dword_ADDR != 0);
+                                        } while (dword_ADDR != eax);
                                         eax = dword_ADDR;
                                         if (eax != 0) {
                                             eax += edx;
@@ -3339,8 +3343,9 @@ void sub_140013154_l1(void) {
                                         }
                                         ebx = 1;
                                         do {
+                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], ebx");
-                                        } while (dword_ADDR != 0);
+                                        } while (dword_ADDR != eax);
                                         eax = dword_ADDR;
                                         if (eax > 0 /* signed */) {
                                             eax -= ebx;
@@ -4740,8 +4745,9 @@ void sub_140013154_l1(void) {
                                         }
                                         edi = 1;
                                         do {
+                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edi");
-                                        } while (dword_ADDR != 0);
+                                        } while (dword_ADDR != eax);
                                         eax = dword_ADDR;
                                         if (eax > 0 /* signed */) {
                                             eax -= edi;
@@ -4820,8 +4826,9 @@ void sub_140013154_l1(void) {
                                         var_cd8 = xmm0;
                                         var_ce8 = xmm0;
                                         do {
+                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edi");
-                                        } while (dword_ADDR != 0);
+                                        } while (dword_ADDR != eax);
                                         eax = dword_ADDR;
                                         if (eax != 0) {
                                             eax += edi;
@@ -5218,8 +5225,9 @@ void sub_140013154_l1(void) {
                                         var_cf0 = edi;
                                         sub_140028010(0, 0xADDR, ebx, &var_cc0);
                                         do {
+                                            eax = 0;
                                             __asm("lock cmpxchg [0xADDR], edi");
-                                        } while (dword_ADDR != 0);
+                                        } while (dword_ADDR != eax);
                                         eax = dword_ADDR;
                                         if (eax > 0 /* signed */) {
                                             eax -= edi;
@@ -5387,7 +5395,7 @@ void sub_140013154_l1(void) {
                                                                                     ecx += 1;
                                                                                     var_340 = ecx;
                                                                                     if (rsi != 0) {
-                                                                                        if (var_348 != 0) {
+                                                                                        if (var_348 != r11) {
                                                                                             rdx = var_348;
                                                                                             edi = r11d;
                                                                                             if (ecx == 0) {
@@ -5731,8 +5739,9 @@ void sub_140013154_l1(void) {
                 }
                 r14d = 1;
                 do {
+                    eax = 0;
                     __asm("lock cmpxchg [0xADDR], r14d");
-                } while (dword_ADDR != 0);
+                } while (dword_ADDR != eax);
                 eax = dword_ADDR;
                 if (eax > 0 /* signed */) {
                     eax -= r14d;
@@ -6116,6 +6125,7 @@ void sub_140013154_l1(void) {
     var_78 = r15d;
     r14 = 0xADDR;
     var_f8 = r12;
+    ecx = 0;
     var_120 = rsi;
     var_c0 = rbx;
     goto loc_ADDR;
@@ -6123,7 +6133,7 @@ void sub_140013154_l1(void) {
     r9 = var_68;
     r10d = 0xADDR;
     r11d = 0xADDR;
-    var_78 = 0;
+    var_78 = ecx;
     loc_ADDR:
     if (r8d > 4) {
         ecx = 8;
@@ -6605,10 +6615,11 @@ void sub_140013154_l1(void) {
         if (var_2f0 > edx) goto loc_ADDR;
     }
     do {
+        r13d = 0xADDR;
         goto loc_ADDR;
         loc_ADDR:
         rdx = var_2f8;
-        r9d = 0xADDR;
+        r9d = r13d;
         do {
             r8 = (rdx + 4);
             var_a8 = eax;
@@ -7964,7 +7975,8 @@ void sub_140013154_l1(void) {
         eax = 1;
         loc_ADDR:
         var_148 += 1;
-    } while (*(u8*)(rbx) != 0xADDR);
+        r12d = 0;
+    } while (*(u8*)(rbx) != r12b);
     goto loc_ADDR;
     loc_ADDR:
     edi = 0xADDR;
@@ -8676,10 +8688,11 @@ void sub_140013154_l1(void) {
         if (var_340 > edx) goto loc_ADDR;
     }
     do {
+        r14d = 0xADDR;
         goto loc_ADDR;
         loc_ADDR:
         rdx = var_348;
-        r9d = 0xADDR;
+        r9d = r14d;
         do {
             r8 = (rdx + 4);
             var_b8 = eax;
@@ -9131,10 +9144,11 @@ void sub_140013154_l1(void) {
                     r14d = 0xADDR;
                     goto loc_ADDR;
                     loc_ADDR:
-                    rax = qword_ADDR;
+                    rax = *(u64*)((r14 + 8));
+                    r11d = 0;
                     var_70 = rax;
                     if (rax == 0) goto loc_ADDR;
-                } while (dword_ADDR == 0);
+                } while (*(u32*)(r14) == r11d);
                 ecx = *(u32*)(r14);
                 rcx -= 0xADDR;
                 var_90 = rcx;

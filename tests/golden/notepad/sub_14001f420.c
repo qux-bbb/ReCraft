@@ -33,6 +33,5 @@ void sub_14001f420_l1(void) {
     var_34 = esi;
     SendMessageW(qword_ADDR, 0xADDR, 5, &var_28);
     SendMessageW(qword_ADDR, 5, 0, 0);
-    r11 = &var_50;
     return;
 }

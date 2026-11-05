@@ -20,7 +20,6 @@ void sub_14001e1dc_l1(void) {
     var_48 = rdi;
     var_60 = 6;
     RegisterClassExW(&var_30);
-    r11 = &var_80;
     eax = (uint32)(ax);
     return;
 }

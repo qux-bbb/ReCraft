@@ -72,8 +72,9 @@ void sub_14002193c_l1(void) {
             SendMessageW(qword_ADDR, 0xADDR, 0, (int64)(r12d));
             SendMessageW(qword_ADDR, 0xADDR, 1, rsi);
             GlobalFree(rsi);
+            ebx = 1;
         }
     }
-    eax = 1;
+    eax = ebx;
     return;
 }

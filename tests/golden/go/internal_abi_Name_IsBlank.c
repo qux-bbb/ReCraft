@@ -5,6 +5,7 @@ void internal/abi.Name.IsBlank_l1(void) {
         continue;
     }
     if (rax == 0) {
+        eax = 0;
         return;
     }
     ebx = 1;
@@ -12,8 +13,10 @@ void internal/abi.Name.IsBlank_l1(void) {
     if (rbx == 1) {
         ebx = 2;
         internal/abi.Name.Data();
-        cl = (uint8)((*(u8*)(0) == 0xADDR));
+        cl = (uint8)((*(u8*)(rax) == 0xADDR));
+    } else {
+        ecx = 0;
     }
-    eax = 0;
+    eax = ecx;
     return;
 }

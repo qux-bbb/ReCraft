@@ -33,7 +33,7 @@ void sub_140002354_l1(void) {
                             sub_1400088d0(r15, "api-ms-", (rbx + 7));
                             if (eax != 0) {
                                 LoadLibraryExW(r15, 0, 0);
-                                rbx = -1;
+                                rbx = rax;
                             }
                         }
                     }
@@ -45,9 +45,10 @@ void sub_140002354_l1(void) {
             GetProcAddress(rbx, r13);
             if (rax == 0) {
                 __asm("xchg [r15+rdi*8+0xADDR], r14");
+                eax = 0;
                 return;
             }
-            rcx = 0;
+            rcx = rax;
             __asm("xchg [r15+rdi*8+0xADDR], rcx");
         }
     }

@@ -16,11 +16,13 @@ void sub_140004cb4_l1(void) {
             rcx = (rax + 0xADDR);
             rax = -(rax);
             rdi = ((rax != 0) ? rcx : 0);
+        } else {
+            edi = 0;
         }
         rsi = (rbx + 0xADDR);
         AcquireSRWLockExclusive(rsi);
         if (*(u64*)((rbx + 0xADDR)) == 0) {
-            *(u64*)((rbx + 0xADDR)) = 0;
+            *(u64*)((rbx + 0xADDR)) = rdi;
         }
         if (rsi != 0) {
             ReleaseSRWLockExclusive(rsi);

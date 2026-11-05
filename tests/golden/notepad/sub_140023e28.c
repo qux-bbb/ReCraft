@@ -25,7 +25,7 @@ void sub_140023e28_l1(void) {
                 LoadResource();
                 if (rax != 0) {
                     LockResource(rax);
-                    rbp = 0;
+                    rbp = rax;
                     if (rax == 0) {
                         eax = 0;
                         return;

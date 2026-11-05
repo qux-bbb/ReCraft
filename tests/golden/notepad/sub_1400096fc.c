@@ -18,13 +18,14 @@ void sub_1400096fc_l1(void) {
                 } else if (rdi >= rbx) {
                 } else {
                     _o__errno();
+                    ebx = 0xADDR;
                     *(u32*)(0xADDR) = 0xADDR;
                     sub_140002934();
                     eax = 0xADDR;
                     return;
                 }
             } else if (rdi >= rbx) {
-                r8 = 0xADDR;
+                r8 = rbx;
                 rdx = rsi;
                 sub_1400274ac();
                 eax = 0;

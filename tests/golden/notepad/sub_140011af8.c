@@ -205,7 +205,7 @@ void sub_140011af8_l1(void) {
                         r10d = 0;
                         r8 = rbx;
                         if (edi != 0) {
-                            r9d = 1;
+                            r9d = edi;
                             r14d = 0xADDR;
                             do {
                                 ecx = (uint32)(*(u16*)(r8));
@@ -219,7 +219,7 @@ void sub_140011af8_l1(void) {
                             r14d = var_48;
                         }
                         var_20 = 0;
-                        WriteFile(qword_ADDR, rbx, 2, &var_44, 0);
+                        WriteFile(qword_ADDR, rbx, (rdi + rdi), &var_44, 0);
                         r8d = eax;
                         if (edi == 0) goto loc_ADDR;
                     } else {

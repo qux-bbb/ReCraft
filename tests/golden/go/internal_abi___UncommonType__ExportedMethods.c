@@ -8,7 +8,6 @@ void internal/abi.(*UncommonType).ExportedMethods_l1(void) {
     }
     if (*(u16*)((rax + 6)) != 0) {
         var_30 = rax;
-        ebx = *(u32*)((rax + 8));
         internal/abi.addChecked(off_1400dc21b);
         ecx = (uint32)(*(u16*)((var_30 + 6)));
         return;

@@ -72,6 +72,5 @@ void sub_14000f9f0_l1(void) {
     eax = dword_ADDR;
     dword_ADDR = eax;
     sub_14000fd5c();
-    r11 = &var_b0;
     return;
 }

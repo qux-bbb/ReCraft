@@ -46,10 +46,11 @@ void sub_140021cd0_l1(void) {
                 if (r15d != 0) {
                     SendMessageW(qword_ADDR, 0xADDR, 0, 0);
                 }
+                ebx = 1;
             }
         }
         LocalUnlock(rdi);
-        eax = 1;
+        eax = ebx;
     }
     return;
 }

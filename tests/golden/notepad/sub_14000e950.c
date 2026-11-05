@@ -289,11 +289,12 @@ void sub_14000e950_l1(void) {
                 }
                 *(u8*)((rax + 0xADDR)) = bl;
                 sub_1400225a4(qword_ADDR);
+                eax = 0;
                 return;
             } else if (ebp == 0xADDR) {
                 GetDpiForWindow(qword_ADDR);
                 MulDiv(0xADDR, eax, 0xADDR);
-                *(u32*)((r14 + 0xADDR)) = 0;
+                *(u32*)((r14 + 0xADDR)) = eax;
                 eax = 0;
                 return;
             } else if (ebp == 0xADDR) {

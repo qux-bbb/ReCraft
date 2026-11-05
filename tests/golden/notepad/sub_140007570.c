@@ -155,8 +155,8 @@ void sub_140007570_l1(void) {
         if (eax != 0) {
             r8d = var_a0;
             r8d -= var_98;
-            var_30 = 0;
-            var_28 = 0;
+            var_30 = r15d;
+            var_28 = r15d;
             sub_140009a5c(rsi, var_98, r8);
         }
         loc_ADDR:
@@ -165,7 +165,7 @@ void sub_140007570_l1(void) {
         var_c8 = rax;
         loc_ADDR:
         r14 = var_b0;
-        var_b0 = 0;
+        var_b0 = r15;
         if (r14 != 0) {
             GetProcessHeap();
             HeapFree(rax, 0, r14);

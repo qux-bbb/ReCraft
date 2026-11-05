@@ -63,6 +63,5 @@ void sub_14000fe3c_l1(void) {
             LocalFree(rbx);
         }
     }
-    r11 = &var_340;
     return;
 }

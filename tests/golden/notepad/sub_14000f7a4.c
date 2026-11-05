@@ -70,7 +70,6 @@ void sub_14000f7a4_l1(void) {
             }
         }
     }
-    r11 = &var_50;
     eax = ebx;
     return;
 }

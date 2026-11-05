@@ -21,6 +21,5 @@ void sub_14000fb98_l1(void) {
         dword_ADDR = edi;
         dword_ADDR = esi;
     }
-    r11 = &var_c0;
     return;
 }

@@ -48,6 +48,5 @@ void sub_140010580_l1(void) {
     }
     SendMessageW(qword_ADDR, 0xADDR, 1, &var_190);
     sub_1400239c8(edi);
-    r11 = &var_440;
     return;
 }

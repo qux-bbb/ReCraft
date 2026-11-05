@@ -134,7 +134,6 @@ void sub_14000d6a8_l1(void) {
         rax = *(u64*)((rax + 0xADDR));
         sub_140028010(rcx, rdx, r8);
     }
-    r11 = &var_60;
     eax = ebx;
     return;
 }

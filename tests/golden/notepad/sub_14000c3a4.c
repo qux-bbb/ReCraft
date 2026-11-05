@@ -24,12 +24,12 @@ void sub_14000c3a4_l1(void) {
     rbp = rax;
     if (rax == 0) {
         MessageBoxW(r15, rbx, r14, var_60);
-        ebx = 0;
+        ebx = eax;
     } else {
         r8d = (uint32)(word_ADDR);
         edx = 0;
         rcx = rax;
-        while (*(u16*)(0) != r8w) {
+        while (*(u16*)(rbx) != r8w) {
             if (edx >= esi) break;
             edx += 1;
             *(u16*)(rcx) = ax;

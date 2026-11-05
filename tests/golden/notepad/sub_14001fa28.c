@@ -69,6 +69,5 @@ void sub_14001fa28_l1(void) {
     } else {
         SetCursor(rdi);
     }
-    r11 = &var_50;
     return;
 }

@@ -25,6 +25,7 @@ void sub_140001094_l1(void) {
     var_8c = 0;
     rdx = *(u64*)(rax);
     if (rdx == 0) {
+        rdx = off_14002b210;
     } else {
         do {
             rcx += 1;
@@ -33,7 +34,7 @@ void sub_140001094_l1(void) {
     }
     var_60 = var_108;
     rax = var_100;
-    var_70 = off_14002b210;
+    var_70 = rdx;
     var_78 = r8d;
     r8d = 0;
     var_7c = r9d;

@@ -132,6 +132,5 @@ void sub_14000accc_l1(void) {
     esi -= 0;
     var_20 = r15d;
     MoveWindow(qword_ADDR, esi, ebx, 0, r15d, 1);
-    r11 = &var_260;
     return;
 }

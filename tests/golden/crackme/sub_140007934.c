@@ -9,11 +9,13 @@ void sub_140007934_l1(void) {
             if (rax != 0) {
                 qword_ADDR = rax;
                 qword_ADDR = rax;
+            } else {
+                edi = -1;
             }
             ecx = 0;
             sub_140008ee0(0);
             sub_140008ee0(rbx);
-            eax = -1;
+            eax = edi;
         } else {
             ecx = 0;
             sub_140008ee0(0);

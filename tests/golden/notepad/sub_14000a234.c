@@ -103,6 +103,5 @@ void sub_14000a234_l1(void) {
     SendMessageW(rbx, 0xADDR, 0, &var_d0);
     sub_14000accc();
     eax = 0;
-    r11 = &var_130;
     return;
 }

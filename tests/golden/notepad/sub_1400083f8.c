@@ -14,20 +14,22 @@ void sub_1400083f8_l1(void) {
         } else {
             rax = (int64)(eax);
             if (rax > rsi) {
+                edi = 0xADDR;
                 *(u16*)((r14 + (rsi * 2))) = 0xADDR;
                 eax = 0xADDR;
                 return;
             } else if (rax == rsi) {
                 *(u16*)((r14 + (rsi * 2))) = bx;
-                eax = 0xADDR;
+                eax = edi;
                 return;
             }
         }
     } else {
+        edi = 0xADDR;
         if (rdx != 0) {
             *(u16*)(rcx) = bx;
         }
     }
-    eax = 0xADDR;
+    eax = edi;
     return;
 }

@@ -54,20 +54,22 @@ void sub_140021e54_l1(void) {
                 }
             }
         } else {
+            edi = 0xADDR;
             if (rsi == 0) {
                 edx = 0xADDR;
-                r9d = 0xADDR;
+                r9d = edi;
                 sub_140007cf0(var_68, rdx, "onecore\\internal\\sdk\\inc\\wil\\opensource\\wil\\resource.h");
                 if (rbx != 0) {
                     CoTaskMemFree(rbx);
                 }
-                eax = 0xADDR;
+                eax = edi;
                 return;
             }
         }
     } else {
+        edi = 0xADDR;
         edx = 0xADDR;
     }
-    eax = 0xADDR;
+    eax = edi;
     return;
 }

@@ -103,6 +103,5 @@ void sub_14000c520_l1(void) {
     } else {
         eax = (rdi + 1);
     }
-    r11 = &var_250;
     return;
 }

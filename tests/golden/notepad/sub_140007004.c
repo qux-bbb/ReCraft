@@ -63,6 +63,5 @@ void sub_140007004_l1(void) {
     } else {
         al = 1;
     }
-    r11 = &var_50;
     return;
 }

@@ -77,13 +77,14 @@ void sub_140004f4c_l1(void) {
                 r8d = var_d8;
                 r8d += var_2c;
                 if (var_2c == r8d) {
+                    bl = 1;
                     *(u8*)((r13 + 0xADDR)) = 1;
                     eax = 0;
                     return;
                 }
                 if (dl != 1) goto loc_ADDR;
             }
-            *(u8*)((r13 + 0xADDR)) = 1;
+            *(u8*)((r13 + 0xADDR)) = bl;
             eax = 0;
         }
     } else {

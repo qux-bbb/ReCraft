@@ -16,14 +16,18 @@ void sub_140004c1c_l1(void) {
     rcx = *(u64*)(rcx);
     sub_14000ad14(rcx, 1, r8, r9, *(u64*)((rbx + 8)));
     rcx = *(u64*)((rbx + 0xADDR));
+    edi = -1;
     if (rax == *(u64*)(rcx)) {
         rdx = *(u64*)(rbx);
         r8 = *(u64*)((rbx + 8));
         rdx = *(u64*)(rdx);
         sub_14000acfc((rdi + 0xADDR), rdx);
+        if (eax != edi) {
+            edi = 0;
+        }
     }
     r8 = rbp;
     sub_14000b03c(r14b, rsi);
-    eax = 0;
+    eax = edi;
     return;
 }

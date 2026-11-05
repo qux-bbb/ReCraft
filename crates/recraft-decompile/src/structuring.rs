@@ -491,6 +491,9 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
     fold_compound_assignments(&mut lines);
     drop_noop_statements(&mut lines);
+    // Folding a constant into a call argument (`ecx = 0; call(rcx)` → `call(0)`) can leave
+    // the assignment that produced it dead; the write-drop pass above ran before that.
+    drop_unused_register_writes(&mut lines);
     // The dispatch ladder is rebuilt from the final text: the constant folds above have
     // already settled the subtracted immediates, and nothing after this point rewrites the
     // arm bodies in a way that would break the `case` labels.
@@ -771,7 +774,24 @@ fn fold_constant_registers(lines: &mut Vec<PseudoLine>) {
         for offset in index + 1..limit {
             let statement = lines[offset].text.trim();
             let body = statement.trim_end_matches(';');
+            // The constant only applies where the definition dominates the use. A `}` that
+            // leaves the definition's block ends that: the following text belongs to another
+            // path (`if (x) { eax = 1; return; } *(u8*)(rax) = 0;` must not fold).
+            if depths[offset] < depths[index] {
+                break;
+            }
             if family.iter().any(|name| assigns_to(body, name)) {
+                break;
+            }
+            // A terminator at the definition's own level also ends its path.
+            if depths[offset] == depths[index]
+                && (body == "return"
+                    || body.starts_with("return ")
+                    || body.starts_with("goto ")
+                    || body == "break"
+                    || body == "continue"
+                    || statement.starts_with("} while"))
+            {
                 break;
             }
             if !final_value && depths[offset] != depths[index] {
@@ -10358,6 +10378,27 @@ mod tests {
         assert_eq!(lines[0].text, "    rbx = 0x2b992ddfa232;");
         assert_eq!(lines[1].text, "    if (rax == 0x2b992ddfa232) {");
     }
+    #[test]
+    fn a_constant_does_not_reach_a_later_alternative_path() {
+        // `eax = 1` is on the early-return path; the store after the `}` runs only when the
+        // other path was taken, so it must keep its register.
+        let mut lines = vec![
+            test_line("    if (rax == 0) {"),
+            test_line("        eax = 1;"),
+            test_line("        return;"),
+            test_line("    }"),
+            test_line("    *(u8*)(rax) = 0;"),
+        ];
+        fold_constant_registers(&mut lines);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("*(u8*)(rax) = 0;"), "{text}");
+        assert!(text.contains("eax = 1;"), "{text}");
+    }
+
     #[test]
     fn an_image_base_constant_reaches_an_address_inside_a_loop() {
         let mut lines = vec![

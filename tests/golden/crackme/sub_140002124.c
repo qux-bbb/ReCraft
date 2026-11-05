@@ -7,9 +7,10 @@ void sub_140002124_l1(void) {
     __asm("mov rax, gs:[0xADDR]");
     rcx = *(u64*)((rcx + 0xADDR));
     if (rcx < *(u64*)((rax + 0xADDR))) {
+        ecx = 0xADDR;
         __asm("int 0xADDR");
     }
-    if (0xADDR <= *(u64*)((rax + 8))) {
+    if (rcx <= *(u64*)((rax + 8))) {
         return;
     }
 }

@@ -20,7 +20,7 @@ void sub_140001010_l1(void) {
         }
         sub_140006fd0(&var_20, "\r\n");
         if (rax != 0) {
-            *(u8*)(1) = 0;
+            *(u8*)(rax) = 0;
         }
         sub_140016b60(&var_20, "flag{strings_are_not_enough_you_know}");
         if (eax != 0) {
