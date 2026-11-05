@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A local whose only definition is a constant the next call already spells is removed from
+  the L2 body.** The constant argument setup `ecx = 0; call(0)` is folded into the call at the
+  text level, but the dead-write sweep cannot drop the assignment when the register is reused
+  later in the function, so L2 kept a declaration and an assignment (`uint32 v4; v4 = 0;`) for
+  a value nothing reads. A pass after variable recovery removes the pair when the local has
+  exactly one definition, its value is a constant, nothing in the function reads it, and the
+  next statement is a call that already carries that constant. Merely looking unread is not
+  enough — a definition can still reach a join the value flow could not name (`return rax`
+  after an `__asm`) — which is why the consumed-call requirement is part of the rule. crackme's
+  L2 lost 198 lines across its 495 functions and `main` no longer declares `v4`; one unit test
+  covers the shape, lint is 0 findings on all five projects and the 789 golden snapshots are
+  unchanged.
 - **Statically linked CRT helpers get names inferred from their structure, not from a symbol
   table.** IDA names these with FLIRT signatures; ReCraft has only user prototypes, so
   `crackme main` still called `sub_140001170("Enter flag: ")`, `sub_140016b60(&var_20, …)`
