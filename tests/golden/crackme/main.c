@@ -1,5 +1,5 @@
 // L1 structure recovery (12 blocks)
-void sub_140001010_l1(void) {
+void main_l1(void) {
 // some loops keep labels (an inner loop exits its parent)
     puts("==========================================");
     puts("  Simple Crackme v2.0  (C edition)");

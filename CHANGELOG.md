@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`main` is found from the CRT startup call.** A statically linked MSVC program has no `main`
+  symbol, but its startup calls it in a fixed shape: `argc` is loaded into `ecx`, `argv`/`envp`
+  into `rdx`/`r8`, the return value is saved and the exit path follows immediately.
+  `recraft-decompile::startup::find_main` follows the entry point's tail jumps
+  (`mainCRTStartup` → `__scrt_common_main_seh`) and matches that shape, and `apply_builtin` — the
+  step `analyze` runs — names the result `main`. On the crackme sample the analysis now reports
+  `built-in signatures: 9 function(s) named` (eight CRT functions plus `main`), the L1 view reads
+  `void main_l1(void)` and the L2 view `int32 main(void)`; `--no-signatures` keeps the old
+  behaviour. The `argc` load is the discriminator, so GUI programs (`WinMain`), the corpus
+  binaries and the Go sample do not trigger it. Two crackme snapshots changed: `sub_140001010.c`
+  is now `main.c`, and `sub_1400012a8.c` calls `main(...)`; all 789 snapshots pass.
+
 - **`analyze` matches the built-in CRT signatures once, so a new project opens with real names.**
   After function discovery and string extraction the analysis names every unnamed function that
   matches the eight built-in signatures; `--no-signatures` turns it off, the JSON report gains

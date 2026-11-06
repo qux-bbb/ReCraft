@@ -2,6 +2,7 @@
   "format": 1,
   "note": "Built-in signatures for the x64 Visual C++ static CRT (VS 2019/2022 toolchain), exported from the ReCraft sample crackme_win_x64.exe. A pattern is a function-header byte string where branches, RIP-relative displacements and address-like immediates are wildcards, so it only matches the CRT build it was exported from; other versions or compiler flags need their own library (signature-export + --from).",
   "signatures": [
+    { "name": "__scrt_common_main_seh", "pattern": "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 B9 01 00 00 00 E8 ?? ?? ?? ?? 84 C0 0F 84 36 01 00" },
     { "name": "__acrt_iob_func", "pattern": "8B C1 48 8D 0D ?? ?? ?? ?? 48 6B C0 58 48 03 C1 C3" },
     { "name": "fflush", "pattern": "48 83 EC 38 48 89 4C 24 48 48 85 C9 75 ?? E8 ?? ?? ?? ?? EB ?? 8B 51 14 8B C2 24 03 90 3C 02 75" },
     { "name": "fgets", "pattern": "48 89 5C 24 10 4C 89 44 24 18 56 57 41 54 41 56 41 57 48 83 EC 30 49 8B D8 44 8B FA 4C 8B E1 33" },

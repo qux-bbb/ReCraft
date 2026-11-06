@@ -1,5 +1,5 @@
 // L1 structure recovery (22 blocks)
-void sub_1400012a8_l1(void) {
+void __scrt_common_main_seh_l1(void) {
     sub_140001474(1);
     if (al == 0) {
         sub_1400017a0(7);
@@ -53,7 +53,7 @@ void sub_1400012a8_l1(void) {
         sub_1400080b8();
         r8 = rdi;
         rdx = rbx;
-        sub_140001010(*(u32*)(rax));
+        main(*(u32*)(rax));
         ebx = eax;
         sub_1400018f4();
         if (al == 0) {
@@ -104,7 +104,7 @@ void sub_1400012a8_l1(void) {
         sub_1400080b8();
         r8 = rdi;
         rdx = rbx;
-        sub_140001010(*(u32*)(rax));
+        main(*(u32*)(rax));
         ebx = eax;
         sub_1400018f4();
         if (al == 0) {

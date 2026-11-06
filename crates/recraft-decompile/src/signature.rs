@@ -281,7 +281,22 @@ pub fn apply(
 /// [`apply`] with the signatures compiled into the binary.
 pub fn apply_builtin(session: &mut Session, dry_run: bool) -> recraft_common::Result<ApplyReport> {
     let signatures = parse_document(BUILTIN_SIGNATURES).unwrap_or_default();
-    apply(session, &signatures, dry_run)
+    let mut report = apply(session, &signatures, dry_run)?;
+    // The CRT startup call names `main`. No signature can cover it: every program's `main`
+    // is different, so the shape of the startup call is what identifies it.
+    if let Some(main) = crate::startup::find_main(session)
+        && user_name(session, main)?.is_none()
+        && !report.renamed.iter().any(|(addr, _)| *addr == main)
+    {
+        if !dry_run {
+            session.execute(recraft_core::Command::Rename {
+                addr: main,
+                name: Some("main".to_owned()),
+            })?;
+        }
+        report.renamed.push((main, "main".to_owned()));
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
