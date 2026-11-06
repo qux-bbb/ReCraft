@@ -44,6 +44,7 @@ void sub_1400229e8_l1(void) {
             var_f8 = r12d;
             RegQueryInfoKeyW(var_n9, 0, 0, 0, r12, r12, r12, &var_64, &var_f0);
             if (eax != 0) {
+                loc_ADDR:
                 rcx = var_70;
             } else {
                 eax = var_f0;
@@ -71,7 +72,8 @@ void sub_1400229e8_l1(void) {
                     var_60 = eax;
                     if (eax > 6) {
                         CoTaskMemFree(rsi);
-                        rcx = var_70;
+                        loc_ADDR:
+                        if (rbx == 0) goto loc_ADDR;
                     } else {
                         r14d = 0xADDR;
                         wcschr(rsi, r14d);
@@ -248,7 +250,7 @@ void sub_1400229e8_l1(void) {
                         }
                     }
                 } else {
-                    rcx = var_70;
+                    if (rsi == 0) goto loc_ADDR;
                 }
             }
         }

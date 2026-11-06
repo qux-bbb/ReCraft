@@ -23,6 +23,7 @@ void sub_14000391c_l1(void) {
                     var_28 = al;
                     var_20 = rbx;
                     sub_1400030a8(rdi, r14, r15, rsi, rbx, var_a8, var_98, var_a0);
+                    loc_ADDR:
                     eax = 1;
                 } else if (*(u32*)((rdi + 0xADDR)) < 3) {
                     rax = var_a0;
@@ -168,7 +169,7 @@ void sub_14000391c_l1(void) {
         eax = *(u32*)(rbx);
         eax &= ecx;
         if (eax < 0xADDR) goto loc_ADDR;
-        eax = 1;
+        if ((*(u8*)((rbx + 0xADDR)) & 1) != 0) goto loc_ADDR;
         sub_140008860();
         return;
     }
@@ -176,5 +177,5 @@ void sub_14000391c_l1(void) {
     eax = *(u32*)(rbx);
     eax &= ecx;
     if (eax < 0xADDR) goto loc_ADDR;
-    eax = 1;
+    if ((*(u8*)((rbx + 0xADDR)) & 1) != 0) goto loc_ADDR;
 }

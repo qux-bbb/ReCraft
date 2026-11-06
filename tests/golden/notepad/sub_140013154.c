@@ -108,6 +108,7 @@ void sub_140013154_l1(void) {
             rax = qword_ADDR;
         }
         if (rax == 0) {
+            loc_ADDR:
         } else {
             sub_1400223a0(&var_1a8, *(u64*)(0xADDR));
             rdi = var_1a8;
@@ -118,7 +119,7 @@ void sub_140013154_l1(void) {
                     r9d = eax;
                     sub_140007cf0(var_1108, 0xADDR, "shell\\osshell\\accesory\\notepad\\nprestart.cpp");
                 }
-                eax = 0;
+                if (rdi == 0) goto loc_ADDR;
             }
         }
         var_58 = rax;

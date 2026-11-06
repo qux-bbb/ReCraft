@@ -32,6 +32,7 @@ void sub_14000e950_l1(void) {
                     SendMessageW(qword_ADDR, (r12 + 0xADDR), rdi, (r12 - 4));
                 }
                 RedrawWindow(qword_ADDR, 0, 0, r12d);
+                loc_ADDR:
                 eax = 0;
             } else {
                 eax -= 0xADDR;
@@ -41,6 +42,7 @@ void sub_14000e950_l1(void) {
                     ax &= 0xADDR;
                     if (ax != 0xADDR) {
                         if (r14 != qword_ADDR) {
+                            loc_ADDR:
                             r8 = r14;
                             sub_14000da7c(r15, rdi);
                             if (eax != 0) {
@@ -55,6 +57,7 @@ void sub_14000e950_l1(void) {
                         } else {
                             rax = (rdi >> 0xADDR);
                             if (ax != 0xADDR) {
+                                ecx = 0xADDR;
                                 ebx = 1;
                                 ax -= 0xADDR;
                                 if (ax <= 0xADDR) {
@@ -71,17 +74,7 @@ void sub_14000e950_l1(void) {
                                 }
                             } else {
                                 sub_14000d990();
-                                r8 = r14;
-                                sub_14000da7c(r15, rdi);
-                                if (eax != 0) {
-                                    eax = 0;
-                                    return;
-                                }
-                                r9 = r14;
-                                r8 = rdi;
-                                edx = ebp;
-                                rcx = r15;
-                                DefWindowProcW(rcx, rdx, r8, r9);
+                                if (al == byte_ADDR) goto loc_ADDR;
                             }
                         }
                     } else {
@@ -427,12 +420,12 @@ void sub_14000e950_l1(void) {
     return;
     loc_ADDR:
     sub_14000c520();
-    eax = 0;
+    if (eax == 0) goto loc_ADDR;
     sub_140023d18(qword_ADDR);
     DestroyWindow(qword_ADDR);
     DestroyWindow(qword_ADDR);
     DeleteObject(qword_ADDR);
-    eax = 0;
+    goto loc_ADDR;
     sub_14000fe3c(rcx);
     rdx = qword_ADDR;
     r9d = 0xADDR;

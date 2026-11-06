@@ -75,7 +75,6 @@ void sub_1400206b4_l1(void) {
     CreateFontIndirectW(&var_e0);
     r13 = rax;
     if (rax == 0) {
-        loc_ADDR:
         GetLastError();
         esi = eax;
         r12d = 0;
@@ -130,7 +129,9 @@ void sub_1400206b4_l1(void) {
                     if (eax <= 0 /* signed */) {
                         MessageBoxW(qword_ADDR, qword_ADDR, qword_ADDR, 0xADDR);
                         SetLastError(0);
-                        goto loc_ADDR;
+                        GetLastError();
+                        esi = eax;
+                        r12d = 0;
                     }
                     SetAbortProc(rdi, sub_140020260);
                     esi = eax;
@@ -146,7 +147,9 @@ void sub_1400206b4_l1(void) {
                             if (rax == 0) {
                                 loc_ADDR:
                                 rbx = var_30;
-                                goto loc_ADDR;
+                                GetLastError();
+                                esi = eax;
+                                r12d = 0;
                             }
                             GetWindowTextLengthW(qword_ADDR);
                             edx = 0;

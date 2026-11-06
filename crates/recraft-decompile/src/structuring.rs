@@ -5561,9 +5561,24 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
                 references.entry(target).or_default().push(index);
             }
         }
+        // Only an unconditional jump can be replaced by a copy of the tail: rewriting a
+        // conditional one would drop its condition. A label whose other references are
+        // conditional keeps its label, so the copy is not made at all.
+        let mut unconditional: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.text.trim().starts_with("goto loc_") {
+                continue;
+            }
+            if let Some(target) = goto_target(&line.text) {
+                unconditional.entry(target).or_default().push(index);
+            }
+        }
         let mut candidate = None;
-        for (target, sites) in &references {
+        for (target, sites) in &unconditional {
             if sites.is_empty() || sites.len() > MAX_REFERENCES {
+                continue;
+            }
+            if references.get(target).map(Vec::len) != Some(sites.len()) {
                 continue;
             }
             let label_text = format!("loc_{target:x}:");

@@ -86,7 +86,6 @@ void sub_140021474_l1(void) {
                     }
                     rsi = off_140035a90;
                     r15d = 0xADDR;
-                    loc_ADDR:
                     r10d = 0xADDR;
                 } else if (ax != *(u16*)((r8 + 2))) {
                     if (ax == *(u16*)((r8 + 4))) {
@@ -120,7 +119,7 @@ void sub_140021474_l1(void) {
                         rbx -= 2;
                         loc_ADDR:
                         r8 = qword_ADDR;
-                        goto loc_ADDR;
+                        r10d = 0xADDR;
                     } else if (ax != *(u16*)((r8 + 6))) {
                         if (ax == *(u16*)((r8 + 8))) {
                             wcsnlen(off_140034670, r15);
@@ -152,7 +151,7 @@ void sub_140021474_l1(void) {
                                         *(u32*)(((rbp + (r14 * 4)) - 1)) = edx;
                                         rcx <<= 8;
                                         rcx += rdi;
-                                        *(u16*)((rsi + (rcx * 2))) = r10w;
+                                        *(u16*)((off_140035a90 + (rcx * 2))) = r10w;
                                     }
                                 }
                             }

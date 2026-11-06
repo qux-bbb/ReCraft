@@ -122,6 +122,7 @@ void sub_140005d70_l1(void) {
                                                     eax = -(eax);
                                                     *(u32*)((rbx + 0xADDR)) = eax;
                                                 }
+                                                loc_ADDR:
                                                 al = 1;
                                             } else {
                                                 rdx = (rbx + 0xADDR);
@@ -177,9 +178,9 @@ void sub_140005d70_l1(void) {
                         *(u64*)((rbx + 0xADDR)) = rax;
                         eax = *(u32*)(rcx);
                         *(u32*)((rbx + 0xADDR)) = eax;
-                        al = 1;
+                        if (eax >= 0 /* signed */) goto loc_ADDR;
                         *(u32*)((rbx + 0xADDR)) = ebp;
-                        al = 1;
+                        goto loc_ADDR;
                         if (r8b != 0xADDR) {
                             if (r8b != 0xADDR) {
                                 if (r8b != 0xADDR) {
