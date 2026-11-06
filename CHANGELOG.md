@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A conditional jump folds into `if (c) { tail }` when the shared tail ends the path itself.**
+  The previous fix stopped the copy from dropping a condition, but it also refused every
+  conditional site. A tail that ends with `return` or `goto` finishes the path on its own, so
+  copying it under `if (c) { … }` is exact; a tail that can fall through keeps its `goto`. The
+  copy now also shifts every line by the tail's own base indentation instead of trimming each
+  line, which had flattened the tail's internal nesting. crackme goes 459→460 and notepad
+  493→494 structured functions, while four functions (two per sample) go back to the correct
+  `goto` because their tails do fall through. Lint is 0 findings on all five projects, the 789
+  golden snapshots pass and the 220 unit tests pass.
+
 - **A shared tail with two references is copied into both, which removes more `goto`.** The
   previous round only handled a label with exactly one reference; two arms landing on the same
   tail is common (two `switch` cases falling into one epilogue), so up to two references are
