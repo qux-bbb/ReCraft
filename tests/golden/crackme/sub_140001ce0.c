@@ -20,7 +20,6 @@ void sub_140001ce0_l1(void) {
             r9 += r9;
             eax = *(u32*)(((rbx + (r9 * 8)) + 4));
             if (r14 < rax) {
-                loc_ADDR:
                 edi += 1;
             } else {
                 eax = *(u32*)(((rbx + (r9 * 8)) + 8));
@@ -43,7 +42,7 @@ void sub_140001ce0_l1(void) {
                             eax = *(u32*)((rbx + (rax * 8)));
                             if (rbp == rax) {
                                 if ((*(u8*)((rsi + 4)) & 0xADDR) != 0) break;
-                                goto loc_ADDR;
+                                edi += 1;
                             }
                             break;
                         }

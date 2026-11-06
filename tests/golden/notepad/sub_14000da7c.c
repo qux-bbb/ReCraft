@@ -50,7 +50,6 @@ void sub_14000da7c_l1(void) {
                 rcx = qword_ADDR;
                 if (rax == rcx) {
                     PostMessageW(qword_ADDR, (uint32)(r14w), 0, 0);
-                    loc_ADDR:
                     if (rbx != 0) {
                         rcx = rbx;
                         CoTaskMemFree(rcx);
@@ -338,7 +337,10 @@ void sub_14000da7c_l1(void) {
                     var_28 = 5;
                     var_20 = rsi;
                     ShellExecuteW(0, 0, rbx, off_14002b210, rsi, 5);
-                    goto loc_ADDR;
+                    if (rbx != 0) {
+                        rcx = rbx;
+                        CoTaskMemFree(rcx);
+                    }
                 }
                 r8 = "shell\\osshell\\accesory\\notepad\\notepad.cpp";
                 r9d = eax;

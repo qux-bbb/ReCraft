@@ -57,7 +57,6 @@ void sub_140004264_l1(void) {
                         sub_1400029dc((rdi + 0xADDR), 0, (rbx + 0xADDR));
                         *(u64*)(r15) = rdi;
                         sub_140003fa0(&var_38);
-                        loc_ADDR:
                         if (r14 == 0) {
                             if (rbx == 0) {
                                 eax = 0;
@@ -122,7 +121,20 @@ void sub_140004264_l1(void) {
             ecx += 1;
             rbx = var_30;
             *(u32*)(rax) = ecx;
-            goto loc_ADDR;
+            if (r14 == 0) {
+                if (rbx == 0) {
+                    eax = 0;
+                    return;
+                }
+                CloseHandle(rbx);
+                if (eax == 0) {
+                    sub_1400091e4(var_298, 0xADDR);
+                }
+            }
+            ReleaseMutex(r14);
+            if (eax == 0) {
+                sub_1400091e4(var_298, 0xADDR);
+            }
         }
         r9d = eax;
         sub_140007cf0(var_298, 0xADDR, "wil");

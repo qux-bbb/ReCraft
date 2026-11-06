@@ -10,7 +10,6 @@ void sub_1400090c8_l1(void) {
         if (al != 2) {
             if (*(u16*)(rsi) != r14w) {
                 rbp = (rsi + 8);
-                loc_ADDR:
                 r9d = (uint32)(*(u16*)(rbp));
                 rax = (r9 + rbx);
                 if (rax <= rdi) {
@@ -35,7 +34,18 @@ void sub_1400090c8_l1(void) {
                 r9d = 2;
                 sub_1400096fc(rbx, rdx, rbp);
                 rbx = r14;
-                goto loc_ADDR;
+                r9d = (uint32)(*(u16*)(rbp));
+                rax = (r9 + rbx);
+                if (rax <= rdi) {
+                    rdi -= rbx;
+                    sub_1400096fc(rbx, rdi, *(u64*)((rsi + 0xADDR)));
+                    ecx = (uint32)(*(u16*)(rbp));
+                    al = 1;
+                    rcx += rbx;
+                    *(u64*)(r15) = rcx;
+                } else {
+                    al = 0;
+                }
             }
         } else {
             rbp = (rbx + 4);

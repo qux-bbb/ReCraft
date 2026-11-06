@@ -28,7 +28,6 @@ void sub_140004f54_l1(void) {
                         eax = (rsi - 0xADDR);
                         if (al > 0xADDR) {
                             eax = 0xADDR;
-                            loc_ADDR:
                             eax = ((ebp != 0) ? ebp : eax);
                             ebp = eax;
                         } else {
@@ -45,7 +44,8 @@ void sub_140004f54_l1(void) {
                                     rax = (r8 + 1);
                                     *(u64*)(rbx) = rax;
                                     eax = 0xADDR;
-                                    goto loc_ADDR;
+                                    eax = ((ebp != 0) ? ebp : eax);
+                                    ebp = eax;
                                 }
                                 *(u64*)(rbx) = rcx;
                                 eax = 8;
@@ -126,7 +126,6 @@ void sub_140004f54_l1(void) {
                         if ((r15b & dil) != 0) {
                             r14d = -(r14d);
                         }
-                        loc_ADDR:
                         rax = *(u64*)((rbx + 8));
                         if (rax != 0) {
                             *(u64*)(rax) = *(u64*)(rbx);
@@ -155,7 +154,11 @@ void sub_140004f54_l1(void) {
                                 }
                             } else {
                                 r14d = -1;
-                                goto loc_ADDR;
+                                rax = *(u64*)((rbx + 8));
+                                if (rax != 0) {
+                                    *(u64*)(rax) = *(u64*)(rbx);
+                                }
+                                eax = -1;
                             }
                         }
                     } else if (r14d > r8d) {

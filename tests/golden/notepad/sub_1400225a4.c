@@ -161,7 +161,6 @@ void sub_1400225a4_l1(void) {
                                             dword_ADDR = r15d;
                                         } else {
                                             RegDeleteKeyExW(var_128, *(u64*)((r13 + 0xADDR)), 0, 0);
-                                            loc_ADDR:
                                             __asm("if (je short 0xADDR /* unmodelled flags */) goto 0xADDR");
                                             rcx = rsi;
                                             CoTaskMemFree(rcx);
@@ -171,7 +170,9 @@ void sub_1400225a4_l1(void) {
                                     }
                                 }
                             } else {
-                                goto loc_ADDR;
+                                __asm("if (je short 0xADDR /* unmodelled flags */) goto 0xADDR");
+                                rcx = rsi;
+                                CoTaskMemFree(rcx);
                             }
                         } else {
                             sub_140010a74(rcx, &var_50);

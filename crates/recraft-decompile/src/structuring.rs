@@ -448,6 +448,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     }
     for _ in 0..3 {
         let mut changed = fold_backward_gotos_into_loops(&mut lines);
+        changed += split_shared_tail_into_branches(&mut lines);
         changed += fold_short_forward_gotos(&mut lines);
         if changed == 0 {
             break;
@@ -5539,6 +5540,122 @@ fn fold_jumps_over_braces(lines: &mut Vec<PseudoLine>) {
 const MAX_FORWARD_SKIP: usize = 64;
 
 /// Parse `if (cond) goto loc_X;` into the condition and the target address.
+/// Copy a shared tail into the arm that jumps to it.
+///
+/// `if (a) { P; L: T } else { Q; goto L; }` is how a compiler shares code between two arms.
+/// The region from `L` to the end of the first arm cannot become a loop (it closes the arm),
+/// so the only way to drop the `goto` is to duplicate the tail into the second arm. Only a
+/// small tail with no jump, `break`, `continue` or label is copied, and only when the label
+/// has exactly one reference.
+fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
+    const MAX_TAIL: usize = 20;
+    let mut folded = 0usize;
+    let mut attempts = 0usize;
+    while attempts < 16 {
+        attempts += 1;
+        let mut references: HashMap<u64, usize> = HashMap::new();
+        for line in lines.iter() {
+            if let Some(target) = goto_target(&line.text) {
+                *references.entry(target).or_default() += 1;
+            }
+        }
+        let mut candidate = None;
+        for index in 0..lines.len() {
+            let text = lines[index].text.trim();
+            if !text.starts_with("goto loc_") || conditional_goto(text).is_some() {
+                continue;
+            }
+            let Some(target) = goto_target(text) else {
+                continue;
+            };
+            if references.get(&target).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            let label_text = format!("loc_{target:x}:");
+            let Some(label) = lines.iter().position(|line| line.text.trim() == label_text) else {
+                continue;
+            };
+            if label >= index {
+                continue;
+            }
+            candidate = Some((index, label));
+            break;
+        }
+        let Some((index, label)) = candidate else {
+            break;
+        };
+        // The label's block must close before the jump: that is what makes the region a
+        // shared tail rather than a plain straight-line jump.
+        let mut depth = 0isize;
+        let mut end = None;
+        for (offset, line) in lines.iter().enumerate().skip(label) {
+            for ch in line.text.chars() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth < 0 {
+                            end = Some(offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if end.is_some() {
+                break;
+            }
+        }
+        let Some(end) = end else {
+            break;
+        };
+        if end <= label + 1 || end - label - 1 > MAX_TAIL || end > index {
+            break;
+        }
+        let tail: Vec<String> = lines[label + 1..end]
+            .iter()
+            .map(|line| line.text.clone())
+            .collect();
+        let copyable = tail.iter().all(|text| {
+            let trimmed = text.trim();
+            !trimmed.starts_with("goto ")
+                && !trimmed.starts_with("loc_")
+                && !trimmed.ends_with("break;")
+                && !trimmed.ends_with("continue;")
+                && !trimmed.starts_with("case ")
+                && trimmed != "default:"
+                && !trimmed.starts_with("return ")
+        });
+        if !copyable {
+            break;
+        }
+        let source_indent = crate::structuring::leading_spaces(&lines[label].text);
+        let target_indent = leading_spaces(&lines[index].text);
+        let shift = target_indent as isize - source_indent as isize;
+        let mut inserted = Vec::with_capacity(tail.len());
+        for text in tail {
+            let text = if shift > 0 {
+                format!("{}{text}", " ".repeat(shift as usize))
+            } else if shift < 0 {
+                let cut = (-shift) as usize;
+                text.get(cut..).unwrap_or(&text).to_owned()
+            } else {
+                text
+            };
+            inserted.push(PseudoLine {
+                addr: lines[index].addr,
+                text,
+            });
+        }
+        let count = inserted.len();
+        lines.splice(index..index, inserted);
+        lines.remove(index + count);
+        lines.remove(label);
+        folded += 1;
+    }
+    folded
+}
+
 fn conditional_goto(text: &str) -> Option<(&str, u64)> {
     let (condition, rest) = text
         .trim()
@@ -12256,6 +12373,58 @@ mod tests {
         ];
         assert_eq!(fold_short_forward_gotos(&mut lines), 0);
         assert!(lines[0].text.contains("goto loc_20;"));
+    }
+
+    #[test]
+    fn a_shared_tail_is_copied_into_the_arm_that_jumps_to_it() {
+        let mut lines = vec![
+            test_line("    if (a) {"),
+            test_line("        p = 1;"),
+            test_line("        loc_20:"),
+            test_line("        tail = 2;"),
+            test_line("    } else {"),
+            test_line("        q = 3;"),
+            test_line("        goto loc_20;"),
+            test_line("    }"),
+        ];
+        assert_eq!(split_shared_tail_into_branches(&mut lines), 1);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_20;"), "{text}");
+        assert!(!text.contains("loc_20:"), "{text}");
+        // The tail now runs in both arms.
+        assert_eq!(text.matches("tail = 2;").count(), 2, "{text}");
+    }
+
+    #[test]
+    fn a_shared_tail_with_two_references_keeps_its_label() {
+        let mut lines = vec![
+            test_line("    if (a) {"),
+            test_line("        loc_20:"),
+            test_line("        tail = 2;"),
+            test_line("    } else {"),
+            test_line("        goto loc_20;"),
+            test_line("    }"),
+            test_line("    if (b) {"),
+            test_line("        goto loc_20;"),
+            test_line("    }"),
+        ];
+        assert_eq!(split_shared_tail_into_branches(&mut lines), 0);
+    }
+
+    #[test]
+    fn a_tail_with_a_loop_control_statement_is_not_copied() {
+        let mut lines = vec![
+            test_line("    while (1) {"),
+            test_line("        loc_20:"),
+            test_line("        if (a) break;"),
+            test_line("    }"),
+            test_line("    goto loc_20;"),
+        ];
+        assert_eq!(split_shared_tail_into_branches(&mut lines), 0);
     }
 
     #[test]
