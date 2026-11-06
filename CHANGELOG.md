@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A shared tail is copied into the arm that jumps to it, which removes a class of `goto`.**
+  `if (a) { P; L: T } else { Q; goto L; }` is how a compiler shares code between two arms.
+  The region from `L` to the end of the first arm closes that arm, so it cannot become a loop;
+  the only way to drop the `goto` is to duplicate the tail into the second arm. The pass only
+  copies a tail of at most 20 lines when the label has exactly one reference and the tail
+  contains no `goto`, label, `break`, `continue`, `case` or `return` (those would bind to a
+  different target at the new site). notepad's structured rate went 487→493 (96.2%→97.4%),
+  goto fallback functions 19→13 and labels 268→260; crackme went 455→458 (91.9%→92.5%),
+  fallbacks 40→37, labels 201→192; corpus and corpus86 stay at 100%. Ten snapshots changed
+  (the tail is duplicated, +11..14 lines each, and the label plus `goto` disappear). Three
+  unit tests cover the copy, the two-reference refusal and the loop-control refusal; lint is 0
+  findings on all five projects and the 789 golden snapshots pass.
+
 - **Function signatures export and import, so a name learned once reaches another binary.**
   `recraft-decompile::signature` turns a function head into a byte pattern where the bytes that
   encode an address are wildcarded: relative branches, RIP-relative displacements and any
