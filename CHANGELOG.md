@@ -294,6 +294,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `while (1)` body that leaves the loop through its exit now says `break`.** When the
+  body's linear chain reached the loop's exit block, the emitter returned without writing
+  anything, so the generated C looped back at the closing brace — the source's exit became
+  another iteration. `emit_linear` now writes `break;` when the fallthrough is the exit of a
+  loop emitted as `while (1)`; other targets keep their old shape so no new `goto` appears.
+  Six snapshots changed, each adding the missing `break`: crackme `sub_140002688`, notepad
+  `sub_1400052e0`/`sub_1400081ac`/`sub_1400101d8` and Go's `internal/abi.NewName` gain one
+  line, and crackme `sub_140001ce0` recovers its real if/else shape (+24/−17 — it was an
+  infinite loop before). Structured rate and goto counts are unchanged (crackme 455/495,
+  notepad 487/506), lint is 0 findings on all five projects and the 789 golden snapshots pass.
+
+
 - **A `...` in a user prototype is no longer parsed as a parameter.** Naming a variadic
   helper (`int printf(const char* format, ...)`) added a second, default-typed parameter, so
   every call site grew an argument the source never passes
