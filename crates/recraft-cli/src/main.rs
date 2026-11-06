@@ -442,11 +442,13 @@ enum Commands {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Name functions from a signature file; addresses that already have a name are kept.
+    /// Name functions from one or more signature files (or directories of `*.json`); a
+    /// function that already has a name keeps it.
     SignatureImport {
         project: PathBuf,
-        #[arg(long = "from")]
-        from: PathBuf,
+        /// A signature JSON file, or a directory whose `*.json` files are all loaded.
+        #[arg(long = "from", required = true)]
+        from: Vec<PathBuf>,
         /// Print the matches without renaming anything.
         #[arg(long)]
         dry_run: bool,
@@ -3369,31 +3371,59 @@ fn cmd_signature_export(project: &Path, out: &Path) -> Result<()> {
 }
 
 /// Name functions that match a signature file; a name the project already has wins.
-fn cmd_signature_import(project: &Path, from: &Path, dry_run: bool) -> Result<()> {
+fn cmd_signature_import(project: &Path, from: &[PathBuf], dry_run: bool) -> Result<()> {
     use recraft_decompile::signature::Signature;
 
-    let text = std::fs::read_to_string(from)?;
-    let document: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| Error::invalid_argument(format!("{}: {error}", from.display())))?;
-    let Some(entries) = document
-        .get("signatures")
-        .and_then(|value| value.as_array())
-    else {
-        return Err(Error::unsupported(format!(
-            "{} has no `signatures` array",
-            from.display()
-        )));
-    };
-    let mut signatures = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let (Some(name), Some(pattern)) = (
-            entry.get("name").and_then(|value| value.as_str()),
-            entry.get("pattern").and_then(|value| value.as_str()),
-        ) else {
-            continue;
+    // A library is usually several exports: accept directories and load their `*.json` files
+    // in a stable order so the same set always produces the same names.
+    let mut files: Vec<PathBuf> = Vec::new();
+    for path in from {
+        if path.is_dir() {
+            let mut found: Vec<PathBuf> = std::fs::read_dir(path)?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+                .collect();
+            found.sort();
+            files.extend(found);
+        } else {
+            files.push(path.clone());
+        }
+    }
+    if files.is_empty() {
+        return Err(Error::invalid_argument(
+            "no signature files to import".to_owned(),
+        ));
+    }
+    let mut signatures: Vec<Signature> = Vec::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file)?;
+        let document: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|error| Error::invalid_argument(format!("{}: {error}", file.display())))?;
+        let Some(entries) = document
+            .get("signatures")
+            .and_then(|value| value.as_array())
+        else {
+            return Err(Error::unsupported(format!(
+                "{} has no `signatures` array",
+                file.display()
+            )));
         };
-        if let Some(signature) = Signature::parse(name, pattern) {
-            signatures.push(signature);
+        for entry in entries {
+            let (Some(name), Some(pattern)) = (
+                entry.get("name").and_then(|value| value.as_str()),
+                entry.get("pattern").and_then(|value| value.as_str()),
+            ) else {
+                continue;
+            };
+            // The first export wins: a later file cannot rename a signature already in the set.
+            if !seen.insert(name.to_owned()) {
+                continue;
+            }
+            if let Some(signature) = Signature::parse(name, pattern) {
+                signatures.push(signature);
+            }
         }
     }
 
