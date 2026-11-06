@@ -345,7 +345,19 @@ void sub_14000e950_l1(void) {
                 return;
             }
             rcx = qword_ADDR;
-            if (rcx == 0) goto loc_ADDR;
+            if (rcx == 0) {
+                sub_14000c520();
+                if (eax == 0) goto loc_ADDR;
+                sub_140023d18(qword_ADDR);
+                DestroyWindow(qword_ADDR);
+                DestroyWindow(qword_ADDR);
+                DeleteObject(qword_ADDR);
+                goto loc_ADDR;
+                sub_14000fe3c(rcx);
+                rdx = qword_ADDR;
+                r9d = 0xADDR;
+                return;
+            }
         } else {
             eax = (edx - 2);
             if (eax == 0) {
@@ -418,15 +430,4 @@ void sub_14000e950_l1(void) {
         }
     }
     return;
-    loc_ADDR:
-    sub_14000c520();
-    if (eax == 0) goto loc_ADDR;
-    sub_140023d18(qword_ADDR);
-    DestroyWindow(qword_ADDR);
-    DestroyWindow(qword_ADDR);
-    DeleteObject(qword_ADDR);
-    goto loc_ADDR;
-    sub_14000fe3c(rcx);
-    rdx = qword_ADDR;
-    r9d = 0xADDR;
 }

@@ -505,6 +505,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
     // already settled the subtracted immediates, and nothing after this point rewrites the
     // arm bodies in a way that would break the `case` labels.
     fold_dispatch_ladders(&mut lines);
+    fold_terminal_tail_jumps(&mut lines);
     if info.is_some() {
         // The typed view is the one people read; the raw L1 view keeps the explicit epilogue.
         drop_trailing_void_return(&mut lines);
@@ -5547,6 +5548,129 @@ const MAX_FORWARD_SKIP: usize = 64;
 /// so the only way to drop the `goto` is to duplicate the tail into the second arm. Only a
 /// small tail with no jump, `break`, `continue` or label is copied, and only when the label
 /// has exactly one reference.
+/// Copy a function's trailing block into the branch that jumps to it.
+///
+/// A jump to a label that sits after the body's final `return;` targets the function's
+/// epilogue: the block is reachable only through that jump, so it can be copied into the
+/// branch and the label dropped. `if (c) goto L;` becomes `if (c) { <epilogue>; return; }`.
+///
+/// Runs after `fold_dispatch_ladders`: a copy that lands inside an if/else ladder would
+/// otherwise change the ladder's shape and its arms would be folded differently.
+fn fold_terminal_tail_jumps(lines: &mut Vec<PseudoLine>) -> usize {
+    const MAX_TAIL: usize = 20;
+    let mut folded = 0usize;
+    while folded < 8 {
+        // The closing brace is appended after the text passes, so the body ends here.
+        let close = lines.len();
+        // Only the body's last block, at function level: everything after it is its tail.
+        // The epilogue is the body's last block: a function-level label that follows a
+        // `return;` and has no label after it.
+        let mut label = None;
+        for index in (0..close).rev() {
+            let text = lines[index].text.trim();
+            if !text.starts_with("loc_") || !text.ends_with(':') {
+                continue;
+            }
+            if leading_spaces(&lines[index].text) != 4 {
+                continue;
+            }
+            if index == 0 || lines[index - 1].text.trim() != "return;" {
+                continue;
+            }
+            if lines[index + 1..].iter().any(|line| {
+                let text = line.text.trim();
+                text.starts_with("loc_") && text.ends_with(':')
+            }) {
+                continue;
+            }
+            label = Some(index);
+            break;
+        }
+        let Some(label) = label else {
+            break;
+        };
+        if lines[label - 1].text.trim() != "return;" {
+            break;
+        }
+        let tail: Vec<String> = lines[label + 1..close]
+            .iter()
+            .map(|line| line.text.clone())
+            .collect();
+        if tail.is_empty() || tail.len() > MAX_TAIL {
+            break;
+        }
+        let copyable = tail.iter().all(|text| {
+            let trimmed = text.trim();
+            // Jumps are fine: their labels live elsewhere in the same function.
+            !(trimmed.starts_with("loc_") && trimmed.ends_with(':'))
+                && !trimmed.ends_with("break;")
+                && trimmed != "default:"
+        });
+        if !copyable {
+            break;
+        }
+        let Some(address) = lines[label]
+            .text
+            .trim()
+            .trim_end_matches(':')
+            .strip_prefix("loc_")
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        else {
+            break;
+        };
+        let sites: Vec<usize> = (0..label)
+            .filter(|index| goto_target(&lines[*index].text) == Some(address))
+            .collect();
+        if sites.len() != 1 {
+            break;
+        }
+        let site = sites[0];
+        let indent = leading_spaces(&lines[site].text);
+        let body_indent = " ".repeat(indent + 4);
+        let condition =
+            conditional_goto(lines[site].text.trim()).map(|(condition, _)| condition.to_owned());
+        let mut replacement: Vec<PseudoLine> = Vec::new();
+        if let Some(condition) = condition.as_deref() {
+            replacement.push(PseudoLine {
+                addr: lines[site].addr,
+                text: format!("{}if ({condition}) {{", " ".repeat(indent)),
+            });
+        }
+        for line in &tail {
+            replacement.push(PseudoLine {
+                addr: lines[site].addr,
+                text: format!("{body_indent}{}", line.trim_start()),
+            });
+        }
+        let ends = tail.last().is_some_and(|text| {
+            let text = text.trim();
+            text.starts_with("return") || text.starts_with("goto ")
+        });
+        if !ends {
+            replacement.push(PseudoLine {
+                addr: lines[site].addr,
+                text: format!("{body_indent}return;"),
+            });
+        }
+        if condition.is_some() {
+            replacement.push(PseudoLine {
+                addr: lines[site].addr,
+                text: format!("{}}}", " ".repeat(indent)),
+            });
+        }
+        let added = replacement.len();
+        lines.splice(site..site + 1, replacement);
+        // The label and the tail moved by the copy; remove them from the end.
+        let shift = added as isize - 1;
+        let label = (label as isize + shift) as usize;
+        for offset in (label..label + tail.len() + 1).rev() {
+            lines.remove(offset);
+        }
+        folded += 1;
+    }
+    folded
+}
+
 fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
     const MAX_TAIL: usize = 20;
     const MAX_REFERENCES: usize = 2;

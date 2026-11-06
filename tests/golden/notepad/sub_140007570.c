@@ -57,7 +57,14 @@ void sub_140007570_l1(void) {
         eax = var_40;
         loc_ADDR:
         sub_140008078(&var_80, &var_190, eax, 0xADDR);
-        if (var_b9 != r15b) goto loc_ADDR;
+        if (var_b9 != r15b) {
+            rbx = var_b0;
+            var_b0 = r15;
+            if (rbx == 0) return;
+            GetProcessHeap();
+            HeapFree(rax, 0, rbx);
+            return;
+        }
         rax = &var_c0;
         var_c0 = r15;
         var_60 = rax;
@@ -173,12 +180,5 @@ void sub_140007570_l1(void) {
         if (bl != 0) return;
         if (rsi >= r13) return;
     } while (r12 < 0xADDR);
-    return;
-    loc_ADDR:
-    rbx = var_b0;
-    var_b0 = r15;
-    if (rbx == 0) return;
-    GetProcessHeap();
-    HeapFree(rax, 0, rbx);
     return;
 }
