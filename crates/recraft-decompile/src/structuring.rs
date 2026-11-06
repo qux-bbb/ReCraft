@@ -5671,6 +5671,14 @@ fn fold_terminal_tail_jumps(lines: &mut Vec<PseudoLine>) -> usize {
     folded
 }
 
+/// Whether the next non-empty line after `index` closes a block.
+fn ends_block(lines: &[PseudoLine], index: usize) -> bool {
+    lines[index + 1..]
+        .iter()
+        .find(|line| !line.text.trim().is_empty())
+        .is_some_and(|line| line.text.trim_start().starts_with('}'))
+}
+
 fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
     const MAX_TAIL: usize = 20;
     const MAX_REFERENCES: usize = 2;
@@ -5758,6 +5766,13 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
         for site in &sites {
             let text = lines[*site].text.trim();
             if text.starts_with("goto loc_") {
+                // The copy falls through where the jump went: either the tail ends the path
+                // itself, or the jump is the last statement of its block so both continue at
+                // the same place.
+                if !ends_path && !ends_block(lines, *site) {
+                    usable = false;
+                    break;
+                }
                 plans.push((*site, None));
             } else if let Some((condition, _)) = conditional_goto(text) {
                 if !ends_path {
