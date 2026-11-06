@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A shared tail with two references is copied into both, which removes more `goto`.** The
+  previous round only handled a label with exactly one reference; two arms landing on the same
+  tail is common (two `switch` cases falling into one epilogue), so up to two references are
+  now copied and the label is dropped. Three or more references are left alone: they gave no
+  further reduction and only multiplied the duplicated code. crackme's structured rate went
+  458→462 (92.5%→93.3%) with goto fallback functions 37→33, notepad went 493→495
+  (97.4%→97.8%) with fallbacks 13→11; corpus and corpus86 are unchanged. Eleven snapshots
+  changed (the tail copied into the second site), lint is 0 findings on all five projects and
+  the 789 golden snapshots pass.
+
 - **A shared tail is copied into the arm that jumps to it, which removes a class of `goto`.**
   `if (a) { P; L: T } else { Q; goto L; }` is how a compiler shares code between two arms.
   The region from `L` to the end of the first arm closes that arm, so it cannot become a loop;
