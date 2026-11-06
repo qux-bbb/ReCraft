@@ -354,6 +354,8 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
 
 > **设计要点（开工前先定）：** 推断出来的名字**不要写回项目**。`rename`/`prototype` 是用户
 > **2026-11-06 追加：签名库机制已落地（`f7f43f7`）。** 剩下的 4 个名字（puts/__acrt_iob_func/fflush/strpbrk）不再靠猜：`signature-export` 把项目里已命名的函数导出成"函数头字节 + 地址字节通配"的模式，`signature-import` 在别的项目里按模式匹配命名（重名跳过、thunk 优先、已有名字不动）。crackme 上导出 10 条签名后，导入到全新项目即可让 main 直接读作 puts/printf/fgets/strpbrk/strcmp/strlen/fflush(__acrt_iob_func(1))，无需任何原型。跨二进制匹配要求同一份 CRT 构建（notepad 动态链接 CRT，0 匹配符合预期）。
+
+> **2026-11-06 再追加（`faf9cc1` 之后）：`--from` 支持多文件/目录。** 现在可以把多个二进制的导出放进一个目录，`signature-import <project> --from <dir>` 一次导入；目录按文件名排序、同名签名先到先得。crackme 导出 10 条签名 + 一份重复文件实测：9 个函数命名成功，无重复改名。
 >
 > 资产，推断名应由渲染层按本次分析结果临时显示（例如 `structure()` 里已有的
 > `variadic` 集合），并在签名行或 `//` 注释里标注来源，避免下次分析结果变化时与用户
