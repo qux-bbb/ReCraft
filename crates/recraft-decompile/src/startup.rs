@@ -5,7 +5,6 @@
 //!
 //! A statically linked MSVC program carries no `main` symbol, but its CRT startup calls it in a
 //! fixed shape: `argc`, `argv` and `envp` are loaded into `ecx`/`rdx`/`r8`, the call's return
-//! value is saved, and the exit path runs right after. Following the entry point to the startup
 //! and matching that shape names `main` the way a signature database would — the difference is
 //! that this needs no bytes from a particular CRT build.
 
@@ -13,33 +12,31 @@ use recraft_common::Address;
 use recraft_core::Session;
 use recraft_decode::iced_x86::{Mnemonic, Register};
 
-/// How many tail jumps to follow from the entry point before giving up.
 const MAX_HOPS: usize = 3;
 /// How many instructions to scan inside the startup function.
 const MAX_SCAN: usize = 4096;
 
-/// Which of the two CRT entry points a program uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     /// Console program: the startup passes `argc`/`argv`/`envp`.
     Main,
     /// GUI program: the startup passes `hInstance`/`hPrevInstance`/`lpCmdLine`/`nShowCmd`.
     WinMain,
+    /// DLL: the startup passes `hinstDLL`/`fdwReason`/`lpvReserved`.
+    DllMain,
 }
 
 impl EntryKind {
-    /// The name the entry is known by.
     pub fn name(self) -> &'static str {
         match self {
             EntryKind::Main => "main",
             EntryKind::WinMain => "WinMain",
+            EntryKind::DllMain => "DllMain",
         }
     }
 }
 
-/// Which entry the CRT startup calls.
 ///
-/// The entry point of a static CRT program is a short stub that tail-jumps into the startup
 /// (`mainCRTStartup` → `__scrt_common_main_seh`), so the search starts by following those
 /// jumps and then looks for the `argc`/`argv`/`envp` call.
 pub fn find_entry(session: &mut Session) -> Option<(Address, EntryKind)> {
@@ -82,9 +79,11 @@ fn function_end(session: &Session, start: Address) -> Option<Address> {
         .map(|function| function.end)
 }
 
-/// The entry call inside the startup function, if its shape is the expected one.
 fn candidate_in(session: &mut Session, start: Address) -> Option<(Address, EntryKind)> {
-    let end = function_end(session, start)?;
+    // The startup is usually a known function; when discovery missed it (a stub the
+    // analyzer folded away), scan a bounded window instead.
+    let end = function_end(session, start)
+        .unwrap_or_else(|| Address::new(start.get().saturating_add(0x1000)));
     let mut instructions = Vec::new();
     let mut address = start;
     while address < end && instructions.len() < MAX_SCAN {
@@ -114,6 +113,25 @@ fn candidate_in(session: &mut Session, start: Address) -> Option<(Address, Entry
             continue;
         };
         return Some((target, kind));
+    }
+    // A DLL startup (`_DllMainCRTStartup`) calls `DllMain` instead: the BOOL result is
+    // tested right after the call rather than saved.
+    for index in 1..instructions.len().saturating_sub(1) {
+        let call = &instructions[index];
+        if call.mnemonic() != Mnemonic::Call {
+            continue;
+        }
+        let Some(target) = call.branch_target() else {
+            continue;
+        };
+        let after = &instructions[index + 1..(index + 5).min(instructions.len())];
+        if !after.iter().any(tests_return) {
+            continue;
+        }
+        if !sets_third_argument(&instructions[..index]) {
+            continue;
+        }
+        return Some((target, EntryKind::DllMain));
     }
     None
 }
@@ -165,6 +183,21 @@ fn writes_first_operand(insn: &recraft_decode::Insn) -> bool {
             | Mnemonic::Or
             | Mnemonic::Movsxd
     ) && recraft_ir::reg::from_iced(insn.op_register(0)).is_some()
+}
+
+/// Whether the instruction tests the call's return value (`test eax, eax`).
+fn tests_return(insn: &recraft_decode::Insn) -> bool {
+    insn.mnemonic() == Mnemonic::Test
+        && insn.op_count() >= 2
+        && insn.op_register(0) == Register::EAX
+}
+
+/// Whether the third argument (`r8`) is set shortly before the call.
+fn sets_third_argument(before: &[recraft_decode::Insn]) -> bool {
+    let window = &before[before.len().saturating_sub(8)..];
+    window
+        .iter()
+        .any(|insn| writes_first_operand(insn) && insn.op_register(0) == Register::R8)
 }
 
 /// Whether the instruction saves the call's return value (`mov r32, eax`).

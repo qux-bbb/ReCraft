@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--no-signatures` keeps the old behaviour. Snapshots changed for both samples
   (`sub_140001010.c` → `main.c`, `sub_1400012a8.c` → `__scrt_common_main_seh.c`,
   `sub_1400101d8.c` → `WinMain.c`); all 789 pass.
+- **A DLL's entry is named `DllMain`.** `_DllMainCRTStartup` calls `DllMain(hinstDLL, fdwReason,
+  lpvReserved)` and tests the BOOL result instead of saving it for an exit path, so the shape
+  differs from `main`/`WinMain`: `find_entry` tries the console/GUI shape first and falls back to
+  `r8` set before the call plus a `test eax, eax` within the next few instructions. Verified on a
+  DLL built with VS2022 (`DllMain` named) and on `main`/`WinMain` samples. `wmain` and `wWinMain`
+  stay named `main`/`WinMain`: in this CRT the narrow and wide argv helpers have identical bytes,
+  so the two builds cannot be told apart from code (IDA guesses the same way). 32-bit programs are
+  not covered yet: their entry arguments are pushed on the stack and the SEH-wrapped startup hides
+  the call from the linear walk used here, so it needs a control-flow walk that models the
+  `__try` layout.
 
 - **`analyze` matches the built-in CRT signatures once, so a new project opens with real names.**
   After function discovery and string extraction the analysis names every unnamed function that
