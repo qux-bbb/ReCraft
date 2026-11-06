@@ -317,6 +317,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The shared-tail copy no longer rewrites a conditional jump.** The multi-reference version of
+  `split_shared_tail_into_branches` lost the "unconditional jump only" filter, so `if (c) goto L;`
+  counted as a reference and the tail at `L` was copied over it — dropping the condition.
+  On crackme `sub_14000391c` that turned `if ((*(u8*)((rbx + 0xc)) & 1) != 0) goto loc_…;` into an
+  unconditional `eax = 1;`. References are now tracked twice: `references` holds every jump (a
+  label may only be dropped when all of them are folded) and `unconditional` holds the plain
+  `goto loc_…;` lines that may be copied. crackme's structured rate goes 462→459 and notepad's
+  495→493: those five functions were "improved" by the wrong folds and now keep their real shape.
+  Twelve snapshots regained their conditional jumps; lint is 0 findings on all five projects, the
+  789 golden snapshots pass and the 220 unit tests pass.
+
 - **A `while (1)` body that leaves the loop through its exit now says `break`.** When the
   body's linear chain reached the loop's exit block, the emitter returned without writing
   anything, so the generated C looped back at the closing brace — the source's exit became
