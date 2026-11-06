@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A jump to the function's epilogue folds into `if (c) { … }`.** When the body's final block
+  sits after its last `return;`, the only way in is the jump that targets it, so the block can be
+  copied into the branch and its label dropped. The pass runs *after* `fold_dispatch_ladders`:
+  inside the goto-folding loop the copied text changed the shape of if/else ladders and an arm
+  could fold differently (this was tried and reverted in an earlier round). A copied tail may
+  contain jumps to other labels of the same function but not `break`, `continue` or label
+  definitions, and no extra `return;` is added when the tail already ends in one. Two notepad
+  snapshots change (`sub_140007570`, `sub_14000e950`, one `goto` plus one label each). Lint is 0
+  findings on all five projects, the 789 golden snapshots pass and the 220 unit tests pass.
+
 - **A conditional jump folds into `if (c) { tail }` when the shared tail ends the path itself.**
   The previous fix stopped the copy from dropping a condition, but it also refused every
   conditional site. A tail that ends with `return` or `goto` finishes the path on its own, so
