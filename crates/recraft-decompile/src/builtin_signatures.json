@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "note": "Built-in signatures for the x64 Visual C++ static CRT (VS 2019/2022 toolchain), exported from the ReCraft sample crackme_win_x64.exe. A pattern is a function-header byte string where branches, RIP-relative displacements and address-like immediates are wildcards, so it only matches the CRT build it was exported from; other versions or compiler flags need their own library (signature-export + --from).",
+  "signatures": [
+    { "name": "__acrt_iob_func", "pattern": "8B C1 48 8D 0D ?? ?? ?? ?? 48 6B C0 58 48 03 C1 C3" },
+    { "name": "fflush", "pattern": "48 83 EC 38 48 89 4C 24 48 48 85 C9 75 ?? E8 ?? ?? ?? ?? EB ?? 8B 51 14 8B C2 24 03 90 3C 02 75" },
+    { "name": "fgets", "pattern": "48 89 5C 24 10 4C 89 44 24 18 56 57 41 54 41 56 41 57 48 83 EC 30 49 8B D8 44 8B FA 4C 8B E1 33" },
+    { "name": "printf", "pattern": "48 89 4C 24 08 48 89 54 24 10 4C 89 44 24 18 4C 89 4C 24 20 53 56 57 48 83 EC 30 48 8B F9 48 8D" },
+    { "name": "puts", "pattern": "40 55 53 56 57 48 8D 6C 24 C1 48 81 EC A8 00 00 00 33 F6 39 35 ?? ?? ?? ?? 48 89 75 F7 40 88 75" },
+    { "name": "strcmp", "pattern": "48 2B D1 F6 C1 07 74 ?? 0F B6 01 3A 04 0A 75 ?? 48 FF C1 84 C0 74 ?? F6 C1 07 75 ?? 49 BB 80 80" },
+    { "name": "strlen", "pattern": "48 8B C1 48 F7 D9 48 A9 07 00 00 00 74 ?? 66 90 8A 10 48 FF C0 84 D2 74 ?? A8 07 75 ?? 49 B8 FF" },
+    { "name": "strpbrk", "pattern": "48 89 5C 24 08 48 89 74 24 18 57 4C 8B D2 48 8D 35 ?? ?? ?? ?? 41 83 E2 0F 48 8B DA 49 2B DA 33" }
+  ]
+}

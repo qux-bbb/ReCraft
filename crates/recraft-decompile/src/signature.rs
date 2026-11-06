@@ -14,6 +14,10 @@
 use recraft_common::Address;
 use recraft_core::Session;
 
+/// Signatures shipped with the binary: the x64 Visual C++ static CRT set.
+///
+/// Patterns are build specific; `signature-export` produces more for other CRT versions.
+pub const BUILTIN_SIGNATURES: &str = include_str!("builtin_signatures.json");
 /// How many bytes of a function head a signature covers.
 pub const SIGNATURE_BYTES: usize = 32;
 

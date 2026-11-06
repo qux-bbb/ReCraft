@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A built-in CRT signature set, matched with `signature-import --builtin`.** The binary now
+  carries eight x64 Visual C++ static-CRT signatures (`printf`, `puts`, `fgets`, `fflush`,
+  `strpbrk`, `strcmp`, `strlen`, `__acrt_iob_func`) exported from the sample crackme, so a fresh
+  project can be named without preparing a signature file: `recraft-cli signature-import
+  <project> --builtin`. `--from` is now optional (a file or a directory of `*.json`); passing
+  neither is an error. The first source wins, so a `--from` library can override a built-in name.
+  On the crackme sample the built-in set names eight functions (nine matches, because the `fgets`
+  thunk and its target share one signature) and `main` then reads as `puts`/`printf`/`fgets`/
+  `strpbrk`/`strcmp`/`strlen`/`fflush(__acrt_iob_func(1))`. Patterns are build specific: a
+  different CRT version or compiler flags still needs its own library. A unit test parses the
+  embedded document and checks every pattern is valid.
+
 - **A backward jump inside an `if` becomes `while (1) { … continue; }`.** `fold_backward_gotos_into_loops`
   needs the latch at the label's own indentation to build a `do … while`; a latch nested in an
   `if` was left as a label plus `goto`. The whole region from the label to the end of its block

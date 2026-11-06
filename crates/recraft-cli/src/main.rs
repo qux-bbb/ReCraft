@@ -442,13 +442,16 @@ enum Commands {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Name functions from one or more signature files (or directories of `*.json`); a
-    /// function that already has a name keeps it.
+    /// Name functions from the built-in CRT signatures and/or signature files (or
+    /// directories of `*.json`); a function that already has a name keeps it.
     SignatureImport {
         project: PathBuf,
         /// A signature JSON file, or a directory whose `*.json` files are all loaded.
-        #[arg(long = "from", required = true)]
+        #[arg(long = "from")]
         from: Vec<PathBuf>,
+        /// Also match the CRT signatures compiled into this binary.
+        #[arg(long)]
+        builtin: bool,
         /// Print the matches without renaming anything.
         #[arg(long)]
         dry_run: bool,
@@ -738,8 +741,9 @@ fn run(cli: Cli) -> Result<()> {
         Commands::SignatureImport {
             project,
             from,
+            builtin,
             dry_run,
-        } => cmd_signature_import(&project, &from, dry_run),
+        } => cmd_signature_import(&project, &from, builtin, dry_run),
         Commands::DefineStruct {
             project,
             name,
@@ -3371,7 +3375,12 @@ fn cmd_signature_export(project: &Path, out: &Path) -> Result<()> {
 }
 
 /// Name functions that match a signature file; a name the project already has wins.
-fn cmd_signature_import(project: &Path, from: &[PathBuf], dry_run: bool) -> Result<()> {
+fn cmd_signature_import(
+    project: &Path,
+    from: &[PathBuf],
+    builtin: bool,
+    dry_run: bool,
+) -> Result<()> {
     use recraft_decompile::signature::Signature;
 
     // A library is usually several exports: accept directories and load their `*.json` files
@@ -3390,24 +3399,23 @@ fn cmd_signature_import(project: &Path, from: &[PathBuf], dry_run: bool) -> Resu
             files.push(path.clone());
         }
     }
-    if files.is_empty() {
+    if files.is_empty() && !builtin {
         return Err(Error::invalid_argument(
-            "no signature files to import".to_owned(),
+            "pass --from <file|dir> or --builtin".to_owned(),
         ));
     }
     let mut signatures: Vec<Signature> = Vec::new();
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for file in &files {
-        let text = std::fs::read_to_string(file)?;
-        let document: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|error| Error::invalid_argument(format!("{}: {error}", file.display())))?;
+    // The first source wins: a later file cannot rename a signature already in the set.
+    let mut load = |text: &str, origin: &str| -> Result<()> {
+        let document: serde_json::Value = serde_json::from_str(text)
+            .map_err(|error| Error::invalid_argument(format!("{origin}: {error}")))?;
         let Some(entries) = document
             .get("signatures")
             .and_then(|value| value.as_array())
         else {
             return Err(Error::unsupported(format!(
-                "{} has no `signatures` array",
-                file.display()
+                "{origin} has no `signatures` array"
             )));
         };
         for entry in entries {
@@ -3417,7 +3425,6 @@ fn cmd_signature_import(project: &Path, from: &[PathBuf], dry_run: bool) -> Resu
             ) else {
                 continue;
             };
-            // The first export wins: a later file cannot rename a signature already in the set.
             if !seen.insert(name.to_owned()) {
                 continue;
             }
@@ -3425,6 +3432,17 @@ fn cmd_signature_import(project: &Path, from: &[PathBuf], dry_run: bool) -> Resu
                 signatures.push(signature);
             }
         }
+        Ok(())
+    };
+    for file in &files {
+        let text = std::fs::read_to_string(file)?;
+        load(&text, &file.display().to_string())?;
+    }
+    if builtin {
+        load(
+            recraft_decompile::signature::BUILTIN_SIGNATURES,
+            "built-in signatures",
+        )?;
     }
 
     let mut session = Session::open(project)?;
@@ -3568,6 +3586,30 @@ fn cmd_redo(project: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_builtin_signatures_parse() {
+        let document: serde_json::Value =
+            serde_json::from_str(recraft_decompile::signature::BUILTIN_SIGNATURES).unwrap();
+        let entries = document
+            .get("signatures")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        assert!(entries.len() >= 8, "{}", entries.len());
+        let mut names = std::collections::BTreeSet::new();
+        for entry in entries {
+            let name = entry.get("name").and_then(|value| value.as_str()).unwrap();
+            let pattern = entry
+                .get("pattern")
+                .and_then(|value| value.as_str())
+                .unwrap();
+            assert!(names.insert(name), "duplicate {name}");
+            assert!(
+                recraft_decompile::signature::Signature::parse(name, pattern).is_some(),
+                "{name}: {pattern}"
+            );
+        }
+    }
 
     #[test]
     fn address_parsing_entry_and_hex() {
