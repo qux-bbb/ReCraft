@@ -45,33 +45,40 @@ void sub_140001ce0_l1(void) {
                                 if ((*(u8*)((rsi + 4)) & 0xADDR) != 0) break;
                                 goto loc_ADDR;
                             }
+                            break;
                         }
-                    } else {
-                        edx = 0;
-                        if (r8d != 0) {
-                            while (1) {
-                                ecx = edx;
-                                rcx += rcx;
-                                eax = *(u32*)(((rbx + (rcx * 8)) + 4));
-                                if (rbp < rax) {
-                                    edx += 1;
-                                    if (edx >= r8d) break;
-                                } else {
-                                    eax = *(u32*)(((rbx + (rcx * 8)) + 8));
-                                    if (rbp < rax) {
-                                        eax = *(u32*)(((rbx + (r9 * 8)) + 0xADDR));
-                                        if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) == eax) {
-                                            eax = *(u32*)(((rbx + (r9 * 8)) + 0xADDR));
-                                            if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) == eax) break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if (edx != *(u32*)(rbx)) break;
+                        break;
                     }
+                    edx = 0;
+                    if (r8d != 0) {
+                        while (1) {
+                            ecx = edx;
+                            rcx += rcx;
+                            eax = *(u32*)(((rbx + (rcx * 8)) + 4));
+                            if (rbp < rax) {
+                                edx += 1;
+                                if (edx >= r8d) break;
+                            } else {
+                                eax = *(u32*)(((rbx + (rcx * 8)) + 8));
+                                if (rbp < rax) {
+                                    eax = *(u32*)(((rbx + (r9 * 8)) + 0xADDR));
+                                    if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) == eax) {
+                                        eax = *(u32*)(((rbx + (r9 * 8)) + 0xADDR));
+                                        if (*(u32*)(((rbx + (rcx * 8)) + 0xADDR)) == eax) break;
+                                    }
+                                    break;
+                                }
+                                break;
+                            }
+                            break;
+                        }
+                    }
+                    if (edx != *(u32*)(rbx)) break;
+                    break;
                 }
+                break;
             }
+            break;
         }
         eax = 1;
     } else {

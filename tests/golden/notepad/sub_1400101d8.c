@@ -38,7 +38,10 @@ void sub_1400101d8_l1(void) {
                     CharNextW(rbx);
                     rbx = rax;
                     eax = (uint32)(*(u16*)(rax));
+                } else {
+                    break;
                 }
+                break;
             }
             while (1) {
                 if (*(u16*)(rbx) == 0xADDR) {

@@ -21,6 +21,7 @@ void sub_1400052e0_l1(void) {
             if (*(u32*)(rbx) != r9d) {
                 rbx = *(u64*)((rbx + 8));
             }
+            break;
         }
         if (rbx != 0 && *(u64*)(rbx) != 0) {
             *(u8*)(rsi) = bpl;

@@ -64,6 +64,7 @@ void sub_1400081ac_l1(void) {
                     eax = *(u32*)((rsi + 8));
                     if (*(u32*)(rdx) == eax) break;
                 }
+                break;
             }
         }
     }

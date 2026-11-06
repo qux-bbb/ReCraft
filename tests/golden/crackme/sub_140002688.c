@@ -20,6 +20,7 @@ void sub_140002688_l1(void) {
             } else {
                 if (esi <= *(u32*)((rax + 8)) /* signed */) break;
             }
+            break;
         }
     }
     return;

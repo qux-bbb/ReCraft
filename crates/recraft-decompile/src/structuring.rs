@@ -2904,6 +2904,9 @@ struct Structurer {
     /// recursing back into `emit_loop` for the same header).
     fallback_headers: BTreeSet<usize>,
     /// Top-level loops whose inner exit leaves the loop: their whole body is emitted as
+    /// Loop headers emitted as `while (1) { … }`: falling out of the body is a jump, not
+    /// the end of the construct, so a `break` has to be written explicitly.
+    infinite_headers: BTreeSet<usize>,
     /// labels so one jump cannot place the enclosing continuation on the wrong path.
     flat_headers: BTreeSet<usize>,
     /// Inferred argument counts for direct call targets, used to bound how many setup lines
@@ -3018,6 +3021,7 @@ impl Structurer {
             loop_blocks: BTreeMap::new(),
             loop_stack: Vec::new(),
             fallback_headers: BTreeSet::new(),
+            infinite_headers: BTreeSet::new(),
             flat_headers: BTreeSet::new(),
             call_arg_counts,
             emitted,
@@ -3448,6 +3452,20 @@ impl Structurer {
         while guard <= self.blocks.len() + 8 {
             guard += 1;
             if current >= self.blocks.len() || self.emitted[current] || stop.contains(&current) {
+                // Falling out of a `while (1)` body loops back, so a body that leaves the
+                // loop has to say so. Only the loop exit is handled here: it needs a
+                // `break`, and the caller already continues at that block after the loop,
+                // so nothing else in the output moves.
+                if current < self.blocks.len()
+                    && let Some(&(loop_header, loop_exit)) = self.loop_stack.last()
+                    && current == loop_exit
+                    && self.infinite_headers.contains(&loop_header)
+                {
+                    lines.push(PseudoLine {
+                        addr: self.blocks[current].entry,
+                        text: format!("{}break;", indent(level)),
+                    });
+                }
                 return;
             }
             if let Some(header) = self.loop_of[current]
@@ -3954,6 +3972,7 @@ impl Structurer {
         // Header statements run once per iteration: keep them inside the loop and
         // break when the condition says to leave.
         self.loop_stack.push((header, exit));
+        self.infinite_headers.insert(header);
         lines.push(PseudoLine {
             addr: self.blocks[header].entry,
             text: format!("{}while (1) {{", indent(level)),
@@ -4026,6 +4045,7 @@ impl Structurer {
             text: format!("{}while (1) {{", indent(level)),
         });
         self.loop_stack.push((header, exit));
+        self.infinite_headers.insert(header);
         self.fallback_headers.insert(header);
         self.emit_linear(lines, header, level + 1, &stop);
         self.fallback_headers.remove(&header);

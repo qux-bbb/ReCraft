@@ -151,7 +151,9 @@ void internal/abi.NewName_l1(void) {
                 }
                 __asm("if (ja short 0xADDR /* unmodelled flags */) goto 0xADDR");
             }
+            break;
         }
+        break;
     }
         runtime.panicBounds(rcx, rdx, r8, r9);
     return;
