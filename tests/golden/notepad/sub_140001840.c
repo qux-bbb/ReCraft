@@ -51,7 +51,7 @@ void sub_140001840_l1(void) {
         r9d = ebx;
         r8 = rax;
         edx = 0;
-        sub_1400101d8(0xADDR, 0);
+        WinMain(0xADDR, 0);
         ebx = eax;
         sub_1400022b4();
         if (al == 0) {
@@ -100,7 +100,7 @@ void sub_140001840_l1(void) {
         r9d = ebx;
         r8 = rax;
         edx = 0;
-        sub_1400101d8(0xADDR, 0);
+        WinMain(0xADDR, 0);
         ebx = eax;
         sub_1400022b4();
         if (al == 0) {

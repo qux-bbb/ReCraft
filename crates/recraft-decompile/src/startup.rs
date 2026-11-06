@@ -18,12 +18,31 @@ const MAX_HOPS: usize = 3;
 /// How many instructions to scan inside the startup function.
 const MAX_SCAN: usize = 4096;
 
-/// The function the CRT startup passes `argc`/`argv`/`envp` to, i.e. `main`.
+/// Which of the two CRT entry points a program uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Console program: the startup passes `argc`/`argv`/`envp`.
+    Main,
+    /// GUI program: the startup passes `hInstance`/`hPrevInstance`/`lpCmdLine`/`nShowCmd`.
+    WinMain,
+}
+
+impl EntryKind {
+    /// The name the entry is known by.
+    pub fn name(self) -> &'static str {
+        match self {
+            EntryKind::Main => "main",
+            EntryKind::WinMain => "WinMain",
+        }
+    }
+}
+
+/// Which entry the CRT startup calls.
 ///
 /// The entry point of a static CRT program is a short stub that tail-jumps into the startup
 /// (`mainCRTStartup` → `__scrt_common_main_seh`), so the search starts by following those
 /// jumps and then looks for the `argc`/`argv`/`envp` call.
-pub fn find_main(session: &mut Session) -> Option<Address> {
+pub fn find_entry(session: &mut Session) -> Option<(Address, EntryKind)> {
     let mut start = session.entry_point();
     for _ in 0..MAX_HOPS {
         let Some(next) = tail_jump(session, start) else {
@@ -63,8 +82,8 @@ fn function_end(session: &Session, start: Address) -> Option<Address> {
         .map(|function| function.end)
 }
 
-/// The `main` call inside the startup function, if its shape is the expected one.
-fn candidate_in(session: &mut Session, start: Address) -> Option<Address> {
+/// The entry call inside the startup function, if its shape is the expected one.
+fn candidate_in(session: &mut Session, start: Address) -> Option<(Address, EntryKind)> {
     let end = function_end(session, start)?;
     let mut instructions = Vec::new();
     let mut address = start;
@@ -83,31 +102,69 @@ fn candidate_in(session: &mut Session, start: Address) -> Option<Address> {
         let Some(target) = call.branch_target() else {
             continue;
         };
-        // `argc` is loaded into `ecx` right before the call ...
-        if !loads_argc(&instructions[index - 1]) {
-            continue;
-        }
-        // ... its return value is saved, and the exit path runs immediately after.
+        // The return value is saved and the exit path runs immediately after: that is the
+        // startup calling the program's entry.
         if !saves_return(&instructions[index + 1]) {
             continue;
         }
         if instructions[index + 2].mnemonic() != Mnemonic::Call {
             continue;
         }
-        return Some(target);
+        let Some(kind) = classify(&instructions[..index]) else {
+            continue;
+        };
+        return Some((target, kind));
     }
     None
 }
 
-/// Whether the instruction loads a value into `ecx` (the `argc` argument).
-fn loads_argc(insn: &recraft_decode::Insn) -> bool {
-    if !matches!(
-        insn.mnemonic(),
-        Mnemonic::Mov | Mnemonic::Movzx | Mnemonic::Movsx
-    ) {
+/// Whether the argument setup before the call matches a console or a GUI entry.
+fn classify(before: &[recraft_decode::Insn]) -> Option<EntryKind> {
+    let window = &before[before.len().saturating_sub(8)..];
+    let mut writes_ecx = false;
+    let mut writes_rcx = false;
+    let mut writes_r9 = false;
+    for insn in window {
+        if !writes_first_operand(insn) {
+            continue;
+        }
+        match insn.op_register(0) {
+            Register::ECX => writes_ecx = true,
+            Register::RCX => writes_rcx = true,
+            Register::R9 | Register::R9D => writes_r9 = true,
+            _ => {}
+        }
+    }
+    // `main(argc, argv, envp)`: `argc` is a 32-bit `ecx` load.
+    if writes_ecx && !writes_rcx {
+        return Some(EntryKind::Main);
+    }
+    // `WinMain(hInstance, hPrevInstance, lpCmdLine, nShowCmd)`: a 64-bit `rcx` and a fourth
+    // argument in `r9`.
+    if writes_rcx && writes_r9 {
+        return Some(EntryKind::WinMain);
+    }
+    None
+}
+
+/// Whether the instruction writes its first operand (a rough "this sets the register" test).
+fn writes_first_operand(insn: &recraft_decode::Insn) -> bool {
+    if insn.op_count() < 1 {
         return false;
     }
-    insn.op_count() >= 1 && insn.op_register(0) == Register::ECX
+    matches!(
+        insn.mnemonic(),
+        Mnemonic::Mov
+            | Mnemonic::Movzx
+            | Mnemonic::Movsx
+            | Mnemonic::Lea
+            | Mnemonic::Xor
+            | Mnemonic::Add
+            | Mnemonic::Sub
+            | Mnemonic::And
+            | Mnemonic::Or
+            | Mnemonic::Movsxd
+    ) && recraft_ir::reg::from_iced(insn.op_register(0)).is_some()
 }
 
 /// Whether the instruction saves the call's return value (`mov r32, eax`).

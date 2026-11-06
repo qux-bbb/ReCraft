@@ -1,5 +1,5 @@
 // L1 structure recovery (38 blocks)
-void sub_1400101d8_l1(void) {
+void WinMain_l1(void) {
     xmm0 = 0;
     r14d = r9d;
     msg = xmm0;

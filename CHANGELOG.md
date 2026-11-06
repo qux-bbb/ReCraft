@@ -9,17 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`main` is found from the CRT startup call.** A statically linked MSVC program has no `main`
-  symbol, but its startup calls it in a fixed shape: `argc` is loaded into `ecx`, `argv`/`envp`
-  into `rdx`/`r8`, the return value is saved and the exit path follows immediately.
-  `recraft-decompile::startup::find_main` follows the entry point's tail jumps
-  (`mainCRTStartup` → `__scrt_common_main_seh`) and matches that shape, and `apply_builtin` — the
-  step `analyze` runs — names the result `main`. On the crackme sample the analysis now reports
-  `built-in signatures: 9 function(s) named` (eight CRT functions plus `main`), the L1 view reads
-  `void main_l1(void)` and the L2 view `int32 main(void)`; `--no-signatures` keeps the old
-  behaviour. The `argc` load is the discriminator, so GUI programs (`WinMain`), the corpus
-  binaries and the Go sample do not trigger it. Two crackme snapshots changed: `sub_140001010.c`
-  is now `main.c`, and `sub_1400012a8.c` calls `main(...)`; all 789 snapshots pass.
+- **The CRT startup call names `main` or `WinMain`.** A statically linked MSVC program has no
+  entry symbol, but its startup calls the program entry in a fixed shape. Console programs get
+  `argc` in `ecx` plus `argv`/`envp` in `rdx`/`r8`; GUI programs get `hInstance` in `rcx`,
+  `hPrevInstance` in `rdx`, `lpCmdLine` in `r8` and `nShowCmd` in `r9`. In both cases the return
+  value is saved and the exit path (`__scrt_is_managed_app`) runs right after.
+  `recraft-decompile::startup::find_entry` follows the entry point's tail jumps
+  (`mainCRTStartup` → `__scrt_common_main_seh`) and classifies the call, and `apply_builtin` — the
+  step `analyze` runs — names it `main` or `WinMain`. The built-in signature set also gained
+  `__scrt_common_main_seh`, so the startup function itself is named too. On the crackme sample the
+  analysis reports ten names (eight CRT functions, `main`, `__scrt_common_main_seh`) and the L2
+  view reads `int32 main(void)`; on notepad it reports one and the startup calls `WinMain(...)`.
+  `--no-signatures` keeps the old behaviour. Snapshots changed for both samples
+  (`sub_140001010.c` → `main.c`, `sub_1400012a8.c` → `__scrt_common_main_seh.c`,
+  `sub_1400101d8.c` → `WinMain.c`); all 789 pass.
 
 - **`analyze` matches the built-in CRT signatures once, so a new project opens with real names.**
   After function discovery and string extraction the analysis names every unnamed function that
