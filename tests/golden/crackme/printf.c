@@ -1,9 +1,9 @@
 // L1 structure recovery (1 blocks)
-void sub_140001170_l1(void) {
+void printf_l1(void) {
     var_58 = rdx;
     rdi = rcx;
     rsi = &var_58;
-    sub_140004580(1);
+    __acrt_iob_func(1);
     rbx = rax;
     sub_140001000();
     r9d = 0;

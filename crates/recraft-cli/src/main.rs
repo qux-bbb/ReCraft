@@ -253,10 +253,12 @@ enum Commands {
         /// When `project` is a PE file, create/overwrite this project and analyze it.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Do not match the built-in CRT signatures after analysing.
+        #[arg(long)]
+        no_signatures: bool,
         #[arg(long)]
         json: bool,
     },
-    /// Incrementally re-analyze one code range (DESIGN §6.4).
     Reanalyze {
         project: PathBuf,
         /// Range start: `0x...`, decimal, a symbol name, or `entry`.
@@ -565,7 +567,12 @@ fn run(cli: Cli) -> Result<()> {
             let materialized = materialize_project(&project)?;
             cmd_funcs(&materialized.path, json)
         }
-        Commands::Analyze { project, out, json } => cmd_analyze(&project, out.as_deref(), json),
+        Commands::Analyze {
+            project,
+            out,
+            json,
+            no_signatures,
+        } => cmd_analyze(&project, out.as_deref(), json, !no_signatures),
         Commands::Reanalyze {
             project,
             addr,
@@ -1166,7 +1173,7 @@ fn cmd_reanalyze(project: &Path, raw: &str, len: u64, as_json: bool) -> Result<(
     Ok(())
 }
 
-fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool) -> Result<()> {
+fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool, signatures: bool) -> Result<()> {
     // DESIGN §10: `analyze <file> --out project.rcraft` imports and analyses in one step.
     let owned_project;
     let project = if project.is_file() && !is_project_file(project) {
@@ -1187,6 +1194,16 @@ fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool) -> Result<()> 
     recraft_analysis::persist_strings(&mut session, &strings)?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+    // Names learned elsewhere reach a new project without an extra command: the built-in CRT
+    // signatures are matched once, right after the analysis that discovers the functions.
+    let named = if signatures {
+        recraft_decompile::signature::apply_builtin(&mut session, false)?
+            .renamed
+            .len()
+    } else {
+        0
+    };
+
     let xref_count = result.calls.len() + result.jumps.len() + result.data_refs.len();
     let auto_names = session.auto_name_count()?;
     if as_json {
@@ -1204,6 +1221,7 @@ fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool) -> Result<()> 
             "xrefs": xref_count,
             "strings": strings.len(),
             "elapsed_ms": elapsed_ms,
+            "signature_names": named,
         }));
     }
 
@@ -1251,6 +1269,9 @@ fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool) -> Result<()> 
     println!("data references:      {}", result.data_refs.len());
     println!("api tags:             {}", result.api_refs.len());
     println!("auto names:           {auto_names}");
+    if named > 0 {
+        println!("built-in signatures:  {named} function(s) named");
+    }
     if result.go_functions > 0 {
         println!("go pclntab functions: {}", result.go_functions);
     }
@@ -3331,19 +3352,7 @@ fn cmd_prototype(project: &Path, addr: &str, text: Option<&str>) -> Result<()> {
 
 /// The name a project gave a function, if it is more than the default `sub_…` spelling.
 fn user_name(session: &Session, addr: Address) -> Result<Option<String>> {
-    if let Some(name) = session.name_at(addr)?
-        && name != format!("sub_{:x}", addr.get())
-    {
-        return Ok(Some(name));
-    }
-    // A prototype carries the name the user declared: `int printf(const char* format, ...)`.
-    let Some(text) = session.prototype_at(addr)? else {
-        return Ok(None);
-    };
-    let Some(open) = text.find('(') else {
-        return Ok(None);
-    };
-    Ok(text[..open].split_whitespace().last().map(str::to_owned))
+    recraft_decompile::signature::user_name(session, addr)
 }
 
 /// Write the signature of every named function to a JSON file.
@@ -3446,51 +3455,15 @@ fn cmd_signature_import(
     }
 
     let mut session = Session::open(project)?;
-    let functions = session.functions()?;
-    let mut matches: Vec<(Address, String)> = Vec::new();
-    for function in &functions {
-        if user_name(&session, function.start)?.is_some() {
-            continue;
-        }
-        if let Some(name) = recraft_decompile::signature::find_match(
-            &mut session,
-            function.start,
-            function.end,
-            &signatures,
-        ) {
-            matches.push((function.start, name.to_owned()));
-        }
-    }
-    // A thunk and its target carry the same signature; the thunk is what call sites name, so it
-    // takes the name and the target is left alone (names are unique per project).
-    let mut ordered = matches.clone();
-    ordered.sort_by_key(|(addr, _)| {
-        recraft_decompile::signature::thunk_target(&mut session, *addr).is_none()
-    });
-    let mut taken: std::collections::BTreeSet<String> = functions
-        .iter()
-        .filter_map(|function| user_name(&session, function.start).ok().flatten())
-        .collect();
-    let mut applied = 0usize;
-    let mut skipped = 0usize;
-    for (addr, name) in &ordered {
-        if taken.contains(name) {
-            skipped += 1;
-            continue;
-        }
-        taken.insert(name.clone());
+    let report = recraft_decompile::signature::apply(&mut session, &signatures, dry_run)?;
+    for (addr, name) in &report.renamed {
         println!("{:#x} -> {name}", addr.get());
-        if !dry_run {
-            session.execute(Command::Rename {
-                addr: *addr,
-                name: Some(name.clone()),
-            })?;
-        }
-        applied += 1;
     }
     println!(
-        "matched {applied} function(s) from {} signature(s), {skipped} name(s) already taken{}",
+        "matched {} function(s) from {} signature(s), {} name(s) already taken{}",
+        report.renamed.len(),
         signatures.len(),
+        report.skipped,
         if dry_run { " (dry run)" } else { "" }
     );
     Ok(())

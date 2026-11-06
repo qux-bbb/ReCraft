@@ -1,5 +1,5 @@
 // L1 structure recovery (22 blocks)
-void sub_140004cc4_l1(void) {
+void puts_l1(void) {
     var_60 = 0;
     var_70 = sil;
     ebx = (rsi + 1);
@@ -13,7 +13,7 @@ void sub_140004cc4_l1(void) {
     }
     var_d8 = rcx;
     if (rcx != 0) {
-        sub_140004580(ebx);
+        __acrt_iob_func(ebx);
         var_e0 = rax;
         ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
         if ((bl & cl) != 0) {

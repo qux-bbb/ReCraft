@@ -180,6 +180,110 @@ pub fn find_match<'a>(
         .map(|signature| signature.name.as_str())
 }
 
+/// The name a function already has, whether it was renamed or declared through a prototype.
+///
+/// The default `sub_<address>` name does not count: a signature may replace it.
+pub fn user_name(session: &Session, addr: Address) -> recraft_common::Result<Option<String>> {
+    if let Some(name) = session.name_at(addr)?
+        && name != format!("sub_{:x}", addr.get())
+    {
+        return Ok(Some(name));
+    }
+    // A prototype carries the name the user declared: `int printf(const char* format, ...)`.
+    let Some(text) = session.prototype_at(addr)? else {
+        return Ok(None);
+    };
+    let Some(open) = text.find('(') else {
+        return Ok(None);
+    };
+    Ok(text[..open].split_whitespace().last().map(str::to_owned))
+}
+
+/// Parse a signature document: `{"format": 1, "signatures": [{"name": …, "pattern": …}]}`.
+pub fn parse_document(text: &str) -> Result<Vec<Signature>, String> {
+    let document: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let Some(entries) = document
+        .get("signatures")
+        .and_then(|value| value.as_array())
+    else {
+        return Err("no `signatures` array".to_owned());
+    };
+    let mut signatures = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (Some(name), Some(pattern)) = (
+            entry.get("name").and_then(|value| value.as_str()),
+            entry.get("pattern").and_then(|value| value.as_str()),
+        ) else {
+            continue;
+        };
+        if let Some(signature) = Signature::parse(name, pattern) {
+            signatures.push(signature);
+        }
+    }
+    Ok(signatures)
+}
+
+/// What [`apply`] did.
+#[derive(Debug, Default)]
+pub struct ApplyReport {
+    /// Addresses that were renamed, with the name they got.
+    pub renamed: Vec<(Address, String)>,
+    /// Matches skipped because the project already uses the name.
+    pub skipped: usize,
+}
+
+/// Name every unnamed function that matches one of `signatures`.
+///
+/// A thunk and its target carry the same signature; the thunk is what call sites name, so it
+/// takes the name and the target is left alone (names are unique per project). A name the
+/// project already uses is never reused, and with `dry_run` nothing is written.
+pub fn apply(
+    session: &mut Session,
+    signatures: &[Signature],
+    dry_run: bool,
+) -> recraft_common::Result<ApplyReport> {
+    use recraft_core::Command;
+
+    let functions = session.functions()?;
+    let mut matches: Vec<(Address, String)> = Vec::new();
+    for function in &functions {
+        if user_name(session, function.start)?.is_some() {
+            continue;
+        }
+        if let Some(name) = find_match(session, function.start, function.end, signatures) {
+            matches.push((function.start, name.to_owned()));
+        }
+    }
+    matches.sort_by_key(|(addr, _)| thunk_target(session, *addr).is_none());
+    let mut taken: std::collections::BTreeSet<String> = functions
+        .iter()
+        .filter_map(|function| user_name(session, function.start).ok().flatten())
+        .collect();
+    let mut report = ApplyReport::default();
+    for (addr, name) in matches {
+        if taken.contains(&name) {
+            report.skipped += 1;
+            continue;
+        }
+        taken.insert(name.clone());
+        if !dry_run {
+            session.execute(Command::Rename {
+                addr,
+                name: Some(name.clone()),
+            })?;
+        }
+        report.renamed.push((addr, name));
+    }
+    Ok(report)
+}
+
+/// [`apply`] with the signatures compiled into the binary.
+pub fn apply_builtin(session: &mut Session, dry_run: bool) -> recraft_common::Result<ApplyReport> {
+    let signatures = parse_document(BUILTIN_SIGNATURES).unwrap_or_default();
+    apply(session, &signatures, dry_run)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

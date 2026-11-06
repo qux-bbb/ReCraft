@@ -1,25 +1,24 @@
 // L1 structure recovery (12 blocks)
-// inferred: sub_140001170 = printf, sub_140004bd4 = fgets, sub_140016b60 = strcmp, sub_140016be0 = strlen
 void sub_140001010_l1(void) {
 // some loops keep labels (an inner loop exits its parent)
-    sub_140004cc4("==========================================");
-    sub_140004cc4("  Simple Crackme v2.0  (C edition)");
-    sub_140004cc4("  flag format: flag{...}");
-    sub_140004cc4("==========================================");
+    puts("==========================================");
+    puts("  Simple Crackme v2.0  (C edition)");
+    puts("  flag format: flag{...}");
+    puts("==========================================");
     ebx = 0;
     do {
         printf("Enter flag: ");
-        sub_140004580(1);
-        sub_1400049f8(rax);
+        __acrt_iob_func(1);
+        fflush(rax);
         ecx = 0;
-        sub_140004580(0);
+        __acrt_iob_func(0);
         fgets(&var_20, 0xADDR, rax);
         if (rax == 0) {
-            sub_140004cc4("[?] Hint: it is shuffled, xored, and shifted.");
+            puts("[?] Hint: it is shuffled, xored, and shifted.");
             eax = 1;
             return;
         }
-        sub_140006fd0(&var_20, "\r\n");
+        strpbrk(&var_20, "\r\n");
         if (rax != 0) {
             *(u8*)(rax) = 0;
         }
@@ -38,16 +37,16 @@ void sub_140001010_l1(void) {
                     if (dl != byte_ADDR[rax]) goto loc_ADDR;
                     rax += 1;
                 } while (rax < 0xADDR);
-                sub_140004cc4("[+] Correct! Nice reversing.");
+                puts("[+] Correct! Nice reversing.");
                 eax = 0;
                 return;
             }
         }
         loc_ADDR:
-        sub_140004cc4("[-] Wrong flag. Try again.");
+        puts("[-] Wrong flag. Try again.");
         ebx += 1;
     } while (ebx < 3 /* signed */);
-    sub_140004cc4("[?] Hint: it is shuffled, xored, and shifted.");
+    puts("[?] Hint: it is shuffled, xored, and shifted.");
     eax = 1;
     return;
 }

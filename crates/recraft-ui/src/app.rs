@@ -9040,6 +9040,9 @@ fn run_analysis_job(project: &Path, cancel: &Arc<AtomicBool>) -> AnalysisMessage
         recraft_analysis::persist(&mut session, &result)?;
         let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
         recraft_analysis::persist_strings(&mut session, &strings)?;
+        // Names learned elsewhere reach a new project without an extra command: match the
+        // built-in CRT signatures once, right after the analysis that finds the functions.
+        recraft_decompile::signature::apply_builtin(&mut session, false)?;
         Ok((result.functions.len(), strings.len()))
     })();
     match outcome {

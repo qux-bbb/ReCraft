@@ -1,5 +1,5 @@
 // L1 structure recovery (70 blocks)
-void sub_140006fd0_l1(void) {
+void strpbrk_l1(void) {
     r10 = rdx;
     rsi = 0xADDR;
     r10d &= 0xADDR;

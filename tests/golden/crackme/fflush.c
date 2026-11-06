@@ -1,5 +1,5 @@
 // L1 structure recovery (8 blocks)
-void sub_1400049f8_l1(void) {
+void fflush_l1(void) {
     var_48 = rcx;
     if (rcx != 0) {
         edx = *(u32*)((rcx + 0xADDR));

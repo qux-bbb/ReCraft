@@ -3035,6 +3035,7 @@ dependencies = [
  "recraft-core",
  "recraft-decode",
  "recraft-ir",
+ "serde_json",
  "tempfile",
 ]
 

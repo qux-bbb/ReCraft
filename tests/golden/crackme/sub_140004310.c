@@ -1,5 +1,4 @@
 // L1 structure recovery (7 blocks)
-// inferred: sub_140016be0 = strlen
 void sub_140004310_l1(void) {
     rdi = rdx;
     rbx = rcx;

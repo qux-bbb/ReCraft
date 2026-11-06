@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`analyze` matches the built-in CRT signatures once, so a new project opens with real names.**
+  After function discovery and string extraction the analysis names every unnamed function that
+  matches the eight built-in signatures; `--no-signatures` turns it off, the JSON report gains
+  `signature_names` and the text report a `built-in signatures: N function(s) named` line. The
+  GUI's import/re-analysis worker calls the same step, so opening a project shows `puts`/
+  `printf`/… without running `signature-import` first. The matching logic moved into
+  `recraft-decompile::signature` (`parse_document`, `user_name`, `apply`, `apply_builtin`) and
+  both the CLI command and the GUI use it. It is idempotent: a named function is never renamed
+  again. On the crackme sample six functions pick up CRT names, so their snapshots were renamed
+  (`printf`, `puts`, `fgets`, `fflush`, `strpbrk`, `__acrt_iob_func`) and three call-site
+  snapshots changed; notepad, corpus, corpus86 and Go are untouched and all 789 snapshots pass.
+
 - **A built-in CRT signature set, matched with `signature-import --builtin`.** The binary now
   carries eight x64 Visual C++ static-CRT signatures (`printf`, `puts`, `fgets`, `fflush`,
   `strpbrk`, `strcmp`, `strlen`, `__acrt_iob_func`) exported from the sample crackme, so a fresh
