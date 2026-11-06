@@ -5561,24 +5561,9 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
                 references.entry(target).or_default().push(index);
             }
         }
-        // Only an unconditional jump can be replaced by a copy of the tail: rewriting a
-        // conditional one would drop its condition. A label whose other references are
-        // conditional keeps its label, so the copy is not made at all.
-        let mut unconditional: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
-        for (index, line) in lines.iter().enumerate() {
-            if !line.text.trim().starts_with("goto loc_") {
-                continue;
-            }
-            if let Some(target) = goto_target(&line.text) {
-                unconditional.entry(target).or_default().push(index);
-            }
-        }
         let mut candidate = None;
-        for (target, sites) in &unconditional {
+        for (target, sites) in &references {
             if sites.is_empty() || sites.len() > MAX_REFERENCES {
-                continue;
-            }
-            if references.get(target).map(Vec::len) != Some(sites.len()) {
                 continue;
             }
             let label_text = format!("loc_{target:x}:");
@@ -5588,10 +5573,10 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
             if sites.iter().any(|site| *site <= label) {
                 continue;
             }
-            candidate = Some((label, sites.clone()));
+            candidate = Some((*target, label, sites.clone()));
             break;
         }
-        let Some((label, sites)) = candidate else {
+        let Some((_target, label, sites)) = candidate else {
             break;
         };
         // The label's block must close before the jumps: that is what makes the region a
@@ -5638,33 +5623,77 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
         if !copyable {
             break;
         }
-        let source_indent = crate::structuring::leading_spaces(&lines[label].text);
-        // Copy into every arm that jumps here, last first so the earlier indices stay valid.
-        for site in sites.iter().rev() {
-            let target_indent = leading_spaces(&lines[*site].text);
-            let shift = target_indent as isize - source_indent as isize;
-            let inserted: Vec<PseudoLine> = tail
-                .iter()
-                .map(|text| {
-                    let text = if shift > 0 {
-                        format!("{}{text}", " ".repeat(shift as usize))
-                    } else if shift < 0 {
-                        text.get((-shift) as usize..).unwrap_or(text).to_owned()
-                    } else {
-                        text.clone()
-                    };
-                    PseudoLine {
-                        addr: lines[*site].addr,
-                        text,
-                    }
-                })
-                .collect();
-            let count = inserted.len();
-            lines.splice(*site..*site, inserted);
-            lines.remove(*site + count);
-            folded += 1;
+        // A conditional jump only copies as `if (c) { tail }`, which needs the tail to end
+        // the path itself: otherwise the arm falls through where the jump did not.
+        let ends_path = tail.last().is_some_and(|text| {
+            let trimmed = text.trim();
+            trimmed.starts_with("return") || trimmed.starts_with("goto ")
+        });
+        let mut plans: Vec<(usize, Option<String>)> = Vec::new();
+        let mut usable = true;
+        for site in &sites {
+            let text = lines[*site].text.trim();
+            if text.starts_with("goto loc_") {
+                plans.push((*site, None));
+            } else if let Some((condition, _)) = conditional_goto(text) {
+                if !ends_path {
+                    usable = false;
+                    break;
+                }
+                plans.push((*site, Some(condition.to_owned())));
+            } else {
+                usable = false;
+                break;
+            }
         }
+        if !usable {
+            break;
+        }
+        // Copy into every arm that jumps here, last first so the earlier indices stay valid.
+        for (site, condition) in plans.iter().rev() {
+            let target_indent = leading_spaces(&lines[*site].text);
+            let mut inserted: Vec<PseudoLine> = Vec::new();
+            let body_indent = if let Some(condition) = condition {
+                inserted.push(PseudoLine {
+                    addr: lines[*site].addr,
+                    text: format!("{}if ({condition}) {{", " ".repeat(target_indent)),
+                });
+                target_indent + 4
+            } else {
+                target_indent
+            };
+            // Keep the tail's own nesting: shift every line by the same amount.
+            let base = leading_spaces(&tail[0]);
+            let shift = body_indent as isize - base as isize;
+            for text in &tail {
+                let text = if shift > 0 {
+                    format!("{}{text}", " ".repeat(shift as usize))
+                } else if shift < 0 {
+                    text.get((-shift) as usize..)
+                        .unwrap_or(text.as_str())
+                        .to_owned()
+                } else {
+                    text.clone()
+                };
+                inserted.push(PseudoLine {
+                    addr: lines[*site].addr,
+                    text,
+                });
+            }
+            if condition.is_some() {
+                inserted.push(PseudoLine {
+                    addr: lines[*site].addr,
+                    text: format!("{}}}", " ".repeat(target_indent)),
+                });
+            }
+            let count = inserted.len();
+            lines.splice(*site..*site + 1, inserted);
+            let _ = count;
+        }
+        // The copies went in after the label, so it has not moved. Only the label goes: the
+        // tail still runs when the fall-through reaches it.
         lines.remove(label);
+        folded += plans.len();
     }
     folded
 }

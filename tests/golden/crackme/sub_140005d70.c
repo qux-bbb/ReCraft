@@ -128,6 +128,7 @@ void sub_140005d70_l1(void) {
                                                 rdx = (rbx + 0xADDR);
                                                 sub_140005ce0(rbx, rdx);
                                             }
+                                            loc_ADDR:
                                             if (al == 0) {
                                                 eax = ebp;
                                                 return;
@@ -147,18 +148,12 @@ void sub_140005d70_l1(void) {
                                                 case 0xADDR: {
                                                     ecx -= 0xADDR;
                                                     sub_1400060f4(rbx);
-                                                    if (al == 0) {
-                                                        eax = ebp;
-                                                        return;
-                                                    }
+                                                    goto loc_ADDR;
                                                 }
                                                 case 0xADDR: {
                                                     ecx -= 0xADDR;
                                                     sub_14000627c(rbx);
-                                                    if (al == 0) {
-                                                        eax = ebp;
-                                                        return;
-                                                    }
+                                                    goto loc_ADDR;
                                                 }
                                                 default: {
                                                     ecx -= 0xADDR;
