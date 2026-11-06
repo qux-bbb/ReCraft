@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A backward jump inside an `if` becomes `while (1) { … continue; }`.** `fold_backward_gotos_into_loops`
+  needs the latch at the label's own indentation to build a `do … while`; a latch nested in an
+  `if` was left as a label plus `goto`. The whole region from the label to the end of its block
+  now runs under `while (1)` and the jump becomes `continue`. The pass only fires when every
+  reference to the label is inside that region, the region has no `break`/`continue` (they would
+  rebind to the new loop), its last statement is a `return`/`goto` (otherwise the wrapper would
+  loop where the original fell out) and it is at most 200 lines (wrapping a giant function would
+  indent thousands of lines for one jump). crackme goes 459→460 structured with goto fallback
+  functions 36→35; notepad and Go are unchanged. The affected function is outside the snapshot
+  sample, so the 789 golden snapshots still pass; lint is 0 findings on all five projects and the
+  222 unit tests pass (2 new ones cover the fold and the fall-through refusal).
+
 - **A jump to the function's epilogue folds into `if (c) { … }`.** When the body's final block
   sits after its last `return;`, the only way in is the jump that targets it, so the block can be
   copied into the branch and its label dropped. The pass runs *after* `fold_dispatch_ladders`:
