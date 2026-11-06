@@ -89,7 +89,6 @@ void sub_140001ce0_l1(void) {
             ebp = edi;
             eax = *(u32*)(((rbx + (rcx * 8)) + 4));
             if (r14 < rax) {
-                loc_ADDR:
                 edi += 1;
             } else {
                 eax = *(u32*)(((rbx + (rcx * 8)) + 8));
@@ -125,7 +124,7 @@ void sub_140001ce0_l1(void) {
                         rcx = &var_30;
                         (*rax)();
                         if (eax >= 0 /* signed */) {
-                            if (eax <= 0 /* signed */) goto loc_ADDR;
+                            edi += 1;
                         }
                     }
                 }

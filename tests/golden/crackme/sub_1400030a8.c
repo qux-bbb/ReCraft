@@ -14,7 +14,6 @@ void sub_1400030a8_l1(void) {
     var_64 = eax;
     ebx = eax;
     if (eax < -1 /* signed */) {
-        loc_ADDR:
         sub_140008860();
     }
     if (eax >= *(u32*)((rsi + 4)) /* signed */) {
@@ -27,7 +26,6 @@ void sub_1400030a8_l1(void) {
         var_c0 = rax;
         var_b8 = rsi;
         if (*(u32*)(rdi) != 0xADDR) {
-            loc_ADDR:
             if (*(u32*)((rsi + 0xADDR)) <= 0) {
                 sub_14000217c(rcx);
                 if (*(u64*)((rax + 0xADDR)) != 0) {
@@ -47,7 +45,24 @@ void sub_1400030a8_l1(void) {
             var_20 = rsi;
             sub_140003598(rdi, r12, r15, r14, rsi, ebx, var_1a0, r13);
         }
-        if (*(u32*)((rdi + 0xADDR)) != 4) goto loc_ADDR;
+        if (*(u32*)((rsi + 0xADDR)) <= 0) {
+            sub_14000217c(rcx);
+            if (*(u64*)((rax + 0xADDR)) != 0) {
+                sub_140008860();
+                return;
+            }
+            return;
+        }
+        if (var_198 != 0) {
+            sub_140008860();
+            return;
+        }
+        eax = var_1a0;
+        var_38 = r13;
+        var_30 = eax;
+        var_28 = ebx;
+        var_20 = rsi;
+        sub_140003598(rdi, r12, r15, r14, rsi, ebx, var_1a0, r13);
     }
     if (*(u32*)((rdi + 0xADDR)) != 4) goto loc_ADDR;
     eax = *(u32*)((rdi + 0xADDR));
@@ -65,7 +80,7 @@ void sub_1400030a8_l1(void) {
     r15 = *(u64*)((rax + 0xADDR));
     var_68 = r15;
     sub_140002b70(*(u64*)((rdi + 0xADDR)));
-    if (rdi == 0) goto loc_ADDR;
+    sub_140008860();
     if (*(u32*)(rdi) == 0xADDR) {
         if (*(u32*)((rdi + 0xADDR)) == 4) {
             eax = *(u32*)((rdi + 0xADDR));
@@ -73,7 +88,7 @@ void sub_1400030a8_l1(void) {
             eax += 0xADDR;
             if (eax <= 1) {
                 loc_ADDR:
-                if (*(u64*)((rdi + 0xADDR)) == 0) goto loc_ADDR;
+                sub_140008860();
             }
         }
     }
@@ -93,7 +108,24 @@ void sub_1400030a8_l1(void) {
     eax = *(u32*)((rdi + 0xADDR));
     if (eax != 0xADDR) {
         eax += 0xADDR;
-        if (eax > 1) goto loc_ADDR;
+        if (*(u32*)((rsi + 0xADDR)) <= 0) {
+            sub_14000217c(rcx);
+            if (*(u64*)((rax + 0xADDR)) != 0) {
+                sub_140008860();
+                return;
+            }
+            return;
+        }
+        if (var_198 != 0) {
+            sub_140008860();
+            return;
+        }
+        eax = var_1a0;
+        var_38 = r13;
+        var_30 = eax;
+        var_28 = ebx;
+        var_20 = rsi;
+        sub_140003598(rdi, r12, r15, r14, rsi, ebx, var_1a0, r13);
     }
     if (*(u32*)((rsi + 0xADDR)) <= 0) goto loc_ADDR;
     eax = var_1a0;

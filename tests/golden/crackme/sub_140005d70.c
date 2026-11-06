@@ -122,13 +122,11 @@ void sub_140005d70_l1(void) {
                                                     eax = -(eax);
                                                     *(u32*)((rbx + 0xADDR)) = eax;
                                                 }
-                                                loc_ADDR:
                                                 al = 1;
                                             } else {
                                                 rdx = (rbx + 0xADDR);
                                                 sub_140005ce0(rbx, rdx);
                                             }
-                                            loc_ADDR:
                                             if (al == 0) {
                                                 eax = ebp;
                                                 return;
@@ -148,12 +146,18 @@ void sub_140005d70_l1(void) {
                                                 case 0xADDR: {
                                                     ecx -= 0xADDR;
                                                     sub_1400060f4(rbx);
-                                                    goto loc_ADDR;
+                                                    if (al == 0) {
+                                                        eax = ebp;
+                                                        return;
+                                                    }
                                                 }
                                                 case 0xADDR: {
                                                     ecx -= 0xADDR;
                                                     sub_14000627c(rbx);
-                                                    goto loc_ADDR;
+                                                    if (al == 0) {
+                                                        eax = ebp;
+                                                        return;
+                                                    }
                                                 }
                                                 default: {
                                                     ecx -= 0xADDR;
@@ -173,9 +177,9 @@ void sub_140005d70_l1(void) {
                         *(u64*)((rbx + 0xADDR)) = rax;
                         eax = *(u32*)(rcx);
                         *(u32*)((rbx + 0xADDR)) = eax;
-                        if (eax >= 0 /* signed */) goto loc_ADDR;
+                        al = 1;
                         *(u32*)((rbx + 0xADDR)) = ebp;
-                        goto loc_ADDR;
+                        al = 1;
                         if (r8b != 0xADDR) {
                             if (r8b != 0xADDR) {
                                 if (r8b != 0xADDR) {

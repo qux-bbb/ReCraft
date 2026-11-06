@@ -29,7 +29,6 @@ void sub_140026268_l1(void) {
                 switch (edx) {
                     case 0xADDR: {
                         edx -= 0xADDR;
-                        loc_ADDR:
                         *(u32*)(rsi) = 1;
                         WindowsDeleteString(rcx);
                         rcx = var_58;
@@ -113,8 +112,20 @@ void sub_140026268_l1(void) {
                     }
                     default: {
                         edx -= 0xADDR;
-                        if (edx == 3) goto loc_ADDR;
-                        break;
+                        *(u32*)(rsi) = 1;
+                        WindowsDeleteString(rcx);
+                        rcx = var_58;
+                        hstring = r15;
+                        if (rcx == 0) {
+                            eax = 0;
+                            return;
+                        }
+                        var_58 = r15;
+                        rax = *(u64*)(rcx);
+                        rax = *(u64*)((rax + 0xADDR));
+                        sub_140028010(rcx, rdx);
+                        eax = 0;
+                        return;
                     }
                 }
             } else {

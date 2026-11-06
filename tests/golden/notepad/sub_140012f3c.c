@@ -5,7 +5,6 @@ void sub_140012f3c_l1(void) {
     LocalAlloc(0xADDR, 0xADDR);
     rbx = rax;
     if (rax == 0) {
-        loc_ADDR:
         eax = 0;
     } else {
         rdi = off_1400295b0;
@@ -44,8 +43,7 @@ void sub_140012f3c_l1(void) {
         *(u64*)(rcx) = rsi;
         rcx = (int64)(eax);
         rsi += (rcx * 2);
-        if (eax > ebx /* signed */) goto loc_ADDR;
-        ebx -= eax;
+        ebx -= 0;
         rdi += 8;
         rax = off_140029790;
     } while (rdi < rax /* signed */);

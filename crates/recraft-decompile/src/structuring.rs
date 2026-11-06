@@ -5549,42 +5549,37 @@ const MAX_FORWARD_SKIP: usize = 64;
 /// has exactly one reference.
 fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
     const MAX_TAIL: usize = 20;
+    const MAX_REFERENCES: usize = 2;
     let mut folded = 0usize;
     let mut attempts = 0usize;
     while attempts < 16 {
         attempts += 1;
-        let mut references: HashMap<u64, usize> = HashMap::new();
-        for line in lines.iter() {
+        // Every jump to a label, in a deterministic order.
+        let mut references: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+        for (index, line) in lines.iter().enumerate() {
             if let Some(target) = goto_target(&line.text) {
-                *references.entry(target).or_default() += 1;
+                references.entry(target).or_default().push(index);
             }
         }
         let mut candidate = None;
-        for index in 0..lines.len() {
-            let text = lines[index].text.trim();
-            if !text.starts_with("goto loc_") || conditional_goto(text).is_some() {
-                continue;
-            }
-            let Some(target) = goto_target(text) else {
-                continue;
-            };
-            if references.get(&target).copied().unwrap_or(0) != 1 {
+        for (target, sites) in &references {
+            if sites.is_empty() || sites.len() > MAX_REFERENCES {
                 continue;
             }
             let label_text = format!("loc_{target:x}:");
             let Some(label) = lines.iter().position(|line| line.text.trim() == label_text) else {
                 continue;
             };
-            if label >= index {
+            if sites.iter().any(|site| *site <= label) {
                 continue;
             }
-            candidate = Some((index, label));
+            candidate = Some((label, sites.clone()));
             break;
         }
-        let Some((index, label)) = candidate else {
+        let Some((label, sites)) = candidate else {
             break;
         };
-        // The label's block must close before the jump: that is what makes the region a
+        // The label's block must close before the jumps: that is what makes the region a
         // shared tail rather than a plain straight-line jump.
         let mut depth = 0isize;
         let mut end = None;
@@ -5609,7 +5604,7 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
         let Some(end) = end else {
             break;
         };
-        if end <= label + 1 || end - label - 1 > MAX_TAIL || end > index {
+        if end <= label + 1 || end - label - 1 > MAX_TAIL || sites.iter().any(|site| *site < end) {
             break;
         }
         let tail: Vec<String> = lines[label + 1..end]
@@ -5624,34 +5619,37 @@ fn split_shared_tail_into_branches(lines: &mut Vec<PseudoLine>) -> usize {
                 && !trimmed.ends_with("continue;")
                 && !trimmed.starts_with("case ")
                 && trimmed != "default:"
-                && !trimmed.starts_with("return ")
         });
         if !copyable {
             break;
         }
         let source_indent = crate::structuring::leading_spaces(&lines[label].text);
-        let target_indent = leading_spaces(&lines[index].text);
-        let shift = target_indent as isize - source_indent as isize;
-        let mut inserted = Vec::with_capacity(tail.len());
-        for text in tail {
-            let text = if shift > 0 {
-                format!("{}{text}", " ".repeat(shift as usize))
-            } else if shift < 0 {
-                let cut = (-shift) as usize;
-                text.get(cut..).unwrap_or(&text).to_owned()
-            } else {
-                text
-            };
-            inserted.push(PseudoLine {
-                addr: lines[index].addr,
-                text,
-            });
+        // Copy into every arm that jumps here, last first so the earlier indices stay valid.
+        for site in sites.iter().rev() {
+            let target_indent = leading_spaces(&lines[*site].text);
+            let shift = target_indent as isize - source_indent as isize;
+            let inserted: Vec<PseudoLine> = tail
+                .iter()
+                .map(|text| {
+                    let text = if shift > 0 {
+                        format!("{}{text}", " ".repeat(shift as usize))
+                    } else if shift < 0 {
+                        text.get((-shift) as usize..).unwrap_or(text).to_owned()
+                    } else {
+                        text.clone()
+                    };
+                    PseudoLine {
+                        addr: lines[*site].addr,
+                        text,
+                    }
+                })
+                .collect();
+            let count = inserted.len();
+            lines.splice(*site..*site, inserted);
+            lines.remove(*site + count);
+            folded += 1;
         }
-        let count = inserted.len();
-        lines.splice(index..index, inserted);
-        lines.remove(index + count);
         lines.remove(label);
-        folded += 1;
     }
     folded
 }
@@ -12400,7 +12398,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_tail_with_two_references_keeps_its_label() {
+    fn a_shared_tail_with_two_references_is_copied_into_both() {
         let mut lines = vec![
             test_line("    if (a) {"),
             test_line("        loc_20:"),
@@ -12412,7 +12410,16 @@ mod tests {
             test_line("        goto loc_20;"),
             test_line("    }"),
         ];
-        assert_eq!(split_shared_tail_into_branches(&mut lines), 0);
+        assert_eq!(split_shared_tail_into_branches(&mut lines), 2);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("goto loc_20;"), "{text}");
+        assert!(!text.contains("loc_20:"), "{text}");
+        // The original tail plus one copy per reference.
+        assert_eq!(text.matches("tail = 2;").count(), 3, "{text}");
     }
 
     #[test]
