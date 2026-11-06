@@ -450,6 +450,7 @@ fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Res
         let mut changed = fold_backward_gotos_into_loops(&mut lines);
         changed += split_shared_tail_into_branches(&mut lines);
         changed += fold_short_forward_gotos(&mut lines);
+        changed += wrap_backward_jumps_in_loops(&mut lines);
         if changed == 0 {
             break;
         }
@@ -5666,6 +5667,131 @@ fn fold_terminal_tail_jumps(lines: &mut Vec<PseudoLine>) -> usize {
         for offset in (label..label + tail.len() + 1).rev() {
             lines.remove(offset);
         }
+        folded += 1;
+    }
+    folded
+}
+
+/// Wrap a backward jump that sits inside a nested block in a `while (1)` loop.
+///
+/// `fold_backward_gotos_into_loops` needs the latch at the label's own indentation. A latch
+/// inside an `if` (the common `if (c) goto header;` inside the loop body) cannot become a
+/// `do … while`, but the whole region from the label to the end of its block can: the jump
+/// becomes `continue` and the region runs under `while (1)`. The region must end the path
+/// (`return`/`goto`) and must not use `break`/`continue`, which would rebind to the new loop.
+fn wrap_backward_jumps_in_loops(lines: &mut Vec<PseudoLine>) -> usize {
+    let mut folded = 0usize;
+    let mut attempts = 0usize;
+    while attempts < 8 {
+        attempts += 1;
+        let mut labels: BTreeMap<u64, usize> = BTreeMap::new();
+        for (index, line) in lines.iter().enumerate() {
+            let text = line.text.trim();
+            if let Some(address) = text
+                .strip_suffix(':')
+                .and_then(|label| label.strip_prefix("loc_"))
+                .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+            {
+                labels.insert(address, index);
+            }
+        }
+        let mut candidate: Option<(usize, usize, Vec<usize>)> = None;
+        for (address, label) in &labels {
+            // Only a function-level label: its region runs to the end of the body.
+            if leading_spaces(&lines[*label].text) != 4 {
+                continue;
+            }
+            let mut depth = 0isize;
+            let mut end = lines.len();
+            let mut quoted = false;
+            for (offset, line) in lines.iter().enumerate().skip(*label + 1) {
+                let mut escaped = false;
+                for ch in line.text.chars() {
+                    if quoted {
+                        if escaped {
+                            escaped = false;
+                        } else if ch == '\\' {
+                            escaped = true;
+                        } else if ch == '"' {
+                            quoted = false;
+                        }
+                        continue;
+                    }
+                    match ch {
+                        '"' => quoted = true,
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth < 0 {
+                                end = offset;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if depth < 0 {
+                    break;
+                }
+            }
+            // A huge region would indent thousands of lines for one jump: not worth it.
+            if end <= *label + 2 || end - *label > 200 {
+                continue;
+            }
+            let sites: Vec<usize> = (0..lines.len())
+                .filter(|index| goto_target(&lines[*index].text) == Some(*address))
+                .collect();
+            if sites.is_empty() || sites.iter().any(|site| *site <= *label || *site >= end) {
+                continue;
+            }
+            let region = &lines[*label + 1..end];
+            if region.iter().any(|line| {
+                let text = line.text.trim();
+                text.ends_with("break;") || text.ends_with("continue;")
+            }) {
+                continue;
+            }
+            let Some(last) = region
+                .iter()
+                .rev()
+                .find(|line| !line.text.trim().is_empty())
+            else {
+                continue;
+            };
+            let text = last.text.trim();
+            if !(text.starts_with("return") || text.starts_with("goto ")) {
+                continue;
+            }
+            candidate = Some((*label, end, sites));
+            break;
+        }
+        let Some((label, end, sites)) = candidate else {
+            break;
+        };
+        let indent = leading_spaces(&lines[label].text);
+        for site in sites.iter().rev() {
+            let site_indent = leading_spaces(&lines[*site].text);
+            lines[*site].text = format!("{}continue;", " ".repeat(site_indent));
+        }
+        for line in &mut lines[label + 1..end] {
+            line.text.insert_str(0, "    ");
+        }
+        let addr = lines[label].addr;
+        lines.insert(
+            label + 1,
+            PseudoLine {
+                addr,
+                text: format!("{}while (1) {{", " ".repeat(indent)),
+            },
+        );
+        lines.insert(
+            end + 1,
+            PseudoLine {
+                addr,
+                text: format!("{}}}", " ".repeat(indent)),
+            },
+        );
+        lines.remove(label);
         folded += 1;
     }
     folded
@@ -12554,6 +12680,42 @@ mod tests {
         ];
         assert_eq!(fold_short_forward_gotos(&mut lines), 0);
         assert!(lines[0].text.contains("goto loc_20;"));
+    }
+
+    #[test]
+    fn a_latch_inside_an_if_becomes_a_while_loop() {
+        let mut lines = vec![
+            test_line("    v1 = 1;"),
+            test_line("    loc_20:"),
+            test_line("    v1 -= 1;"),
+            test_line("    if (v2 != 0) {"),
+            test_line("        if (v1 != 0) goto loc_20;"),
+            test_line("    }"),
+            test_line("    return 0;"),
+        ];
+        assert_eq!(wrap_backward_jumps_in_loops(&mut lines), 1);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("while (1) {"), "{text}");
+        assert!(text.contains("continue;"), "{text}");
+        assert!(!text.contains("goto loc_20;"), "{text}");
+        assert!(!text.contains("loc_20:"), "{text}");
+    }
+
+    #[test]
+    fn a_region_that_can_fall_through_keeps_its_jump() {
+        let mut lines = vec![
+            test_line("    loc_20:"),
+            test_line("    v1 -= 1;"),
+            test_line("    if (v2 != 0) {"),
+            test_line("        if (v1 != 0) goto loc_20;"),
+            test_line("    }"),
+            test_line("    v3 = 1;"),
+        ];
+        assert_eq!(wrap_backward_jumps_in_loops(&mut lines), 0);
     }
 
     #[test]
