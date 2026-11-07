@@ -3,14 +3,18 @@
 
 //! Model Context Protocol server exposing the session API as tools and resources.
 //!
-//! Transport: newline-delimited JSON-RPC 2.0 over stdio (MCP stdio transport). The
-//! server is **read-only** in this milestone: every tool observes the project, never
-//! mutates it. Write tools (`rename`, `set_comment`, `apply_type`, ...) arrive with the
-//! propose/apply protocol in M3.
+//! Transport: newline-delimited JSON-RPC 2.0 over stdio (MCP stdio transport), plus the
+//! optional HTTP mode. The server is **read-only by default**: `--write` opts into the
+//! journaled write tools (`rename`, `set_comment`, `set_prototype`, `apply_type`,
+//! `define_function`) and `undo`, so a plain `serve-mcp` never mutates the project and
+//! every enabled write stays revertible.
 //!
-//! Tools: `list_functions`, `get_disassembly`, `get_pseudocode`, `xrefs_to`,
+//! Read tools: `list_functions`, `get_disassembly`, `get_pseudocode`, `xrefs_to`,
 //! `xrefs_from`, `list_strings`, `list_imports`, `callgraph`, `search_bytes`,
 //! `function_summary`.
+//!
+//! Write tools (`--write` only): `rename`, `set_comment`, `set_prototype`, `apply_type`,
+//! `define_function`, `undo`.
 //!
 //! Resources: `recraft://project/{id}/functions|strings|imports` and
 //! `recraft://project/{id}/pseudocode/{func}`.
@@ -27,20 +31,38 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use recraft_common::{Address, Error, Result};
-use recraft_core::Session;
+use recraft_core::{Command, CommentKind, Effect, Session};
 use serde_json::{Value, json};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 /// Protocol revisions this server speaks; `initialize` echoes the client's choice when it is
 /// one of these, and falls back to [`PROTOCOL_VERSION`] otherwise.
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2024-11-05", "2025-06-18"];
-/// Server instructions. Clients copy this into the system prompt, so it states the read-only
-/// contract and the truncation convention rather than describing the project.
-const SERVER_INSTRUCTIONS: &str = "ReCraft serves one read-only reverse-engineering project. \
+/// Server instructions. Clients copy this into the system prompt, so it states the
+/// read-only contract and the truncation convention rather than describing the project.
+const SERVER_INSTRUCTIONS_READ_ONLY: &str = "ReCraft serves one read-only reverse-engineering project. \
 Start with list_functions (its filter is a case-insensitive name substring), then \
 function_summary or get_pseudocode for one function; addresses accept 0x hex, decimal, a \
 symbol name, or 'entry'. Large payloads report truncated:true together with the untruncated \
 size; narrow the query or raise maxLines/maxBytes instead of assuming the result is complete.";
+/// Instructions for `--write`: same query guidance, plus the mutation contract.
+const SERVER_INSTRUCTIONS_WRITABLE: &str = "ReCraft serves one reverse-engineering project with \
+read tools and journaled write tools. Query with list_functions (case-insensitive name \
+substring), function_summary or get_pseudocode; addresses accept 0x hex, decimal, a symbol \
+name, or 'entry'. Write tools (rename, set_comment, set_prototype, apply_type, \
+define_function) mutate user data through the same command bus as the GUI: every call is \
+applied immediately and recorded in the project journal, and undo reverts the newest change. \
+Prefer reading first (pseudocode/strings/xrefs) and use a short, specific name; confirm with \
+list_functions or get_pseudocode after a write. Large payloads report \
+truncated:true; narrow the query or raise maxLines/maxBytes.";
+
+fn instructions(write: bool) -> &'static str {
+    if write {
+        SERVER_INSTRUCTIONS_WRITABLE
+    } else {
+        SERVER_INSTRUCTIONS_READ_ONLY
+    }
+}
 /// Default `get_pseudocode` caps. A single L2 function in notepad.exe renders 9 855 lines
 /// (~1.5 MB), which exceeds what most MCP clients accept as one tool result.
 const DEFAULT_PSEUDOCODE_MAX_LINES: usize = 2000;
@@ -57,10 +79,22 @@ type ToolResult = std::result::Result<Value, String>;
 pub struct McpServer {
     session: Session,
     project_id: String,
+    /// `true` when `--write` enabled the journaled write tools.
+    write: bool,
 }
 
 impl McpServer {
+    /// Open read-only (the default): write tools are not registered at all.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_mode(path, false)
+    }
+
+    /// Open with the journaled write tools enabled (`serve-mcp --write`).
+    pub fn open_writable(path: &Path) -> Result<Self> {
+        Self::open_mode(path, true)
+    }
+
+    fn open_mode(path: &Path, write: bool) -> Result<Self> {
         let session = Session::open(path)?;
         let project_id = session
             .path()
@@ -70,7 +104,13 @@ impl McpServer {
         Ok(McpServer {
             session,
             project_id,
+            write,
         })
+    }
+
+    /// Whether this server exposes the write tools.
+    pub const fn is_writable(&self) -> bool {
+        self.write
     }
 
     /// Serve newline-delimited JSON-RPC on stdin/stdout until EOF.
@@ -136,12 +176,12 @@ impl McpServer {
                         "resources": {"subscribe": false, "listChanged": false},
                     },
                     "serverInfo": {"name": "recraft", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": SERVER_INSTRUCTIONS,
+                    "instructions": instructions(self.write),
                 }))
             }
             "notifications/initialized" | "notifications/cancelled" => return None,
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools": tools()})),
+            "tools/list" => Ok(json!({"tools": tools(self.write)})),
             "tools/call" => self.call_tool(&params),
             "resources/list" => Ok(json!({"resources": self.resources()})),
             "resources/templates/list" => {
@@ -169,6 +209,15 @@ impl McpServer {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        if is_write_tool(name) && !self.write {
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": "error: write tools are disabled for this server; start it with `serve-mcp --write` to enable them.",
+                }],
+                "isError": true,
+            }));
+        }
         let outcome: ToolResult = match name {
             "list_functions" => self.tool_list_functions(&arguments),
             "get_disassembly" => self.tool_disassembly(&arguments),
@@ -180,6 +229,12 @@ impl McpServer {
             "callgraph" => self.tool_callgraph(&arguments),
             "search_bytes" => self.tool_search(&arguments),
             "function_summary" => self.tool_summary(&arguments),
+            "rename" => self.tool_rename(&arguments),
+            "set_comment" => self.tool_set_comment(&arguments),
+            "set_prototype" => self.tool_set_prototype(&arguments),
+            "apply_type" => self.tool_apply_type(&arguments),
+            "define_function" => self.tool_define_function(&arguments),
+            "undo" => self.tool_undo(&arguments),
             other => return Err((-32602, format!("unknown tool: {other}"))),
         };
         match outcome {
@@ -634,6 +689,148 @@ impl McpServer {
         }))
     }
 
+    // ------------------------------------------------------- write tools ----
+    //
+    // Registered only with `--write`. Each tool resolves its arguments, builds one
+    // `Command`, and applies it through `Session::execute`, which journals the inverse
+    // in the same transaction as the change. The result reports the previous value and
+    // the dirty ranges, so the caller can verify the change or call `undo`.
+
+    fn tool_rename(&mut self, arguments: &Value) -> ToolResult {
+        let addr = self
+            .resolve_address(arguments.get("addr"))
+            .map_err(|e| e.to_string())?;
+        let name = optional_text(arguments, "name")?;
+        let previous = self.session.name_at(addr).map_err(|e| e.to_string())?;
+        let effect = self
+            .session
+            .execute(Command::Rename {
+                addr,
+                name: name.clone(),
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(change_payload("rename", addr, previous, name, &effect))
+    }
+
+    fn tool_set_comment(&mut self, arguments: &Value) -> ToolResult {
+        let addr = self
+            .resolve_address(arguments.get("addr"))
+            .map_err(|e| e.to_string())?;
+        let kind = comment_kind(arguments)?;
+        let text = optional_text(arguments, "text")?;
+        let previous = self
+            .session
+            .comment_at(addr, kind)
+            .map_err(|e| e.to_string())?;
+        let effect = self
+            .session
+            .execute(Command::SetComment {
+                addr,
+                kind,
+                text: text.clone(),
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(change_payload("set_comment", addr, previous, text, &effect))
+    }
+
+    fn tool_set_prototype(&mut self, arguments: &Value) -> ToolResult {
+        let addr = self
+            .resolve_address(arguments.get("addr"))
+            .map_err(|e| e.to_string())?;
+        let text = optional_text(arguments, "text")?;
+        let previous = self.session.prototype_at(addr).map_err(|e| e.to_string())?;
+        let effect = self
+            .session
+            .execute(Command::SetPrototype {
+                addr,
+                text: text.clone(),
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(change_payload(
+            "set_prototype",
+            addr,
+            previous,
+            text,
+            &effect,
+        ))
+    }
+
+    fn tool_apply_type(&mut self, arguments: &Value) -> ToolResult {
+        let func = self
+            .resolve_address(arguments.get("func"))
+            .map_err(|e| e.to_string())?;
+        let slot = arguments
+            .get("slot")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "apply_type requires `slot` (0 = first argument)".to_owned())?;
+        let slot =
+            u8::try_from(slot).map_err(|_| format!("slot {slot} is out of range (0-255)"))?;
+        let struct_name = optional_text(arguments, "struct")?;
+        let previous = self
+            .session
+            .arg_type(func, slot)
+            .map_err(|e| e.to_string())?;
+        let effect = self
+            .session
+            .execute(Command::ApplyType {
+                func,
+                slot,
+                struct_name: struct_name.clone(),
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(change_payload(
+            "apply_type",
+            func,
+            previous,
+            struct_name,
+            &effect,
+        ))
+    }
+
+    fn tool_define_function(&mut self, arguments: &Value) -> ToolResult {
+        let start = self
+            .resolve_address(arguments.get("start"))
+            .map_err(|e| e.to_string())?;
+        let end = self
+            .resolve_address(arguments.get("end"))
+            .map_err(|e| e.to_string())?;
+        if end <= start {
+            return Err(format!(
+                "define_function needs end > start ({} >= {})",
+                hex(end),
+                hex(start)
+            ));
+        }
+        let previous_end = self.session.func_at(start).map_err(|e| e.to_string())?;
+        let effect = self
+            .session
+            .execute(Command::DefineFunc { start, end })
+            .map_err(|e| e.to_string())?;
+        Ok(json!({
+            "tool": "define_function",
+            "addr": hex(start),
+            "previous_end": previous_end.map(hex),
+            "end": hex(end),
+            "dirty": dirty_ranges(&effect),
+            "undo": true,
+            "note": "applied to the project journal; call undo to revert",
+        }))
+    }
+
+    fn tool_undo(&mut self, _arguments: &Value) -> ToolResult {
+        let effect = self.session.undo().map_err(|e| e.to_string())?;
+        Ok(match effect {
+            Some(effect) => json!({
+                "undone": true,
+                "dirty": dirty_ranges(&effect),
+            }),
+            None => json!({
+                "undone": false,
+                "message": "nothing to undo",
+            }),
+        })
+    }
+
     // --------------------------------------------------------- resources ----
 
     fn resources(&self) -> Vec<Value> {
@@ -811,6 +1008,67 @@ fn bytes_equal_ct(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
+/// Tools that mutate the project; only registered (and callable) with `--write`.
+fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "rename" | "set_comment" | "set_prototype" | "apply_type" | "define_function" | "undo"
+    )
+}
+
+/// Read an optional string argument: missing is an error, `null` means "clear".
+fn optional_text(arguments: &Value, key: &str) -> std::result::Result<Option<String>, String> {
+    match arguments.get(key) {
+        None => Err(format!("missing `{key}` (a string, or null to clear)")),
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(format!("`{key}` must be a string or null")),
+    }
+}
+
+fn comment_kind(arguments: &Value) -> std::result::Result<CommentKind, String> {
+    match arguments
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("regular")
+    {
+        "regular" => Ok(CommentKind::Regular),
+        "repeatable" => Ok(CommentKind::Repeatable),
+        "anterior" => Ok(CommentKind::Anterior),
+        other => Err(format!(
+            "unknown comment kind {other:?}; use regular, repeatable or anterior"
+        )),
+    }
+}
+
+/// Format the ranges a command invalidated, e.g. `["0x140001008..+1"]`.
+fn dirty_ranges(effect: &Effect) -> Vec<String> {
+    effect
+        .dirty
+        .iter()
+        .map(|range| format!("{}..+{}", hex(range.start), range.len()))
+        .collect()
+}
+
+/// Shared shape of a single write result: previous value, new value, dirty ranges.
+fn change_payload(
+    tool: &str,
+    addr: Address,
+    previous: Option<String>,
+    value: Option<String>,
+    effect: &Effect,
+) -> Value {
+    json!({
+        "tool": tool,
+        "addr": hex(addr),
+        "previous": previous,
+        "value": value,
+        "dirty": dirty_ranges(effect),
+        "undo": true,
+        "note": "applied to the project journal; call undo to revert",
+    })
+}
+
 fn xref_kind_name(kind: i64) -> &'static str {
     match kind {
         1 => "call",
@@ -875,8 +1133,8 @@ impl<'a> FunctionIndex<'a> {
 
 // ---------------------------------------------------------------- tools ----
 
-fn tools() -> Vec<Value> {
-    vec![
+fn tools(write: bool) -> Vec<Value> {
+    let mut tools = vec![
         json!({
             "name": "list_functions",
             "description": "List discovered functions with names and ranges. `filter` runs before `limit`; the result reports `total` and `truncated`.",
@@ -980,25 +1238,114 @@ fn tools() -> Vec<Value> {
                 "properties": {"addr": {"type": ["integer", "string"]}},
             },
         }),
+    ];
+    if write {
+        tools.extend(write_tools());
+    }
+    tools
+}
+
+/// Write tools, registered only with `--write`. Every call mutates the project database
+/// through the journaled command bus, so it is undoable.
+fn write_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "rename",
+            "description": "Rename the address (function, data, import) through the journaled command bus. `name: null` clears the user name. Fails on duplicate or reserved names. Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"], "description": "Address, hex string, name, or 'entry'."},
+                    "name": {"type": ["string", "null"], "description": "New name; null clears it."},
+                },
+                "required": ["addr", "name"],
+            },
+        }),
+        json!({
+            "name": "set_comment",
+            "description": "Set or clear a comment at an address. `text: null` deletes it. Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "text": {"type": ["string", "null"]},
+                    "kind": {"type": "string", "enum": ["regular", "repeatable", "anterior"], "description": "Comment slot; default regular."},
+                },
+                "required": ["addr", "text"],
+            },
+        }),
+        json!({
+            "name": "set_prototype",
+            "description": "Set or clear the C prototype of a function. `text: null` deletes it. Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "text": {"type": ["string", "null"], "description": "C declaration, e.g. 'int __cdecl sub_140001008(int a, char *b)'."},
+                },
+                "required": ["addr", "text"],
+            },
+        }),
+        json!({
+            "name": "apply_type",
+            "description": "Bind a user-defined struct layout to a function argument slot (0 = first argument). `struct: null` clears the binding; the struct must already exist (define it in the GUI first). Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "func": {"type": ["integer", "string"]},
+                    "slot": {"type": "integer", "minimum": 0, "maximum": 255},
+                    "struct": {"type": ["string", "null"]},
+                },
+                "required": ["func", "slot", "struct"],
+            },
+        }),
+        json!({
+            "name": "define_function",
+            "description": "Define (or resize) a function at `start` with the given exclusive `end`. Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": ["integer", "string"]},
+                    "end": {"type": ["integer", "string"]},
+                },
+                "required": ["start", "end"],
+            },
+        }),
+        json!({
+            "name": "undo",
+            "description": "Revert the newest journaled command (the same undo the GUI uses). Reports `undone: false` when the journal is empty.",
+            "inputSchema": {"type": "object"},
+        }),
     ]
 }
 
 // ------------------------------------------------------------------ HTTP -----
 
-/// Serve JSON-RPC over HTTP (`POST /mcp`) with bearer-token authentication.
+/// Serve JSON-RPC over HTTP (`POST /mcp`) with bearer-token authentication (read-only).
 pub fn serve_http(project: &Path, bind: &str, token: &str) -> Result<()> {
-    let listener = TcpListener::bind(bind).map_err(Error::from)?;
-    let local = listener.local_addr().map_err(Error::from)?;
-    eprintln!("[mcp] http listening on http://{local}/mcp (bearer token required)");
-    serve_http_listener(listener, project.to_path_buf(), token.to_owned())
+    serve_http_mode(project, bind, token, false)
 }
 
-pub(crate) fn serve_http_listener(
+/// Same as [`serve_http`], with `--write` enabling the journaled write tools.
+pub fn serve_http_writable(project: &Path, bind: &str, token: &str) -> Result<()> {
+    serve_http_mode(project, bind, token, true)
+}
+
+fn serve_http_mode(project: &Path, bind: &str, token: &str, write: bool) -> Result<()> {
+    let listener = TcpListener::bind(bind).map_err(Error::from)?;
+    let local = listener.local_addr().map_err(Error::from)?;
+    let mode = if write { "write" } else { "read-only" };
+    eprintln!("[mcp] http listening on http://{local}/mcp ({mode}, bearer token required)");
+    serve_http_listener_mode(listener, project.to_path_buf(), token.to_owned(), write)
+}
+
+pub(crate) fn serve_http_listener_mode(
     listener: TcpListener,
     project: PathBuf,
     token: String,
+    write: bool,
 ) -> Result<()> {
-    let mut server = McpServer::open(&project)?;
+    let mut server = McpServer::open_mode(&project, write)?;
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else {
             continue;
@@ -1140,6 +1487,21 @@ mod tests {
         Some(server)
     }
 
+    fn notepad_writable() -> Option<(McpServer, PathBuf)> {
+        let bytes = std::fs::read("C:/Windows/System32/notepad.exe").ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("write.rcraft");
+        {
+            let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+            let result = recraft_analysis::analyze(&mut session).unwrap();
+            recraft_analysis::persist(&mut session, &result).unwrap();
+        }
+        let server = McpServer::open_writable(&project).unwrap();
+        // The project file must outlive the server; the process exits after the test.
+        std::mem::forget(dir);
+        Some((server, project))
+    }
+
     fn notepad_project_path() -> Option<PathBuf> {
         let bytes = std::fs::read("C:/Windows/System32/notepad.exe").ok()?;
         let dir = tempfile::tempdir().unwrap();
@@ -1191,7 +1553,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let token = "secret-token";
         std::thread::spawn(move || {
-            let _ = serve_http_listener(listener, project, token.to_owned());
+            let _ = serve_http_listener_mode(listener, project, token.to_owned(), false);
         });
 
         let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
@@ -1552,5 +1914,142 @@ mod tests {
         assert!(!bearer_matches(Some("Bearer s3cret2"), "s3cret"));
         assert!(!bearer_matches(Some("Basic s3cret"), "s3cret"));
         assert!(bytes_equal_ct(b"", b""));
+    }
+
+    fn tool_names(server: &mut McpServer) -> Vec<String> {
+        let response = call(server, "tools/list", json!({}));
+        response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    fn first_function(server: &mut McpServer) -> String {
+        let functions = tool_json(server, "list_functions", json!({"limit": 1}));
+        functions["functions"][0]["start"]
+            .as_str()
+            .expect("first function start")
+            .to_owned()
+    }
+
+    #[test]
+    fn write_tools_are_opt_in() {
+        let Some(mut read_only) = notepad_project() else {
+            return;
+        };
+        let names = tool_names(&mut read_only);
+        assert!(!names.iter().any(|name| name == "rename"), "{names:?}");
+        assert!(!names.iter().any(|name| name == "undo"), "{names:?}");
+
+        let Some((mut writable, _project)) = notepad_writable() else {
+            return;
+        };
+        let names = tool_names(&mut writable);
+        for tool in [
+            "rename",
+            "set_comment",
+            "set_prototype",
+            "apply_type",
+            "define_function",
+            "undo",
+        ] {
+            assert!(
+                names.iter().any(|name| name == tool),
+                "missing write tool {tool}: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_server_rejects_write_tools() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let response = call(
+            &mut server,
+            "tools/call",
+            json!({"name": "rename", "arguments": {"addr": "entry", "name": "x"}}),
+        );
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(text.contains("--write"), "{text}");
+    }
+
+    #[test]
+    fn rename_is_journaled_and_undoable() {
+        let Some((mut server, project)) = notepad_writable() else {
+            return;
+        };
+        let addr = first_function(&mut server);
+        let result = tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": addr, "name": "mcp_renamed"}),
+        );
+        assert_eq!(result["value"], "mcp_renamed", "{result}");
+        assert_eq!(result["undo"], true, "{result}");
+        let after = tool_json(
+            &mut server,
+            "list_functions",
+            json!({"filter": "mcp_renamed"}),
+        );
+        assert_eq!(after["total"], 1, "{after}");
+
+        let undone = tool_json(&mut server, "undo", json!({}));
+        assert_eq!(undone["undone"], true, "{undone}");
+        let after = tool_json(
+            &mut server,
+            "list_functions",
+            json!({"filter": "mcp_renamed"}),
+        );
+        assert_eq!(after["total"], 0, "{after}");
+        drop(server);
+
+        // Both the rename and its undo reached the project file.
+        let session = Session::open(&project).unwrap();
+        assert!(session.addr_of_name("mcp_renamed").unwrap().is_none());
+    }
+
+    #[test]
+    fn comment_and_prototype_round_trip() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let addr = first_function(&mut server);
+        let comment = tool_json(
+            &mut server,
+            "set_comment",
+            json!({"addr": addr, "text": "entry point"}),
+        );
+        assert_eq!(comment["value"], "entry point", "{comment}");
+
+        let prototype = tool_json(
+            &mut server,
+            "set_prototype",
+            json!({"addr": addr, "text": "int __cdecl entry(void)"}),
+        );
+        assert_eq!(prototype["value"], "int __cdecl entry(void)", "{prototype}");
+
+        // `null` clears the slot and reports what was there.
+        let cleared = tool_json(
+            &mut server,
+            "set_comment",
+            json!({"addr": addr, "text": null}),
+        );
+        assert_eq!(cleared["previous"], "entry point", "{cleared}");
+        assert_eq!(cleared["value"], Value::Null, "{cleared}");
+    }
+
+    #[test]
+    fn undo_with_an_empty_journal_reports_nothing_to_do() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let undone = tool_json(&mut server, "undo", json!({}));
+        assert_eq!(undone["undone"], false, "{undone}");
     }
 }

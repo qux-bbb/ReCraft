@@ -421,11 +421,11 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 
 - 传输：stdio 优先，HTTP 可选（带 token 鉴权）
 - 读工具：`list_functions`、`get_disassembly`、`get_pseudocode`、`xrefs_to/from`、`list_strings`、`list_imports`、`callgraph`、`search_bytes`、`function_summary`
-- 写工具（**propose/apply 两段式**）：`rename`、`set_comment`、`set_prototype`、`define_function`、`apply_type`
+- 写工具（`serve-mcp --write` 显式开启，默认只读）：`rename`、`set_comment`、`set_prototype`、`define_function`、`apply_type`、`undo`
 - 资源：`recraft://project/{id}/functions|strings|imports|pseudocode/{func}`
 - 提示模板：恶意样本 triage 报告、CTF 解题大纲
 
-写操作协议：LLM 只能产生 `Proposal`（含证据地址 + 置信度），UI 展示 diff，人工确认后走 Command 总线。**禁止静默改库**。
+写操作协议：写工具直接经 Command 总线应用并写 journal（可 undo），进程级 `--write` 即人工授权；AI 的批量命名建议仍然走 `Proposal`（含证据地址 + 置信度）→ UI 展示 diff → 人工确认的两段式，二者共用同一条命令总线。
 
 ### 9.2 AI 功能（v1）
 

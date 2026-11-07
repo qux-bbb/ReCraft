@@ -1,17 +1,18 @@
 # MCP server（read-only，M2）
 
 ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户端（Claude Desktop、
-Cursor、自研 agent 等）。MCP 侧**只有只读工具 + 资源**；写操作（`rename`、`set_comment`、
-`set_prototype`、`define_function`、`apply_type`）不走 MCP，由 UI/CLI 的
-**propose/apply 两段式**完成——LLM 只产生带证据地址与置信度的 Proposal，人工确认后经命令
-总线写入且可 undo，见 [ADR-008](adr/ADR-008-mcp-propose-apply.md)。
+Cursor、自研 agent 等）。默认只暴露只读工具 + 资源；加 `--write` 后额外暴露**写工具**
+（`rename`、`set_comment`、`set_prototype`、`apply_type`、`define_function` 和 `undo`），
+所有写操作走与 GUI 相同的 Command 总线并写入 journal，可以 undo 回退。写工具默认关闭，
+`serve-mcp` 不加 `--write` 时服务器对项目的访问是只读的。
 
 ## 启动
 
 ```powershell
 cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
 cargo run -p recraft-cli -- analyze notepad.rcraft
-cargo run -p recraft-cli -- serve-mcp notepad.rcraft
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft            # 只读
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft --write    # 只读 + 写工具
 ```
 
 传输：**stdio**，每条消息是一行 JSON-RPC 2.0（MCP stdio transport）。服务器只把
@@ -105,6 +106,30 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 | `search_bytes` | `hex?` 或 `ascii?`, `limit?` | `{hits:[{addr}],count,truncated}`（扫描可读映射段，1 MiB 分块） |
 | `function_summary` | `addr?` | 名字/范围/指令数/调用者/调用的函数/引用字符串/API 标签 |
 
+### 写工具（`--write`）
+
+写工具只在 `serve-mcp --write` 时注册；未开启时调用会在工具结果里返回 `isError: true`
+和一句 “write tools are disabled … `serve-mcp --write`”。
+
+| 工具 | 参数 | 说明 |
+|---|---|---|
+| `rename` | `addr`, `name`（`null` 清除） | 重命名函数/数据/导入；重名或保留名会被拒绝 |
+| `set_comment` | `addr`, `text`（`null` 清除）, `kind?`=`regular/repeatable/anterior` | 行内/引用/前置注释 |
+| `set_prototype` | `addr`, `text`（`null` 清除） | 函数 C 原型 |
+| `apply_type` | `func`, `slot`（0 = 第一个参数）, `struct`（`null` 清除） | 把已定义的结构体绑定到参数槽 |
+| `define_function` | `start`, `end`（不含端点） | 定义函数或调整范围 |
+| `undo` | — | 撤销 journal 中最新的那条命令 |
+
+每个写工具返回改动前后的值、脏范围和 undo 提示：
+
+```json
+{"tool":"rename","addr":"0x140001008","previous":"sub_140001008","value":"main_entry",
+ "dirty":["0x140001008..+1"],"undo":true,"note":"applied to the project journal; call undo to revert"}
+```
+
+语义与 GUI/CLI 完全一致：命令在同一个 SQLite 事务里写入并记录 inverse，`undo` 就是 GUI 的
+撤销。项目文件同时被 GUI 打开时，GUI 需要重新载入才能看到新名字/注释。
+
 **过滤与截断约定**：`filter` 先于 `limit` 生效——`limit` 只限制返回行数，不会截断扫描，
 所以命中项在表的任何位置都能被找到；列表型工具都报告 `truncated`，并在适用时给出
 `count`（实返行数）与 `total`（截断前的命中总数），`callgraph` 额外给出 `node_total`。
@@ -138,19 +163,21 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 
 ## 实现与测试
 
-- 代码：`crates/recraft-mcp`（`McpServer::open` / `handle_message` / `serve_stdio`）。
+- 代码：`crates/recraft-mcp`（`McpServer::open` / `open_writable` / `handle_message` /
+  `serve_stdio`）。
 - 测试：`cargo test -p recraft-mcp`（notepad 真实样本：initialize/tools/list/tools/call、
   resources/read、filter 先于 limit 的回归、伪代码截断上限、恒定时间 token 比较、未知方法与
-  未知工具的错误路径）。
+  未知工具的错误路径，以及 `--write` 的开关、rename 落库 + undo、comment/prototype 往返、
+  只读服务器拒绝写工具）。
 - E2E：`scripts/e2e.ps1` 第 11 步通过管道调用 `serve-mcp` 验证 initialize +
   `list_functions` + `resources/read`，并断言截断契约（`list_functions{limit:1}` 的
   `count/truncated/total`、`get_pseudocode{maxLines:1}` 的 `total_lines/truncated`）。
 
 ## 限制与后续
 
-- **只读**：所有工具不修改项目；写操作也不在这个服务器上——`rename`/注释/类型等由 UI/CLI 的
-  Proposal（证据地址 + 置信度）→ 人工确认 → Command 总线完成，见
-  [ADR-008](adr/ADR-008-mcp-propose-apply.md)。
+- **默认只读**：不加 `--write` 时所有工具都不修改项目。`--write` 打开的写工具走 Command
+  总线并写 journal，可 `undo`；它取代了早期“MCP 只读、写操作只走 propose/apply”的约定，
+  见 [ADR-014](adr/ADR-014-mcp-write-mode.md)（部分取代 [ADR-008](adr/ADR-008-mcp-propose-apply.md)）。
 - 无资源订阅（`resources/subscribe`）与 MCP 提示词模板（prompts）；HTTP 传输与 bearer
   鉴权已实现（见上）。
 - `search_bytes` 在 1 GiB 段上按需分块扫描，暂无通配符/正则；`callgraph` 基于已持久化

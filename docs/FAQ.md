@@ -52,8 +52,10 @@ DCO），不需要 CLA，也不做版权转让。
 
 ## 9. 有 MCP 吗？能接 Claude/Cursor 吗？
 
-有。`recraft-cli serve-mcp <project>` 通过 stdio 提供只读工具（反汇编、伪代码、xrefs、字符串、
-导入、调用图、字节搜索、函数摘要）与项目资源；配置示例见 [docs/DEMO.md](DEMO.md)。
+有。`recraft-cli serve-mcp <project>` 通过 stdio 提供反汇编、伪代码、xrefs、字符串、导入、
+调用图、字节搜索、函数摘要等只读工具与项目资源；加 `--write` 后再提供 `rename`、`set_comment`、
+`set_prototype`、`apply_type`、`define_function`、`undo` 写工具（走命令总线，每步可撤销）。
+配置示例见 [docs/DEMO.md](DEMO.md)。
 
 ## 10. 什么时候有公开预览？
 

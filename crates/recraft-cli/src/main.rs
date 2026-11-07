@@ -164,7 +164,8 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Serve the project over the Model Context Protocol (read-only tools).
+    /// Serve the project over the Model Context Protocol (read-only tools; `--write`
+    /// adds the journaled write tools).
     ServeMcp {
         project: PathBuf,
         /// Serve JSON-RPC over HTTP POST /mcp instead of stdio.
@@ -176,6 +177,10 @@ enum Commands {
         /// Bearer token for HTTP; generated and printed when omitted.
         #[arg(long)]
         token: Option<String>,
+        /// Enable the journaled write tools (rename, set_comment, set_prototype,
+        /// apply_type, define_function, undo).
+        #[arg(long)]
+        write: bool,
     },
     /// Execute a JSON batch script of edit commands.
     Batch {
@@ -534,6 +539,7 @@ fn run(cli: Cli) -> Result<()> {
             http,
             bind,
             token,
+            write,
         } => {
             if http {
                 let token = token.unwrap_or_else(generate_mcp_token);
@@ -541,7 +547,13 @@ fn run(cli: Cli) -> Result<()> {
                     return Err(recraft_common::Error::internal("empty MCP token"));
                 }
                 eprintln!("[mcp] token: {token}");
-                recraft_mcp::serve_http(&project, &bind, &token)
+                if write {
+                    recraft_mcp::serve_http_writable(&project, &bind, &token)
+                } else {
+                    recraft_mcp::serve_http(&project, &bind, &token)
+                }
+            } else if write {
+                recraft_mcp::McpServer::open_writable(&project)?.serve_stdio()
             } else {
                 recraft_mcp::McpServer::open(&project)?.serve_stdio()
             }

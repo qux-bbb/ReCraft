@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP can write, behind `--write`.** `recraft-cli serve-mcp <project> --write` registers
+  `rename`, `set_comment`, `set_prototype`, `apply_type`, `define_function` and `undo` next to
+  the read tools. Each write goes through the same journaled command bus as the GUI, so it is
+  recorded with its inverse and `undo` reverts it; without the flag the server stays read-only
+  and a write call returns `isError: true`. HTTP mode gained `serve_http_writable`. Tests cover
+  the opt-in, a rename that survives a reopen plus its undo, comment/prototype round-trips, and
+  the read-only rejection (ADR-014 partially supersedes ADR-008).
+
 - **The CRT startup call names `main` or `WinMain`.** A statically linked MSVC program has no
   entry symbol, but its startup calls the program entry in a fixed shape. Console programs get
   `argc` in `ecx` plus `argv`/`envp` in `rdx`/`r8`; GUI programs get `hInstance` in `rcx`,

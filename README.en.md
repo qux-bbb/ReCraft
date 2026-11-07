@@ -4,8 +4,9 @@
 
 > **Status: M3 complete, M4 (public preview) in progress.** Import/analyze PE32/PE32+
 > (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
-> struct-type writes through a journaled command bus with undo, MCP read-only server, and
-> provider-backed AI (explain / rename proposals / triage) with a propose-apply UI.
+> struct-type writes through a journaled command bus with undo, an MCP server (read-only
+> by default, `--write` enables the write tools), and provider-backed AI (explain / rename
+> proposals / triage) with a propose-apply UI.
 > Quality gates: corpus semantic coverage **97.4%**, structured rate **100%**; notepad
 > **99.6%** coverage and **96.6%** structured (489/506); 1 GiB
 > sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
@@ -27,7 +28,8 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 - **Provider required**: AI features use a configured LLM provider; prompts
   are redacted + budgeted, results cached and audited locally.
 - **MCP-native**: Claude/Cursor and other agents can query functions, pseudocode, xrefs,
-  strings, imports and call graphs through a read-only MCP server.
+  strings, imports and call graphs through an MCP server; `--write` also renames, comments
+  and sets prototypes, each step undoable.
 - **Built for triage**: API behaviour tagging, strings/xrefs, runtime symbol recovery
   (Go/Rust/C++), one-command triage with suspicious-function ranking.
 - **Honest engineering**: documented limitations, measured quality gates, reproducible
