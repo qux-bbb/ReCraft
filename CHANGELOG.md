@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One batch-script grammar for the CLI and MCP, and MCP can define structs.** The command
+  parser moved out of `recraft-cli` into `recraft-core::script` (`COMMAND_TYPES` +
+  `parse_command` + the shared `resolve_address`), so `recraft-cli batch` and the MCP `batch`
+  tool accept the same `{"type": ..., ...}` entries; MCP also still accepts the
+  `{tool, arguments}` pair. The grammar gained `define_function` (CLI batch could not express
+  it) and MCP gained a `define_struct` tool, which closes the "`apply_type` exists but the
+  layout can only be made in the GUI" gap. Single write tools build their command through the
+  same parser, so an argument shape lives in one place.
+
 ### Added
 
 - **Rendered pseudocode is cached in the project.** `get_pseudocode` stores its L2 text in the

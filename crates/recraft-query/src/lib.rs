@@ -321,24 +321,8 @@ pub fn resolve_address(session: &Session, value: Option<&Value>) -> Result<Addre
             .as_u64()
             .map(Address::new)
             .ok_or_else(|| Error::internal("address must be a u64")),
-        Value::String(raw) => {
-            let raw = raw.trim();
-            if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
-                return u64::from_str_radix(hex, 16)
-                    .map(Address::new)
-                    .map_err(|_| Error::internal(format!("bad hex address: {raw}")));
-            }
-            if let Ok(parsed) = raw.parse::<u64>() {
-                return Ok(Address::new(parsed));
-            }
-            if raw.eq_ignore_ascii_case("entry") {
-                return Ok(session.entry_point());
-            }
-            if let Some(addr) = session.addr_of_name(raw)? {
-                return Ok(addr);
-            }
-            Err(Error::internal(format!("unknown address or name: {raw}")))
-        }
+        // One syntax for every front end: CLI arguments, batch scripts and tools share it.
+        Value::String(raw) => recraft_core::resolve_address(session, raw),
         _ => Err(Error::internal("address must be a number or string")),
     }
 }

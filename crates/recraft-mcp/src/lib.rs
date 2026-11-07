@@ -239,6 +239,7 @@ impl McpServer {
                 "set_prototype" => self.tool_set_prototype(&arguments),
                 "apply_type" => self.tool_apply_type(&arguments),
                 "define_function" => self.tool_define_function(&arguments),
+                "define_struct" => self.tool_define_struct(&arguments),
                 "batch" => self.tool_batch(&arguments),
                 "undo" => self.tool_undo(&arguments),
                 other => return Err((-32602, format!("unknown tool: {other}"))),
@@ -1087,6 +1088,7 @@ mod tests {
             "set_prototype",
             "apply_type",
             "define_function",
+            "define_struct",
             "batch",
             "undo",
         ] {
@@ -1112,6 +1114,45 @@ mod tests {
     }
 
     #[test]
+    fn define_struct_then_apply_type_round_trip() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let first = first_function(&mut server);
+        let defined = tool_json(
+            &mut server,
+            "define_struct",
+            json!({"name": "HDR", "size": 16, "fields": ["0:hdr:u32", "4:code:u32"]}),
+        );
+        assert_eq!(defined["tool"], "define_struct", "{defined}");
+        assert_eq!(defined["name"], "HDR", "{defined}");
+        assert!(defined["seq"].as_u64().unwrap() >= 1, "{defined}");
+
+        // Defining a struct twice is a replace, not an error.
+        let replaced = tool_json(
+            &mut server,
+            "define_struct",
+            json!({"name": "HDR", "size": 32,
+                   "fields": [{"offset": 0, "name": "hdr", "kind": "u32"}]}),
+        );
+        assert_eq!(replaced["name"], "HDR", "{replaced}");
+
+        // The layout can now be bound to an argument slot; before this tool existed the
+        // server could only apply structs the GUI had defined.
+        let applied = tool_json(
+            &mut server,
+            "apply_type",
+            json!({"func": first, "slot": 0, "struct": "HDR"}),
+        );
+        assert_eq!(applied["value"], "HDR", "{applied}");
+
+        // Undo the binding, then the (re)definition.
+        tool_json(&mut server, "undo", json!({}));
+        let undone = tool_json(&mut server, "undo", json!({}));
+        assert_eq!(undone["undone"], true, "{undone}");
+    }
+
+    #[test]
     fn batch_applies_and_undoes_as_one_group() {
         let Some((mut server, _project)) = notepad_writable() else {
             return;
@@ -1124,13 +1165,20 @@ mod tests {
             &mut server,
             "batch",
             json!({"commands": [
-                {"tool": "rename", "arguments": {"addr": first, "name": "batch_one"}},
+                // Canonical batch-script grammar (same as `recraft-cli batch`).
+                {"type": "rename", "addr": first, "name": "batch_one"},
+                // The MCP-style pair is still accepted for convenience.
                 {"tool": "rename", "arguments": {"addr": second, "name": "batch_two"}},
-                {"tool": "set_comment", "arguments": {"addr": first, "text": "batch note"}},
+                {"type": "comment", "addr": first, "text": "batch note", "kind": "regular"},
             ]}),
         );
         assert_eq!(applied["count"], 3, "{applied}");
         assert!(applied["seq"].as_u64().unwrap() >= 3, "{applied}");
+        assert_eq!(
+            applied["commands"],
+            json!(["rename", "rename", "comment"]),
+            "{applied}"
+        );
 
         let named = tool_json(&mut server, "list_functions", json!({"filter": "batch_"}));
         assert_eq!(named["count"], 2, "{named}");

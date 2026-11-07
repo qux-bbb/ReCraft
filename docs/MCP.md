@@ -138,8 +138,28 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 | `set_prototype` | `addr`, `text`（`null` 清除） | 函数 C 原型 |
 | `apply_type` | `func`, `slot`（0 = 第一个参数）, `struct`（`null` 清除） | 把已定义的结构体绑定到参数槽 |
 | `define_function` | `start`, `end`（不含端点） | 定义函数或调整范围 |
-| `batch` | `commands: [{tool, arguments}]` | 一次应用多条写命令：要么全成功、要么全不落库，一条 `undo` 撤销整组 |
+| `define_struct` | `name`, `size`, `fields`（`"offset:name:kind"` 或 `{offset,name,kind}`） | 定义/替换结构体布局（`apply_type` 的前一半，MCP 现在能自己建布局） |
+| `batch` | `commands: [...]` | 一次应用多条命令：要么全成功、要么全不落库，一条 `undo` 撤销整组 |
 | `undo` | `seq?`, `dryRun?` | 撤销最新的命令或整组，并回报撤销了哪些记录 |
+
+**批量脚本语法（`batch` 与 `recraft-cli batch` 共用）**：每条命令是
+`{"type": "<命令>", ...字段}`，`type` 取 `rename` / `comment` / `prototype` /
+`apply_type` / `define_function` / `define_struct`；地址可以是 `0x…`、十进制、`entry`、
+已有符号，或同一脚本里刚创建的名字。`batch` 也接受 `{"tool": "rename", "arguments": {...}}`
+这种与单条工具同形的写法：
+
+```json
+{"commands": [
+  {"type": "rename", "addr": "sub_140001008", "name": "parse_args"},
+  {"type": "comment", "addr": "parse_args", "text": "reads argv", "kind": "regular"},
+  {"type": "define_struct", "name": "HDR", "size": 16,
+   "fields": ["0:hdr:u32", "4:code:u32"]},
+  {"type": "apply_type", "addr": "parse_args", "slot": 0, "struct": "HDR"}
+]}
+```
+
+同一份语法在 `recraft-core::script`（`COMMAND_TYPES` / `parse_command`），CLI、MCP 和单条
+写工具都走它——参数形状只有一处定义。
 
 每个写工具返回 `seq`、改动前后的值、脏范围和 undo 提示；`seq` 之后可以喂给 `undo {seq}`
 做「只撤销我以为的那一条」的校验：

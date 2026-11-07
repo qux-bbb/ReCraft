@@ -4,8 +4,10 @@
 //! Journaled write tools: one `Edit` parsed from tool arguments and applied through the same
 //! command bus as the GUI, so every mutation is undoable and attributed to `mcp`.
 
-use recraft_common::{Address, Result};
-use recraft_core::{Command, CommentKind, Effect, Session, UndoRecord};
+use std::collections::BTreeMap;
+
+use recraft_common::Address;
+use recraft_core::{Command, Effect, Session, UndoRecord};
 use recraft_query::hex;
 use serde_json::{Value, json};
 
@@ -82,18 +84,15 @@ impl McpServer {
         if entries.is_empty() {
             return Err("batch has no commands".to_owned());
         }
-        let mut edits = Vec::with_capacity(entries.len());
+        let mut commands = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
-            let tool = entry
-                .get("tool")
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("command #{}: needs a string `tool`", index + 1))?;
-            let arguments = entry.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            let edit = Edit::parse(self, tool, &arguments)
-                .map_err(|error| format!("command #{} ({tool}): {error}", index + 1))?;
-            edits.push(edit);
+            let script = script_entry_or_structured(entry)
+                .map_err(|error| format!("command #{}: {error}", index + 1))?;
+            let command = recraft_core::parse_command(&self.session, &BTreeMap::new(), &script)
+                .map_err(|error| format!("command #{}: {error}", index + 1))?;
+            commands.push(command);
         }
-        let commands: Vec<Command> = edits.iter().map(|edit| edit.command.clone()).collect();
+        let kinds: Vec<&str> = commands.iter().map(Command::name).collect();
         let effects = self
             .session
             .execute_batch(&commands)
@@ -105,11 +104,34 @@ impl McpServer {
         Ok(json!({
             "tool": "batch",
             "seq": self.session.last_journal_seq().map_err(|e| e.to_string())?,
-            "count": edits.len(),
-            "commands": edits.iter().map(|edit| edit.tool).collect::<Vec<_>>(),
+            "count": commands.len(),
+            "commands": kinds,
             "dirty": dirty,
             "undo": true,
             "note": "applied as one journal batch; a single undo reverts all of it",
+        }))
+    }
+
+    /// Define or replace a user struct layout (the missing half of `apply_type`).
+    pub(crate) fn tool_define_struct(&mut self, arguments: &Value) -> ToolResult {
+        let entry = script_entry("define_struct", arguments)?;
+        let command = recraft_core::parse_command(&self.session, &BTreeMap::new(), &entry)
+            .map_err(|error| error.to_string())?;
+        let name = arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let effect = self
+            .session
+            .execute(command)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "tool": "define_struct",
+            "seq": self.session.last_journal_seq().map_err(|e| e.to_string())?,
+            "name": name,
+            "dirty": dirty_ranges(&effect),
+            "undo": true,
+            "note": "applied to the project journal; call undo to revert",
         }))
     }
 
@@ -146,11 +168,6 @@ impl McpServer {
     }
 
     // ----------------------------------------------------------- helpers ----
-
-    fn resolve_address(&self, value: Option<&Value>) -> Result<Address> {
-        // Address syntax is part of the shared query contract, not of the transport.
-        recraft_query::resolve_address(&self.session, value)
-    }
 }
 
 pub(crate) struct Edit {
@@ -165,73 +182,23 @@ impl Edit {
         tool: &str,
         arguments: &Value,
     ) -> std::result::Result<Edit, String> {
-        let resolve =
-            |value: Option<&Value>| server.resolve_address(value).map_err(|e| e.to_string());
-        Ok(match tool {
-            "rename" => {
-                let addr = resolve(arguments.get("addr"))?;
-                let name = optional_text(arguments, "name")?;
-                Edit {
-                    tool: "rename",
-                    addr,
-                    command: Command::Rename { addr, name },
-                }
-            }
-            "set_comment" => {
-                let addr = resolve(arguments.get("addr"))?;
-                let kind = comment_kind(arguments)?;
-                let text = optional_text(arguments, "text")?;
-                Edit {
-                    tool: "set_comment",
-                    addr,
-                    command: Command::SetComment { addr, kind, text },
-                }
-            }
-            "set_prototype" => {
-                let addr = resolve(arguments.get("addr"))?;
-                let text = optional_text(arguments, "text")?;
-                Edit {
-                    tool: "set_prototype",
-                    addr,
-                    command: Command::SetPrototype { addr, text },
-                }
-            }
-            "apply_type" => {
-                let func = resolve(arguments.get("func"))?;
-                let slot = arguments
-                    .get("slot")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| "apply_type requires `slot` (0 = first argument)".to_owned())?;
-                let slot = u8::try_from(slot)
-                    .map_err(|_| format!("slot {slot} is out of range (0-255)"))?;
-                let struct_name = optional_text(arguments, "struct")?;
-                Edit {
-                    tool: "apply_type",
-                    addr: func,
-                    command: Command::ApplyType {
-                        func,
-                        slot,
-                        struct_name,
-                    },
-                }
-            }
-            "define_function" => {
-                let start = resolve(arguments.get("start"))?;
-                let end = resolve(arguments.get("end"))?;
-                if end <= start {
-                    return Err(format!(
-                        "define_function needs end > start ({} >= {})",
-                        hex(end),
-                        hex(start)
-                    ));
-                }
-                Edit {
-                    tool: "define_function",
-                    addr: start,
-                    command: Command::DefineFunc { start, end },
-                }
-            }
-            other => return Err(format!("unknown write tool: {other}")),
+        // The single tools and `batch` share the batch-script grammar (`recraft-core`), so
+        // there is exactly one place that knows an argument shape.
+        let entry = script_entry(tool, arguments)?;
+        let command = recraft_core::parse_command(&server.session, &BTreeMap::new(), &entry)
+            .map_err(|error| error.to_string())?;
+        let addr = edit_address(&command)?;
+        Ok(Edit {
+            tool: match tool {
+                "rename" => "rename",
+                "set_comment" => "set_comment",
+                "set_prototype" => "set_prototype",
+                "apply_type" => "apply_type",
+                "define_function" => "define_function",
+                other => return Err(format!("unknown write tool: {other}")),
+            },
+            addr,
+            command,
         })
     }
 
@@ -260,6 +227,79 @@ impl Edit {
     }
 }
 
+/// Address a command edits, for the result payload.
+fn edit_address(command: &Command) -> std::result::Result<Address, String> {
+    Ok(match command {
+        Command::Rename { addr, .. }
+        | Command::SetComment { addr, .. }
+        | Command::SetPrototype { addr, .. } => *addr,
+        Command::ApplyType { func, .. } => *func,
+        Command::DefineFunc { start, .. } => *start,
+        _ => return Err("unsupported edit".to_owned()),
+    })
+}
+
+/// Translate a tool call into its batch-script entry.
+///
+/// Numeric addresses are rendered as decimal strings so the script grammar (which accepts
+/// `0x…`, decimal, `entry` and symbol names) sees one type.
+fn script_entry(tool: &str, arguments: &Value) -> std::result::Result<Value, String> {
+    // Numeric addresses become decimal strings so the script grammar (which accepts `0x…`,
+    // decimal, `entry` and symbol names) sees one type; everything else stays as typed.
+    let addr = |key: &str| -> Value {
+        match arguments.get(key) {
+            Some(Value::Number(number)) => Value::String(number.to_string()),
+            Some(value) => value.clone(),
+            None => Value::Null,
+        }
+    };
+    let raw = |key: &str| arguments.get(key).cloned().unwrap_or(Value::Null);
+    Ok(match tool {
+        "rename" => json!({"type": "rename", "addr": addr("addr"), "name": raw("name")}),
+        "set_comment" => json!({
+            "type": "comment",
+            "addr": addr("addr"),
+            "text": raw("text"),
+            "kind": raw("kind"),
+        }),
+        "set_prototype" => json!({
+            "type": "prototype",
+            "addr": addr("addr"),
+            "text": raw("text"),
+        }),
+        "apply_type" => json!({
+            "type": "apply_type",
+            "addr": addr("func"),
+            "slot": raw("slot"),
+            "struct": raw("struct"),
+        }),
+        "define_function" => json!({
+            "type": "define_function",
+            "start": addr("start"),
+            "end": addr("end"),
+        }),
+        "define_struct" => json!({
+            "type": "define_struct",
+            "name": raw("name"),
+            "size": raw("size"),
+            "fields": raw("fields"),
+        }),
+        other => return Err(format!("unknown write tool: {other}")),
+    })
+}
+
+/// Accept either a batch-script entry (`type` + fields) or the MCP-style `{tool, arguments}`.
+fn script_entry_or_structured(entry: &Value) -> std::result::Result<Value, String> {
+    if entry.get("type").is_some() {
+        return Ok(entry.clone());
+    }
+    if let Some(tool) = entry.get("tool").and_then(Value::as_str) {
+        let arguments = entry.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        return script_entry(tool, &arguments);
+    }
+    Err("command needs a `type` (batch script) or `tool` (MCP style)".to_owned())
+}
+
 /// Journal records reverted by one undo, as they appear in a tool result.
 fn undo_records(records: &[UndoRecord]) -> Vec<Value> {
     records
@@ -284,34 +324,10 @@ pub(crate) fn is_write_tool(name: &str) -> bool {
             | "set_prototype"
             | "apply_type"
             | "define_function"
+            | "define_struct"
             | "batch"
             | "undo"
     )
-}
-
-/// Read an optional string argument: missing is an error, `null` means "clear".
-fn optional_text(arguments: &Value, key: &str) -> std::result::Result<Option<String>, String> {
-    match arguments.get(key) {
-        None => Err(format!("missing `{key}` (a string, or null to clear)")),
-        Some(Value::Null) => Ok(None),
-        Some(Value::String(text)) => Ok(Some(text.clone())),
-        Some(_) => Err(format!("`{key}` must be a string or null")),
-    }
-}
-
-fn comment_kind(arguments: &Value) -> std::result::Result<CommentKind, String> {
-    match arguments
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or("regular")
-    {
-        "regular" => Ok(CommentKind::Regular),
-        "repeatable" => Ok(CommentKind::Repeatable),
-        "anterior" => Ok(CommentKind::Anterior),
-        other => Err(format!(
-            "unknown comment kind {other:?}; use regular, repeatable or anterior"
-        )),
-    }
 }
 
 /// Format the ranges a command invalidated, e.g. `["0x140001008..+1"]`.

@@ -59,7 +59,7 @@ fn write_tools() -> Vec<Value> {
         }),
         json!({
             "name": "apply_type",
-            "description": "Bind a user-defined struct layout to a function argument slot (0 = first argument). `struct: null` clears the binding; the struct must already exist (define it in the GUI first). Undoable.",
+            "description": "Bind a user-defined struct layout to a function argument slot (0 = first argument). `struct: null` clears the binding; define the layout first with `define_struct`. Undoable.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -83,8 +83,38 @@ fn write_tools() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "define_struct",
+            "description": "Define or replace a user struct layout (the other half of `apply_type`). Fields are either \"offset:name:kind\" strings or {offset,name,kind} objects; offsets and size are decimal or 0x hex. Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Struct name, e.g. 'HDR'."},
+                    "size": {"type": "integer", "minimum": 1, "description": "Total size in bytes."},
+                    "fields": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "oneOf": [
+                                {"type": "string", "description": "offset:name:kind, e.g. '0:hdr:u32' (offset may be 0x hex)."},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "offset": {"type": "integer", "minimum": 0},
+                                        "name": {"type": "string"},
+                                        "kind": {"type": "string"},
+                                    },
+                                    "required": ["offset", "name", "kind"],
+                                },
+                            ],
+                        },
+                    },
+                },
+                "required": ["name", "size", "fields"],
+            },
+        }),
+        json!({
             "name": "batch",
-            "description": "Apply several write tools as one journal batch: either all of them land or none does, and a single `undo` reverts the whole set. Each entry is {\"tool\": \"rename\", \"arguments\": {...}} with the same arguments the single tool takes.",
+            "description": "Apply several commands as one journal batch: either all of them land or none does, and a single `undo` reverts the whole set. Each entry is either a batch-script command ({\"type\": \"rename\", \"addr\": ..., \"name\": ...}, same grammar as `recraft-cli batch`) or {\"tool\": ..., \"arguments\": {...}}.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -94,10 +124,10 @@ fn write_tools() -> Vec<Value> {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "tool": {"type": "string", "enum": ["rename", "set_comment", "set_prototype", "apply_type", "define_function"]},
+                                "type": {"type": "string", "enum": recraft_core::COMMAND_TYPES},
+                                "tool": {"type": "string", "enum": ["rename", "set_comment", "set_prototype", "apply_type", "define_function", "define_struct"]},
                                 "arguments": {"type": "object"},
                             },
-                            "required": ["tool"],
                         },
                     },
                 },
@@ -140,6 +170,7 @@ fn write_title_of(name: &str) -> &'static str {
         "set_prototype" => "Set prototype",
         "apply_type" => "Apply struct type",
         "define_function" => "Define function",
+        "define_struct" => "Define struct",
         "batch" => "Batch edits",
         "undo" => "Undo",
         _ => "ReCraft write tool",
