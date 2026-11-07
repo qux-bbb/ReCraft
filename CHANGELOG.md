@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One query layer for MCP and the built-in agent.** The read tools moved out of
+  `recraft-mcp` into a new `recraft-query` crate: one JSON schema and one executor, called by
+  the MCP server (`Budget::mcp`) and by the in-app agent (`Budget::agent`, smaller row/line
+  caps), so the two surfaces can no longer drift in names, arguments or result shapes. The
+  agent therefore gains `list_imports`, `callgraph`, `search_bytes`, paging and address
+  validation for free, and MCP gains `find_api_callers`. `get_pseudocode` now defaults to
+  **L2** everywhere (MCP used to default to L1, showing external clients a worse rendering
+  than the GUI); `function_summary` also returns the prototype and a caller-function list.
+  `recraft-mcp` no longer depends on the empty `recraft-app` shell, and DESIGN §1 stops
+  claiming CLI/UI go through an app API that does not exist.
+
 - **The journal knows who wrote, and undo reports what it reverted.** Schema v4 adds `origin`
   (`gui`/`cli`/`mcp`/`ai`/`user`) and `batch` to the journal; existing projects migrate in
   place. `Session::execute_batch` applies several commands in one transaction under one batch

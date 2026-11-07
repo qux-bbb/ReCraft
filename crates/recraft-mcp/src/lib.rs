@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use recraft_common::{Address, Error, Result};
 use recraft_core::{Command, CommentKind, Effect, Session};
+use recraft_query::{Budget, MAX_LIMIT, hex};
 use serde_json::{Value, json};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -67,16 +68,6 @@ fn instructions(write: bool) -> &'static str {
         SERVER_INSTRUCTIONS_READ_ONLY
     }
 }
-/// Default `get_pseudocode` caps. A single L2 function in notepad.exe renders 9 855 lines
-/// (~1.5 MB), which exceeds what most MCP clients accept as one tool result.
-const DEFAULT_PSEUDOCODE_MAX_LINES: usize = 2000;
-const DEFAULT_PSEUDOCODE_MAX_BYTES: usize = 256 * 1024;
-const MAX_PSEUDOCODE_LINES: usize = 100_000;
-const MAX_PSEUDOCODE_BYTES: usize = 8 * 1024 * 1024;
-const XREF_CALL: i64 = 1;
-const XREF_DATA: i64 = 3;
-const MAX_LIMIT: usize = 5000;
-
 type ToolResult = std::result::Result<Value, String>;
 
 /// A project opened for MCP access.
@@ -225,25 +216,19 @@ impl McpServer {
                 "isError": true,
             }));
         }
-        let outcome: ToolResult = match name {
-            "list_functions" => self.tool_list_functions(&arguments),
-            "get_disassembly" => self.tool_disassembly(&arguments),
-            "get_pseudocode" => self.tool_pseudocode(&arguments),
-            "xrefs_to" => self.tool_xrefs(&arguments, true),
-            "xrefs_from" => self.tool_xrefs(&arguments, false),
-            "list_strings" => self.tool_strings(&arguments),
-            "list_imports" => self.tool_imports(&arguments),
-            "callgraph" => self.tool_callgraph(&arguments),
-            "search_bytes" => self.tool_search(&arguments),
-            "function_summary" => self.tool_summary(&arguments),
-            "rename" => self.tool_rename(&arguments),
-            "set_comment" => self.tool_set_comment(&arguments),
-            "set_prototype" => self.tool_set_prototype(&arguments),
-            "apply_type" => self.tool_apply_type(&arguments),
-            "define_function" => self.tool_define_function(&arguments),
-            "batch" => self.tool_batch(&arguments),
-            "undo" => self.tool_undo(&arguments),
-            other => return Err((-32602, format!("unknown tool: {other}"))),
+        let outcome: ToolResult = if recraft_query::is_read_tool(name) {
+            recraft_query::call(&mut self.session, name, &arguments, &Budget::mcp())
+        } else {
+            match name {
+                "rename" => self.tool_rename(&arguments),
+                "set_comment" => self.tool_set_comment(&arguments),
+                "set_prototype" => self.tool_set_prototype(&arguments),
+                "apply_type" => self.tool_apply_type(&arguments),
+                "define_function" => self.tool_define_function(&arguments),
+                "batch" => self.tool_batch(&arguments),
+                "undo" => self.tool_undo(&arguments),
+                other => return Err((-32602, format!("unknown tool: {other}"))),
+            }
         };
         match outcome {
             Ok(value) => Ok(json!({
@@ -255,522 +240,6 @@ impl McpServer {
                 "isError": true,
             })),
         }
-    }
-
-    fn tool_list_functions(&self, arguments: &Value) -> ToolResult {
-        let filter = arguments
-            .get("filter")
-            .and_then(Value::as_str)
-            .map(str::to_ascii_lowercase);
-        let limit = limit_of(arguments, 500);
-        let offset = offset_of(arguments);
-        let functions = self.session.functions().map_err(|e| e.to_string())?;
-        let total_available = functions.len();
-        let mut items = Vec::new();
-        let mut matched = 0usize;
-        for function in &functions {
-            // Without a filter the scan stops at the end of the page; with one it has to
-            // reach the end, because the match may sit anywhere in the (address-ordered)
-            // table.
-            if filter.is_none() && items.len() >= limit {
-                break;
-            }
-            let name = self
-                .session
-                .name_at(function.start)
-                .map_err(|e| e.to_string())?;
-            if let Some(filter) = &filter
-                && !name
-                    .as_deref()
-                    .map(|name| name.to_ascii_lowercase().contains(filter))
-                    .unwrap_or(false)
-            {
-                continue;
-            }
-            matched += 1;
-            // The filter runs *before* the offset and the limit: `limit` caps returned
-            // rows, never the scan, otherwise a default-500 query silently answers
-            // "no match" for later entries.
-            if matched <= offset {
-                continue;
-            }
-            if items.len() < limit {
-                items.push(json!({
-                    "name": name,
-                    "start": hex(function.start),
-                    "end": hex(function.end),
-                    "size": function.end.get().saturating_sub(function.start.get()),
-                }));
-            }
-        }
-        let total = if filter.is_some() {
-            matched
-        } else {
-            total_available
-        };
-        let next = offset.saturating_add(items.len());
-        Ok(json!({
-            "functions": items,
-            "count": items.len(),
-            "total": total,
-            "offset": offset,
-            "truncated": next < total,
-            "next_offset": if next < total { json!(next) } else { Value::Null },
-        }))
-    }
-
-    fn tool_disassembly(&mut self, arguments: &Value) -> ToolResult {
-        let start = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let count = arguments
-            .get("count")
-            .and_then(Value::as_u64)
-            .map(|count| (count as usize).clamp(1, 4096))
-            .unwrap_or(64);
-        let lines = self
-            .session
-            .disasm(start, count)
-            .map_err(|e| e.to_string())?;
-        let items: Vec<Value> = lines
-            .iter()
-            .map(|line| {
-                json!({
-                    "addr": hex(line.addr),
-                    "bytes": line.bytes().iter().map(|byte| format!("{byte:02x}")).collect::<Vec<_>>().join(" "),
-                    "mnemonic": line.mnemonic,
-                    "operands": line.operands,
-                    "name": line.name,
-                    "comment": line.comment,
-                })
-            })
-            .collect();
-        Ok(json!({"start": hex(start), "lines": items, "count": items.len()}))
-    }
-
-    fn tool_pseudocode(&mut self, arguments: &Value) -> ToolResult {
-        let addr = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let level = arguments
-            .get("level")
-            .and_then(Value::as_str)
-            .unwrap_or("l1")
-            .to_ascii_lowercase();
-        let functions = self.session.functions().map_err(|e| e.to_string())?;
-        let function = functions
-            .iter()
-            .find(|function| addr >= function.start && addr < function.end)
-            .map(|function| function.start)
-            .unwrap_or(addr);
-        let code = match level.as_str() {
-            "l0" => recraft_decompile::pseudocode_l0(&mut self.session, function, 2000),
-            "l2" => recraft_decompile::pseudocode_l2(&mut self.session, function),
-            _ => recraft_decompile::pseudocode_l1(&mut self.session, function),
-        }
-        .map_err(|e| e.to_string())?;
-        let name = self.session.name_at(function).map_err(|e| e.to_string())?;
-        // Cap the response: one huge L2 function otherwise returns megabytes over the wire and
-        // can exceed the client's tool-result budget outright.
-        let max_lines = cap_of(
-            arguments,
-            "maxLines",
-            DEFAULT_PSEUDOCODE_MAX_LINES,
-            1,
-            MAX_PSEUDOCODE_LINES,
-        );
-        let max_bytes = cap_of(
-            arguments,
-            "maxBytes",
-            DEFAULT_PSEUDOCODE_MAX_BYTES,
-            1024,
-            MAX_PSEUDOCODE_BYTES,
-        );
-        // Page through a huge function by line number: the whole point of the cap is that the
-        // caller can read lines 2001+ without asking for the whole 13 000-line function.
-        let start_line = arguments
-            .get("startLine")
-            .and_then(Value::as_u64)
-            .map(|line| (line as usize).max(1))
-            .unwrap_or(1);
-        let include_lines = arguments
-            .get("includeLines")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let total_lines = code.lines.len();
-        let first = start_line.saturating_sub(1).min(total_lines);
-        let mut lines = Vec::new();
-        let mut text = String::new();
-        let mut kept = 0usize;
-        for line in code.lines.iter().skip(first) {
-            if kept >= max_lines || (kept > 0 && text.len() + line.text.len() + 1 > max_bytes) {
-                break;
-            }
-            text.push_str(&line.text);
-            text.push('\n');
-            kept += 1;
-            if include_lines {
-                lines.push(json!({"addr": hex(line.addr), "text": line.text}));
-            }
-        }
-        let end_line = first + kept;
-        let truncated = end_line < total_lines;
-        let mut payload = json!({
-            "function": hex(function),
-            "name": name,
-            "level": level,
-            "text": text,
-            "start_line": first + 1,
-            "end_line": end_line,
-            "returned_lines": kept,
-            "total_lines": total_lines,
-            "truncated": truncated,
-            "next_start_line": if truncated { json!(end_line + 1) } else { Value::Null },
-        });
-        if include_lines {
-            payload["lines"] = json!(lines);
-        }
-        if truncated {
-            payload["hint"] = json!(format!(
-                "truncated to lines {}-{} of {}; pass startLine={} (or raise maxLines/maxBytes), or export the full text with `recraft-cli decompile --out`",
-                first + 1,
-                end_line,
-                total_lines,
-                end_line + 1
-            ));
-        }
-        Ok(payload)
-    }
-
-    fn tool_xrefs(&self, arguments: &Value, incoming: bool) -> ToolResult {
-        let addr = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let limit = limit_of(arguments, MAX_LIMIT);
-        let entries = if incoming {
-            self.session.xrefs_to(addr)
-        } else {
-            self.session.xrefs_from(addr)
-        }
-        .map_err(|e| e.to_string())?;
-        let offset = offset_of(arguments);
-        let total = entries.len();
-        let items: Vec<Value> = entries
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|entry| {
-                json!({
-                    "from": hex(entry.from),
-                    "to": hex(entry.to),
-                    "kind": xref_kind_name(entry.kind),
-                })
-            })
-            .collect();
-        let next = offset.saturating_add(items.len());
-        Ok(json!({
-            "addr": hex(addr),
-            "xrefs": items,
-            "count": items.len(),
-            "total": total,
-            "offset": offset,
-            "truncated": next < total,
-            "next_offset": if next < total { json!(next) } else { Value::Null },
-        }))
-    }
-
-    fn tool_strings(&mut self, arguments: &Value) -> ToolResult {
-        let filter = arguments
-            .get("filter")
-            .and_then(Value::as_str)
-            .map(str::to_ascii_lowercase);
-        let limit = limit_of(arguments, 500);
-        let offset = offset_of(arguments);
-        let strings = self.session.strings().map_err(|e| e.to_string())?;
-        let total_available = strings.len();
-        let mut items = Vec::new();
-        let mut matched = 0usize;
-        for entry in &strings {
-            if filter.is_none() && items.len() >= limit {
-                break;
-            }
-            let text = self
-                .session
-                .read_bytes(entry.addr, (entry.len as usize).max(2))
-                .map(|bytes| decode_string(&bytes, entry.enc))
-                .unwrap_or_default();
-            if let Some(filter) = &filter
-                && !text.to_ascii_lowercase().contains(filter)
-            {
-                continue;
-            }
-            matched += 1;
-            // Same convention as `list_functions`: filtering precedes the offset and cap.
-            if matched <= offset {
-                continue;
-            }
-            if items.len() < limit {
-                items.push(json!({
-                    "addr": hex(entry.addr),
-                    "length": entry.len,
-                    "encoding": if entry.enc == 2 { "utf-16le" } else { "ascii" },
-                    "text": text,
-                }));
-            }
-        }
-        let total = if filter.is_some() {
-            matched
-        } else {
-            total_available
-        };
-        let next = offset.saturating_add(items.len());
-        Ok(json!({
-            "strings": items,
-            "count": items.len(),
-            "total": total,
-            "offset": offset,
-            "truncated": next < total,
-            "next_offset": if next < total { json!(next) } else { Value::Null },
-        }))
-    }
-
-    fn tool_imports(&self, _arguments: &Value) -> ToolResult {
-        let image = self.session.image();
-        let modules: Vec<Value> = image
-            .imports
-            .iter()
-            .map(|module| {
-                let functions: Vec<Value> = module
-                    .functions
-                    .iter()
-                    .map(|function| {
-                        json!({
-                            "name": function.name,
-                            "ordinal": function.ordinal,
-                            "hint": function.hint,
-                            "iat": hex(function.iat_va),
-                        })
-                    })
-                    .collect();
-                json!({
-                    "module": module.name,
-                    "iat": hex(module.iat_va),
-                    "functions": functions,
-                })
-            })
-            .collect();
-        Ok(json!({"modules": modules}))
-    }
-
-    fn tool_callgraph(&self, arguments: &Value) -> ToolResult {
-        let limit = limit_of(arguments, 2000);
-        let offset = offset_of(arguments);
-        let functions = self.session.functions().map_err(|e| e.to_string())?;
-        let index = FunctionIndex::new(&functions);
-        let calls = self
-            .session
-            .all_xrefs(Some(XREF_CALL))
-            .map_err(|e| e.to_string())?;
-        let mut pairs = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        for call in calls {
-            let Some(from) = index.containing(call.from) else {
-                continue;
-            };
-            let Some(to) = index.containing(call.to) else {
-                continue;
-            };
-            if from == to || !seen.insert((from, to)) {
-                continue;
-            }
-            pairs.push((from, to));
-        }
-        let edge_total = pairs.len();
-        let edges: Vec<Value> = pairs
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|(from, to)| {
-                json!({
-                    "from": hex(functions[*from].start),
-                    "from_name": self.session.name_at(functions[*from].start).ok().flatten(),
-                    "to": hex(functions[*to].start),
-                    "to_name": self.session.name_at(functions[*to].start).ok().flatten(),
-                })
-            })
-            .collect();
-        let nodes: Vec<Value> = functions
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|function| {
-                json!({
-                    "start": hex(function.start),
-                    "name": self.session.name_at(function.start).ok().flatten(),
-                })
-            })
-            .collect();
-        let next_edges = offset.saturating_add(edges.len());
-        let next_nodes = offset.saturating_add(nodes.len());
-        Ok(json!({
-            "nodes": nodes,
-            "node_total": functions.len(),
-            "edges": edges,
-            "edge_total": edge_total,
-            "offset": offset,
-            "truncated": next_edges < edge_total || next_nodes < functions.len(),
-            "next_offset": if next_edges < edge_total || next_nodes < functions.len() {
-                json!(offset.saturating_add(limit))
-            } else {
-                Value::Null
-            },
-        }))
-    }
-
-    fn tool_search(&mut self, arguments: &Value) -> ToolResult {
-        let limit = limit_of(arguments, 20).min(1000);
-        let offset = offset_of(arguments).min(1000);
-        let needle = if let Some(hex) = arguments.get("hex").and_then(Value::as_str) {
-            parse_hex_bytes(hex)?
-        } else if let Some(ascii) = arguments.get("ascii").and_then(Value::as_str) {
-            ascii.as_bytes().to_vec()
-        } else {
-            return Err("search_bytes needs `hex` or `ascii`".to_owned());
-        };
-        if needle.is_empty() {
-            return Err("empty pattern".to_owned());
-        }
-        // Scan `offset + limit` hits, then drop the first `offset`: `Session::search_bytes`
-        // has no offset parameter of its own.
-        let hits = self
-            .session
-            .search_bytes(&needle, offset.saturating_add(limit))
-            .map_err(|e| e.to_string())?;
-        let total = hits.len();
-        let items: Vec<Value> = hits
-            .iter()
-            .skip(offset)
-            .map(|addr| json!({"addr": hex(*addr)}))
-            .collect();
-        let next = offset.saturating_add(items.len());
-        Ok(json!({
-            "hits": items,
-            "count": items.len(),
-            "offset": offset,
-            // `total` is the number of hits inspected, not the number that exist: the
-            // scan itself stops at `offset + limit`.
-            "total": total,
-            "truncated": total >= offset.saturating_add(limit),
-            "next_offset": if total >= offset.saturating_add(limit) { json!(next) } else { Value::Null },
-        }))
-    }
-
-    fn tool_summary(&mut self, arguments: &Value) -> ToolResult {
-        let addr = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let functions = self.session.functions().map_err(|e| e.to_string())?;
-        let index = FunctionIndex::new(&functions);
-        let Some(function) = index.containing(addr) else {
-            return Err(format!("no function contains {}", hex(addr)));
-        };
-        let function = &functions[function];
-        let name = self
-            .session
-            .name_at(function.start)
-            .map_err(|e| e.to_string())?;
-
-        let callers = self
-            .session
-            .xrefs_to(function.start)
-            .map_err(|e| e.to_string())?
-            .iter()
-            .filter(|entry| entry.kind == XREF_CALL)
-            .count();
-
-        let strings = self.session.strings().map_err(|e| e.to_string())?;
-        let string_addrs: std::collections::BTreeSet<u64> =
-            strings.iter().map(|entry| entry.addr.get()).collect();
-
-        let calls = self
-            .session
-            .all_xrefs(Some(XREF_CALL))
-            .map_err(|e| e.to_string())?;
-        let data_refs = self
-            .session
-            .all_xrefs(Some(XREF_DATA))
-            .map_err(|e| e.to_string())?;
-        let mut call_targets: Vec<Value> = Vec::new();
-        let mut call_sites = Vec::new();
-        let mut seen_targets = std::collections::BTreeSet::new();
-        for call in &calls {
-            if call.from < function.start || call.from >= function.end {
-                continue;
-            }
-            call_sites.push(call.from);
-            if seen_targets.insert(call.to.get()) {
-                call_targets.push(json!({
-                    "addr": hex(call.to),
-                    "name": self.session.name_at(call.to).ok().flatten(),
-                }));
-            }
-        }
-        let mut referenced_strings = Vec::new();
-        for data in &data_refs {
-            if data.from < function.start || data.from >= function.end {
-                continue;
-            }
-            if string_addrs.contains(&data.to.get()) {
-                let text = self
-                    .session
-                    .read_bytes(data.to, 64)
-                    .map(|bytes| decode_string(&bytes, 1))
-                    .unwrap_or_default();
-                referenced_strings.push(json!({"addr": hex(data.to), "text": text}));
-            }
-        }
-        let mut api_tags = Vec::new();
-        for site in call_sites {
-            for (rule, category) in self.session.api_tags_at(site).map_err(|e| e.to_string())? {
-                api_tags.push(json!({
-                    "addr": hex(site),
-                    "rule": rule,
-                    "category": category,
-                }));
-            }
-        }
-
-        let mut instruction_count = 0usize;
-        let mut cursor = function.start;
-        let mut truncated = false;
-        while cursor < function.end {
-            if instruction_count >= 20_000 {
-                truncated = true;
-                break;
-            }
-            let Ok(Some(insn)) = self.session.insn_at(cursor) else {
-                break;
-            };
-            instruction_count += 1;
-            cursor = insn.next_addr();
-        }
-
-        Ok(json!({
-            "name": name,
-            "start": hex(function.start),
-            "end": hex(function.end),
-            "size": function.end.get().saturating_sub(function.start.get()),
-            "instructions": instruction_count,
-            "truncated": truncated,
-            "callers": callers,
-            "calls": call_targets,
-            "strings": referenced_strings,
-            "api_tags": api_tags,
-            "segment": self
-                .session
-                .segment_containing(function.start)
-                .map(|segment| segment.name.clone()),
-        }))
     }
 
     // ------------------------------------------------------- write tools ----
@@ -946,21 +415,38 @@ impl McpServer {
         let Some(rest) = uri.strip_prefix(&prefix) else {
             return Err((-32602, format!("unknown resource uri: {uri}")));
         };
+        let read = |session: &mut Session, name: &str, arguments: Value| {
+            recraft_query::call(session, name, &arguments, &Budget::mcp())
+        };
         let (mime, result) = if rest == "functions" {
             (
                 "application/json",
-                self.tool_list_functions(&json!({"limit": MAX_LIMIT})),
+                read(
+                    &mut self.session,
+                    "list_functions",
+                    json!({"limit": MAX_LIMIT}),
+                ),
             )
         } else if rest == "strings" {
             (
                 "application/json",
-                self.tool_strings(&json!({"limit": MAX_LIMIT})),
+                read(
+                    &mut self.session,
+                    "list_strings",
+                    json!({"limit": MAX_LIMIT}),
+                ),
             )
         } else if rest == "imports" {
-            ("application/json", self.tool_imports(&json!({})))
+            (
+                "application/json",
+                read(&mut self.session, "list_imports", json!({})),
+            )
         } else if let Some(target) = rest.strip_prefix("pseudocode/") {
-            let value = json!({"addr": target, "level": "l1"});
-            ("text/plain", self.tool_pseudocode(&value))
+            let value = json!({"addr": target, "level": "l2"});
+            (
+                "text/plain",
+                read(&mut self.session, "get_pseudocode", value),
+            )
         } else {
             return Err((-32602, format!("unknown resource uri: {uri}")));
         };
@@ -1000,34 +486,8 @@ impl McpServer {
     // ----------------------------------------------------------- helpers ----
 
     fn resolve_address(&self, value: Option<&Value>) -> Result<Address> {
-        let Some(value) = value else {
-            return Ok(self.session.entry_point());
-        };
-        match value {
-            Value::Number(number) => number
-                .as_u64()
-                .map(Address::new)
-                .ok_or_else(|| Error::internal("address must be a u64")),
-            Value::String(raw) => {
-                let raw = raw.trim();
-                if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
-                    return u64::from_str_radix(hex, 16)
-                        .map(Address::new)
-                        .map_err(|_| Error::internal(format!("bad hex address: {raw}")));
-                }
-                if let Ok(parsed) = raw.parse::<u64>() {
-                    return Ok(Address::new(parsed));
-                }
-                if raw.eq_ignore_ascii_case("entry") {
-                    return Ok(self.session.entry_point());
-                }
-                if let Some(addr) = self.session.addr_of_name(raw)? {
-                    return Ok(addr);
-                }
-                Err(Error::internal(format!("unknown address or name: {raw}")))
-            }
-            _ => Err(Error::internal("address must be a number or string")),
-        }
+        // Address syntax is part of the shared query contract, not of the transport.
+        recraft_query::resolve_address(&self.session, value)
     }
 }
 
@@ -1166,38 +626,6 @@ fn rpc_error(id: Value, code: i64, message: impl Into<String>) -> Value {
     })
 }
 
-fn hex(addr: Address) -> String {
-    format!("{:#x}", addr.get())
-}
-
-fn limit_of(arguments: &Value, default: usize) -> usize {
-    arguments
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|limit| (limit as usize).clamp(1, MAX_LIMIT))
-        .unwrap_or(default)
-}
-
-/// Row offset for the list tools. `total` keeps counting every match, so
-/// `offset + count < total` means another page exists.
-fn offset_of(arguments: &Value) -> usize {
-    arguments
-        .get("offset")
-        .and_then(Value::as_u64)
-        .map(|offset| (offset as usize).min(MAX_LIMIT))
-        .unwrap_or(0)
-}
-
-/// Read an integer cap (`maxLines`, `maxBytes`) and clamp it into range.
-fn cap_of(arguments: &Value, key: &str, default: usize, min: usize, max: usize) -> usize {
-    arguments
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|value| (value as usize).clamp(min, max))
-        .unwrap_or(default)
-}
-
-/// Constant-time bearer-token check so a wrong token cannot be guessed from response timing.
 fn bearer_matches(authorization: Option<&str>, token: &str) -> bool {
     let expected = format!("Bearer {token}");
     bytes_equal_ct(
@@ -1286,194 +714,18 @@ fn change_payload(
     })
 }
 
-fn xref_kind_name(kind: i64) -> &'static str {
-    match kind {
-        1 => "call",
-        2 => "jump",
-        3 => "data",
-        _ => "other",
-    }
-}
-
-fn parse_hex_bytes(text: &str) -> std::result::Result<Vec<u8>, String> {
-    let cleaned: String = text
-        .chars()
-        .filter(|ch| !ch.is_ascii_whitespace() && *ch != ',' && *ch != '\\')
-        .collect();
-    if cleaned.len() % 2 != 0 {
-        return Err("hex pattern needs an even number of digits".to_owned());
-    }
-    let mut bytes = Vec::with_capacity(cleaned.len() / 2);
-    for index in (0..cleaned.len()).step_by(2) {
-        let byte = u8::from_str_radix(&cleaned[index..index + 2], 16)
-            .map_err(|_| format!("bad hex byte: {}", &cleaned[index..index + 2]))?;
-        bytes.push(byte);
-    }
-    Ok(bytes)
-}
-
-fn decode_string(bytes: &[u8], encoding: i64) -> String {
-    let mut end = bytes.len();
-    if encoding == 2 {
-        while end >= 2 && bytes[end - 2] == 0 && bytes[end - 1] == 0 {
-            end -= 2;
-        }
-        let units: Vec<u16> = bytes[..end]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect();
-        String::from_utf16_lossy(&units)
-    } else {
-        while end > 0 && bytes[end - 1] == 0 {
-            end -= 1;
-        }
-        String::from_utf8_lossy(&bytes[..end]).into_owned()
-    }
-}
-
-/// Sorted function ranges for "which function contains this address" queries.
-struct FunctionIndex<'a> {
-    functions: &'a [recraft_core::FunctionInfo],
-}
-
-impl<'a> FunctionIndex<'a> {
-    fn new(functions: &'a [recraft_core::FunctionInfo]) -> Self {
-        FunctionIndex { functions }
-    }
-
-    fn containing(&self, addr: Address) -> Option<usize> {
-        self.functions
-            .iter()
-            .position(|function| addr >= function.start && addr < function.end)
-    }
-}
-
 // ---------------------------------------------------------------- tools ----
 
 fn tools(write: bool) -> Vec<Value> {
-    let mut tools = vec![
-        json!({
-            "name": "list_functions",
-            "description": "List discovered functions with names and ranges. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset` — pass it back as `offset` to read the next page.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "filter": {"type": "string", "description": "Case-insensitive name substring."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
-                    "offset": {"type": "integer", "minimum": 0, "description": "Rows to skip; use `next_offset` from the previous page."},
-                },
-            },
-        }),
-        json!({
-            "name": "get_disassembly",
-            "description": "Linear disassembly from an address.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "addr": {"type": ["integer", "string"], "description": "Address, hex string, name, or 'entry'."},
-                    "count": {"type": "integer", "minimum": 1, "maximum": 4096},
-                },
-            },
-        }),
-        json!({
-            "name": "get_pseudocode",
-            "description": "Pseudo-C for the function containing an address (L0/L1/L2). Long functions are capped per page; read the rest with `startLine` from `next_start_line`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "addr": {"type": ["integer", "string"]},
-                    "level": {"type": "string", "enum": ["l0", "l1", "l2"]},
-                    "maxLines": {"type": "integer", "minimum": 1, "maximum": MAX_PSEUDOCODE_LINES},
-                    "maxBytes": {"type": "integer", "minimum": 1024, "maximum": MAX_PSEUDOCODE_BYTES},
-                    "startLine": {"type": "integer", "minimum": 1, "description": "1-based first line to return."},
-                    "includeLines": {"type": "boolean", "description": "Also return `lines: [{addr,text}]` (duplicates `text`; off by default)."},
-                },
-            },
-        }),
-        json!({
-            "name": "xrefs_to",
-            "description": "References pointing at an address; pages with `offset`/`limit` and reports `total`/`truncated`/`next_offset`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "addr": {"type": ["integer", "string"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
-                    "offset": {"type": "integer", "minimum": 0},
-                },
-                "required": ["addr"],
-            },
-        }),
-        json!({
-            "name": "xrefs_from",
-            "description": "References originating at an address; pages with `offset`/`limit` and reports `total`/`truncated`/`next_offset`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "addr": {"type": ["integer", "string"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
-                    "offset": {"type": "integer", "minimum": 0},
-                },
-                "required": ["addr"],
-            },
-        }),
-        json!({
-            "name": "list_strings",
-            "description": "Extracted strings with encoding and address. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "filter": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
-                    "offset": {"type": "integer", "minimum": 0},
-                },
-            },
-        }),
-        json!({
-            "name": "list_imports",
-            "description": "Imported modules and functions (IAT addresses).",
-            "inputSchema": {"type": "object"},
-        }),
-        json!({
-            "name": "callgraph",
-            "description": "Function-level call graph derived from persisted call xrefs. Pages both `nodes` and `edges` with `offset`/`limit` and reports `node_total`/`edge_total`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
-                    "offset": {"type": "integer", "minimum": 0},
-                },
-            },
-        }),
-        json!({
-            "name": "search_bytes",
-            "description": "Search mapped readable segments for a byte pattern (hex or ASCII). `total` is the number of hits inspected, not the number that exist.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "hex": {"type": "string", "description": "Hex bytes, e.g. '8B 44 24 04'."},
-                    "ascii": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
-                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000},
-                },
-            },
-        }),
-        json!({
-            "name": "function_summary",
-            "description": "Compact summary of one function: callers, calls, strings, API tags.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"addr": {"type": ["integer", "string"]}},
-            },
-        }),
-    ];
+    // The read surface lives in `recraft-query`, shared with the in-app agent: one schema,
+    // one executor, no per-front-end wording or caps to drift.
+    let mut tools = recraft_query::specs(&Budget::mcp());
     if write {
         tools.extend(write_tools());
     }
     tools
 }
 
-/// Write tools, registered only with `--write`. Every call mutates the project database
-/// through the journaled command bus, so it is undoable.
 fn write_tools() -> Vec<Value> {
     vec![
         json!({
@@ -2132,14 +1384,15 @@ mod tests {
             "get_pseudocode",
             json!({"addr": biggest, "level": "l2"}),
         );
+        let budget = Budget::mcp();
         let text = full["text"].as_str().unwrap();
         assert!(
-            text.len() <= DEFAULT_PSEUDOCODE_MAX_BYTES,
+            text.len() <= budget.pseudo_bytes,
             "L2 payload not capped: {} bytes",
             text.len()
         );
         let kept = full["returned_lines"].as_u64().unwrap();
-        assert!(kept <= DEFAULT_PSEUDOCODE_MAX_LINES as u64);
+        assert!(kept <= budget.pseudo_lines as u64);
         assert_eq!(
             full["truncated"],
             kept < full["total_lines"].as_u64().unwrap()

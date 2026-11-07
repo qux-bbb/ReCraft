@@ -78,11 +78,12 @@ recraft-ai（LLM 客户端/提示/脱敏/预算）供 app/mcp/ui 使用
 | `recraft-analysis` | 递归下降、函数识别、跳表、字符串、Go/Rust、API 分类 | core, decode |
 | `recraft-ir` | 语义 IR、x86/x64 提升、lazy flags | common, decode |
 | `recraft-decompile` | CFG、SSA、优化、结构恢复、变量、类型、C 生成 | ir, core |
-| `recraft-app` | 编排：后台任务、分析调度、设置、会话生命周期 | core, analysis, ir, decompile, ai, mcp |
-| `recraft-mcp` | MCP server（stdio/HTTP）、工具、资源、propose/apply | app（或 core 读 API） |
-| `recraft-cli` | headless：analyze/strings/imports/decompile/search/export/serve-mcp | app |
-| `recraft-ui` | egui 应用、视图、自绘控件、i18n | app |
-| `recraft-ai` | provider 抽象、提示模板、脱敏、token 预算、缓存 | common |
+| `recraft-query` | 只读查询/工具层：MCP 与内置 agent 共用的工具 spec、执行器、预算 | common, core, decompile |
+| `recraft-app` | 编排：后台任务、分析调度、设置、会话生命周期（尚未填充，见 §1.1） | core, analysis, ir, decompile, ai, mcp |
+| `recraft-mcp` | MCP server（stdio/HTTP）、传输、写工具、资源 | core, query |
+| `recraft-cli` | headless：analyze/strings/imports/decompile/search/export/serve-mcp | core, analysis, decompile, ai, mcp |
+| `recraft-ui` | egui 应用、视图、自绘控件、i18n | core, analysis, decompile, ai |
+| `recraft-ai` | provider 抽象、提示模板、脱敏、token 预算、缓存、项目级 agent | common, core, query |
 
 依赖方向必须单向，`core` 不得依赖 `analysis/decompile/ir`。新增 crate 需在本文档 ADR 中登记。
 
@@ -420,8 +421,8 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 ### 9.1 MCP server
 
 - 传输：stdio 优先，HTTP 可选（带 token 鉴权）
-- 读工具：`list_functions`、`get_disassembly`、`get_pseudocode`、`xrefs_to/from`、`list_strings`、`list_imports`、`callgraph`、`search_bytes`、`function_summary`
-- 写工具（`serve-mcp --write` 显式开启，默认只读）：`rename`、`set_comment`、`set_prototype`、`define_function`、`apply_type`、`undo`
+- 读工具（`recraft-query` 提供，MCP 与内置 agent 共用同一份 spec 与执行器）：`list_functions`、`get_disassembly`、`get_pseudocode`（默认 L2）、`xrefs_to/from`、`list_strings`、`list_imports`、`callgraph`、`search_bytes`、`function_summary`、`find_api_callers`
+- 写工具（`serve-mcp --write` 显式开启，默认只读）：`rename`、`set_comment`、`set_prototype`、`define_function`、`apply_type`、`batch`、`undo`
 - 资源：`recraft://project/{id}/functions|strings|imports|pseudocode/{func}`
 - 提示模板：恶意样本 triage 报告、CTF 解题大纲
 
@@ -458,7 +459,8 @@ recraft-cli serve-mcp <project.rcraft> [--stdio|--http]
 recraft-cli batch <script.json>
 ```
 
-CLI 与 UI 走同一 `recraft-app` API，保证行为一致；CI 用 CLI 跑质量门禁。
+CLI 与 UI 直接使用 `recraft-core` 的 `Session`，MCP 与内置 agent 共用 `recraft-query` 的只读
+工具层；`recraft-app` 是规划中的编排层，目前仍是空壳（见 §1.1）。CI 用 CLI 跑质量门禁。
 
 ---
 

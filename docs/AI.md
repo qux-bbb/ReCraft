@@ -295,18 +295,20 @@ exact 一列标成区间；accepted/partial 才是稳定的判断口径。逐条
 ## 项目级 Agent（工具调用）
 
 一次性按钮回答不了“这个样本的持久化在哪”“谁解析命令行”这类问题——它们需要模型自己决定
-看哪个函数、看多少。`ai ask` 与面板里的 **分析助手** 把项目暴露成 8 个只读工具，让模型在
-最多 `AGENT_MAX_ROUNDS=8` 轮内自己取证：
+看哪个函数、看多少。`ai ask` 与面板里的 **分析助手** 把项目暴露成 11 个只读工具，让模型在
+最多 `AGENT_MAX_ROUNDS=8` 轮内自己取证。工具定义与执行器来自 `recraft-query`，与 MCP 服务器
+**同一份 spec、同一个实现**，只是预算更小（行数/伪代码行数，避免一次塞满上下文）：
 
 | 工具 | 作用 |
 |---|---|
-| `list_functions` | 按名字子串列函数（地址/大小），先找候选 |
-| `function_info` | 名字、范围、指令数、API 标签、引用字符串、直接调用与调用者（复用 `explain`） |
-| `pseudocode` | 读该函数的 L2 伪 C（默认 150 行、上限 400 行） |
+| `list_functions` | 按名字子串列函数（地址/大小），先找候选；支持 `offset` 翻页 |
+| `function_summary` | 名字、范围、指令数、原型、调用者（含函数名）、直接调用、引用字符串、API 标签 |
+| `get_pseudocode` | 读该函数的伪 C（默认 L2，400 行/64 KiB 上限，`startLine` 翻页） |
 | `xrefs_to` / `xrefs_from` | 谁引用它 / 它引用谁（附所属函数名） |
 | `find_api_callers` | 哪些函数调用某个导入 API（如 `CreateFileW`） |
-| `search_strings` | 按内容搜字符串表 |
-| `disassemble` | 原始反汇编（最多 60 条） |
+| `list_strings` | 按内容搜字符串表（`filter`） |
+| `get_disassembly` | 原始反汇编 |
+| `list_imports` / `callgraph` / `search_bytes` | 导入表、调用图、字节搜索 |
 
 - **只读**：工具只查库与反编译，不写项目；重命名仍然走 Proposal/apply。模型给出的重命名
   只是正文建议。

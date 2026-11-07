@@ -98,14 +98,18 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 |---|---|---|
 | `list_functions` | `filter?`, `limit?`, `offset?` | `{functions:[{name,start,end,size}],count,total,offset,truncated,next_offset}` |
 | `get_disassembly` | `addr?`, `count?` | `{start,lines:[{addr,bytes,mnemonic,operands,name,comment}],count}` |
-| `get_pseudocode` | `addr?`, `level?`=`l0/l1/l2`, `maxLines?`=2000, `maxBytes?`=256 KiB, `startLine?`, `includeLines?` | `{function,name,level,text,start_line,end_line,returned_lines,total_lines,truncated,next_start_line,hint?}`；`includeLines:true` 时额外给 `lines:[{addr,text}]` |
+| `get_pseudocode` | `addr?`, `level?`=`l0/l1/l2`（默认 **l2**）, `maxLines?`=2000, `maxBytes?`=256 KiB, `startLine?`, `includeLines?` | `{function,name,level,text,start_line,end_line,returned_lines,total_lines,truncated,next_start_line,hint?}`；`includeLines:true` 时额外给 `lines:[{addr,text}]` |
 | `xrefs_to` | `addr`, `limit?`, `offset?` | `{addr,xrefs:[{from,to,kind}],count,total,offset,truncated,next_offset}` |
 | `xrefs_from` | `addr`, `limit?`, `offset?` | 同上 |
 | `list_strings` | `filter?`, `limit?`, `offset?` | `{strings:[{addr,length,encoding,text}],count,total,offset,truncated,next_offset}` |
 | `list_imports` | — | `{modules:[{module,iat,functions:[{name,ordinal,hint,iat}]}]}` |
 | `callgraph` | `limit?`, `offset?` | `{nodes,node_total,edges:[{from,to,from_name,to_name}],edge_total,offset,truncated,next_offset}`（节点或边被裁剪都为 true） |
 | `search_bytes` | `hex?` 或 `ascii?`, `limit?`, `offset?` | `{hits:[{addr}],count,total,offset,truncated,next_offset}`（扫描可读映射段，1 MiB 分块；`total` 是已检查的命中数，不是命中总数） |
-| `function_summary` | `addr?` | 名字/范围/指令数/调用者/调用的函数/引用字符串/API 标签 |
+| `function_summary` | `addr?` | 名字/范围/指令数/原型/调用者（数量 + 函数列表）/调用的函数/引用字符串/API 标签 |
+| `find_api_callers` | `api`（导入名子串，如 `CreateFileW`）, `limit?` | `{functions:[{name,addr,api,category,site}],count,total,truncated}` |
+
+读工具的实现与参数 schema 都在 `recraft-query`，`serve-mcp` 与内置 AI agent（`ai ask`、分析助手）
+**共用同一份定义**——外部客户端和内置助手看到的是同一批工具，只是 agent 的行数/字节预算更小。
 
 ### 写工具（`--write`）
 

@@ -963,8 +963,8 @@ impl AuditLog {
 /// One function the model may call (an OpenAI `tools` entry).
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
-    pub name: &'static str,
-    pub description: &'static str,
+    pub name: String,
+    pub description: String,
     /// JSON Schema object describing the arguments.
     pub parameters: Value,
 }

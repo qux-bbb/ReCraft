@@ -14,6 +14,7 @@ publish = false
 recraft-common = { workspace = true }
 recraft-core = { workspace = true }
 recraft-decompile = { version = "0.1.0", path = "../recraft-decompile" }
+recraft-query = { workspace = true }
 serde_json = "1.0.154"
 ureq = "3.5.0"
 base64 = "0.23.1"

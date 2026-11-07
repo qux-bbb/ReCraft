@@ -2947,6 +2947,7 @@ dependencies = [
  "recraft-common",
  "recraft-core",
  "recraft-decompile",
+ "recraft-query",
  "serde_json",
  "tempfile",
  "ureq",
@@ -3061,7 +3062,18 @@ name = "recraft-mcp"
 version = "0.1.0"
 dependencies = [
  "recraft-analysis",
- "recraft-app",
+ "recraft-common",
+ "recraft-core",
+ "recraft-query",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "recraft-query"
+version = "0.1.0"
+dependencies = [
+ "recraft-analysis",
  "recraft-common",
  "recraft-core",
  "recraft-decompile",

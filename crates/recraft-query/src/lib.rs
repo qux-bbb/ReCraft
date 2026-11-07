@@ -1,0 +1,511 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 ReCraft contributors
+
+//! The read-only query layer: one implementation of every read tool, shared by the MCP
+//! server and the in-app AI agent.
+//!
+//! Both front ends used to carry their own copy of these queries (different names, caps and
+//! result shapes), so a fix in one never reached the other. Everything a caller may read
+//! through a tool lives here; the transport (JSON-RPC or an LLM tool loop) and the argument
+//! parsing stay with the caller.
+//!
+//! # Budgets
+//!
+//! A tool call is bounded by a [`Budget`]: the row cap for list tools and the line/byte caps
+//! for `get_pseudocode`. MCP and the agent use different budgets (a model turn must not be
+//! handed 5 000 rows) but the same specs and the same executor, so the two surfaces cannot
+//! drift apart again.
+
+#![forbid(unsafe_code)]
+
+mod tools;
+
+use recraft_common::{Address, Error, Result};
+use recraft_core::Session;
+use serde_json::{Value, json};
+
+pub use tools::{MAX_LIMIT, MAX_PSEUDOCODE_BYTES, MAX_PSEUDOCODE_LINES};
+
+/// One XREF row kind: a call.
+pub(crate) const XREF_CALL: i64 = 1;
+/// One XREF row kind: a data reference.
+pub(crate) const XREF_DATA: i64 = 3;
+
+/// Per-call limits for a front end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    /// Maximum rows a list-shaped tool may return.
+    pub rows: usize,
+    /// Default and maximum lines `get_pseudocode` returns per page.
+    pub pseudo_lines: usize,
+    /// Default and maximum bytes `get_pseudocode` returns per page.
+    pub pseudo_bytes: usize,
+}
+
+impl Budget {
+    /// MCP: the caller is a program, and the caps are what a client can accept as one result.
+    pub const fn mcp() -> Self {
+        Budget {
+            rows: MAX_LIMIT,
+            pseudo_lines: 2000,
+            pseudo_bytes: 256 * 1024,
+        }
+    }
+
+    /// In-app agent: the caller is a model with a context window, so the caps are much lower.
+    pub const fn agent() -> Self {
+        Budget {
+            rows: 200,
+            pseudo_lines: 400,
+            pseudo_bytes: 64 * 1024,
+        }
+    }
+}
+
+/// Tool names served by this crate, in the order they are advertised.
+pub const READ_TOOLS: [&str; 11] = [
+    "list_functions",
+    "get_disassembly",
+    "get_pseudocode",
+    "xrefs_to",
+    "xrefs_from",
+    "list_strings",
+    "list_imports",
+    "callgraph",
+    "search_bytes",
+    "function_summary",
+    "find_api_callers",
+];
+
+/// Whether `name` is one of the shared read tools.
+pub fn is_read_tool(name: &str) -> bool {
+    READ_TOOLS.contains(&name)
+}
+
+/// Execute one read tool. Errors are strings because every caller reports them as tool
+/// results, not as transport failures.
+pub fn call(
+    session: &mut Session,
+    name: &str,
+    arguments: &Value,
+    budget: &Budget,
+) -> std::result::Result<Value, String> {
+    let budget = *budget;
+    match name {
+        "list_functions" => tools::list_functions(session, arguments, budget),
+        "get_disassembly" => tools::disassembly(session, arguments),
+        "get_pseudocode" => tools::pseudocode(session, arguments, budget),
+        "xrefs_to" => tools::xrefs(session, arguments, budget, true),
+        "xrefs_from" => tools::xrefs(session, arguments, budget, false),
+        "list_strings" => tools::strings(session, arguments, budget),
+        "list_imports" => tools::imports(session),
+        "callgraph" => tools::callgraph(session, arguments, budget),
+        "search_bytes" => tools::search_bytes(session, arguments, budget),
+        "function_summary" => tools::summary(session, arguments),
+        "find_api_callers" => tools::api_callers(session, arguments, budget),
+        other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+/// Canonical JSON Schemas for the shared tools, bounded by `budget`.
+pub fn specs(budget: &Budget) -> Vec<Value> {
+    let rows = budget.rows;
+    let pseudo_lines = budget.pseudo_lines;
+    let pseudo_bytes = budget.pseudo_bytes;
+    vec![
+        json!({
+            "name": "list_functions",
+            "description": "List discovered functions with names and ranges. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset` —pass it back as `offset` to read the next page.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "string", "description": "Case-insensitive name substring."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                    "offset": {"type": "integer", "minimum": 0, "description": "Rows to skip; use `next_offset` from the previous page."},
+                },
+            },
+        }),
+        json!({
+            "name": "get_disassembly",
+            "description": "Linear disassembly from an address.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"], "description": "Address, hex string, name, or 'entry'."},
+                    "count": {"type": "integer", "minimum": 1, "maximum": 4096},
+                },
+            },
+        }),
+        json!({
+            "name": "get_pseudocode",
+            "description": "Pseudo-C for the function containing an address (L0/L1/L2, L2 by default). Long functions are capped per page; read the rest with `startLine` from `next_start_line`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "level": {"type": "string", "enum": ["l0", "l1", "l2"], "description": "Default l2 (structured C with reconstructed locals)."},
+                    "maxLines": {"type": "integer", "minimum": 1, "maximum": pseudo_lines},
+                    "maxBytes": {"type": "integer", "minimum": 1024, "maximum": pseudo_bytes},
+                    "startLine": {"type": "integer", "minimum": 1, "description": "1-based first line to return."},
+                    "includeLines": {"type": "boolean", "description": "Also return `lines: [{addr,text}]` (duplicates `text`; off by default)."},
+                },
+            },
+        }),
+        json!({
+            "name": "xrefs_to",
+            "description": "References pointing at an address; pages with `offset`/`limit` and reports `total`/`truncated`/`next_offset`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
+                "required": ["addr"],
+            },
+        }),
+        json!({
+            "name": "xrefs_from",
+            "description": "References originating at an address; pages with `offset`/`limit` and reports `total`/`truncated`/`next_offset`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
+                "required": ["addr"],
+            },
+        }),
+        json!({
+            "name": "list_strings",
+            "description": "Extracted strings with encoding and address. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
+            },
+        }),
+        json!({
+            "name": "list_imports",
+            "description": "Imported modules and functions (IAT addresses).",
+            "inputSchema": {"type": "object"},
+        }),
+        json!({
+            "name": "callgraph",
+            "description": "Function-level call graph derived from persisted call xrefs. Pages both `nodes` and `edges` with `offset`/`limit` and reports `node_total`/`edge_total`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
+            },
+        }),
+        json!({
+            "name": "search_bytes",
+            "description": "Search mapped readable segments for a byte pattern (hex or ASCII). `total` is the number of hits inspected, not the number that exist.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "hex": {"type": "string", "description": "Hex bytes, e.g. '8B 44 24 04'."},
+                    "ascii": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000},
+                },
+            },
+        }),
+        json!({
+            "name": "function_summary",
+            "description": "Compact summary of one function: range, instruction count, prototype, callers, calls, referenced strings, API tags.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"addr": {"type": ["integer", "string"]}},
+            },
+        }),
+        json!({
+            "name": "find_api_callers",
+            "description": "Functions that call an imported API (name substring, e.g. 'CreateFileW').",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "api": {"type": "string", "description": "Import name substring (case-insensitive)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                },
+                "required": ["api"],
+            },
+        }),
+    ]
+}
+
+/// `0x… rendering used by every result.
+pub fn hex(addr: Address) -> String {
+    format!("{:#x}", addr.get())
+}
+
+/// Resolve `0x…, decimal, a symbol name or `entry`; a missing value means the entry point.
+pub fn resolve_address(session: &Session, value: Option<&Value>) -> Result<Address> {
+    let Some(value) = value else {
+        return Ok(session.entry_point());
+    };
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .map(Address::new)
+            .ok_or_else(|| Error::internal("address must be a u64")),
+        Value::String(raw) => {
+            let raw = raw.trim();
+            if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+                return u64::from_str_radix(hex, 16)
+                    .map(Address::new)
+                    .map_err(|_| Error::internal(format!("bad hex address: {raw}")));
+            }
+            if let Ok(parsed) = raw.parse::<u64>() {
+                return Ok(Address::new(parsed));
+            }
+            if raw.eq_ignore_ascii_case("entry") {
+                return Ok(session.entry_point());
+            }
+            if let Some(addr) = session.addr_of_name(raw)? {
+                return Ok(addr);
+            }
+            Err(Error::internal(format!("unknown address or name: {raw}")))
+        }
+        _ => Err(Error::internal("address must be a number or string")),
+    }
+}
+
+/// Row limit for a list tool, clamped to `budget.rows`.
+pub(crate) fn limit_of(arguments: &Value, default: usize, budget: Budget) -> usize {
+    arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|limit| (limit as usize).clamp(1, budget.rows))
+        .unwrap_or(default.min(budget.rows))
+}
+
+/// Row offset for a list tool.
+pub(crate) fn offset_of(arguments: &Value) -> usize {
+    arguments
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|offset| (offset as usize).min(MAX_LIMIT))
+        .unwrap_or(0)
+}
+
+/// Read an integer cap (`maxLines`, `maxBytes`) and clamp it into range.
+pub(crate) fn cap_of(
+    arguments: &Value,
+    key: &str,
+    default: usize,
+    min: usize,
+    max: usize,
+) -> usize {
+    arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| (value as usize).clamp(min, max))
+        .unwrap_or(default.min(max))
+}
+
+/// `count`/`total`/`offset`/`truncated`/`next_offset` block shared by the list tools.
+pub(crate) fn page(
+    rows: usize,
+    total: usize,
+    offset: usize,
+    limit: usize,
+) -> std::result::Result<Value, String> {
+    let next = offset.saturating_add(rows);
+    Ok(json!({
+        "count": rows,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "truncated": next < total,
+        "next_offset": if next < total { json!(next) } else { Value::Null },
+    }))
+}
+
+/// `FunctionIndex` over an address-sorted function table.
+pub(crate) struct FunctionIndex<'a> {
+    functions: &'a [recraft_core::FunctionInfo],
+}
+
+impl<'a> FunctionIndex<'a> {
+    pub(crate) fn new(functions: &'a [recraft_core::FunctionInfo]) -> Self {
+        FunctionIndex { functions }
+    }
+
+    /// Index of the function containing `addr`, if any.
+    pub(crate) fn containing(&self, addr: Address) -> Option<usize> {
+        self.functions
+            .iter()
+            .position(|function| addr >= function.start && addr < function.end)
+    }
+
+    pub(crate) fn get(&self, index: usize) -> &recraft_core::FunctionInfo {
+        &self.functions[index]
+    }
+}
+
+pub(crate) fn xref_kind_name(kind: i64) -> &'static str {
+    match kind {
+        1 => "call",
+        2 => "jump",
+        3 => "data",
+        _ => "other",
+    }
+}
+
+pub(crate) fn parse_hex_bytes(text: &str) -> std::result::Result<Vec<u8>, String> {
+    let cleaned: String = text
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace() && *ch != ',' && *ch != '\\')
+        .collect();
+    if cleaned.len() % 2 != 0 {
+        return Err("hex pattern needs an even number of digits".to_owned());
+    }
+    let mut bytes = Vec::with_capacity(cleaned.len() / 2);
+    for index in (0..cleaned.len()).step_by(2) {
+        let byte = u8::from_str_radix(&cleaned[index..index + 2], 16)
+            .map_err(|_| format!("bad hex byte: {}", &cleaned[index..index + 2]))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn decode_string(bytes: &[u8], encoding: i64) -> String {
+    let mut end = bytes.len();
+    if encoding == 2 {
+        while end >= 2 && bytes[end - 2] == 0 && bytes[end - 1] == 0 {
+            end -= 2;
+        }
+        let units: Vec<u16> = bytes[..end]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        while end > 0 && bytes[end - 1] == 0 {
+            end -= 1;
+        }
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A real sample when one is available (Windows dev/CI), otherwise the test is skipped.
+    fn project() -> Option<Session> {
+        let bytes = std::fs::read("C:/Windows/System32/notepad.exe").ok()?;
+        let dir = TempDir::new().ok()?;
+        let path = dir.path().join("query.rcraft");
+        let mut session = Session::create(&path, &bytes, &mut |_, _| {}, &|| false).ok()?;
+        let analysis = recraft_analysis::analyze(&mut session).ok()?;
+        recraft_analysis::persist(&mut session, &analysis).ok()?;
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).ok()?;
+        recraft_analysis::persist_strings(&mut session, &strings).ok()?;
+        // The project file must outlive the session.
+        std::mem::forget(dir);
+        Some(session)
+    }
+
+    #[test]
+    fn specs_cover_every_read_tool_exactly_once() {
+        let listed = specs(&Budget::mcp());
+        let mut names: Vec<&str> = listed
+            .iter()
+            .filter_map(|spec| spec["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        let mut expected = READ_TOOLS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+        for spec in &listed {
+            assert!(
+                spec["description"]
+                    .as_str()
+                    .is_some_and(|text| !text.is_empty())
+            );
+            assert_eq!(spec["inputSchema"]["type"], "object", "{spec}");
+        }
+        // The budget is visible in the schema, so a model sees the real cap.
+        let agent = specs(&Budget::agent());
+        let list = agent
+            .iter()
+            .find(|spec| spec["name"] == "list_functions")
+            .expect("list_functions spec");
+        assert_eq!(list["inputSchema"]["properties"]["limit"]["maximum"], 200);
+    }
+
+    #[test]
+    fn pseudocode_defaults_to_the_structural_level() {
+        let Some(mut session) = project() else {
+            return;
+        };
+        let entry = session.entry_point();
+        let value = call(
+            &mut session,
+            "get_pseudocode",
+            &json!({"addr": format!("{:#x}", entry.get())}),
+            &Budget::mcp(),
+        )
+        .expect("pseudocode");
+        assert_eq!(value["level"], "l2", "the default level must match the GUI");
+        assert!(value["text"].as_str().is_some_and(|text| !text.is_empty()));
+        let paged = call(
+            &mut session,
+            "get_pseudocode",
+            &json!({"addr": format!("{:#x}", entry.get()), "maxLines": 1}),
+            &Budget::mcp(),
+        )
+        .expect("paged pseudocode");
+        assert_eq!(paged["returned_lines"], 1);
+        assert_eq!(paged["next_start_line"], 2);
+    }
+
+    #[test]
+    fn the_agent_budget_caps_rows_below_the_mcp_budget() {
+        let Some(mut session) = project() else {
+            return;
+        };
+        let args = json!({"limit": MAX_LIMIT});
+        let wide = call(&mut session, "list_functions", &args, &Budget::mcp()).expect("mcp rows");
+        let narrow =
+            call(&mut session, "list_functions", &args, &Budget::agent()).expect("agent rows");
+        assert!(narrow["count"].as_u64().unwrap() <= Budget::agent().rows as u64);
+        assert!(wide["count"].as_u64().unwrap() >= narrow["count"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn a_bad_address_is_an_error_not_a_panic() {
+        let Some(mut session) = project() else {
+            return;
+        };
+        for name in [
+            "get_disassembly",
+            "get_pseudocode",
+            "xrefs_to",
+            "xrefs_from",
+            "function_summary",
+        ] {
+            let result = call(
+                &mut session,
+                name,
+                &json!({"addr": "no_such_symbol"}),
+                &Budget::agent(),
+            );
+            assert!(result.is_err(), "{name} accepted a bogus address");
+            assert!(
+                result.unwrap_err().contains("no_such_symbol"),
+                "{name} lost the offending name in its error"
+            );
+        }
+    }
+}

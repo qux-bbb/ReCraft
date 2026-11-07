@@ -23,6 +23,7 @@ recraft-core = { path = "crates/recraft-core" }
 recraft-analysis = { path = "crates/recraft-analysis" }
 recraft-ir = { path = "crates/recraft-ir" }
 recraft-decompile = { path = "crates/recraft-decompile" }
+recraft-query = { path = "crates/recraft-query" }
 recraft-app = { path = "crates/recraft-app" }
 recraft-ai = { path = "crates/recraft-ai" }
 recraft-mcp = { path = "crates/recraft-mcp" }
