@@ -100,7 +100,7 @@ corpus 62 + corpus86 64 份文本，另抽查 kernel32 5 134、user32 6 080、ad
 （历史决定：跨 MSVC 版本保持形状稳定），所以常量折叠、case 值这类"数字"变化只能靠人工
 review，快照本身不覆盖。
 
-**2026-11-05 复核（间接调用继续扫描之后）**：函数扫描不再把 `call qword ptr [IAT]` 当死路，
+**2026-11-05 复核（历史；当前基线见上一段）**：函数扫描不再把 `call qword ptr [IAT]` 当死路，
 notepad **502 → 506** 个函数（新增 4 个此前不可达的调用目标）、结构化 **489（96.6%）**、
 覆盖率 **99.6%**、标签 **269**、`__asm` 103、API 标签 **448 → 1 637**；crackme **495** /
 **455（91.9%）** / 覆盖率 98.5% / 标签 218 / `__asm` 258；corpus 31、corpus86 32 结构不变。
@@ -110,6 +110,14 @@ notepad **502 → 506** 个函数（新增 4 个此前不可达的调用目标�
 `lint` 在 notepad/crackme/corpus/corpus86 仍 0 findings。上面的 502/487 表格保留为
 2026-11-02–04 的历史基线。
 
+**2026-11-07 复核（共享尾块与节点复制之后）**：11-06 的 5 个文本 pass 与 11-07 的循环双出口
+节点复制（`copy_linear_chain`）把数字推到当前基线：notepad **494/506（97.6%）**、覆盖率
+99.6%、`goto` **435** 处、标签 **258**、`__asm` **104**、`switch` 14、最深嵌套 52（27 个函数
+≥8 级）；crackme **460/495（92.9%）**、覆盖率 98.5%、标签 **196**、`__asm` **257**；
+corpus 31/31、corpus86 32/32 不变。Go 全样本仍 **2998/3261（91.9%）**、263 个回退
+（11-06 收尾报告确认结构率未变）。notepad 的 506 张快照已用当前构建重跑 `--check`，
+mismatched 0；notepad/crackme 的 L1+L2 `lint` 实测各 **0 findings**。
+
 `recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels`、`inline asm statements`、`switch statements` 与 `max nesting depth`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 506（L1+L2 共 1012 份）、crackme 495、corpus 31、corpus86 32 在 2026-11-05 复测 **0 findings**；Go 3261 个函数只复测了前 300 个（L1，0 findings）与 60 份快照（`--check` 无变化），全量 lint 未重跑（耗时超过 15 分钟，改动只影响扫描可达性、不改变 Go 的函数集合与快照）。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
@@ -118,7 +126,7 @@ notepad **502 → 506** 个函数（新增 4 个此前不可达的调用目标�
 **间接跳转**（`jmp rcx/rax/r9`）和 **SSE 比较后的未建模标志分支**——语义不可用标量
 表达式直译，保留 `__asm` 是设计允许的降级路径。
 
-真实样本 notepad（重新分析后 502 个函数、**37522 条可达指令**）：覆盖率 **99.5%**
+真实样本 notepad（2026-11-02 数据：重新分析后 502 个函数、**37522 条可达指令**）：覆盖率 **99.5%**
 （170 intrinsic）、结构化 **97.0%**（487/502；依次经历 443 函数旧分析状态 49.2% →
 62.4%（早退链）→ 77.3%（break/continue）→ 77.7%（do-while）→ 78.7%（复杂循环头兜底）
 → 81.1%（CFG 可达性裁剪）→ 81.5%（共享尾声块复制）→ 84.7%（共享尾部链复制）→
@@ -150,6 +158,9 @@ sub_…(cookie)` 变成真实返回值），跨块调用实参补回 99 处（�
 
 ## 结构化失败的形状（2026-10-31 复核）
 
+> 2026-11-07：notepad 的回退函数已从 15 降到 **12**（crackme 40 → **35**）；下表是 2026-10-31
+> 的形状分类，形状本身没有变化。当前最大仍是 `sub_140013154`（371 处 goto / 9767 行）。
+
 剩下的 `goto` 回退有明确的共同原因，不是随机失败：
 
 | 形状 | 说明 | notepad | Go 样本 |
@@ -162,8 +173,8 @@ notepad 的 15 个回退函数已逐个核对：每个都有一处**向后**跳�
 （例如 `loc_14000459c:` 之前的 `sub_140003fa0(&var_38);` 会被重试路径再次执行），
 即"goto 式重试循环"，不是结构化器的随机失败|
 
-两个样本都只在"循环不是单入口"时回退，其余部分照常结构化（notepad 487/502、
-Go 3003/3261 函数无任何 `goto`）。这类形状 IDA 同样常以 `goto` + 标签呈现；
+两个样本都只在"循环不是单入口"时回退，其余部分照常结构化（notepad 494/506、
+Go 2998/3261 函数无任何 `goto`）。这类形状 IDA 同样常以 `goto` + 标签呈现；
 要彻底消除需要在结构器里引入多入口循环的规范化（把第二入口提升为守卫条件），
 属于下一步的结构化工作，而不是文本后处理能安全完成的事情。
 
@@ -306,7 +317,8 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
 - 更新流程：改动反编译器后运行 `recraft-cli golden <corpus-project> --dir tests/golden/corpus`，
   **人工 review `git diff tests/golden/corpus`**，确认变化符合预期后提交。
- 已提交快照合计 **785** 个函数（notepad **502（全部函数）**、crackme 160、corpus 31、corpus86 32、go 60），
-  全部通过 `--check`；配合 `recraft-cli lint` 与 `recraft-cli metrics` 构成三层回归- CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
+ 已提交快照合计 **789** 个函数（notepad **506（全部函数）**、crackme 160、corpus 31、corpus86 32、go 60），
+  全部通过 `--check`；配合 `recraft-cli lint` 与 `recraft-cli metrics` 构成三层回归。
+- CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
   CI 先写入临时目录再 `--check` 做**确定性/归一化回环**校验。仓库快照用于本地与
   review 时的真实回归。M3 引入固定 toolchain 容器后改为直接对比提交的快照。

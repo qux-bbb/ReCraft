@@ -1,9 +1,9 @@
-# MCP server（read-only，M2）
+# MCP server（默认只读，`--write` 开写工具）
 
 ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户端（OpenCode、
 自研 agent 等）。默认只暴露只读工具 + 资源；加 `--write` 后额外暴露**写工具**
-（`rename`、`set_comment`、`set_prototype`、`apply_type`、`define_function`、`batch` 和
-`undo`），所有写操作走与 GUI 相同的 Command 总线并写入带来源标记的 journal，可以 undo
+（`rename`、`set_comment`、`set_prototype`、`apply_type`、`define_function`、
+`define_struct`、`batch` 和 `undo`），所有写操作走与 GUI 相同的 Command 总线并写入带来源标记的 journal，可以 undo
 回退（`batch` 一整组一起回退）。写工具默认关闭，`serve-mcp` 不加 `--write` 时服务器对项目
 的访问是只读的。
 

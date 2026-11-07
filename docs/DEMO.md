@@ -23,7 +23,7 @@ pwsh -File scripts/demo.ps1 -PEFile C:\Windows\System32\notepad.exe
 |---|---|
 | 1 PE headers | 架构、镜像基址、节表（`recraft-cli info`） |
 | 2 import + analysis | 导入 → 函数/字符串/xref/API 标签，分析耗时 |
-| 3 function discovery | 函数列表（corpus 28 个） |
+| 3 function discovery | 函数列表（corpus 31 个） |
 | 4 structured pseudocode | `decompile --l2`：签名、参数名、结构（if/while） |
 | 5 rename + prototype | 命令总线写入，`// prototype:` 与解析后的签名/参数名 |
 | 6 struct layout + apply_type | `define-struct`/`apply-type` 后 `arg1->value` |
@@ -147,8 +147,11 @@ opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp C:\path\to\proj
 ```
 
 客户端可获得 `list_functions`、`get_disassembly`、`get_pseudocode`、`xrefs_*`、
-`list_strings`、`list_imports`、`callgraph`、`search_bytes`、`function_summary`，
-以及 `recraft://project/{id}/functions|strings|imports|pseudocode/{func}` 资源。
+`list_strings`、`list_imports`、`list_exports`、`get_metadata`、`callgraph`、
+`search_bytes`、`function_summary`、`find_api_callers`，以及
+`recraft://project/{id}/functions|strings|imports|pseudocode/{func}` 资源；加 `--write`
+还会注册 `rename`/`set_comment`/`set_prototype`/`apply_type`/`define_function`/
+`define_struct`/`batch`/`undo`。
 
 ## 本地 LLM（可选）
 
@@ -170,7 +173,7 @@ recraft-cli ai explain demo.rcraft --addr entry --llm
 3. **反编译**（3 min）：L2 结构化、字段/数组/结构体/原型、golden 回归与质量门禁。
 4. **AI 与写回**（2 min）：Proposal 带证据与置信度；只有人工确认才经命令总线写入，可 undo。
 5. **生态**（1 min）：MCP 让 OpenCode 等直接查询项目；纯本地、无云端依赖。
-6. **路线**（1 min）：M3 打包/预览 → 动态调试（后续版本）。
+6. **路线**（1 min）：M4 公开预览 → 动态调试（后续版本）。
 
 ## 排障
 

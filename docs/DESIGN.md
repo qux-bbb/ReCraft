@@ -1,6 +1,6 @@
 # ReCraft 设计文档 v0.1
 
-> 状态：待评审（评审通过后进入 M0）
+> 状态：已评审（2026-10-22 通过，进入 M0）
 > 日期：2026-10-22
 > 作者：Lead（与项目所有者讨论产出）
 
@@ -421,10 +421,10 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 ### 9.1 MCP server
 
 - 传输：stdio 优先，HTTP 可选（带 token 鉴权）
-- 读工具（`recraft-query` 提供，MCP 与内置 agent 共用同一份 spec 与执行器）：`list_functions`、`get_disassembly`、`get_pseudocode`（默认 L2）、`xrefs_to/from`、`list_strings`、`list_imports`、`callgraph`、`search_bytes`、`function_summary`、`find_api_callers`
-- 写工具（`serve-mcp --write` 显式开启，默认只读）：`rename`、`set_comment`、`set_prototype`、`define_function`、`apply_type`、`batch`、`undo`
+- 读工具（`recraft-query` 提供，MCP 与内置 agent 共用同一份 spec 与执行器）：`list_functions`、`get_disassembly`、`get_pseudocode`（默认 L2）、`xrefs_to/from`、`list_strings`、`list_imports`、`list_exports`、`get_metadata`、`callgraph`、`search_bytes`、`function_summary`、`find_api_callers`
+- 写工具（`serve-mcp --write` 显式开启，默认只读）：`rename`、`set_comment`、`set_prototype`、`define_function`、`define_struct`、`apply_type`、`batch`、`undo`
 - 资源：`recraft://project/{id}/functions|strings|imports|pseudocode/{func}`
-- 提示模板：恶意样本 triage 报告、CTF 解题大纲
+- 提示模板：`triage_sample`、`explain_function`、`propose_names`、`ctf_outline`
 
 写操作协议：写工具直接经 Command 总线应用并写 journal（可 undo），进程级 `--write` 即人工授权；AI 的批量命名建议仍然走 `Proposal`（含证据地址 + 置信度）→ UI 展示 diff → 人工确认的两段式，二者共用同一条命令总线。
 
@@ -452,8 +452,8 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 
 ```
 recraft-cli analyze <file> [--json] [--out project.rcraft]
-recraft-cli strings|imports|functions|callgraph <file> [--json]
-recraft-cli decompile <file> --func 0x401000 [--json]
+recraft-cli strings|imports|funcs|callgraph <file> [--json]
+recraft-cli decompile <file> --addr 0x401000 [--json]
 recraft-cli search --bytes/--string ...
 recraft-cli serve-mcp <project.rcraft> [--stdio|--http]
 recraft-cli batch <script.json>
@@ -558,3 +558,4 @@ CLI 与 UI 直接使用 `recraft-core` 的 `Session`，MCP 与内置 agent 共�
 | ADR-011 | 大样本目标 1 GB，交互优先、后台导入/分析 | 已定 |
 | ADR-012 | 多窗口 | 已定 |
 | ADR-013 | 纯 AGPL-3.0-only，DCO 取代 CLA，取消商业许可 | 已定 |
+| ADR-014 | MCP 写工具由 `--write` 显式开启，走 Command 总线可 undo（部分取代 ADR-008） | 已定 |

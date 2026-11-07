@@ -2,13 +2,15 @@
 
 [简体中文](README.md) | **English**
 
-> **Status: M3 complete, M4 (public preview) in progress.** Import/analyze PE32/PE32+
+> **Status: M3 complete; M4 features and artifacts are complete. The public preview
+> awaits code signing and a clean-VM re-check.** Import/analyze PE32/PE32+
 > (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type writes through a journaled command bus with undo, an MCP server (read-only
 > by default, `--write` enables the write tools), and provider-backed AI (explain / rename
 > proposals / triage) with a propose-apply UI.
 > Quality gates: corpus semantic coverage **97.4%**, structured rate **100%**; notepad
-> **99.6%** coverage and **96.6%** structured (489/506); 1 GiB
+> **99.6%** coverage and **97.6%** structured (494/506); crackme **92.9%** (460/495),
+> Go **91.9%** (2,998/3,261); 1 GiB
 > sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
 > [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
 
@@ -25,8 +27,9 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
   to an instruction address; golden snapshots guard every change.
 - **AI that proposes, never silently writes**: proposals carry evidence addresses and a
   confidence; writes go through the same journaled command bus as manual edits (undoable).
-- **Provider required**: AI features use a configured LLM provider; prompts
-  are redacted + budgeted, results cached and audited locally.
+- **Provider optional**: AI heuristics run offline; a configured LLM provider adds
+  model-backed explain/rename/polish, with prompts redacted + budgeted and results cached
+  and audited locally.
 - **MCP-native**: OpenCode and other agents can query functions, pseudocode, xrefs,
   strings, imports and call graphs through an MCP server; `--write` also renames, comments
   and sets prototypes, each step undoable.
@@ -82,16 +85,22 @@ flowchart TB
     ana --> dc
     dc --> app[recraft-app]
     core --> app
+    core --> q[recraft-query<br/>shared read tools]
+    dc --> q
     app --> cli[recraft-cli]
     app --> ui[recraft-ui<br/>egui/Glow]
     app --> mcp[recraft-mcp<br/>stdio JSON-RPC]
     app --> ai[recraft-ai<br/>explain / proposals / providers]
+    q --> mcp
+    q --> ai
     ai --> cli
     ai --> ui
 ```
 
 All writes (rename/comment/prototype/apply_type) go through `recraft-core`'s journaled
-command bus; analysis output lives in derived tables and can be rebuilt at any time.
+command bus; analysis output lives in derived tables and can be rebuilt at any time. The
+`recraft-app` node in the diagram is the planned orchestration layer (currently a skeleton);
+the CLI and UI use `recraft-core`, `recraft-analysis` and `recraft-decompile` directly.
 
 ## Building
 
@@ -220,9 +229,12 @@ during the spike, see [`docs/adr/ADR-002-ui-framework.md`](docs/adr/ADR-002-ui-f
 
 ### MCP server
 
-Read-only Model Context Protocol tools over stdio: `list_functions`, `get_disassembly`,
-`get_pseudocode` (L0/L1/L2), `xrefs_to/from`, `list_strings`, `list_imports`,
-`callgraph`, `search_bytes`, `function_summary`, plus project resources.
+Model Context Protocol tools over stdio (read-only by default; `--write` adds the
+journaled write tools): `list_functions`, `get_disassembly`, `get_pseudocode` (L0/L1/L2),
+`xrefs_to/from`, `list_strings`, `list_imports`, `list_exports`, `get_metadata`,
+`callgraph`, `search_bytes`, `function_summary`, `find_api_callers`, plus project
+resources; `--write` adds `rename`/`set_comment`/`set_prototype`/`apply_type`/
+`define_function`/`define_struct`/`batch`/`undo`.
 
 ```powershell
 cargo run -p recraft-cli -- serve-mcp notepad.rcraft

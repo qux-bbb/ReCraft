@@ -8,8 +8,8 @@
 ## 2. 反编译质量到什么程度？
 
 伪代码是**可读但不保证可编译**的 C-like 输出，每个 token 可回溯到指令地址（DESIGN §7）。
-corpus 基准：语义覆盖 97.4%、结构化成功率 100%；真实样本（notepad）覆盖 99.5%、
-结构化 97.0%（487/502），crackme 91.9%（453/493），Go 二进制 92.1%（3003/3261，覆盖率 98.8%）。
+corpus 基准：语义覆盖 97.4%、结构化成功率 100%；真实样本（notepad）覆盖 99.6%、
+结构化 97.6%（494/506），crackme 92.9%（460/495），Go 二进制 91.9%（2998/3261，覆盖率 98.8%）。
 复杂异常处理/不可归约控制流会回退到 `goto` 标签，这是设计
 允许的降级路径。
 
@@ -52,13 +52,14 @@ DCO），不需要 CLA，也不做版权转让。
 
 ## 9. 有 MCP 吗？怎么接 OpenCode？
 
-有。`recraft-cli serve-mcp <project>` 通过 stdio 提供反汇编、伪代码、xrefs、字符串、导入、
-调用图、字节搜索、函数摘要等只读工具与项目资源；加 `--write` 后再提供 `rename`、`set_comment`、
-`set_prototype`、`apply_type`、`define_function`、`undo` 写工具（走命令总线，每步可撤销）。
+有。`recraft-cli serve-mcp <project>` 通过 stdio 提供反汇编、伪代码、xrefs、字符串、导入/导出、
+镜像元数据、调用图、字节搜索、函数摘要等只读工具与项目资源；加 `--write` 后再提供 `rename`、
+`set_comment`、`set_prototype`、`apply_type`、`define_function`、`define_struct`、`batch`、
+`undo` 写工具（走命令总线，每步可撤销）。
 接入步骤与配置示例见 [docs/MCP.md](MCP.md)（`opencode mcp add` 或 `mcp.servers`），演示脚本见
 [docs/DEMO.md](DEMO.md)。
 
 ## 10. 什么时候有公开预览？
 
-里程碑见 [docs/ROADMAP.md](ROADMAP.md)。当前 M0–M3 功能已落地，M4 在做安装包验证与
-预览材料；预览前检查清单在 [docs/M4.md](M4.md)。
+里程碑见 [docs/ROADMAP.md](ROADMAP.md)。M0–M4 的功能与产物已落地；公开预览待代码签名与
+干净 VM 复验。预览前检查清单在 [docs/M4.md](M4.md)。

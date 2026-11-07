@@ -2,12 +2,13 @@
 
 **简体中文** | [English](README.en.md)
 
-> **状态：M3 已完成，M4（公开预览）进行中。** 支持导入/分析 PE32/PE32+
-> （x64 + Win32）；带签名、ABI 和类型的结构化伪 C；通过带撤销的日志命令总线执行
-> 重命名/注释/原型/结构体类型写入；MCP 服务器（默认只读，`--write` 开写工具）；离线优先 AI
-> （解释 / 重命名建议 / 初筛）及 propose-apply UI。
+> **状态：M3 已完成，M4 功能与产物完成；公开预览待代码签名与干净 VM 复验。**
+> 支持导入/分析 PE32/PE32+（x64 + Win32）；带签名、ABI 和类型的结构化伪 C；通过带撤销的
+> 日志命令总线执行重命名/注释/原型/结构体类型写入；MCP 服务器（默认只读，`--write` 开写
+> 工具）；离线优先 AI（解释 / 重命名建议 / 初筛）及 propose-apply UI。
 > 质量门禁：语料语义覆盖率 **97.4%**、结构化率 **100%**；真实样本 notepad 覆盖率
-> **99.6%**、结构化 **96.6%**（489/506）；1 GiB 样本：导入约 4 秒，
+> **99.6%**、结构化 **97.6%**（494/506）；crackme **92.9%**（460/495）、Go
+> **91.9%**（2,998/3,261）；1 GiB 样本：导入约 4 秒，
 > 分析约 0.3 秒，峰值 5.6 MiB（debug）。预览清单见 [`docs/M4.md`](docs/M4.md)，
 > 常见问题见 [`docs/FAQ.md`](docs/FAQ.md)。
 
@@ -80,16 +81,22 @@ flowchart TB
     ana --> dc
     dc --> app[recraft-app]
     core --> app
+    core --> q[recraft-query<br/>shared read tools]
+    dc --> q
     app --> cli[recraft-cli]
     app --> ui[recraft-ui<br/>egui/Glow]
     app --> mcp[recraft-mcp<br/>stdio JSON-RPC]
     app --> ai[recraft-ai<br/>explain / proposals / providers]
+    q --> mcp
+    q --> ai
     ai --> cli
     ai --> ui
 ```
 
 所有写入（重命名/注释/原型/apply_type）都经过 `recraft-core` 的日志命令总线；
-分析结果存放在派生表中，可以随时重建。
+分析结果存放在派生表中，可以随时重建。图中的 `recraft-app` 是规划中的编排层（当前仍是
+空壳），CLI/UI 目前直接使用 `recraft-core`、`recraft-analysis`、`recraft-decompile` 等
+下层 crate 的 API。
 
 ## 构建
 
@@ -213,9 +220,12 @@ UI 二进制使用 OpenGL（Glow）渲染；wgpu/DX12 在 spike 阶段于 Intel 
 
 ### MCP 服务器
 
-通过 stdio 提供只读 Model Context Protocol 工具：`list_functions`、`get_disassembly`、
-`get_pseudocode`（L0/L1/L2）、`xrefs_to/from`、`list_strings`、`list_imports`、
-`callgraph`、`search_bytes`、`function_summary`，以及项目资源。
+通过 stdio 提供 Model Context Protocol 工具（默认只读，`--write` 再开写工具）：
+`list_functions`、`get_disassembly`、`get_pseudocode`（L0/L1/L2）、`xrefs_to/from`、
+`list_strings`、`list_imports`、`list_exports`、`get_metadata`、`callgraph`、
+`search_bytes`、`function_summary`、`find_api_callers`，以及项目资源；`--write`
+提供 `rename`/`set_comment`/`set_prototype`/`apply_type`/`define_function`/
+`define_struct`/`batch`/`undo`。
 
 ```powershell
 cargo run -p recraft-cli -- serve-mcp notepad.rcraft

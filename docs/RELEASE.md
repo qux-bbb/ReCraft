@@ -69,7 +69,7 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
 [package] SHA256: dist\SHA256SUMS.txt
 [verify] SHA256SUMS matches recraft-v0.1.0-windows-x64.zip
 [verify] MSI SHA256 + compound-file header OK (recraft-v0.1.0-windows-x64.msi, 12.6 MiB)
-[verify] analyze/decompile/AI/metrics OK (functions=502)
+[verify] analyze/decompile/AI/metrics OK (functions=502；2026-11-05 起 notepad 为 506)
 [verify] PACKAGE PASS
 [msi] structure OK (8 table checks, per-machine)
 [msi] payload OK (10 files + 33 docs, byte-identical to dist\ReCraft-0.1.0)

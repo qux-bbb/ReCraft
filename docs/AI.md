@@ -295,7 +295,7 @@ exact 一列标成区间；accepted/partial 才是稳定的判断口径。逐条
 ## 项目级 Agent（工具调用）
 
 一次性按钮回答不了“这个样本的持久化在哪”“谁解析命令行”这类问题——它们需要模型自己决定
-看哪个函数、看多少。`ai ask` 与面板里的 **分析助手** 把项目暴露成 11 个只读工具，让模型在
+看哪个函数、看多少。`ai ask` 与面板里的 **分析助手** 把项目暴露成 13 个只读工具，让模型在
 最多 `AGENT_MAX_ROUNDS=8` 轮内自己取证。工具定义与执行器来自 `recraft-query`，与 MCP 服务器
 **同一份 spec、同一个实现**，只是预算更小（行数/伪代码行数，避免一次塞满上下文）：
 
@@ -331,7 +331,7 @@ exact 一列标成区间；accepted/partial 才是稳定的判断口径。逐条
   缓冲后整段打印。
 
 实测（naming 基准样本）：问“哪些函数在操作注册表”，模型依次调用
-`find_api_callers("Reg")` → `search_strings("Software\\")` → 三个 `function_info`/`pseudocode`
+`find_api_callers("Reg")` → `list_strings("Software\\")` → 三个 `function_summary`/`get_pseudocode`
 → `xrefs_to`，给出三个注册表函数的逐条分析，并额外发现 `read_registry_string` 调用了反调试桩、
 以及 `delete_registry_tree` 只删子键不递归。这类结论单看一个函数的伪代码得不到。
 
