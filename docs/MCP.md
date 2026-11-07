@@ -228,11 +228,16 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 
 ## 限制与后续
 
-- **默认只读**：不加 `--write` 时所有工具都不修改项目。`--write` 打开的写工具走 Command
+- **默认只读**：不加 `--write` 时所有工具都不修改用户数据。`--write` 打开的写工具走 Command
   总线并写 journal，可 `undo`；它取代了早期“MCP 只读、写操作只走 propose/apply”的约定，
   见 [ADR-014](adr/ADR-014-mcp-write-mode.md)（部分取代 [ADR-008](adr/ADR-008-mcp-propose-apply.md)）。
-- 无资源订阅（`resources/subscribe`）与 MCP 提示词模板（prompts）；HTTP 传输与 bearer
-  鉴权已实现（见上）。
+  只读模式唯一会写的是**派生**的伪代码缓存（`pseudocode` 表）：它可随时重建，任何编辑都会
+  清空，失败也不影响返回结果；项目文件只读挂载时缓存自动失效为「每次重新反编译」。
+- **反编译缓存**：`get_pseudocode` 第一次渲染后按指纹（函数范围/名字/原型/参数类型/结构体
+  数量 + 反编译器版本）落库，第二次直接命中。实测 14 768 行的函数：冷 9.8 s → 热 16 ms；
+  结果里 `cached` 字段标明是否命中。`includeLines` 请求逐行地址时不走缓存。
+- 暂无资源订阅（`resources/subscribe`）；`prompts` 已实现（见上），HTTP 传输与 bearer
+  鉴权也已实现。
 - `search_bytes` 在 1 GiB 段上按需分块扫描，暂无通配符/正则；`callgraph` 基于已持久化
   的 call xref，未分析项目返回空图。
 - `function_summary` 的 API 标签来自分析阶段写入的 `api_tag` 表。

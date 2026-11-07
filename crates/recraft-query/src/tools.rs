@@ -35,17 +35,16 @@ pub fn list_functions(
         .map(str::to_ascii_lowercase);
     let limit = limit_of(arguments, 500, budget);
     let offset = offset_of(arguments);
-    let functions = session.functions().map_err(|e| e.to_string())?;
+    let functions = session.functions_named().map_err(|e| e.to_string())?;
     let total_available = functions.len();
     let mut items = Vec::new();
     let mut matched = 0usize;
-    for function in &functions {
+    for (function, name) in &functions {
         // Without a filter the scan stops at the end of the page; with one it has to reach
         // the end, because the match may sit anywhere in the address-ordered table.
         if filter.is_none() && items.len() >= limit {
             break;
         }
-        let name = session.name_at(function.start).map_err(|e| e.to_string())?;
         if let Some(filter) = &filter
             && !name
                 .as_deref()
@@ -427,6 +426,10 @@ pub fn disassembly(session: &mut Session, arguments: &Value) -> Result<Value, St
 }
 
 /// `get_pseudocode`: L0/L1/L2 pseudo-C, paged by line.
+///
+/// Rendered text is cached in the project (`pseudocode` table) under a fingerprint of
+/// everything that can change it, so re-reading a 13 000-line function is instant instead of
+/// paying the decompiler again.
 pub fn pseudocode(
     session: &mut Session,
     arguments: &Value,
@@ -446,13 +449,6 @@ pub fn pseudocode(
         .find(|function| addr >= function.start && addr < function.end)
         .map(|function| function.start)
         .unwrap_or(addr);
-    let code = match level.as_str() {
-        "l0" => recraft_decompile::pseudocode_l0(session, function, 2000),
-        "l1" => recraft_decompile::pseudocode_l1(session, function),
-        _ => recraft_decompile::pseudocode_l2(session, function),
-    }
-    .map_err(|e| e.to_string())?;
-    let name = session.name_at(function).map_err(|e| e.to_string())?;
     let max_lines = cap_of(
         arguments,
         "maxLines",
@@ -478,20 +474,63 @@ pub fn pseudocode(
         .get("includeLines")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let total_lines = code.lines.len();
+
+    // The cache keeps the text only, so a caller that wants per-line addresses is served
+    // straight from the decompiler (that is a debugging view, not the hot path).
+    let engine = format!("recraft-decompile {}", recraft_decompile::VERSION);
+    let fingerprint = session
+        .pseudocode_fingerprint(function, &level, &engine)
+        .map_err(|e| e.to_string())?;
+    let mut cached_hit = false;
+    let mut lines: Vec<(Option<recraft_common::Address>, String)> = Vec::new();
+    if !include_lines
+        && let Some(text) = session
+            .cached_pseudocode(function, &fingerprint)
+            .map_err(|e| e.to_string())?
+    {
+        cached_hit = true;
+        lines.extend(text.lines().map(|line| (None, line.to_owned())));
+    }
+    if !cached_hit {
+        let code = match level.as_str() {
+            "l0" => recraft_decompile::pseudocode_l0(session, function, 2000),
+            "l1" => recraft_decompile::pseudocode_l1(session, function),
+            _ => recraft_decompile::pseudocode_l2(session, function),
+        }
+        .map_err(|e| e.to_string())?;
+        lines.extend(
+            code.lines
+                .iter()
+                .map(|line| (Some(line.addr), line.text.clone())),
+        );
+        if !include_lines {
+            let document: String = code
+                .lines
+                .iter()
+                .map(|line| format!("{}\n", line.text))
+                .collect();
+            // Best effort: a cache write must never fail the tool call.
+            let _ = session.store_pseudocode(function, &fingerprint, &document);
+        }
+    }
+    let name = session.name_at(function).map_err(|e| e.to_string())?;
+    let total_lines = lines.len();
     let first = start_line.saturating_sub(1).min(total_lines);
-    let mut lines = Vec::new();
     let mut text = String::new();
+    let mut rows = Vec::new();
     let mut kept = 0usize;
-    for line in code.lines.iter().skip(first) {
-        if kept >= max_lines || (kept > 0 && text.len() + line.text.len() + 1 > max_bytes) {
+    for (line_addr, line) in lines.iter().skip(first) {
+        if kept >= max_lines || (kept > 0 && text.len() + line.len() + 1 > max_bytes) {
             break;
         }
-        text.push_str(&line.text);
+        text.push_str(line);
         text.push('\n');
         kept += 1;
         if include_lines {
-            lines.push(json!({"addr": hex(line.addr), "text": line.text}));
+            rows.push(json!({
+                "addr": line_addr.map(hex),
+                "text": line,
+            }));
         }
     }
     let end_line = first + kept;
@@ -506,10 +545,11 @@ pub fn pseudocode(
         "returned_lines": kept,
         "total_lines": total_lines,
         "truncated": truncated,
+        "cached": cached_hit,
         "next_start_line": if truncated { json!(end_line + 1) } else { Value::Null },
     });
     if include_lines {
-        payload["lines"] = json!(lines);
+        payload["lines"] = json!(rows);
     }
     if truncated {
         payload["hint"] = json!(format!(
@@ -569,18 +609,15 @@ pub fn summary(session: &mut Session, arguments: &Value) -> Result<Value, String
         strings.iter().map(|entry| entry.addr.get()).collect();
 
     let calls = session
-        .all_xrefs(Some(XREF_CALL))
+        .xrefs_from_range(function.start, function.end, Some(XREF_CALL))
         .map_err(|e| e.to_string())?;
     let data_refs = session
-        .all_xrefs(Some(XREF_DATA))
+        .xrefs_from_range(function.start, function.end, Some(XREF_DATA))
         .map_err(|e| e.to_string())?;
     let mut call_targets: Vec<Value> = Vec::new();
     let mut call_sites = Vec::new();
     let mut seen_targets = std::collections::BTreeSet::new();
     for call in &calls {
-        if call.from < function.start || call.from >= function.end {
-            continue;
-        }
         call_sites.push(call.from);
         if seen_targets.insert(call.to.get()) {
             call_targets.push(json!({
@@ -591,9 +628,6 @@ pub fn summary(session: &mut Session, arguments: &Value) -> Result<Value, String
     }
     let mut referenced_strings = Vec::new();
     for data in &data_refs {
-        if data.from < function.start || data.from >= function.end {
-            continue;
-        }
         if string_addrs.contains(&data.to.get()) {
             let text = session
                 .read_bytes(data.to, 64)

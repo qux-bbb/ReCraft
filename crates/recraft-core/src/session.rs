@@ -41,6 +41,10 @@ const SWEEP_LIMIT: usize = 50_000;
 /// `func.flags` bit marking functions produced by automatic analysis (derived data).
 pub const FUNC_FLAG_AUTO: u32 = 1;
 
+/// Salt for the rendered-pseudocode cache. Bump it when the emitter's output changes in a way
+/// [`Session::pseudocode_fingerprint`] cannot see (formatting, pass order, ...).
+pub const PSEUDOCODE_CACHE_SALT: u32 = 1;
+
 /// One journal record as reported to callers of [`Session::undo_report`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoRecord {
@@ -523,6 +527,36 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// All defined functions with their names, in one query.
+    ///
+    /// Listing functions used to issue one `name_at` query per row (500 rows → 500 round
+    /// trips); a LEFT JOIN does the same work once.
+    pub fn functions_named(&self) -> Result<Vec<(FunctionInfo, Option<String>)>> {
+        let mut statement = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT f.start, f.end, n.text FROM func f
+                 LEFT JOIN name n ON n.addr = f.start
+                 ORDER BY f.start",
+            )
+            .map_err(command::db_err)?;
+        let rows = statement
+            .query_map([], |row| {
+                let start: i64 = row.get(0)?;
+                let end: i64 = row.get(1)?;
+                Ok((
+                    FunctionInfo {
+                        start: Address::new(start as u64),
+                        end: Address::new(end as u64),
+                    },
+                    row.get(2)?,
+                ))
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
     /// Resolve a symbol name to its address (first match).
     pub fn addr_of_name(&self, name: &str) -> Result<Option<Address>> {
         let addr: Option<i64> = self
@@ -570,6 +604,8 @@ impl Session {
             .map_err(command::db_err)?;
         }
         tx.commit().map_err(command::db_err)?;
+        // New function boundaries mean the rendered pseudocode no longer matches.
+        self.clear_pseudocode_cache()?;
         Ok(())
     }
 
@@ -973,12 +1009,121 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// Cross-references originating inside `[start, end)`, optionally filtered by kind.
+    ///
+    /// A function summary used to scan the whole `xref` table twice per call (206 k rows on a
+    /// 33 MB DLL); the range predicate keeps it to one indexed scan of the function's body.
+    pub fn xrefs_from_range(
+        &self,
+        start: Address,
+        end: Address,
+        kind: Option<i64>,
+    ) -> Result<Vec<XrefEntry>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT from_addr, to_addr, type FROM xref
+                 WHERE from_addr >= ?1 AND from_addr < ?2
+                   AND (?3 IS NULL OR type = ?3)
+                 ORDER BY from_addr",
+            )
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map(params![start.get() as i64, end.get() as i64, kind], |row| {
+                Ok(XrefEntry {
+                    from: Address::new(row.get::<_, i64>(0)? as u64),
+                    to: Address::new(row.get::<_, i64>(1)? as u64),
+                    kind: row.get(2)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
     // ----------------------------------------------------------- commands ----
 
     /// Apply a user command, journal it, and invalidate the redo stack.
     pub fn execute(&mut self, cmd: Command) -> Result<Effect> {
         let mut effects = self.execute_batch(&[cmd])?;
         Ok(effects.remove(0))
+    }
+
+    /// Fingerprint of everything that changes a function's rendered pseudocode.
+    ///
+    /// The `pseudocode` table is keyed by it, so renaming a function, editing its prototype,
+    /// rebinding an argument type, adding a struct layout or re-analysing the function (which
+    /// changes its extent) all invalidate the cached text. `engine` is the decompiler version;
+    /// bump [`PSEUDOCODE_CACHE_SALT`] when the emitter itself changes shape.
+    pub fn pseudocode_fingerprint(
+        &self,
+        func: Address,
+        level: &str,
+        engine: &str,
+    ) -> Result<String> {
+        let end = self.func_at(func)?.map(|end| end.get()).unwrap_or(0);
+        let name = self.name_at(func)?.unwrap_or_default();
+        let prototype = self.prototype_at(func)?.unwrap_or_default();
+        let mut args = String::new();
+        for slot in 0..8u8 {
+            if let Some(kind) = self.arg_type(func, slot)? {
+                args.push_str(&kind);
+                args.push('|');
+            }
+        }
+        let (structs, fields): (i64, i64) = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM user_struct),
+                        (SELECT COUNT(*) FROM user_struct_field)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(command::db_err)?;
+        Ok(format!(
+            "{engine}|{level}|v{PSEUDOCODE_CACHE_SALT}|{end:x}|{name}|{prototype}|{args}|{structs}|{fields}"
+        ))
+    }
+
+    /// Cached pseudocode for `func`, when it was rendered from the same fingerprint.
+    pub fn cached_pseudocode(&self, func: Address, fingerprint: &str) -> Result<Option<String>> {
+        let row = self
+            .project
+            .conn()
+            .query_row(
+                "SELECT text, version FROM pseudocode WHERE func_id = ?1",
+                [func.get() as i64],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(command::db_err)?;
+        Ok(match row {
+            Some((text, version)) if version == fingerprint => String::from_utf8(text).ok(),
+            _ => None,
+        })
+    }
+
+    /// Store a freshly rendered pseudocode document under `fingerprint`.
+    pub fn store_pseudocode(&self, func: Address, fingerprint: &str, text: &str) -> Result<()> {
+        self.project
+            .conn()
+            .execute(
+                "INSERT INTO pseudocode(func_id, text, span_map, version) VALUES (?1, ?2, X'', ?3)
+                 ON CONFLICT(func_id) DO UPDATE SET text = excluded.text, version = excluded.version",
+                params![func.get() as i64, text.as_bytes(), fingerprint],
+            )
+            .map_err(command::db_err)?;
+        Ok(())
+    }
+
+    /// Drop every rendered-pseudocode entry (called whenever the project changes).
+    pub fn clear_pseudocode_cache(&self) -> Result<()> {
+        self.project
+            .conn()
+            .execute("DELETE FROM pseudocode", [])
+            .map_err(command::db_err)?;
+        Ok(())
     }
 
     /// Apply several commands in one transaction: all of them land or none does.
@@ -1028,6 +1173,7 @@ impl Session {
         }
 
         self.decoders.clear();
+        self.clear_pseudocode_cache()?;
         Ok(commands.iter().map(Command::effect).collect())
     }
 
@@ -1127,6 +1273,7 @@ impl Session {
         }
 
         self.decoders.clear();
+        self.clear_pseudocode_cache()?;
         Ok(UndoReport {
             records,
             effect: Effect { dirty },
@@ -1161,6 +1308,7 @@ impl Session {
         }
 
         self.decoders.clear();
+        self.clear_pseudocode_cache()?;
         Ok(Some(effect))
     }
 
@@ -1680,6 +1828,67 @@ mod tests {
         let report = session.undo_seq(newest).unwrap();
         assert_eq!(report.records.len(), 1);
         assert_eq!(report.records[0].origin, "gui");
+    }
+
+    #[test]
+    fn functions_named_matches_functions_and_carries_names() {
+        let dir = TempDir::new().unwrap();
+        let Some(session) = fixture(&dir) else {
+            return;
+        };
+        let plain = session.functions().unwrap();
+        let named = session.functions_named().unwrap();
+        assert_eq!(plain.len(), named.len());
+        for (index, (function, name)) in named.iter().enumerate() {
+            assert_eq!(function.start, plain[index].start);
+            assert_eq!(function.end, plain[index].end);
+            assert_eq!(*name, session.name_at(function.start).unwrap());
+        }
+    }
+
+    #[test]
+    fn pseudocode_cache_hits_and_invalidates_on_write() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let fingerprint = session.pseudocode_fingerprint(entry, "l2", "test").unwrap();
+        assert!(
+            session
+                .cached_pseudocode(entry, &fingerprint)
+                .unwrap()
+                .is_none()
+        );
+        session
+            .store_pseudocode(entry, &fingerprint, "int f(void) {}\n")
+            .unwrap();
+        assert_eq!(
+            session.cached_pseudocode(entry, &fingerprint).unwrap(),
+            Some("int f(void) {}\n".to_owned())
+        );
+
+        // Renaming changes the fingerprint, and any command drops the cached text.
+        session
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("renamed_entry".to_owned()),
+            })
+            .unwrap();
+        let after = session.pseudocode_fingerprint(entry, "l2", "test").unwrap();
+        assert_ne!(fingerprint, after, "the name is part of the fingerprint");
+        assert!(session.cached_pseudocode(entry, &after).unwrap().is_none());
+
+        // A different level or engine also misses.
+        session
+            .store_pseudocode(entry, &after, "int f(void) {}\n")
+            .unwrap();
+        assert!(
+            session
+                .cached_pseudocode(entry, "recraft-decompile 999|")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

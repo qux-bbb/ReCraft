@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rendered pseudocode is cached in the project.** `get_pseudocode` stores its L2 text in the
+  `pseudocode` table (dead schema until now) under a fingerprint of everything that can change
+  it — function extent, name, prototype, argument types, struct-layout count and the
+  decompiler version (`recraft-decompile::VERSION`). Re-reading the 14 768-line function on
+  shell32 drops from **9.8 s to 16 ms**; results carry `cached: true`. The cache is derived
+  data: it is deleted on every command, undo, redo and re-analysis, and a failed write (e.g.
+  a read-only file) just means "decompile again".
+
+- **Function lists are one JOIN, and summaries only read the function's own range.**
+  `Session::functions_named` replaces one `name_at` query per row (5 000 lookups: 17.9 ms →
+  the JOIN returns all 31 803 rows in 13.5 ms; `list_functions(5000)` went from 53 ms to
+  21 ms). `function_summary` uses a new `xrefs_from_range` instead of loading both whole xref
+  tables per call — 131 ms → 34 ms on shell32 — and `callgraph` no longer re-scans the
+  function table per edge.
+
+- **`recraft-mcp` is split into modules.** The 2 276-line `lib.rs` became `lib.rs` (protocol +
+  server + tests), `http.rs` (transport), `schema.rs` (tool specs), `write.rs` (journaled
+  edits) and `resources.rs` (resources + prompts); `lib.rs` is down to 1 292 lines, ~1 000 of
+  which are tests.
+
 - **Exports, image metadata and prompt templates.** Two read tools every DLL and every triage
   question needs were missing: `list_exports` (name/ordinal/VA/forwarder, filter + paging) and
   `get_metadata` (format, arch, base, entry, sizes, subsystem, timestamp, TLS callbacks,

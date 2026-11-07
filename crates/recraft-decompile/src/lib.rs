@@ -3,8 +3,7 @@
 
 //! Decompiler front-end.
 //!
-//! - **L0**: flat, instruction-faithful pseudo-C (straight-line + branches).
-//! - **L1**: control-structure recovery (`if`/`else`, `while`, `switch`).
+//! - **L0**: flat, instruction-faithful pseudo-C (straight-line + branches).//! - **L1**: control-structure recovery (`if`/`else`, `while`, `switch`).
 //! - **L2 (first cut)**: incoming argument registers (`arg1..arg4`) and named stack
 //!   slots (`var_XX`), still without types or SSA.
 //!
@@ -12,6 +11,9 @@
 //! layer can cite evidence.
 
 #![forbid(unsafe_code)]
+
+/// Version of the emitter, used to key the rendered-pseudocode cache.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 

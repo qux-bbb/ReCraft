@@ -549,6 +549,143 @@ mod tests {
     }
 
     #[test]
+    fn pseudocode_is_cached_after_the_first_read() {
+        let Some(mut session) = project() else {
+            return;
+        };
+        let addr = format!("{:#x}", session.entry_point().get());
+        let first = call(
+            &mut session,
+            "get_pseudocode",
+            &json!({"addr": addr}),
+            &Budget::mcp(),
+        )
+        .expect("first read");
+        assert_eq!(first["cached"], false);
+        let second = call(
+            &mut session,
+            "get_pseudocode",
+            &json!({"addr": addr}),
+            &Budget::mcp(),
+        )
+        .expect("second read");
+        assert_eq!(
+            second["cached"], true,
+            "second read must come from the cache"
+        );
+        assert_eq!(first["text"], second["text"]);
+
+        // A write invalidates the cached text.
+        call(
+            &mut session,
+            "list_functions",
+            &json!({"limit": 1}),
+            &Budget::mcp(),
+        )
+        .expect("list");
+        let name = session.name_at(session.entry_point()).unwrap();
+        session
+            .execute(recraft_core::Command::Rename {
+                addr: session.entry_point(),
+                name: Some("cached_entry".to_owned()),
+            })
+            .unwrap();
+        let third = call(
+            &mut session,
+            "get_pseudocode",
+            &json!({"addr": addr}),
+            &Budget::mcp(),
+        )
+        .expect("third read");
+        assert_eq!(third["cached"], false, "a rename must drop the cache");
+        assert_ne!(third["name"], json!(name));
+    }
+
+    /// Manual probe against a large sample: `cargo test -p recraft-query -- --ignored
+    /// --nocapture`. Times the row-heavy and decompile-heavy paths on `.tmp/shell32.rcraft`.
+    #[test]
+    #[ignore = "needs .tmp/shell32.rcraft (33 MB, 31 803 functions)"]
+    fn large_sample_probe() {
+        use std::time::Instant;
+        let path = std::path::Path::new("../../.tmp/shell32.rcraft");
+        if !path.exists() {
+            return;
+        }
+        let mut session = Session::open(path).expect("open shell32");
+        let budget = Budget::mcp();
+
+        // Query cost of the two ways to fill a 5 000-row page.
+        let functions = session.functions().expect("functions");
+        let started = Instant::now();
+        for function in functions.iter().take(5000) {
+            let _ = session.name_at(function.start).expect("name");
+        }
+        println!(
+            "name_at x5000            {:6.1} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        let started = Instant::now();
+        let named = session.functions_named().expect("named");
+        println!(
+            "functions_named (JOIN)   {:6.1} ms  rows={}",
+            started.elapsed().as_secs_f64() * 1000.0,
+            named.len()
+        );
+
+        for (label, arguments) in [
+            ("list_functions(5000)", json!({"limit": 5000})),
+            ("function_summary(entry)", json!({"addr": "entry"})),
+        ] {
+            let started = Instant::now();
+            let value = call(
+                &mut session,
+                label.split('(').next().unwrap(),
+                &arguments,
+                &budget,
+            )
+            .expect("tool");
+            println!(
+                "{label:24} {:6.1} ms  rows={} truncated={}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                value["count"].as_u64().unwrap_or_default(),
+                value["truncated"],
+            );
+        }
+
+        // Cold vs cached L2 on the biggest function (the expensive path).
+        let page = call(
+            &mut session,
+            "list_functions",
+            &json!({"limit": 1}),
+            &budget,
+        )
+        .expect("probe list");
+        let biggest = session
+            .functions()
+            .expect("functions")
+            .into_iter()
+            .max_by_key(|function| function.end.get().saturating_sub(function.start.get()))
+            .map(|function| format!("{:#x}", function.start.get()))
+            .unwrap_or_else(|| page["functions"][0]["start"].as_str().unwrap().to_owned());
+        for attempt in ["cold", "cached"] {
+            let started = Instant::now();
+            let value = call(
+                &mut session,
+                "get_pseudocode",
+                &json!({"addr": biggest, "maxLines": 2000}),
+                &budget,
+            )
+            .expect("pseudocode");
+            println!(
+                "get_pseudocode(biggest) {attempt:6} {:7.1} ms  cached={} lines={}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                value["cached"],
+                value["total_lines"],
+            );
+        }
+    }
+
+    #[test]
     fn a_bad_address_is_an_error_not_a_panic() {
         let Some(mut session) = project() else {
             return;
