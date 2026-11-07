@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The MCP HTTP transport serves requests concurrently.** Each connection now runs on its
+  own thread with its own `Session` (capped at 32 in flight), so a multi-second decompile no
+  longer blocks `ping`, `tools/list` or the next client — measured before: a 6-second
+  `get_pseudocode` call held `ping` for 5 991 ms. Requests carrying a non-loopback `Origin`
+  are refused with 403 (DNS-rebinding defence, required by the streamable-HTTP spec), an
+  unsupported `MCP-Protocol-Version` header returns 400, and a request that cannot open the
+  project returns 500 instead of dropping the connection.
+
 ### Added
 
 - **One query layer for MCP and the built-in agent.** The read tools moved out of

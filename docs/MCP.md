@@ -34,9 +34,15 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
   401，scheme 或长度不符同样拒绝）；token 用恒定时间逐字节比较，避免按响应时间猜
   token。通知（无 `id`）返回 202；解析失败 400；路径不存在 404；非 POST 405。
 - `GET /health`：`{"status":"ok"}`，无需 token（只用于存活探测）。
+- **并发**：每个连接一个线程、每个请求一个 `Session`，一个慢反编译不会再挡住 `ping` 或
+  下一个客户端；同时处理超过 32 个请求返回 503。
+- **Origin 校验**：带 `Origin` 且不是 `127.0.0.1`/`localhost`/`[::1]` 的请求返回 403
+  （MCP streamable HTTP 的 DNS-rebinding 防护）；不带 `Origin` 的本机客户端照常可用。
+- **协议版本**：请求带 `MCP-Protocol-Version` 时必须是 `2024-11-05` 或 `2025-06-18`，
+  否则 400。
 - 读取上限：请求头 64 KiB、请求体 4 MiB；`Connection: close` 简化实现（v1）。
-- 单连接串行处理，服务只会读取项目、不修改。
-- 回归覆盖：`crates/recraft-mcp` 单测覆盖 token 拒绝/initialize/tools/call/health/404；
+- 回归覆盖：`crates/recraft-mcp` 单测覆盖 token 拒绝/initialize/tools/call/health/404、
+  Origin 拒绝与放行、协议版本校验、空闲连接不阻塞后续请求；
   `scripts/e2e.ps1` 会后台启动真实 HTTP 服务（随机端口 + token），断言 `/health`、携带
   token 的 `initialize` 返回 `serverInfo`、无 token 请求返回 401，然后强制结束进程。
 

@@ -30,6 +30,7 @@
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use recraft_common::{Address, Error, Result};
@@ -846,18 +847,51 @@ fn serve_http_mode(project: &Path, bind: &str, token: &str, write: bool) -> Resu
     serve_http_listener_mode(listener, project.to_path_buf(), token.to_owned(), write)
 }
 
+/// Maximum number of requests handled at the same time; each one owns a `Session`.
+const MAX_HTTP_CONNECTIONS: usize = 32;
+static HTTP_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// RAII slot for the concurrency cap.
+struct ConnectionSlot;
+
+impl ConnectionSlot {
+    fn acquire() -> Option<ConnectionSlot> {
+        let current = HTTP_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+        if current >= MAX_HTTP_CONNECTIONS {
+            HTTP_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(ConnectionSlot)
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        HTTP_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 pub(crate) fn serve_http_listener_mode(
     listener: TcpListener,
     project: PathBuf,
     token: String,
     write: bool,
 ) -> Result<()> {
-    let mut server = McpServer::open_mode(&project, write)?;
+    // Fail fast when the project cannot be opened at all instead of answering 500 forever.
+    drop(McpServer::open_mode(&project, write)?);
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else {
+        let Ok(stream) = stream else {
             continue;
         };
-        let _ = handle_http_connection(&mut stream, &mut server, &token);
+        let project = project.clone();
+        let token = token.clone();
+        // One thread per connection, one `Session` per request: a long decompile on one
+        // connection must not block `ping` or the next client. The previous single-threaded
+        // loop serialised every request behind the one before it.
+        std::thread::spawn(move || {
+            let mut stream = stream;
+            let _ = handle_http_connection(&mut stream, &project, &token, write);
+        });
     }
     Ok(())
 }
@@ -866,19 +900,33 @@ struct HttpRequest {
     method: String,
     path: String,
     authorization: Option<String>,
+    origin: Option<String>,
+    protocol_version: Option<String>,
     body: String,
 }
 
+/// Serve one HTTP connection. The transport is stateless and every client sends
+/// `Connection: close`, so the `Session` is opened per request; that is what lets two tool
+/// calls run at the same time.
 fn handle_http_connection(
     stream: &mut TcpStream,
-    server: &mut McpServer,
+    project: &Path,
     token: &str,
+    write: bool,
 ) -> Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let Some(request) = read_http_request(stream)? else {
         return Ok(());
     };
-    let (status, body) = if request.method == "GET" && request.path == "/health" {
+    let (status, body) = if !origin_allowed(request.origin.as_deref()) {
+        // Only a browser can be tricked into DNS rebinding, so a non-loopback Origin is
+        // refused even when the token is right.
+        eprintln!(
+            "[mcp] rejected request with Origin {:?}",
+            request.origin.as_deref().unwrap_or_default()
+        );
+        (403, json!({"error": "origin not allowed"}).to_string())
+    } else if request.method == "GET" && request.path == "/health" {
         (200, r#"{"status":"ok"}"#.to_owned())
     } else if request.method != "POST" {
         (405, r#"{"error":"method not allowed"}"#.to_owned())
@@ -889,19 +937,79 @@ fn handle_http_connection(
             401,
             r#"{"error":"missing or invalid bearer token"}"#.to_owned(),
         )
+    } else if let Some(version) = request
+        .protocol_version
+        .as_deref()
+        .filter(|version| !SUPPORTED_PROTOCOL_VERSIONS.contains(version))
+    {
+        (
+            400,
+            json!({"error": format!("unsupported MCP-Protocol-Version: {version}")}).to_string(),
+        )
     } else {
-        match serde_json::from_str::<Value>(&request.body) {
-            Err(error) => (
-                400,
-                json!({"error": format!("parse error: {error}")}).to_string(),
+        match ConnectionSlot::acquire() {
+            None => (
+                503,
+                r#"{"error":"too many concurrent requests"}"#.to_owned(),
             ),
-            Ok(message) => match server.handle_message(&message) {
-                Some(response) => (200, response.to_string()),
-                None => (202, String::new()),
-            },
+            Some(slot) => {
+                let response = handle_rpc(project, write, &request.body);
+                drop(slot);
+                response
+            }
         }
     };
     write_http_response(stream, status, &body)
+}
+
+fn handle_rpc(project: &Path, write: bool, body: &str) -> (u16, String) {
+    let mut server = match McpServer::open_mode(project, write) {
+        Ok(server) => server,
+        Err(error) => {
+            return (
+                500,
+                json!({"error": format!("cannot open project: {error}")}).to_string(),
+            );
+        }
+    };
+    match serde_json::from_str::<Value>(body) {
+        Err(error) => (
+            400,
+            json!({"error": format!("parse error: {error}")}).to_string(),
+        ),
+        Ok(message) => match server.handle_message(&message) {
+            Some(response) => (200, response.to_string()),
+            None => (202, String::new()),
+        },
+    }
+}
+
+/// Browsers send `Origin`; MCP clients on the same machine usually do not. Accept a missing
+/// Origin and loopback origins only (DNS rebinding defence, MCP streamable-HTTP §Security).
+fn origin_allowed(origin: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let host = if let Some(inner) = authority.strip_prefix('[') {
+        // `[::1]:8080` -> `[::1]`
+        match inner.split(']').next() {
+            Some(host) => format!("[{host}]"),
+            None => return false,
+        }
+    } else {
+        authority.split(':').next().unwrap_or(authority).to_owned()
+    };
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "[::1]"
+    )
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
@@ -927,6 +1035,8 @@ fn read_http_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
     let method = parts.next().unwrap_or_default().to_owned();
     let path = parts.next().unwrap_or_default().to_owned();
     let mut authorization = None;
+    let mut origin = None;
+    let mut protocol_version = None;
     let mut content_length = 0usize;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
@@ -938,6 +1048,10 @@ fn read_http_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
             authorization = Some(value.to_owned());
         } else if name == "content-length" {
             content_length = value.parse().unwrap_or(0);
+        } else if name == "origin" {
+            origin = Some(value.to_owned());
+        } else if name == "mcp-protocol-version" {
+            protocol_version = Some(value.to_owned());
         }
     }
     if content_length > 4 * 1024 * 1024 {
@@ -949,6 +1063,8 @@ fn read_http_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
         method,
         path,
         authorization,
+        origin,
+        protocol_version,
         body: String::from_utf8_lossy(&body).into_owned(),
     }))
 }
@@ -959,8 +1075,11 @@ fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) -> Resul
         202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
         _ => "OK",
     };
     let response = format!(
@@ -1029,13 +1148,27 @@ mod tests {
         token: Option<&str>,
         body: &str,
     ) -> (u16, String) {
+        http_request_with(addr, path, token, &[], body)
+    }
+
+    fn http_request_with(
+        addr: std::net::SocketAddr,
+        path: &str,
+        token: Option<&str>,
+        extra_headers: &[(&str, &str)],
+        body: &str,
+    ) -> (u16, String) {
         use std::io::{Read, Write};
         let mut stream = std::net::TcpStream::connect(addr).unwrap();
         let auth = token
             .map(|token| format!("Authorization: Bearer {token}\r\n"))
             .unwrap_or_default();
+        let extra: String = extra_headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect();
         let request = format!(
-            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{auth}Connection: close\r\n\r\n{body}",
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{auth}{extra}Connection: close\r\n\r\n{body}",
             body.len()
         );
         stream.write_all(request.as_bytes()).unwrap();
@@ -1093,6 +1226,85 @@ mod tests {
         stream.read_to_string(&mut raw).unwrap();
         assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
         assert_eq!(http_request(addr, "/nope", Some(token), initialize).0, 404);
+
+        // An extra `Origin` is only honoured for loopback: a browser page on another site
+        // must not reach the local server even with a valid token.
+        assert_eq!(
+            http_request_with(
+                addr,
+                "/mcp",
+                Some(token),
+                &[("Origin", "http://evil.example")],
+                initialize
+            )
+            .0,
+            403,
+            "foreign Origin must be rejected"
+        );
+        assert_eq!(
+            http_request_with(
+                addr,
+                "/mcp",
+                Some(token),
+                &[("Origin", "http://127.0.0.1:3000")],
+                initialize
+            )
+            .0,
+            200,
+            "loopback Origin is the local UI case"
+        );
+
+        // The negotiated version is validated on every request that carries the header.
+        assert_eq!(
+            http_request_with(
+                addr,
+                "/mcp",
+                Some(token),
+                &[("MCP-Protocol-Version", "2099-01-01")],
+                initialize
+            )
+            .0,
+            400
+        );
+        assert_eq!(
+            http_request_with(
+                addr,
+                "/mcp",
+                Some(token),
+                &[("MCP-Protocol-Version", "2025-06-18")],
+                initialize
+            )
+            .0,
+            200
+        );
+    }
+
+    #[test]
+    fn an_idle_connection_does_not_block_the_next_request() {
+        let Some(project) = notepad_project_path() else {
+            return;
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _ = serve_http_listener_mode(listener, project, "idle".to_owned(), false);
+        });
+
+        // A connection that never sends anything used to stall the single-threaded loop for
+        // the whole read timeout.
+        let idle = std::net::TcpStream::connect(addr).unwrap();
+        let (status, body) = http_request(
+            addr,
+            "/mcp",
+            Some("idle"),
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            body.contains("\"result\"") || body.contains("\"id\""),
+            "{body}"
+        );
+        drop(idle);
     }
 
     fn call(server: &mut McpServer, method: &str, params: Value) -> Value {
