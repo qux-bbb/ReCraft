@@ -191,12 +191,15 @@ void sub_14000627c_l1(void) {
                                 if (ecx != 0) {
                                     rdi = (rbx + 0xADDR);
                                     r14 = (rbx + 0xADDR);
-                                    while (1) {
+                                    do {
                                         edx = (uint32)(*(u16*)(r12));
                                         r12 += 2;
                                         sub_14000c868(&var_48, (uint32)(*(u16*)(r12)), &var_38, *(u64*)((rbx + 8)));
                                         r8 = rax;
-                                        if (rax == -1) break;
+                                        if (rax == -1) {
+                                            *(u32*)(rdi) = -1;
+                                            break;
+                                        }
                                         rdx = *(u64*)((rbx + 8));
                                         rax = *(u64*)(r14);
                                         ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
@@ -210,9 +213,7 @@ void sub_14000627c_l1(void) {
                                             }
                                         }
                                         esi += 1;
-                                        if (esi != *(u32*)((rbx + 0xADDR))) continue;
-                                    }
-                                    *(u32*)(rdi) = -1;
+                                    } while (esi != *(u32*)((rbx + 0xADDR)));
                                 }
                             }
                         }

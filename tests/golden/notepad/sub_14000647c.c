@@ -20,20 +20,21 @@ void sub_14000647c_l1(void) {
                 rdx = *(u64*)((rbp + 0xADDR));
                 rax = (rbx << 4);
                 rax += rdx;
-                while (1) {
+                do {
                     rcx = (rbx + 1);
-                    if (*(u64*)(rax) != r14) break;
+                    if (*(u64*)(rax) != r14) {
+                        rbx += rbx;
+                        xmm1 = *(__m128*)((rdx + (rbx * 8)));
+                        rbx = rcx;
+                        xmm0 = xmm1;
+                        r14 = xmm1;
+                        xmm0 >>= 8;
+                        r15 = xmm0;
+                        break;
+                    }
                     rax += 0xADDR;
                     rbx = rcx;
-                    if (rcx < rdi) continue;
-                }
-                rbx += rbx;
-                xmm1 = *(__m128*)((rdx + (rbx * 8)));
-                rbx = rcx;
-                xmm0 = xmm1;
-                r14 = xmm1;
-                xmm0 >>= 8;
-                r15 = xmm0;
+                } while (rcx < rdi);
             }
             if (rsi != 0) {
                 ReleaseSRWLockExclusive(rsi);
@@ -47,17 +48,6 @@ void sub_14000647c_l1(void) {
                 LeaveCriticalSection(rbp);
             }
         } while (rbx < rdi);
-            if (rsi != 0) {
-                ReleaseSRWLockExclusive(rsi);
-            }
-            if (r14 != 0) {
-                rcx = r15;
-                rax = r14;
-                sub_140028010();
-            }
-            if (rbp != 0) {
-                LeaveCriticalSection(rbp);
-            }
     }
     return;
 }

@@ -3962,6 +3962,21 @@ impl Structurer {
         } else {
             return self.emit_unstructured_loop(lines, header, level, &body);
         };
+        // The header's outside successor is an early exit, not necessarily the loop's
+        // continuation: when the body ends at a latch, the loop continues at the latch's
+        // fallthrough. That rewrite needs the early exit copied into the branch (the text
+        // layer cannot keep a jump into the enclosing body in place), so it is only taken
+        // when the copy succeeds; otherwise the old shape is kept.
+        let header_exit = exit;
+        let mut copied_arm = Vec::new();
+        let mut latch: Option<(usize, Vec<PseudoLine>)> = None;
+        if let Some(latch_exit) = self.latch_exit(header, &body) {
+            let target = self.resolved_target(latch_exit);
+            if self.copy_linear_chain(&mut copied_arm, header_exit, level + 2, target) {
+                latch = Some((latch_exit, copied_arm));
+            }
+        }
+        let exit = latch.as_ref().map_or(exit, |(latch_exit, _)| *latch_exit);
 
         // A single-block loop whose header is also the latch is a do-while: emit the
         // statements then test the condition at the bottom.
@@ -3993,10 +4008,23 @@ impl Structurer {
         self.emit_simple(lines, header, level + 1);
         // `condition` above is the condition that stays in the loop (the fallthrough path
         // after the rewrite), so leaving takes its negation.
-        lines.push(PseudoLine {
-            addr: self.blocks[header].entry,
-            text: format!("{}if ({}) break;", indent(level + 1), negate(&condition)),
-        });
+        match latch {
+            Some((_, arm)) => {
+                lines.push(PseudoLine {
+                    addr: self.blocks[header].entry,
+                    text: format!("{}if ({}) {{", indent(level + 1), negate(&condition)),
+                });
+                lines.extend(arm);
+                lines.push(PseudoLine {
+                    addr: self.blocks[header].entry,
+                    text: format!("{}}}", indent(level + 1)),
+                });
+            }
+            None => lines.push(PseudoLine {
+                addr: self.blocks[header].entry,
+                text: format!("{}if ({}) break;", indent(level + 1), negate(&condition)),
+            }),
+        }
 
         let mut stop = BTreeSet::new();
         for block in 0..self.blocks.len() {
@@ -4018,6 +4046,111 @@ impl Structurer {
         self.emit_leftovers(lines, &body, level);
 
         Some(exit)
+    }
+
+    /// Exit implied by a conditional latch: the block whose conditional jumps back to the
+    /// header and whose fallthrough leaves the body.
+    ///
+    /// That fallthrough is where the loop really continues; a different external successor
+    /// (the header's own early-exit branch) is a jump inside the body, not the construct's
+    /// continuation.
+    fn latch_exit(&self, header: usize, body: &BTreeSet<usize>) -> Option<usize> {
+        for &block in body.iter().rev() {
+            let (Some(taken), Some(not_taken)) =
+                (self.blocks[block].taken, self.blocks[block].not_taken)
+            else {
+                continue;
+            };
+            if taken == header && !body.contains(&not_taken) {
+                return Some(not_taken);
+            }
+            if not_taken == header && !body.contains(&taken) {
+                return Some(taken);
+            }
+        }
+        None
+    }
+
+    /// Follow `jmp`-only blocks (no statements) to the block control really reaches.
+    ///
+    /// A latch's fallthrough is often a one-instruction trampoline (`jmp loc_x`): the text
+    /// after the loop starts at `loc_x`, so a copied chain has to stop there.
+    fn resolved_target(&self, mut block: usize) -> usize {
+        for _ in 0..4 {
+            let trampoline = self
+                .bodies
+                .get(block)
+                .is_some_and(|body| body.statements.is_empty())
+                && matches!(self.blocks[block].flow, Flow::Goto(_));
+            let Some(next) = self.blocks[block].goto_target else {
+                break;
+            };
+            if !trampoline || next == block || next >= self.blocks.len() {
+                break;
+            }
+            block = next;
+        }
+        block
+    }
+
+    /// Copy a straight-line chain of blocks to the current position, ending in `break`.
+    ///
+    /// A loop's alternate exit (the "found" path of a search loop, for example) usually
+    /// sits in the middle of the function: naming it with a `goto` forces the enclosing
+    /// region out of shape and costs the structured rate (measured 2026-11-07). Copying
+    /// its chain into the branch keeps both exits structured — the smallest useful form of
+    /// node splitting.
+    ///
+    /// Only plain fallthrough/goto links are copied, the chain has to reach `target` (the
+    /// loop's continuation) within a few blocks, and every block must be private to this
+    /// path: one predecessor, not a loop header, not labelled or emitted yet.
+    fn copy_linear_chain(
+        &mut self,
+        lines: &mut Vec<PseudoLine>,
+        start: usize,
+        level: usize,
+        target: usize,
+    ) -> bool {
+        const MAX_BLOCKS: usize = 8;
+        let mut chain = Vec::new();
+        let mut current = start;
+        while current != target {
+            if chain.len() >= MAX_BLOCKS
+                || current >= self.blocks.len()
+                || self.emitted[current]
+                || self.labeled[current]
+                || self.loop_headers.contains(&current)
+                || self.blocks[current].has_table
+                || self.predecessors[current].len() > 1
+            {
+                return false;
+            }
+            chain.push(current);
+            current = match self.blocks[current].flow {
+                Flow::Fallthrough => match self.blocks[current].not_taken {
+                    Some(next) => next,
+                    None => return false,
+                },
+                Flow::Goto(_) => match self.blocks[current].goto_target {
+                    Some(next) => next,
+                    None => return false,
+                },
+                _ => return false,
+            };
+        }
+        if chain.is_empty() {
+            // The early exit already *is* the continuation: `break` says it better.
+            return false;
+        }
+        for &block in &chain {
+            self.emitted[block] = true;
+            self.emit_simple(lines, block, level);
+        }
+        lines.push(PseudoLine {
+            addr: self.blocks[start].entry,
+            text: format!("{}break;", indent(level)),
+        });
+        true
     }
 
     /// The header condition does not split into "stay in loop" vs "leave loop" (e.g. a
@@ -4417,15 +4550,10 @@ impl Structurer {
         let Some(not_taken) = self.blocks[block].not_taken else {
             return;
         };
-        match next {
-            Some(next) => {
-                if not_taken == next {
-                    return;
-                }
-            }
-            // No block follows in this listing: the region ends here, so its fallthrough
-            // successor has to be named.
-            None => {}
+        // The block right after this one in the listing: its fallthrough is implicit only
+        // when that really is its successor.
+        if next == Some(not_taken) {
+            return;
         }
         if not_taken == block || self.blocks[not_taken].entry.get() >= self.end.get() {
             return;
@@ -11438,6 +11566,100 @@ mod tests {
         assert!(take_adjacent_arguments(&mut lines, 4).is_empty());
         assert_eq!(lines.len(), 2);
     }
+    /// A loop whose header has an early exit and whose body ends at a latch: the early exit
+    /// is copied into the branch (node splitting), so both exits stay structured and the
+    /// loop turns into a `do … while` instead of `while (1)` + a label after the loop.
+    #[test]
+    fn an_early_exit_chain_is_copied_instead_of_jumping_out() {
+        let address = |value: u64| Address::new(value);
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: address(start),
+            end: address(start + 0x10),
+            insns: Vec::new(),
+            edges,
+        };
+        let cfg = Cfg {
+            function: address(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(0, 0x1000, vec![(1, EdgeKind::Fallthrough)]),
+                block(
+                    1,
+                    0x1010,
+                    vec![(3, EdgeKind::Taken), (2, EdgeKind::Fallthrough)],
+                ),
+                block(
+                    2,
+                    0x1020,
+                    vec![(1, EdgeKind::Taken), (4, EdgeKind::Fallthrough)],
+                ),
+                block(3, 0x1030, vec![(4, EdgeKind::Fallthrough)]),
+                block(4, 0x1040, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: BTreeMap::new(),
+        };
+        let lift = |text: &str, condition: Option<&str>, flow: Flow| BlockLift {
+            statements: vec![PseudoLine {
+                addr: address(0x1000),
+                text: text.to_owned(),
+            }],
+            condition: condition.map(str::to_owned),
+            flow,
+            written: BTreeSet::new(),
+            calls: BTreeSet::new(),
+            pushes: Vec::new(),
+            pops: Vec::new(),
+            stack_net: None,
+            stack_min: None,
+            stack_pointers: Vec::new(),
+            arg_writes: Vec::new(),
+            alias_writes: Vec::new(),
+            literals: Vec::new(),
+        };
+        let bodies = vec![
+            lift("prologue();", None, Flow::Fallthrough),
+            lift(
+                "lookup();",
+                Some("a == 1"),
+                Flow::CondGoto {
+                    cond: 0,
+                    target: address(0x1030),
+                },
+            ),
+            lift(
+                "advance();",
+                Some("i < n"),
+                Flow::CondGoto {
+                    cond: 0,
+                    target: address(0x1010),
+                },
+            ),
+            lift("found();", None, Flow::Fallthrough),
+            lift("tail();", None, Flow::Return),
+        ];
+        let mut structurer = Structurer::new(&cfg, bodies, None, address(0x1050), HashMap::new());
+        structurer.compute_rpo();
+        structurer.compute_dominators();
+        structurer.compute_post_dominators();
+        structurer.compute_loops();
+        let mut lines = Vec::new();
+        structurer.emit_all(&mut lines);
+        let text = joined(&lines);
+
+        // The found chain is inside the branch, followed by the loop's `break`.
+        assert!(text.contains("if (a == 1) {"), "{text}");
+        let arm = text.split("if (a == 1) {").nth(1).expect("early-exit arm");
+        let arm = arm.split('}').next().unwrap_or_default();
+        assert!(arm.contains("found();"), "{text}");
+        assert!(arm.contains("break;"), "{text}");
+        // No label/jump is needed for the alternate exit.
+        assert!(!text.contains("goto loc_"), "{text}");
+        // The latch still leaves the loop through its own fallthrough.
+        assert_eq!(text.matches("break;").count(), 2, "{text}");
+    }
+
     #[test]
     fn infinite_do_while_is_written_as_a_while_loop() {
         let mut lines = vec![

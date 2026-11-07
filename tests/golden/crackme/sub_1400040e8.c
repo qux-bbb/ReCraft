@@ -23,7 +23,7 @@ void sub_1400040e8_l1(void) {
             if (r15d > 0 /* signed */) {
                 rax = (int64)(ebp);
                 r13 = (rax + (rax * 4));
-                while (1) {
+                do {
                     rsi = (int64)(*(u32*)(rdi));
                     sub_140002b44(rcx);
                     rbx = (int64)(*(u32*)((r14 + 4)));
@@ -34,19 +34,19 @@ void sub_1400040e8_l1(void) {
                     rcx = (rax + (r13 * 4));
                     rcx += rbx;
                     sub_1400037fc(rcx, rsi, rdi);
-                    if (eax != 0) break;
+                    if (eax != 0) {
+                        r12b = 1;
+                        break;
+                    }
                     rdi = var_68;
                     r15d -= 1;
                     rdi += 4;
                     var_68 = rdi;
-                    if (r15d > 0 /* signed */) continue;
-                }
-                r12b = 1;
+                } while (r15d > 0 /* signed */);
                 rsi = var_60;
             }
             ebp += 1;
         } while (ebp < *(u32*)(r14) /* signed */);
-            rsi = var_60;
     }
     al = r12b;
     return;

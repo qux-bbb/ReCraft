@@ -8,10 +8,13 @@ void sub_140020260_l1(void) {
         ebx = 0;
     } else {
         ebx = 1;
-        while (1) {
+        do {
             var_20 = ebx;
             PeekMessageW(&msg, 0, 0, 0, ebx);
-            if (eax == 0) break;
+            if (eax == 0) {
+                eax = dword_ADDR;
+                break;
+            }
             if (qword_ADDR == 0) {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -19,9 +22,7 @@ void sub_140020260_l1(void) {
                 IsDialogMessageW(qword_ADDR, &msg);
             }
             eax = dword_ADDR;
-            if (eax == 0) continue;
-        }
-        eax = dword_ADDR;
+        } while (eax == 0);
         if (eax != 0) {
             ebx = 0;
             eax = 0;
