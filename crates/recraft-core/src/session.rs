@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use recraft_common::{Address, AddressRange, Error, Result};
 use recraft_decode::{DecodeCache, FlowKind, Formatter, Insn, Mode, decode};
 use recraft_format::PeImage;
-use recraft_storage::Project;
+use recraft_storage::{JournalEntry, Project};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::command::{
@@ -40,6 +40,35 @@ const SWEEP_LIMIT: usize = 50_000;
 
 /// `func.flags` bit marking functions produced by automatic analysis (derived data).
 pub const FUNC_FLAG_AUTO: u32 = 1;
+
+/// One journal record as reported to callers of [`Session::undo_report`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoRecord {
+    pub seq: i64,
+    pub cmd: String,
+    pub origin: String,
+    pub ts: i64,
+    pub batch: Option<i64>,
+}
+
+impl UndoRecord {
+    fn from_entry(entry: &JournalEntry) -> Self {
+        UndoRecord {
+            seq: entry.seq,
+            cmd: entry.cmd.clone(),
+            origin: entry.origin.clone(),
+            ts: entry.ts,
+            batch: entry.batch,
+        }
+    }
+}
+
+/// What one undo reverted: the records (newest first) and the ranges to redraw.
+#[derive(Debug, Clone)]
+pub struct UndoReport {
+    pub records: Vec<UndoRecord>,
+    pub effect: Effect,
+}
 
 /// Page cache over the project's original image bytes.
 struct ImageCache {
@@ -122,6 +151,9 @@ pub struct Session {
     image_cache: ImageCache,
     flags: FlagsStore,
     decoders: DecodeCache,
+    /// Provenance stamped on every journal record this session writes (`cli`, `mcp`,
+    /// `gui`, `ai`, ...): the journal is shared by every front end.
+    origin: String,
 }
 
 impl Session {
@@ -163,6 +195,7 @@ impl Session {
             image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
             flags: FlagsStore::new(FLAGS_CACHE_PAGES),
             decoders: DecodeCache::new(DECODE_CACHE_ENTRIES),
+            origin: "user".to_owned(),
         })
     }
 
@@ -183,10 +216,21 @@ impl Session {
             image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
             flags: FlagsStore::new(FLAGS_CACHE_PAGES),
             decoders: DecodeCache::new(DECODE_CACHE_ENTRIES),
+            origin: "user".to_owned(),
         })
     }
 
     // ------------------------------------------------------------- accessors --
+
+    /// Provenance stamped on journal records (`user`, `cli`, `gui`, `mcp`, `ai`).
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// Set the provenance used by later commands.
+    pub fn set_origin(&mut self, origin: impl Into<String>) {
+        self.origin = origin.into();
+    }
 
     pub fn project(&self) -> &Project {
         &self.project
@@ -933,14 +977,32 @@ impl Session {
 
     /// Apply a user command, journal it, and invalidate the redo stack.
     pub fn execute(&mut self, cmd: Command) -> Result<Effect> {
-        let inverse = cmd.inverse(self)?;
-        let record = JournalRecord {
-            command: cmd.clone(),
-            inverse,
-        };
-        let payload = serde_json::to_vec(&record)
-            .map_err(|error| Error::internal(format!("serialize journal: {error}")))?;
-        let effect = cmd.effect();
+        let mut effects = self.execute_batch(&[cmd])?;
+        Ok(effects.remove(0))
+    }
+
+    /// Apply several commands in one transaction: all of them land or none does.
+    ///
+    /// The journal records share one batch id, so a single [`Session::undo`] reverts the
+    /// whole call — that is what makes an AI "rename these 20 functions" flow one undo.
+    pub fn execute_batch(&mut self, commands: &[Command]) -> Result<Vec<Effect>> {
+        if commands.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Inverses are computed against the *pre-change* state, so all of them are built
+        // before the transaction opens.
+        let mut payloads = Vec::with_capacity(commands.len());
+        for command in commands {
+            let record = JournalRecord {
+                command: command.clone(),
+                inverse: command.inverse(self)?,
+            };
+            payloads.push(
+                serde_json::to_vec(&record)
+                    .map_err(|error| Error::internal(format!("serialize journal: {error}")))?,
+            );
+        }
+        let origin = self.origin.clone();
 
         {
             let Session {
@@ -949,35 +1011,102 @@ impl Session {
                 flags,
                 ..
             } = self;
+            let batch = project.next_batch_id()?;
             let tx = project.conn_mut().transaction().map_err(command::db_err)?;
             // A new command invalidates everything that could be redone.
             tx.execute("DELETE FROM journal WHERE undone = 1", [])
                 .map_err(command::db_err)?;
-            command::apply(&tx, segments, flags, &cmd)?;
-            tx.execute(
-                "INSERT INTO journal(ts, cmd, payload) VALUES (?1, ?2, ?3)",
-                params![unix_now(), cmd.name(), payload],
-            )
-            .map_err(command::db_err)?;
+            for (command, payload) in commands.iter().zip(&payloads) {
+                command::apply(&tx, segments, flags, command)?;
+                tx.execute(
+                    "INSERT INTO journal(ts, cmd, payload, origin, batch) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![unix_now(), command.name(), payload, origin, Some(batch)],
+                )
+                .map_err(command::db_err)?;
+            }
             tx.commit().map_err(command::db_err)?;
         }
 
         self.decoders.clear();
-        Ok(effect)
+        Ok(commands.iter().map(Command::effect).collect())
     }
 
-    /// Undo the newest applied command.
+    /// Undo the newest applied command (or the newest batch, as a unit).
     pub fn undo(&mut self) -> Result<Option<Effect>> {
-        let last = {
-            let Session { project, .. } = self;
-            command::last_active_record(project.conn())?
-        };
-        let Some((seq, payload)) = last else {
+        Ok(self.undo_report()?.map(|report| report.effect))
+    }
+
+    /// Undo the newest applied command (or batch) and report exactly what was reverted.
+    ///
+    /// Unlike [`Session::undo`], the caller learns the sequence numbers, command names and
+    /// origins that were rolled back: an MCP client must be able to tell its own edits from
+    /// a GUI user's.
+    pub fn undo_report(&mut self) -> Result<Option<UndoReport>> {
+        let Some(entry) = self.project.last_active_entry()? else {
             return Ok(None);
         };
-        let record: JournalRecord = serde_json::from_slice(&payload)
-            .map_err(|error| Error::internal(format!("corrupt journal: {error}")))?;
-        let effect = record.inverse.effect();
+        let entries = match entry.batch {
+            Some(batch) => self.project.active_batch(batch)?,
+            None => vec![entry],
+        };
+        self.undo_entries(entries).map(Some)
+    }
+
+    /// Undo one specific journal record (only the newest applied one, to keep the stack
+    /// coherent), together with the rest of its batch, and report what was reverted.
+    pub fn undo_seq(&mut self, seq: i64) -> Result<UndoReport> {
+        let Some(newest) = self.project.last_active_entry()? else {
+            return Err(Error::unsupported("nothing to undo"));
+        };
+        if newest.seq != seq {
+            return Err(Error::unsupported(format!(
+                "cannot undo record #{seq}: #{} was applied later — undo the newer changes first",
+                newest.seq
+            )));
+        }
+        let entries = match newest.batch {
+            Some(batch) => self.project.active_batch(batch)?,
+            None => vec![newest],
+        };
+        self.undo_entries(entries)
+    }
+
+    /// Sequence number of the newest journal record (`0` when the journal is empty).
+    ///
+    /// Front ends echo it back in their write results so a later `undo {seq}` can name the
+    /// command it expects to revert.
+    pub fn last_journal_seq(&self) -> Result<i64> {
+        self.project
+            .conn()
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM journal", [], |row| {
+                row.get(0)
+            })
+            .map_err(command::db_err)
+    }
+
+    /// What [`Session::undo`] would revert right now, without changing anything.
+    pub fn undo_preview(&self) -> Result<Option<Vec<UndoRecord>>> {
+        let Some(entry) = self.project.last_active_entry()? else {
+            return Ok(None);
+        };
+        let entries = match entry.batch {
+            Some(batch) => self.project.active_batch(batch)?,
+            None => vec![entry],
+        };
+        Ok(Some(entries.iter().map(UndoRecord::from_entry).collect()))
+    }
+
+    fn undo_entries(&mut self, entries: Vec<JournalEntry>) -> Result<UndoReport> {
+        // `entries` is newest-first; each inverse is applied in that order and flipped in
+        // the same transaction, so a crash cannot leave the journal lying about the state.
+        let mut records = Vec::with_capacity(entries.len());
+        let mut dirty = Vec::new();
+        for entry in &entries {
+            let record: JournalRecord = serde_json::from_slice(&entry.payload)
+                .map_err(|error| Error::internal(format!("corrupt journal: {error}")))?;
+            dirty.extend(record.inverse.effect().dirty);
+            records.push(UndoRecord::from_entry(entry));
+        }
 
         {
             let Session {
@@ -987,14 +1116,21 @@ impl Session {
                 ..
             } = self;
             let tx = project.conn_mut().transaction().map_err(command::db_err)?;
-            tx.execute("UPDATE journal SET undone = 1 WHERE seq = ?1", [seq])
-                .map_err(command::db_err)?;
-            command::apply(&tx, segments, flags, &record.inverse)?;
+            for entry in &entries {
+                let record: JournalRecord = serde_json::from_slice(&entry.payload)
+                    .map_err(|error| Error::internal(format!("corrupt journal: {error}")))?;
+                tx.execute("UPDATE journal SET undone = 1 WHERE seq = ?1", [entry.seq])
+                    .map_err(command::db_err)?;
+                command::apply(&tx, segments, flags, &record.inverse)?;
+            }
             tx.commit().map_err(command::db_err)?;
         }
 
         self.decoders.clear();
-        Ok(Some(effect))
+        Ok(UndoReport {
+            records,
+            effect: Effect { dirty },
+        })
     }
 
     /// Redo the oldest undone command.
@@ -1472,6 +1608,78 @@ mod tests {
             resumed, entry,
             "rewind/advance disagree across the function start"
         );
+    }
+
+    #[test]
+    fn batch_is_one_journal_group_and_one_undo() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let rows = session.disasm(entry, 4).unwrap();
+        assert!(rows.len() >= 2, "fixture needs a few instructions");
+        let (first, second) = (entry, rows[1].addr);
+        let before: Vec<_> = [first, second]
+            .iter()
+            .map(|addr| session.name_at(*addr).unwrap())
+            .collect();
+
+        session.set_origin("mcp");
+        let commands = [
+            Command::Rename {
+                addr: first,
+                name: Some("batch_one".to_owned()),
+            },
+            Command::Rename {
+                addr: second,
+                name: Some("batch_two".to_owned()),
+            },
+        ];
+        let effects = session.execute_batch(&commands).unwrap();
+        assert_eq!(effects.len(), 2);
+        assert_eq!(
+            session.name_at(first).unwrap().as_deref(),
+            Some("batch_one")
+        );
+        assert_eq!(
+            session.name_at(second).unwrap().as_deref(),
+            Some("batch_two")
+        );
+
+        // Both records carry the batch id and the caller's provenance.
+        let preview = session.undo_preview().unwrap().unwrap();
+        assert_eq!(preview.len(), 2, "a batch is undone as a unit");
+        assert!(preview.iter().all(|record| record.origin == "mcp"));
+        assert!(preview.iter().all(|record| record.batch.is_some()));
+        let batch = preview[0].batch;
+        assert!(preview.iter().all(|record| record.batch == batch));
+
+        // One undo reverts the whole call.
+        let report = session.undo_report().unwrap().unwrap();
+        assert_eq!(report.records.len(), 2);
+        assert_eq!(report.records[0].cmd, "rename");
+        assert_eq!(session.name_at(first).unwrap(), before[0]);
+        assert_eq!(session.name_at(second).unwrap(), before[1]);
+
+        // A stale record cannot be undone out of order.
+        session.set_origin("gui");
+        session
+            .execute(Command::Rename {
+                addr: first,
+                name: Some("later".to_owned()),
+            })
+            .unwrap();
+        let older = preview[0].seq;
+        let error = session.undo_seq(older).unwrap_err();
+        assert!(
+            error.to_string().contains("applied later"),
+            "unexpected error: {error}"
+        );
+        let newest = session.last_journal_seq().unwrap();
+        let report = session.undo_seq(newest).unwrap();
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.records[0].origin, "gui");
     }
 
     #[test]

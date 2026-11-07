@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The journal knows who wrote, and undo reports what it reverted.** Schema v4 adds `origin`
+  (`gui`/`cli`/`mcp`/`ai`/`user`) and `batch` to the journal; existing projects migrate in
+  place. `Session::execute_batch` applies several commands in one transaction under one batch
+  id, and `undo` reverts the newest command — or the whole batch — and returns the reverted
+  records (`seq`/`cmd`/`origin`/`ts`/`batch`). MCP: every write result now carries `seq`;
+  `undo` accepts `seq` (guarded to the newest applied record, so a client cannot silently
+  revert a GUI user's later edit) and `dryRun`; a new `batch` tool applies
+  `{tool, arguments}` entries atomically, making an AI bulk rename one undo. Single write
+  tools and `batch` share one argument parser (`Edit`), so their shapes cannot drift.
+
 - **MCP list tools page, and pseudocode pages by line.** Every list-shaped tool
   (`list_functions`, `list_strings`, `xrefs_to`, `xrefs_from`, `callgraph`, `search_bytes`)
   takes `offset` and returns `offset`/`next_offset` alongside `count`/`total`, so a

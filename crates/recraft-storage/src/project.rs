@@ -33,10 +33,26 @@ pub struct JournalEntry {
     pub ts: i64,
     pub cmd: String,
     pub payload: Vec<u8>,
+    /// Who issued the command (`gui`, `cli`, `mcp`, `ai`, `user`).
+    pub origin: String,
+    /// Commands applied by one bulk call share a batch id.
+    pub batch: Option<i64>,
 }
 
 fn db_err(e: rusqlite::Error) -> Error {
     Error::storage(e.to_string())
+}
+
+/// Map one journal row in [`Project::JOURNAL_COLUMNS`] order.
+fn journal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JournalEntry> {
+    Ok(JournalEntry {
+        seq: row.get(0)?,
+        ts: row.get(1)?,
+        cmd: row.get(2)?,
+        payload: row.get(3)?,
+        origin: row.get(4)?,
+        batch: row.get(5)?,
+    })
 }
 
 fn unix_now() -> i64 {
@@ -297,15 +313,43 @@ impl Project {
 
     // ------------------------------------------------------------- journal --
 
+    /// Columns every journal query returns, in [`JournalEntry`] order.
+    const JOURNAL_COLUMNS: &'static str = "seq, ts, cmd, payload, origin, batch";
+
     /// Append a user command to the undo journal and return its sequence number.
     pub fn append_journal(&self, cmd: &str, payload: &[u8]) -> Result<i64> {
+        self.append_journal_from(cmd, payload, "user", None)
+    }
+
+    /// Append a command with explicit provenance and batch grouping.
+    ///
+    /// `origin` records which front end issued it (`gui`, `cli`, `mcp`, `ai`, `user`);
+    /// `batch` groups the commands of one bulk call so undo can revert them as a unit.
+    pub fn append_journal_from(
+        &self,
+        cmd: &str,
+        payload: &[u8],
+        origin: &str,
+        batch: Option<i64>,
+    ) -> Result<i64> {
         self.conn
             .execute(
-                "INSERT INTO journal(ts, cmd, payload) VALUES (?1, ?2, ?3)",
-                params![unix_now(), cmd, payload],
+                "INSERT INTO journal(ts, cmd, payload, origin, batch) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![unix_now(), cmd, payload, origin, batch],
             )
             .map_err(db_err)?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Next batch id (one more than the highest ever used).
+    pub fn next_batch_id(&self) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COALESCE(MAX(batch), 0) + 1 FROM journal",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_err)
     }
 
     /// Entries with `seq > after`, oldest first.
@@ -314,48 +358,81 @@ impl Project {
     /// (the normal replay path when reopening a project).
     pub fn journal_since(&self, after: i64, include_undone: bool) -> Result<Vec<JournalEntry>> {
         let sql = if include_undone {
-            "SELECT seq, ts, cmd, payload FROM journal WHERE seq > ?1 ORDER BY seq"
+            format!(
+                "SELECT {} FROM journal WHERE seq > ?1 ORDER BY seq",
+                Self::JOURNAL_COLUMNS
+            )
         } else {
-            "SELECT seq, ts, cmd, payload FROM journal WHERE seq > ?1 AND undone = 0 ORDER BY seq"
+            format!(
+                "SELECT {} FROM journal WHERE seq > ?1 AND undone = 0 ORDER BY seq",
+                Self::JOURNAL_COLUMNS
+            )
         };
-        let mut stmt = self.conn.prepare(sql).map_err(db_err)?;
-        let rows = stmt
-            .query_map([after], |row| {
-                Ok(JournalEntry {
-                    seq: row.get(0)?,
-                    ts: row.get(1)?,
-                    cmd: row.get(2)?,
-                    payload: row.get(3)?,
-                })
-            })
-            .map_err(db_err)?;
+        let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+        let rows = stmt.query_map([after], journal_row).map_err(db_err)?;
         rows.map(|row| row.map_err(db_err)).collect()
+    }
+
+    /// One journal record by sequence number.
+    pub fn journal_entry(&self, seq: i64) -> Result<Option<JournalEntry>> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM journal WHERE seq = ?1",
+                    Self::JOURNAL_COLUMNS
+                ),
+                [seq],
+                journal_row,
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Newest record that is currently applied.
+    pub fn last_active_entry(&self) -> Result<Option<JournalEntry>> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM journal WHERE undone = 0 ORDER BY seq DESC LIMIT 1",
+                    Self::JOURNAL_COLUMNS
+                ),
+                [],
+                journal_row,
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Every still-applied record of one batch, newest first.
+    pub fn active_batch(&self, batch: i64) -> Result<Vec<JournalEntry>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {} FROM journal WHERE batch = ?1 AND undone = 0 ORDER BY seq DESC",
+                Self::JOURNAL_COLUMNS
+            ))
+            .map_err(db_err)?;
+        let rows = stmt.query_map([batch], journal_row).map_err(db_err)?;
+        rows.map(|row| row.map_err(db_err)).collect()
+    }
+
+    /// Mark one record as undone and return it.
+    pub fn undo_entry(&self, seq: i64) -> Result<Option<JournalEntry>> {
+        self.conn
+            .execute("UPDATE journal SET undone = 1 WHERE seq = ?1", [seq])
+            .map_err(db_err)?;
+        self.journal_entry(seq)
     }
 
     /// Mark the newest applied command as undone and return it.
     pub fn undo_last_active(&self) -> Result<Option<JournalEntry>> {
-        let entry = self
-            .conn
-            .query_row(
-                "SELECT seq, ts, cmd, payload FROM journal WHERE undone = 0
-                 ORDER BY seq DESC LIMIT 1",
-                [],
-                |row| {
-                    Ok(JournalEntry {
-                        seq: row.get(0)?,
-                        ts: row.get(1)?,
-                        cmd: row.get(2)?,
-                        payload: row.get(3)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(db_err)?;
+        let entry = self.last_active_entry()?;
         let Some(entry) = entry else {
             return Ok(None);
         };
+        let seq = entry.seq;
         self.conn
-            .execute("UPDATE journal SET undone = 1 WHERE seq = ?1", [entry.seq])
+            .execute("UPDATE journal SET undone = 1 WHERE seq = ?1", [seq])
             .map_err(db_err)?;
         Ok(Some(entry))
     }
@@ -365,17 +442,12 @@ impl Project {
         let entry = self
             .conn
             .query_row(
-                "SELECT seq, ts, cmd, payload FROM journal WHERE undone = 1
-                 ORDER BY seq ASC LIMIT 1",
+                &format!(
+                    "SELECT {} FROM journal WHERE undone = 1 ORDER BY seq ASC LIMIT 1",
+                    Self::JOURNAL_COLUMNS
+                ),
                 [],
-                |row| {
-                    Ok(JournalEntry {
-                        seq: row.get(0)?,
-                        ts: row.get(1)?,
-                        cmd: row.get(2)?,
-                        payload: row.get(3)?,
-                    })
-                },
+                journal_row,
             )
             .optional()
             .map_err(db_err)?;

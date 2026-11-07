@@ -20,5 +20,5 @@ pub use command::{
 };
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
 pub use segments::{Perm, Segment, SegmentKind};
-pub use session::{FUNC_FLAG_AUTO, Session};
+pub use session::{FUNC_FLAG_AUTO, Session, UndoRecord, UndoReport};
 pub use view::{DisasmLine, FunctionInfo, StringEntry, XrefEntry};

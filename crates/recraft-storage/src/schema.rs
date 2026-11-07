@@ -13,7 +13,7 @@ use recraft_common::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Current schema version. Stored in `meta.schema_version`.
-pub const CURRENT_VERSION: i64 = 3;
+pub const CURRENT_VERSION: i64 = 4;
 
 /// DDL for schema version 1.
 ///
@@ -144,7 +144,12 @@ CREATE TABLE IF NOT EXISTS journal (
     ts      INTEGER NOT NULL,
     cmd     TEXT    NOT NULL,
     payload BLOB    NOT NULL,
-    undone  INTEGER NOT NULL DEFAULT 0
+    undone  INTEGER NOT NULL DEFAULT 0,
+    -- Who issued the command (`gui`, `cli`, `mcp`, `ai`, `user`): the journal is shared
+    -- by every front end, so the audit trail has to say which one wrote.
+    origin  TEXT    NOT NULL DEFAULT 'user',
+    -- Commands applied by one bulk call share a batch id; undo reverts the batch as a unit.
+    batch   INTEGER
 );
 CREATE INDEX IF NOT EXISTS journal_undone ON journal(undone, seq);
 
@@ -244,7 +249,7 @@ pub fn initialize(conn: &Connection) -> Result<i64> {
     let current = schema_version(conn)?;
     match current {
         None => {
-            conn.execute_batch(SCHEMA_V1).map_err(db_err)?;
+            migrate(conn, 0)?;
             set_schema_version(conn, CURRENT_VERSION)?;
             Ok(CURRENT_VERSION)
         }
@@ -262,12 +267,94 @@ pub fn initialize(conn: &Connection) -> Result<i64> {
 
 /// Run migrations from `from` up to [`CURRENT_VERSION`].
 ///
-/// All DDL is additive and idempotent; v2 added the `prototype` table, v3 adds
-/// user struct layouts + per-argument type bindings.
+/// All DDL is additive and idempotent; v2 added the `prototype` table, v3 user struct
+/// layouts + per-argument type bindings, v4 provenance (`origin`) and batch grouping on the
+/// journal. Columns cannot be added by re-running `CREATE TABLE IF NOT EXISTS`, so a table
+/// that predates v4 gets an explicit `ALTER TABLE` here.
 fn migrate(conn: &Connection, from: i64) -> Result<()> {
-    match from {
-        0 => conn.execute_batch(SCHEMA_V1).map_err(db_err)?,
-        _ => conn.execute_batch(SCHEMA_V1).map_err(db_err)?,
+    conn.execute_batch(SCHEMA_V1).map_err(db_err)?;
+    if from < 4 {
+        add_column_if_missing(conn, "journal", "origin", "TEXT NOT NULL DEFAULT 'user'")?;
+        add_column_if_missing(conn, "journal", "batch", "INTEGER")?;
     }
     Ok(())
+}
+
+/// Whether `table` already has a column named `column`.
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(db_err)?;
+    let mut rows = statement.query([]).map_err(db_err)?;
+    while let Some(row) = rows.next().map_err(db_err)? {
+        let name: String = row.get(1).map_err(db_err)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    if has_column(conn, table, column)? {
+        return Ok(());
+    }
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    ))
+    .map_err(db_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn version_3_journal_gains_provenance_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        // Simulate a v3 project: the journal predates `origin`/`batch`, and it already holds
+        // one record that must keep working after the migration.
+        conn.execute_batch(
+            "DROP TABLE journal;
+             CREATE TABLE journal (
+                 seq     INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ts      INTEGER NOT NULL,
+                 cmd     TEXT    NOT NULL,
+                 payload BLOB    NOT NULL,
+                 undone  INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO journal(ts, cmd, payload) VALUES (1, 'rename', X'00');",
+        )
+        .unwrap();
+        set_schema_version(&conn, 3).unwrap();
+
+        initialize(&conn).unwrap();
+
+        assert!(has_column(&conn, "journal", "origin").unwrap());
+        assert!(has_column(&conn, "journal", "batch").unwrap());
+        assert_eq!(schema_version(&conn).unwrap(), Some(CURRENT_VERSION));
+        let (origin, batch): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT origin, batch FROM journal WHERE seq = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(origin, "user", "old records get the default provenance");
+        assert_eq!(batch, None);
+    }
+
+    #[test]
+    fn initialize_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(initialize(&conn).unwrap(), CURRENT_VERSION);
+        assert_eq!(initialize(&conn).unwrap(), CURRENT_VERSION);
+    }
 }

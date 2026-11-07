@@ -2,9 +2,10 @@
 
 ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户端（Claude Desktop、
 Cursor、自研 agent 等）。默认只暴露只读工具 + 资源；加 `--write` 后额外暴露**写工具**
-（`rename`、`set_comment`、`set_prototype`、`apply_type`、`define_function` 和 `undo`），
-所有写操作走与 GUI 相同的 Command 总线并写入 journal，可以 undo 回退。写工具默认关闭，
-`serve-mcp` 不加 `--write` 时服务器对项目的访问是只读的。
+（`rename`、`set_comment`、`set_prototype`、`apply_type`、`define_function`、`batch` 和
+`undo`），所有写操作走与 GUI 相同的 Command 总线并写入带来源标记的 journal，可以 undo
+回退（`batch` 一整组一起回退）。写工具默认关闭，`serve-mcp` 不加 `--write` 时服务器对项目
+的访问是只读的。
 
 ## 启动
 
@@ -118,17 +119,33 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 | `set_prototype` | `addr`, `text`（`null` 清除） | 函数 C 原型 |
 | `apply_type` | `func`, `slot`（0 = 第一个参数）, `struct`（`null` 清除） | 把已定义的结构体绑定到参数槽 |
 | `define_function` | `start`, `end`（不含端点） | 定义函数或调整范围 |
-| `undo` | — | 撤销 journal 中最新的那条命令 |
+| `batch` | `commands: [{tool, arguments}]` | 一次应用多条写命令：要么全成功、要么全不落库，一条 `undo` 撤销整组 |
+| `undo` | `seq?`, `dryRun?` | 撤销最新的命令或整组，并回报撤销了哪些记录 |
 
-每个写工具返回改动前后的值、脏范围和 undo 提示：
+每个写工具返回 `seq`、改动前后的值、脏范围和 undo 提示；`seq` 之后可以喂给 `undo {seq}`
+做「只撤销我以为的那一条」的校验：
 
 ```json
-{"tool":"rename","addr":"0x140001008","previous":"sub_140001008","value":"main_entry",
+{"tool":"rename","seq":12,"addr":"0x140001008","previous":"sub_140001008","value":"main_entry",
  "dirty":["0x140001008..+1"],"undo":true,"note":"applied to the project journal; call undo to revert"}
 ```
 
+`undo` 的结果会列出被撤销的记录（`seq`/`cmd`/`origin`/`ts`/`batch`，新→旧）：
+
+```json
+{"undone":true,"records":[{"seq":12,"cmd":"rename","origin":"mcp","ts":1762470000,"batch":7}],
+ "dirty":["0x140001008..+1"]}
+```
+
+- `undo {dryRun:true}` 只回 `would_undo`，不改库，适合先确认再撤销。
+- `undo {seq:N}` 要求 `N` 是**当前最新的已应用记录**，否则返回错误（“undo the newer changes
+  first”），避免跳着撤销把状态弄乱；如果该记录属于一个 batch，整组一起撤销。
+- `origin` 记录命令来源（`mcp`/`gui`/`cli`/`ai`/`user`）：journal 是所有前端共用的，
+  审计与「这条到底是谁改的」都靠它。
+
 语义与 GUI/CLI 完全一致：命令在同一个 SQLite 事务里写入并记录 inverse，`undo` 就是 GUI 的
-撤销。项目文件同时被 GUI 打开时，GUI 需要重新载入才能看到新名字/注释。
+撤销。项目文件同时被 GUI 打开时，GUI 需要重新载入才能看到新名字/注释。`batch` 内的地址在
+提交前解析，所以同一组里不能引用本组刚创建的名字。
 
 **过滤、分页与截断约定**：`filter` 先于 `offset`/`limit` 生效——`limit` 只限制返回行数，
 不会截断扫描，所以命中项在表的任何位置都能被找到；列表型工具都报告 `truncated`，给出

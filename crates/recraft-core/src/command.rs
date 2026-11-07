@@ -586,17 +586,6 @@ pub(crate) fn apply(
     Ok(())
 }
 
-/// Read the newest applied journal record for undo.
-pub(crate) fn last_active_record(conn: &Connection) -> Result<Option<(i64, Vec<u8>)>> {
-    conn.query_row(
-        "SELECT seq, payload FROM journal WHERE undone = 0 ORDER BY seq DESC LIMIT 1",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .optional()
-    .map_err(db_err)
-}
-
 /// Read the oldest undone journal record for redo.
 pub(crate) fn first_undone_record(conn: &Connection) -> Result<Option<(i64, Vec<u8>)>> {
     conn.query_row(

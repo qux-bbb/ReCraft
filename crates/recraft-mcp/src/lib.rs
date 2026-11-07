@@ -14,7 +14,8 @@
 //! `function_summary`.
 //!
 //! Write tools (`--write` only): `rename`, `set_comment`, `set_prototype`, `apply_type`,
-//! `define_function`, `undo`.
+//! `define_function`, `batch`, `undo`. Every one goes through the same command bus as the
+//! GUI and is journaled with its origin, so `undo` can report exactly what it reverted.
 //!
 //! Resources: `recraft://project/{id}/functions|strings|imports` and
 //! `recraft://project/{id}/pseudocode/{func}`.
@@ -52,10 +53,12 @@ read tools and journaled write tools. Query with list_functions (case-insensitiv
 substring), function_summary or get_pseudocode; addresses accept 0x hex, decimal, a symbol \
 name, or 'entry'. Write tools (rename, set_comment, set_prototype, apply_type, \
 define_function) mutate user data through the same command bus as the GUI: every call is \
-applied immediately and recorded in the project journal, and undo reverts the newest change. \
-Prefer reading first (pseudocode/strings/xrefs) and use a short, specific name; confirm with \
-list_functions or get_pseudocode after a write. Large payloads report \
-truncated:true; narrow the query or raise maxLines/maxBytes.";
+applied immediately and recorded in the project journal with its origin, and undo reverts the \
+newest change (or a whole batch) and reports what it reverted. Use batch to apply several \
+edits atomically so one undo removes them all. Prefer reading first (pseudocode/strings/xrefs) \
+and use a short, specific name; confirm with list_functions or get_pseudocode after a write. \
+Large payloads report truncated:true with next_offset/next_start_line; follow those fields \
+instead of assuming the result is complete.";
 
 fn instructions(write: bool) -> &'static str {
     if write {
@@ -96,7 +99,10 @@ impl McpServer {
     }
 
     fn open_mode(path: &Path, write: bool) -> Result<Self> {
-        let session = Session::open(path)?;
+        let mut session = Session::open(path)?;
+        // Provenance for the shared journal: a GUI user and an MCP client must stay
+        // distinguishable in the audit trail and in `undo` results.
+        session.set_origin("mcp");
         let project_id = session
             .path()
             .file_stem()
@@ -235,6 +241,7 @@ impl McpServer {
             "set_prototype" => self.tool_set_prototype(&arguments),
             "apply_type" => self.tool_apply_type(&arguments),
             "define_function" => self.tool_define_function(&arguments),
+            "batch" => self.tool_batch(&arguments),
             "undo" => self.tool_undo(&arguments),
             other => return Err((-32602, format!("unknown tool: {other}"))),
         };
@@ -774,132 +781,123 @@ impl McpServer {
     // the dirty ranges, so the caller can verify the change or call `undo`.
 
     fn tool_rename(&mut self, arguments: &Value) -> ToolResult {
-        let addr = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let name = optional_text(arguments, "name")?;
-        let previous = self.session.name_at(addr).map_err(|e| e.to_string())?;
-        let effect = self
-            .session
-            .execute(Command::Rename {
-                addr,
-                name: name.clone(),
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(change_payload("rename", addr, previous, name, &effect))
+        let edit = Edit::parse(self, "rename", arguments)?;
+        self.apply_edit(edit)
     }
 
     fn tool_set_comment(&mut self, arguments: &Value) -> ToolResult {
-        let addr = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let kind = comment_kind(arguments)?;
-        let text = optional_text(arguments, "text")?;
-        let previous = self
-            .session
-            .comment_at(addr, kind)
-            .map_err(|e| e.to_string())?;
-        let effect = self
-            .session
-            .execute(Command::SetComment {
-                addr,
-                kind,
-                text: text.clone(),
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(change_payload("set_comment", addr, previous, text, &effect))
+        let edit = Edit::parse(self, "set_comment", arguments)?;
+        self.apply_edit(edit)
     }
 
     fn tool_set_prototype(&mut self, arguments: &Value) -> ToolResult {
-        let addr = self
-            .resolve_address(arguments.get("addr"))
-            .map_err(|e| e.to_string())?;
-        let text = optional_text(arguments, "text")?;
-        let previous = self.session.prototype_at(addr).map_err(|e| e.to_string())?;
-        let effect = self
-            .session
-            .execute(Command::SetPrototype {
-                addr,
-                text: text.clone(),
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(change_payload(
-            "set_prototype",
-            addr,
-            previous,
-            text,
-            &effect,
-        ))
+        let edit = Edit::parse(self, "set_prototype", arguments)?;
+        self.apply_edit(edit)
     }
 
     fn tool_apply_type(&mut self, arguments: &Value) -> ToolResult {
-        let func = self
-            .resolve_address(arguments.get("func"))
-            .map_err(|e| e.to_string())?;
-        let slot = arguments
-            .get("slot")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "apply_type requires `slot` (0 = first argument)".to_owned())?;
-        let slot =
-            u8::try_from(slot).map_err(|_| format!("slot {slot} is out of range (0-255)"))?;
-        let struct_name = optional_text(arguments, "struct")?;
-        let previous = self
-            .session
-            .arg_type(func, slot)
-            .map_err(|e| e.to_string())?;
+        let edit = Edit::parse(self, "apply_type", arguments)?;
+        self.apply_edit(edit)
+    }
+
+    fn tool_define_function(&mut self, arguments: &Value) -> ToolResult {
+        let edit = Edit::parse(self, "define_function", arguments)?;
+        self.apply_edit(edit)
+    }
+
+    /// Apply one parsed edit and report the previous value, the new value and dirty ranges.
+    fn apply_edit(&mut self, edit: Edit) -> ToolResult {
+        let previous = edit.previous(&self.session)?;
         let effect = self
             .session
-            .execute(Command::ApplyType {
-                func,
-                slot,
-                struct_name: struct_name.clone(),
-            })
+            .execute(edit.command.clone())
             .map_err(|e| e.to_string())?;
+        let seq = self.session.last_journal_seq().map_err(|e| e.to_string())?;
+        if let Command::DefineFunc { start, end } = &edit.command {
+            return Ok(json!({
+                "tool": edit.tool,
+                "seq": seq,
+                "addr": hex(*start),
+                "previous_end": previous,
+                "end": hex(*end),
+                "dirty": dirty_ranges(&effect),
+                "undo": true,
+                "note": "applied to the project journal; call undo to revert",
+            }));
+        }
         Ok(change_payload(
-            "apply_type",
-            func,
+            edit.tool,
+            seq,
+            edit.addr,
             previous,
-            struct_name,
+            edit.value(),
             &effect,
         ))
     }
 
-    fn tool_define_function(&mut self, arguments: &Value) -> ToolResult {
-        let start = self
-            .resolve_address(arguments.get("start"))
-            .map_err(|e| e.to_string())?;
-        let end = self
-            .resolve_address(arguments.get("end"))
-            .map_err(|e| e.to_string())?;
-        if end <= start {
-            return Err(format!(
-                "define_function needs end > start ({} >= {})",
-                hex(end),
-                hex(start)
-            ));
+    /// Apply several edits as one journal batch (all or nothing, reverted by one `undo`).
+    fn tool_batch(&mut self, arguments: &Value) -> ToolResult {
+        let Some(entries) = arguments.get("commands").and_then(Value::as_array) else {
+            return Err("batch needs a `commands` array".to_owned());
+        };
+        if entries.is_empty() {
+            return Err("batch has no commands".to_owned());
         }
-        let previous_end = self.session.func_at(start).map_err(|e| e.to_string())?;
-        let effect = self
+        let mut edits = Vec::with_capacity(entries.len());
+        for (index, entry) in entries.iter().enumerate() {
+            let tool = entry
+                .get("tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("command #{}: needs a string `tool`", index + 1))?;
+            let arguments = entry.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let edit = Edit::parse(self, tool, &arguments)
+                .map_err(|error| format!("command #{} ({tool}): {error}", index + 1))?;
+            edits.push(edit);
+        }
+        let commands: Vec<Command> = edits.iter().map(|edit| edit.command.clone()).collect();
+        let effects = self
             .session
-            .execute(Command::DefineFunc { start, end })
+            .execute_batch(&commands)
             .map_err(|e| e.to_string())?;
+        let mut dirty = Vec::new();
+        for effect in &effects {
+            dirty.extend(dirty_ranges(effect));
+        }
         Ok(json!({
-            "tool": "define_function",
-            "addr": hex(start),
-            "previous_end": previous_end.map(hex),
-            "end": hex(end),
-            "dirty": dirty_ranges(&effect),
+            "tool": "batch",
+            "seq": self.session.last_journal_seq().map_err(|e| e.to_string())?,
+            "count": edits.len(),
+            "commands": edits.iter().map(|edit| edit.tool).collect::<Vec<_>>(),
+            "dirty": dirty,
             "undo": true,
-            "note": "applied to the project journal; call undo to revert",
+            "note": "applied as one journal batch; a single undo reverts all of it",
         }))
     }
 
-    fn tool_undo(&mut self, _arguments: &Value) -> ToolResult {
-        let effect = self.session.undo().map_err(|e| e.to_string())?;
-        Ok(match effect {
-            Some(effect) => json!({
+    fn tool_undo(&mut self, arguments: &Value) -> ToolResult {
+        let seq = arguments.get("seq").and_then(Value::as_i64);
+        let dry_run = arguments
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if dry_run {
+            let Some(records) = self.session.undo_preview().map_err(|e| e.to_string())? else {
+                return Ok(json!({"undone": false, "dry_run": true, "message": "nothing to undo"}));
+            };
+            return Ok(json!({
+                "dry_run": true,
+                "would_undo": undo_records(&records),
+            }));
+        }
+        let report = match seq {
+            Some(seq) => Some(self.session.undo_seq(seq).map_err(|e| e.to_string())?),
+            None => self.session.undo_report().map_err(|e| e.to_string())?,
+        };
+        Ok(match report {
+            Some(report) => json!({
                 "undone": true,
-                "dirty": dirty_ranges(&effect),
+                "records": undo_records(&report.records),
+                "dirty": dirty_ranges(&report.effect),
             }),
             None => json!({
                 "undone": false,
@@ -1033,6 +1031,133 @@ impl McpServer {
     }
 }
 
+/// One write command parsed from tool arguments, before it is applied.
+///
+/// Both the single write tools and `batch` build through this type, so an argument shape
+/// cannot drift between "rename one address" and "rename twenty in one call".
+struct Edit {
+    tool: &'static str,
+    addr: Address,
+    command: Command,
+}
+
+impl Edit {
+    fn parse(
+        server: &McpServer,
+        tool: &str,
+        arguments: &Value,
+    ) -> std::result::Result<Edit, String> {
+        let resolve =
+            |value: Option<&Value>| server.resolve_address(value).map_err(|e| e.to_string());
+        Ok(match tool {
+            "rename" => {
+                let addr = resolve(arguments.get("addr"))?;
+                let name = optional_text(arguments, "name")?;
+                Edit {
+                    tool: "rename",
+                    addr,
+                    command: Command::Rename { addr, name },
+                }
+            }
+            "set_comment" => {
+                let addr = resolve(arguments.get("addr"))?;
+                let kind = comment_kind(arguments)?;
+                let text = optional_text(arguments, "text")?;
+                Edit {
+                    tool: "set_comment",
+                    addr,
+                    command: Command::SetComment { addr, kind, text },
+                }
+            }
+            "set_prototype" => {
+                let addr = resolve(arguments.get("addr"))?;
+                let text = optional_text(arguments, "text")?;
+                Edit {
+                    tool: "set_prototype",
+                    addr,
+                    command: Command::SetPrototype { addr, text },
+                }
+            }
+            "apply_type" => {
+                let func = resolve(arguments.get("func"))?;
+                let slot = arguments
+                    .get("slot")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "apply_type requires `slot` (0 = first argument)".to_owned())?;
+                let slot = u8::try_from(slot)
+                    .map_err(|_| format!("slot {slot} is out of range (0-255)"))?;
+                let struct_name = optional_text(arguments, "struct")?;
+                Edit {
+                    tool: "apply_type",
+                    addr: func,
+                    command: Command::ApplyType {
+                        func,
+                        slot,
+                        struct_name,
+                    },
+                }
+            }
+            "define_function" => {
+                let start = resolve(arguments.get("start"))?;
+                let end = resolve(arguments.get("end"))?;
+                if end <= start {
+                    return Err(format!(
+                        "define_function needs end > start ({} >= {})",
+                        hex(end),
+                        hex(start)
+                    ));
+                }
+                Edit {
+                    tool: "define_function",
+                    addr: start,
+                    command: Command::DefineFunc { start, end },
+                }
+            }
+            other => return Err(format!("unknown write tool: {other}")),
+        })
+    }
+
+    /// Value of the field this edit overwrites, formatted for the result payload.
+    fn previous(&self, session: &Session) -> std::result::Result<Option<String>, String> {
+        let value = match &self.command {
+            Command::Rename { addr, .. } => session.name_at(*addr),
+            Command::SetComment { addr, kind, .. } => session.comment_at(*addr, *kind),
+            Command::SetPrototype { addr, .. } => session.prototype_at(*addr),
+            Command::ApplyType { func, slot, .. } => session.arg_type(*func, *slot),
+            Command::DefineFunc { start, .. } => session.func_at(*start).map(|end| end.map(hex)),
+            _ => return Err("unsupported edit".to_owned()),
+        };
+        value.map_err(|error| error.to_string())
+    }
+
+    /// Value the edit writes, formatted for the result payload.
+    fn value(&self) -> Option<String> {
+        match &self.command {
+            Command::Rename { name, .. } => name.clone(),
+            Command::SetComment { text, .. } => text.clone(),
+            Command::SetPrototype { text, .. } => text.clone(),
+            Command::ApplyType { struct_name, .. } => struct_name.clone(),
+            _ => None,
+        }
+    }
+}
+
+/// Journal records reverted by one undo, as they appear in a tool result.
+fn undo_records(records: &[recraft_core::UndoRecord]) -> Vec<Value> {
+    records
+        .iter()
+        .map(|record| {
+            json!({
+                "seq": record.seq,
+                "cmd": record.cmd,
+                "origin": record.origin,
+                "ts": record.ts,
+                "batch": record.batch,
+            })
+        })
+        .collect()
+}
+
 fn rpc_error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -1096,7 +1221,13 @@ fn bytes_equal_ct(left: &[u8], right: &[u8]) -> bool {
 fn is_write_tool(name: &str) -> bool {
     matches!(
         name,
-        "rename" | "set_comment" | "set_prototype" | "apply_type" | "define_function" | "undo"
+        "rename"
+            | "set_comment"
+            | "set_prototype"
+            | "apply_type"
+            | "define_function"
+            | "batch"
+            | "undo"
     )
 }
 
@@ -1137,6 +1268,7 @@ fn dirty_ranges(effect: &Effect) -> Vec<String> {
 /// Shared shape of a single write result: previous value, new value, dirty ranges.
 fn change_payload(
     tool: &str,
+    seq: i64,
     addr: Address,
     previous: Option<String>,
     value: Option<String>,
@@ -1144,6 +1276,7 @@ fn change_payload(
 ) -> Value {
     json!({
         "tool": tool,
+        "seq": seq,
         "addr": hex(addr),
         "previous": previous,
         "value": value,
@@ -1406,9 +1539,37 @@ fn write_tools() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "batch",
+            "description": "Apply several write tools as one journal batch: either all of them land or none does, and a single `undo` reverts the whole set. Each entry is {\"tool\": \"rename\", \"arguments\": {...}} with the same arguments the single tool takes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "commands": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {"type": "string", "enum": ["rename", "set_comment", "set_prototype", "apply_type", "define_function"]},
+                                "arguments": {"type": "object"},
+                            },
+                            "required": ["tool"],
+                        },
+                    },
+                },
+                "required": ["commands"],
+            },
+        }),
+        json!({
             "name": "undo",
-            "description": "Revert the newest journaled command (the same undo the GUI uses). Reports `undone: false` when the journal is empty.",
-            "inputSchema": {"type": "object"},
+            "description": "Revert the newest journaled command (or batch) and report which records were reverted. `dryRun` shows what would be undone; `seq` requires that record to be the newest applied one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seq": {"type": "integer", "description": "Only undo if this is the newest applied record."},
+                    "dryRun": {"type": "boolean", "description": "Report what would be undone without changing anything."},
+                },
+            },
         }),
     ]
 }
@@ -2157,6 +2318,7 @@ mod tests {
             "set_prototype",
             "apply_type",
             "define_function",
+            "batch",
             "undo",
         ] {
             assert!(
@@ -2164,6 +2326,95 @@ mod tests {
                 "missing write tool {tool}: {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn batch_applies_and_undoes_as_one_group() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let first = first_function(&mut server);
+        let all = tool_json(&mut server, "list_functions", json!({"limit": 2}));
+        let second = all["functions"][1]["start"].as_str().unwrap().to_owned();
+
+        let applied = tool_json(
+            &mut server,
+            "batch",
+            json!({"commands": [
+                {"tool": "rename", "arguments": {"addr": first, "name": "batch_one"}},
+                {"tool": "rename", "arguments": {"addr": second, "name": "batch_two"}},
+                {"tool": "set_comment", "arguments": {"addr": first, "text": "batch note"}},
+            ]}),
+        );
+        assert_eq!(applied["count"], 3, "{applied}");
+        assert!(applied["seq"].as_u64().unwrap() >= 3, "{applied}");
+
+        let named = tool_json(&mut server, "list_functions", json!({"filter": "batch_"}));
+        assert_eq!(named["count"], 2, "{named}");
+
+        // A dry run reports the three records without reverting anything.
+        let preview = tool_json(&mut server, "undo", json!({"dryRun": true}));
+        let would = preview["would_undo"].as_array().unwrap();
+        assert_eq!(would.len(), 3, "{preview}");
+        assert!(would.iter().all(|record| record["origin"] == "mcp"));
+        assert!(would.iter().all(|record| record["batch"].is_number()));
+        assert_eq!(
+            tool_json(&mut server, "list_functions", json!({"filter": "batch_"}))["count"],
+            2,
+            "dry run must not revert anything"
+        );
+
+        // One undo removes all three.
+        let undone = tool_json(&mut server, "undo", json!({}));
+        assert_eq!(undone["records"].as_array().unwrap().len(), 3, "{undone}");
+        assert_eq!(
+            tool_json(&mut server, "list_functions", json!({"filter": "batch_"}))["count"],
+            0
+        );
+    }
+
+    #[test]
+    fn undo_seq_only_accepts_the_newest_record() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let first = first_function(&mut server);
+        let one = tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": first, "name": "seq_one"}),
+        );
+        let one_seq = one["seq"].as_i64().unwrap();
+        let two = tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": first, "name": "seq_two"}),
+        );
+        let two_seq = two["seq"].as_i64().unwrap();
+        assert!(two_seq > one_seq);
+
+        let rejected = call(
+            &mut server,
+            "tools/call",
+            json!({"name": "undo", "arguments": {"seq": one_seq}}),
+        );
+        assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+        assert!(
+            rejected["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("applied later"),
+            "{rejected}"
+        );
+
+        let undone = tool_json(&mut server, "undo", json!({"seq": two_seq}));
+        assert_eq!(undone["records"][0]["seq"], two_seq, "{undone}");
+        assert_eq!(undone["records"][0]["cmd"], "rename");
+        assert_eq!(undone["records"][0]["origin"], "mcp");
+        assert_eq!(
+            tool_json(&mut server, "list_functions", json!({"filter": "seq_"}))["count"],
+            1
+        );
     }
 
     #[test]
