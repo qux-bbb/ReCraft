@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Added
+
+- **Tool metadata a client can act on.** Every MCP tool now carries `title`, `annotations`
+  and an `outputSchema`, and successful `tools/call` results include `structuredContent`
+  next to the JSON text block. Read tools declare `readOnlyHint: true`; write tools declare
+  `readOnlyHint: false`/`destructiveHint: true`, with `undo` and `batch` also
+  `idempotentHint: false`. Clients can auto-approve the read surface instead of prompting for
+  every call, and 2025-06-18 clients can consume the structured result directly.
 
 - **The MCP HTTP transport serves requests concurrently.** Each connection now runs on its
   own thread with its own `Session` (capped at 32 in flight), so a multi-second decompile no
@@ -16,8 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are refused with 403 (DNS-rebinding defence, required by the streamable-HTTP spec), an
   unsupported `MCP-Protocol-Version` header returns 400, and a request that cannot open the
   project returns 500 instead of dropping the connection.
-
-### Added
 
 - **One query layer for MCP and the built-in agent.** The read tools moved out of
   `recraft-mcp` into a new `recraft-query` crate: one JSON schema and one executor, called by

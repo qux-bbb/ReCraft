@@ -108,14 +108,18 @@ pub fn call(
 }
 
 /// Canonical JSON Schemas for the shared tools, bounded by `budget`.
+///
+/// Every spec carries a `title`, `annotations` and a (permissive) `outputSchema`: a client
+/// can tell these are read-only and idempotent without guessing from the name, and can consume
+/// the structured result instead of re-parsing the text block.
 pub fn specs(budget: &Budget) -> Vec<Value> {
     let rows = budget.rows;
     let pseudo_lines = budget.pseudo_lines;
     let pseudo_bytes = budget.pseudo_bytes;
-    vec![
+    let mut listed = vec![
         json!({
             "name": "list_functions",
-            "description": "List discovered functions with names and ranges. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset` —pass it back as `offset` to read the next page.",
+            "description": "List discovered functions with names and ranges. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset` — pass it back as `offset` to read the next page.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -238,15 +242,48 @@ pub fn specs(budget: &Budget) -> Vec<Value> {
                 "required": ["api"],
             },
         }),
-    ]
+    ];
+    for spec in &mut listed {
+        let name = spec["name"].as_str().unwrap_or_default().to_owned();
+        spec["title"] = json!(title_of(&name));
+        // A client can auto-approve these without guessing from the name.
+        spec["annotations"] = json!({
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+        });
+        // Every read tool returns an object; the permissive schema lets a 2025-06-18 client
+        // consume `structuredContent` instead of re-parsing the text block.
+        spec["outputSchema"] = json!({"type": "object", "additionalProperties": true});
+    }
+    listed
 }
 
-/// `0x… rendering used by every result.
+/// Human-readable label a client may show instead of the machine name.
+fn title_of(name: &str) -> &'static str {
+    match name {
+        "list_functions" => "List functions",
+        "get_disassembly" => "Disassembly",
+        "get_pseudocode" => "Pseudocode",
+        "xrefs_to" => "References to address",
+        "xrefs_from" => "References from address",
+        "list_strings" => "Strings",
+        "list_imports" => "Imports",
+        "callgraph" => "Call graph",
+        "search_bytes" => "Search bytes",
+        "function_summary" => "Function summary",
+        "find_api_callers" => "Find API callers",
+        _ => "ReCraft tool",
+    }
+}
+
+/// `0x…` rendering used by every result.
 pub fn hex(addr: Address) -> String {
     format!("{:#x}", addr.get())
 }
 
-/// Resolve `0x…, decimal, a symbol name or `entry`; a missing value means the entry point.
+/// Resolve `0x…`, decimal, a symbol name or `entry`; a missing value means the entry point.
 pub fn resolve_address(session: &Session, value: Option<&Value>) -> Result<Address> {
     let Some(value) = value else {
         return Ok(session.entry_point());

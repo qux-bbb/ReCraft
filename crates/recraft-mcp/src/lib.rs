@@ -234,6 +234,9 @@ impl McpServer {
         match outcome {
             Ok(value) => Ok(json!({
                 "content": [{"type": "text", "text": value.to_string()}],
+                // 2025-06-18 clients read the structured form; older ones still get the JSON
+                // text block. Every tool declares an object `outputSchema`.
+                "structuredContent": value,
                 "isError": false,
             })),
             Err(message) => Ok(json!({
@@ -728,7 +731,7 @@ fn tools(write: bool) -> Vec<Value> {
 }
 
 fn write_tools() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         json!({
             "name": "rename",
             "description": "Rename the address (function, data, import) through the journaled command bus. `name: null` clears the user name. Fails on duplicate or reserved names. Undoable.",
@@ -824,7 +827,35 @@ fn write_tools() -> Vec<Value> {
                 },
             },
         }),
-    ]
+    ];
+    for tool in &mut tools {
+        let name = tool["name"].as_str().unwrap_or_default().to_owned();
+        tool["title"] = json!(write_title_of(&name));
+        // Writes overwrite user data, so a client should confirm them; `batch` and `undo`
+        // are not idempotent (a second undo reverts the previous command).
+        tool["annotations"] = json!({
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": !matches!(name.as_str(), "batch" | "undo"),
+            "openWorldHint": false,
+        });
+        tool["outputSchema"] = json!({"type": "object", "additionalProperties": true});
+    }
+    tools
+}
+
+/// Human-readable label for a write tool.
+fn write_title_of(name: &str) -> &'static str {
+    match name {
+        "rename" => "Rename",
+        "set_comment" => "Set comment",
+        "set_prototype" => "Set prototype",
+        "apply_type" => "Apply struct type",
+        "define_function" => "Define function",
+        "batch" => "Batch edits",
+        "undo" => "Undo",
+        _ => "ReCraft write tool",
+    }
 }
 
 // ------------------------------------------------------------------ HTTP -----
@@ -1356,8 +1387,23 @@ mod tests {
             "callgraph",
             "search_bytes",
             "function_summary",
+            "find_api_callers",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
+        }
+        // Every tool advertises its intent and a result schema, so a client can auto-approve
+        // the read-only ones and consume `structuredContent`.
+        for tool in tools {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                !tool["title"].as_str().unwrap_or_default().is_empty(),
+                "{name}"
+            );
+            assert_eq!(
+                tool["annotations"]["readOnlyHint"], true,
+                "{name} should be read-only"
+            );
+            assert_eq!(tool["outputSchema"]["type"], "object", "{name}");
         }
     }
 
@@ -1375,6 +1421,15 @@ mod tests {
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["count"], 10, "{text}");
         assert!(!parsed["functions"][0]["name"].is_null());
+        // The same payload is available in structured form for 2025-06-18 clients.
+        assert_eq!(
+            functions["result"]["structuredContent"]["count"], 10,
+            "{functions}"
+        );
+        assert_eq!(
+            functions["result"]["structuredContent"], parsed,
+            "structuredContent must mirror the text payload"
+        );
 
         let disassembly = call(
             &mut server,
@@ -1790,6 +1845,20 @@ mod tests {
                 names.iter().any(|name| name == tool),
                 "missing write tool {tool}: {names:?}"
             );
+        }
+        // Write tools must not be advertised as read-only, and `undo`/`batch` must not claim
+        // to be idempotent.
+        let response = call(&mut writable, "tools/list", json!({}));
+        for tool in response["result"]["tools"].as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            if recraft_query::is_read_tool(name) {
+                continue;
+            }
+            assert_eq!(tool["annotations"]["readOnlyHint"], false, "{name}");
+            assert_eq!(tool["annotations"]["destructiveHint"], true, "{name}");
+            if name == "undo" || name == "batch" {
+                assert_eq!(tool["annotations"]["idempotentHint"], false, "{name}");
+            }
         }
     }
 

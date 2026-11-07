@@ -117,6 +117,13 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 读工具的实现与参数 schema 都在 `recraft-query`，`serve-mcp` 与内置 AI agent（`ai ask`、分析助手）
 **共用同一份定义**——外部客户端和内置助手看到的是同一批工具，只是 agent 的行数/字节预算更小。
 
+**工具元数据**：`tools/list` 里每个工具都带 `title`、`annotations`（读工具
+`readOnlyHint: true`；写工具 `readOnlyHint: false` + `destructiveHint: true`，`undo`/`batch`
+另有 `idempotentHint: false`）和 `outputSchema`（对象即可，暂不做逐字段约束）。`tools/call`
+成功时同时返回 `content[0].text`（JSON 字符串，兼容老客户端）与 `structuredContent`
+（同样的对象，2025-06-18 客户端直接消费，不必二次解析文本）。客户端可以据此自动放行只读
+工具、对写工具保留确认。
+
 ### 写工具（`--write`）
 
 写工具只在 `serve-mcp --write` 时注册；未开启时调用会在工具结果里返回 `isError: true`
