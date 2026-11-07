@@ -87,20 +87,32 @@ pub struct McpServer {
     project_id: String,
     /// `true` when `--write` enabled the journaled write tools.
     write: bool,
+    /// Whether this transport can deliver `notifications/resources/updated` (stdio can,
+    /// stateless HTTP cannot, so the capability is advertised per transport).
+    subscribe: bool,
+    /// URIs the client subscribed to.
+    subscriptions: std::collections::BTreeSet<String>,
+    /// Notifications produced by the last request, flushed by the transport.
+    pending: Vec<Value>,
 }
 
 impl McpServer {
     /// Open read-only (the default): write tools are not registered at all.
     pub fn open(path: &Path) -> Result<Self> {
-        Self::open_mode(path, false)
+        Self::open_mode(path, false, true)
     }
 
     /// Open with the journaled write tools enabled (`serve-mcp --write`).
     pub fn open_writable(path: &Path) -> Result<Self> {
-        Self::open_mode(path, true)
+        Self::open_mode(path, true, true)
     }
 
-    fn open_mode(path: &Path, write: bool) -> Result<Self> {
+    /// Open for the HTTP transport: no session state, so no resource subscriptions.
+    pub(crate) fn open_http(path: &Path, write: bool) -> Result<Self> {
+        Self::open_mode(path, write, false)
+    }
+
+    fn open_mode(path: &Path, write: bool, subscribe: bool) -> Result<Self> {
         let mut session = Session::open(path)?;
         // Provenance for the shared journal: a GUI user and an MCP client must stay
         // distinguishable in the audit trail and in `undo` results.
@@ -114,6 +126,9 @@ impl McpServer {
             session,
             project_id,
             write,
+            subscribe,
+            subscriptions: std::collections::BTreeSet::new(),
+            pending: Vec::new(),
         })
     }
 
@@ -131,13 +146,37 @@ impl McpServer {
             if line.trim().is_empty() {
                 continue;
             }
-            let Some(response) = self.handle_line(&line) else {
-                continue;
-            };
-            writeln!(stdout, "{response}").map_err(Error::from)?;
+            if let Some(response) = self.handle_line(&line) {
+                writeln!(stdout, "{response}").map_err(Error::from)?;
+            }
+            // A write queued `notifications/resources/updated`; stdio can deliver them.
+            for notification in self.take_notifications() {
+                writeln!(stdout, "{notification}").map_err(Error::from)?;
+            }
             stdout.flush().map_err(Error::from)?;
         }
         Ok(())
+    }
+
+    /// Notifications produced by the last request, drained by the transport.
+    pub fn take_notifications(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Queue `notifications/resources/updated` for every subscription (the scopes are
+    /// coarse: any edit can change a name, a string reference or a rendered function).
+    pub(crate) fn notify_resources_updated(&mut self) {
+        if !self.subscribe {
+            return;
+        }
+        let uris: Vec<String> = self.subscriptions.iter().cloned().collect();
+        for uri in uris {
+            self.pending.push(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/resources/updated",
+                "params": {"uri": uri},
+            }));
+        }
     }
 
     /// Handle one JSON-RPC line; returns the serialized response (None for notifications).
@@ -182,7 +221,7 @@ impl McpServer {
                     "protocolVersion": version,
                     "capabilities": {
                         "tools": {"listChanged": false},
-                        "resources": {"subscribe": false, "listChanged": false},
+                        "resources": {"subscribe": self.subscribe, "listChanged": false},
                         "prompts": {"listChanged": false},
                     },
                     "serverInfo": {"name": "recraft", "version": env!("CARGO_PKG_VERSION")},
@@ -198,6 +237,8 @@ impl McpServer {
                 Ok(json!({"resourceTemplates": self.resource_templates()}))
             }
             "resources/read" => self.read_resource(&params),
+            "resources/subscribe" => self.subscribe_resource(&params, true),
+            "resources/unsubscribe" => self.subscribe_resource(&params, false),
             "prompts/list" => Ok(json!({"prompts": self.prompts()})),
             "prompts/get" => self.read_prompt(&params),
             other => Err((-32601, format!("method not found: {other}"))),
@@ -727,6 +768,73 @@ mod tests {
         assert_eq!(missing["error"]["code"], -32602, "{missing}");
         let unknown = call(&mut server, "prompts/get", json!({"name": "nope"}));
         assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
+    }
+
+    #[test]
+    fn resource_subscriptions_report_updates_on_stdio() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let uri = format!("recraft://project/{}/functions", server.project_id);
+        let subscribed = call(&mut server, "resources/subscribe", json!({"uri": uri}));
+        assert!(subscribed["result"].is_object(), "{subscribed}");
+        assert!(
+            server.take_notifications().is_empty(),
+            "subscribe is not a change"
+        );
+
+        // A write queues one notification per subscription for the transport to flush.
+        let first = first_function(&mut server);
+        tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": first, "name": "notified"}),
+        );
+        let notifications = server.take_notifications();
+        assert_eq!(notifications.len(), 1, "{notifications:?}");
+        assert_eq!(
+            notifications[0]["method"],
+            "notifications/resources/updated"
+        );
+        assert_eq!(notifications[0]["params"]["uri"], uri);
+
+        // Unsubscribing stops them.
+        call(&mut server, "resources/unsubscribe", json!({"uri": uri}));
+        tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": first, "name": "quiet"}),
+        );
+        assert!(server.take_notifications().is_empty());
+
+        // Unknown URIs are rejected, and so is the HTTP transport (no session state).
+        let bad = call(
+            &mut server,
+            "resources/subscribe",
+            json!({"uri": "recraft://project/other/functions"}),
+        );
+        assert_eq!(bad["error"]["code"], -32602, "{bad}");
+        let Some(path) = notepad_project_path() else {
+            return;
+        };
+        let mut http = McpServer::open_http(&path, false).expect("open http server");
+        let http_uri = format!("recraft://project/{}/functions", http.project_id);
+        let rejected = call(&mut http, "resources/subscribe", json!({"uri": http_uri}));
+        assert_eq!(rejected["error"]["code"], -32601, "{rejected}");
+        let initialized = call(&mut http, "initialize", json!({}));
+        assert_eq!(
+            initialized["result"]["capabilities"]["resources"]["subscribe"], false,
+            "{initialized}"
+        );
+        let stdio = call(
+            &mut McpServer::open(&path).expect("open stdio server"),
+            "initialize",
+            json!({}),
+        );
+        assert_eq!(
+            stdio["result"]["capabilities"]["resources"]["subscribe"], true,
+            "{stdio}"
+        );
     }
 
     #[test]

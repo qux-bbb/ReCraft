@@ -66,7 +66,7 @@ pub(crate) fn serve_http_listener_mode(
     write: bool,
 ) -> Result<()> {
     // Fail fast when the project cannot be opened at all instead of answering 500 forever.
-    drop(McpServer::open_mode(&project, write)?);
+    drop(McpServer::open_http(&project, write)?);
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             continue;
@@ -151,7 +151,7 @@ fn handle_http_connection(
 }
 
 fn handle_rpc(project: &Path, write: bool, body: &str) -> (u16, String) {
-    let mut server = match McpServer::open_mode(project, write) {
+    let mut server = match McpServer::open_http(project, write) {
         Ok(server) => server,
         Err(error) => {
             return (

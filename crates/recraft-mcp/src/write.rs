@@ -53,6 +53,7 @@ impl McpServer {
             .session
             .execute(edit.command.clone())
             .map_err(|e| e.to_string())?;
+        self.notify_resources_updated();
         let seq = self.session.last_journal_seq().map_err(|e| e.to_string())?;
         if let Command::DefineFunc { start, end } = &edit.command {
             return Ok(json!({
@@ -97,6 +98,7 @@ impl McpServer {
             .session
             .execute_batch(&commands)
             .map_err(|e| e.to_string())?;
+        self.notify_resources_updated();
         let mut dirty = Vec::new();
         for effect in &effects {
             dirty.extend(dirty_ranges(effect));
@@ -125,6 +127,7 @@ impl McpServer {
             .session
             .execute(command)
             .map_err(|error| error.to_string())?;
+        self.notify_resources_updated();
         Ok(json!({
             "tool": "define_struct",
             "seq": self.session.last_journal_seq().map_err(|e| e.to_string())?,
@@ -154,6 +157,9 @@ impl McpServer {
             Some(seq) => Some(self.session.undo_seq(seq).map_err(|e| e.to_string())?),
             None => self.session.undo_report().map_err(|e| e.to_string())?,
         };
+        if report.is_some() {
+            self.notify_resources_updated();
+        }
         Ok(match report {
             Some(report) => json!({
                 "undone": true,

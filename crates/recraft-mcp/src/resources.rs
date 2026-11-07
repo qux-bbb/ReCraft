@@ -83,6 +83,46 @@ impl McpServer {
         })]
     }
 
+    /// `resources/subscribe` / `resources/unsubscribe`.
+    ///
+    /// Only stdio can deliver `notifications/resources/updated`; the HTTP transport is
+    /// stateless (one `Session` per request), so it advertises `subscribe: false` and
+    /// rejects the call instead of pretending.
+    pub(crate) fn subscribe_resource(
+        &mut self,
+        params: &Value,
+        subscribe: bool,
+    ) -> std::result::Result<Value, (i64, String)> {
+        if !self.subscribe {
+            return Err((
+                -32601,
+                "resource subscriptions need a stateful transport; serve-mcp --http does not \
+                 support them (use stdio)"
+                    .to_owned(),
+            ));
+        }
+        let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+            return Err((-32602, "resources/subscribe requires a uri".to_owned()));
+        };
+        if !self.known_resource(uri) {
+            return Err((-32602, format!("unknown resource uri: {uri}")));
+        }
+        if subscribe {
+            self.subscriptions.insert(uri.to_owned());
+        } else {
+            self.subscriptions.remove(uri);
+        }
+        Ok(json!({}))
+    }
+
+    /// Whether `uri` names one of this project's resources.
+    fn known_resource(&self, uri: &str) -> bool {
+        let prefix = format!("recraft://project/{}/", self.project_id);
+        uri.strip_prefix(&prefix).is_some_and(|rest| {
+            matches!(rest, "functions" | "strings" | "imports") || rest.starts_with("pseudocode/")
+        })
+    }
+
     pub(crate) fn read_resource(
         &mut self,
         params: &Value,

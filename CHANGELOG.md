@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Resource subscriptions on stdio.** `serve-mcp` (stdio) now advertises
+  `resources.subscribe: true` and implements `resources/subscribe` /
+  `resources/unsubscribe`; after any write or `undo` the server sends one
+  `notifications/resources/updated` per subscribed URI, flushed by the stdio loop. The HTTP
+  transport stays stateless (one `Session` per request), so it advertises
+  `subscribe: false` and rejects the call with `-32601` instead of pretending.
+
 - **One batch-script grammar for the CLI and MCP, and MCP can define structs.** The command
   parser moved out of `recraft-cli` into `recraft-core::script` (`COMMAND_TYPES` +
   `parse_command` + the shared `resolve_address`), so `recraft-cli batch` and the MCP `batch`
