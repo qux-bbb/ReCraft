@@ -294,6 +294,14 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
   32 位快照的 L1 文本按设计保留原始形态（`eax = var_4;`，对应 x64 的
   `eax = (rcx + rdx);`），参数名与 ABI 类型属于 L2。
 
+- 真实样本：`corpus/real/crackme/` 只提交 `src/crackme.c` + `build.ps1`，MSVC 重建出的二进制与
+  `docs/cases/crackme_win_x64.md` 记录的 SHA-256 一致（`/Brepro`，逐字节相同），并产出
+  `crackme.map` 供 `eval --map` 使用。快照沿用 `tests/golden/crackme/`（160，`--limit 160`）；
+  只有工具链漂移、重建产物与钉住的二进制不同时，才用 `build.ps1 -Snapshots` 写入
+  `tests/golden/crackme-real/`，测试随之改用它。门禁为
+  `cargo test -p recraft-decompile --lib real_crackme`（前 160 个函数的 lint + golden），
+  未接入 CI：windows-latest 的 MSVC 版本会让快照抖动。
+
 - 内容：**归一化后的 L1 文本**——`0x...` 地址与 `loc_...` 标签替换为 `0xADDR` /
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。
 - 更新流程：改动反编译器后运行 `recraft-cli golden <corpus-project> --dir tests/golden/corpus`，

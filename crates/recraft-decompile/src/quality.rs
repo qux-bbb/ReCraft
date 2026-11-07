@@ -805,7 +805,7 @@ pub fn default_golden_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use recraft_analysis::{analyze, persist};
+    use recraft_analysis::{analyze, extract_strings, persist, persist_strings};
     use std::path::PathBuf;
 
     fn corpus_for(bits: &str) -> Option<(Session, tempfile::TempDir)> {
@@ -840,6 +840,76 @@ mod tests {
             report.structured_rate() > 0.6,
             "structured {:.3}",
             report.structured_rate()
+        );
+    }
+
+    /// Number of snapshots committed for the real-world crackme fixture (`corpus/real/crackme`),
+    /// the same `--limit 160` selection the case set uses.
+    const REAL_CRACKME_SNAPSHOTS: usize = 160;
+
+    /// The real-world sample, rebuilt from `corpus/real/crackme/src/crackme.c`. Like the corpus,
+    /// the binary is a build product: without `corpus/real/crackme/build.ps1` having run, these
+    /// tests skip instead of failing a clean checkout.
+    fn real_crackme() -> Option<(Session, tempfile::TempDir)> {
+        let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/real/crackme/crackme.exe");
+        let bytes = std::fs::read(exe).ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("real-crackme.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        // Mirror `recraft-cli analyze`: the strings feed comments in the emitted text, and the
+        // built-in CRT signatures name `main`, `strlen`, ...; both are visible in snapshots.
+        let strings = extract_strings(&mut session, 4, 200_000).unwrap();
+        persist_strings(&mut session, &strings).unwrap();
+        crate::signature::apply_builtin(&mut session, false).unwrap();
+        Some((session, dir))
+    }
+
+    /// The fixture carries a full static CRT and a messier CFG than any corpus probe; its output
+    /// must still satisfy every invariant. Only the snapshot selection is linted, because the
+    /// whole 495-function sample costs ~20 s in a debug build.
+    #[test]
+    fn the_real_crackme_fixture_passes_every_output_invariant() {
+        let Some((mut session, _dir)) = real_crackme() else {
+            return;
+        };
+        let report = lint(&mut session, REAL_CRACKME_SNAPSHOTS, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.affected(), 0);
+    }
+
+    /// Committed snapshots for the fixture: `tests/golden/crackme-real` once a rebuild has
+    /// diverged from the pinned case binary, `tests/golden/crackme` while it is byte-identical
+    /// (see `corpus/real/crackme/README.md`).
+    #[test]
+    fn the_real_crackme_fixture_matches_its_snapshots() {
+        let Some((mut session, _dir)) = real_crackme() else {
+            return;
+        };
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let real = root.join("tests/golden/crackme-real");
+        let has_real_snapshots = std::fs::read_dir(&real)
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry.path().extension().and_then(|value| value.to_str()) == Some("c")
+                })
+            })
+            .unwrap_or(false);
+        let dir = if has_real_snapshots {
+            real
+        } else {
+            root.join("tests/golden/crackme")
+        };
+        let report = check_golden_limited(&mut session, &dir, REAL_CRACKME_SNAPSHOTS).unwrap();
+        assert!(
+            report.ok(),
+            "{} checked, {} missing, {} mismatched in {}",
+            report.checked,
+            report.missing.len(),
+            report.mismatched.len(),
+            dir.display()
         );
     }
 

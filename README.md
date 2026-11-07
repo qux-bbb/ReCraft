@@ -162,6 +162,10 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
+真实样本（CTF crackme）的源码镜像与重建脚本在 `corpus\real\crackme\`：只提交 `src\crackme.c`，
+`build.ps1` 用 MSVC 重建出与 `docs\cases\crackme_win_x64.md` 相同 SHA-256 的镜像；二进制、map
+与 `.rcraft` 都是构建产物，不入库。
+
 ### 打包
 
 ```powershell

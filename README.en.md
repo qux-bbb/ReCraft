@@ -167,6 +167,10 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
+The real-world CTF crackme lives in `corpus\real\crackme\` as source plus a build script:
+`build.ps1` reproduces the case binary (same SHA-256 as `docs\cases\crackme_win_x64.md`) with
+MSVC. Binaries, maps and `.rcraft` projects stay build products and are never committed.
+
 ### Packaging
 
 ```powershell

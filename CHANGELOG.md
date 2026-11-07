@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The CTF crackme is now reproducible inside the repository.** `corpus/real/crackme/` mirrors
+  the fixture's `src/crackme.c` (source SHA-256 pinned) next to a `build.ps1` that rebuilds the
+  146,432-byte case binary byte-for-byte with MSVC (`/O2 /MT /GS- /TC /Brepro`), emits
+  `crackme.map` for `eval --map`, and warns when a newer toolchain drifts from the pinned
+  SHA-256. Only source and script are committed — the exe, map and `.rcraft` stay build
+  products. Snapshots keep sharing `tests/golden/crackme` (160, `--limit 160`) while the rebuild
+  is identical; `build.ps1 -Snapshots` fills `tests/golden/crackme-real` when it diverges, and
+  the gate prefers that directory from then on. The new
+  `cargo test -p recraft-decompile --lib real_crackme` runs `lint` (L1+L2, first 160) and the
+  golden check, skipping on a clean checkout (no binary) and staying out of CI because
+  windows-latest's MSVC version would make committed snapshots flaky.
+
 ### Fixed
 
 - **With no project loaded, the Disassembly tab (which carries the welcome page and its

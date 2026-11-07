@@ -1,7 +1,9 @@
 # Case: crackme_win_x64.exe — strings → xref → disassembly → decompile → AI polish
 
 End-to-end walkthrough of the feature requested for the CTF sample. The binary is not
-vendored in this repository; the script takes its path.
+vendored in this repository; the script takes its path. A frozen copy of the source plus a
+reproducible MSVC build script live in `corpus/real/crackme/` (same SHA-256 below), so the
+case can be rebuilt without the CTF project.
 
 | | |
 |---|---|
