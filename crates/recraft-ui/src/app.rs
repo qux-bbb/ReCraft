@@ -1436,6 +1436,9 @@ impl ReCraftApp {
         if let Some(path) = initial {
             app.open_path(&path);
         } else {
+            // A layout restored from the last session may leave another document tab (for
+            // example Decompile) in front, which is empty and hides the open/import hints.
+            app.show_welcome_tab();
             app.set_status(app.t("ui_drop_project"));
         }
         app
@@ -1546,6 +1549,10 @@ impl ReCraftApp {
                 self.import_pe(path, &project);
             }
         }
+        // A failed open leaves the app without a project: keep the welcome page (and the
+        // open/import hints it carries) in front instead of an empty document tab restored
+        // from the saved layout. A successful open has a session, so this is a no-op.
+        self.show_welcome_tab();
     }
 
     fn import_pe(&mut self, source: &Path, project: &Path) {
@@ -1667,6 +1674,10 @@ impl ReCraftApp {
         self.struct_size = 16;
         self.struct_fields.clear();
         self.struct_slot = 0;
+
+        // With the session gone, the Disassembly tab holds the welcome page again; leaving
+        // an empty document tab in front would hide the open/import hints.
+        self.show_welcome_tab();
 
         let message = self.t_args("ui_closed_path", &[("path", &path.display().to_string())]);
         self.set_status(message);
@@ -4446,6 +4457,21 @@ impl ReCraftApp {
         }
     }
 
+    /// Bring the welcome page to the front. The welcome page is the Disassembly pane's
+    /// no-project state, but it is only visible while that tab is active: an empty document
+    /// tab restored from the saved layout (or left in front by Ctrl+W) would hide the only
+    /// place the app offers to open a project.
+    ///
+    /// Called whenever the app can be left without a project (startup without a path, a
+    /// failed open, [`Self::close_project`]), not on every tick, so the user can still
+    /// switch to another tab afterwards.
+    fn show_welcome_tab(&mut self) {
+        if self.session.is_some() {
+            return;
+        }
+        self.focus_pane(Pane::View);
+    }
+
     /// The AI assistant is sidebar-only, so remove any stale AI tab loaded from an older
     /// layout.
     fn remove_ai_tab_from_dock(&mut self) {
@@ -6978,6 +7004,12 @@ impl ReCraftApp {
 
     fn pseudo_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Pseudo;
+        // Nothing has been decompiled yet *and* there is no project to decompile: "no
+        // decompilation for this address" would be the wrong explanation.
+        if self.session.is_none() && self.pseudo.is_none() {
+            ui.weak(self.t("ui_open_a_project_first"));
+            return;
+        }
         let pal = self.palette();
         let mono = FontId::monospace(self.mono_size());
         ui.horizontal(|ui| {
@@ -9119,6 +9151,14 @@ mod tests {
         None
     }
 
+    /// Pane the dock shows in its focused leaf: the view that owns the screen right now.
+    fn active_pane(app: &mut ReCraftApp) -> Option<Pane> {
+        app.dock
+            .as_mut()
+            .and_then(|state| state.find_active_focused())
+            .map(|(_, tab)| *tab)
+    }
+
     /// Headless layout smoke test: real `Session` + real widget code, no window.
     /// Verifies the grid actually emits shapes and that a frame stays fast enough
     /// for interactive use (this is our stand-in for a visual check in CI).
@@ -9839,6 +9879,83 @@ mod tests {
         output.textures_delta.clear();
         assert!(app.session.is_none());
         assert!(app.disasm_rows.is_empty());
+    }
+
+    /// The welcome page is the Disassembly pane's no-project state, so it is only visible
+    /// while that tab is in front. A layout restored from the last session can leave an
+    /// empty Decompile tab there; with no project the app must bring the open/import hints
+    /// back instead of showing a blank document.
+    #[test]
+    fn no_project_brings_the_welcome_tab_to_the_front() {
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        app.focus_pane(Pane::Pseudo);
+        assert_eq!(active_pane(&mut app), Some(Pane::Pseudo));
+
+        app.show_welcome_tab();
+        assert_eq!(
+            active_pane(&mut app),
+            Some(Pane::View),
+            "no project: the welcome page must own the screen"
+        );
+
+        // The rule fires when the project goes away, not every frame: a tab the user picks
+        // afterwards stays put.
+        app.focus_pane(Pane::Hex);
+        app.tick();
+        assert_eq!(active_pane(&mut app), Some(Pane::Hex));
+    }
+
+    #[test]
+    fn a_failed_open_keeps_the_welcome_page_in_front() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("broken.rcraft");
+        std::fs::write(&broken, b"not a project").unwrap();
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        app.focus_pane(Pane::Pseudo);
+
+        app.open_path(&broken);
+
+        assert!(app.session.is_none(), "a broken project must not load");
+        assert!(app.is_error, "the failure must be reported");
+        assert_eq!(
+            active_pane(&mut app),
+            Some(Pane::View),
+            "with no project the welcome page stays in front"
+        );
+    }
+
+    #[test]
+    fn closing_a_project_brings_the_welcome_tab_to_the_front() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("welcome-after-close.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.ensure_dock();
+        app.focus_pane(Pane::Pseudo);
+
+        // An open project keeps whatever tab the user put in front.
+        app.show_welcome_tab();
+        assert_eq!(
+            active_pane(&mut app),
+            Some(Pane::Pseudo),
+            "the welcome rule must not steal the tab while a project is open"
+        );
+
+        app.apply_action(&egui::Context::default(), Action::CloseProject);
+        assert_eq!(
+            active_pane(&mut app),
+            Some(Pane::View),
+            "closing the project must show the welcome page again"
+        );
     }
 
     #[test]

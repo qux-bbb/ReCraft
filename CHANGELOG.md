@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **With no project loaded, the Disassembly tab (which carries the welcome page and its
+  open/import hints) is now always the one in front.** The welcome page lives inside the
+  Disassembly pane, so a document tab restored from `layout.json` — or one left in front by
+  `Ctrl+W` — could hide it behind an empty Decompile/Hex tab and the only in-window way to
+  open a project disappeared. The tab is brought forward when the app starts without a path,
+  when a project is closed, and when an open fails; a tab the user picks afterwards stays
+  put, and an open project is never overridden. The Decompile pane also says "open a project
+  first" instead of "no decompilation for this address" when nothing is loaded.
+
 - **A loop with two exits no longer drops the "search exhausted" edge.** When a loop body
   ends at a latch, the loop really continues at the latch's fallthrough, but the emitter
   took the header's early exit as the continuation, so the fallthrough edge vanished: in
