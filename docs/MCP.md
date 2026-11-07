@@ -109,6 +109,8 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 | `xrefs_from` | `addr`, `limit?`, `offset?` | 同上 |
 | `list_strings` | `filter?`, `limit?`, `offset?` | `{strings:[{addr,length,encoding,text}],count,total,offset,truncated,next_offset}` |
 | `list_imports` | — | `{modules:[{module,iat,functions:[{name,ordinal,hint,iat}]}]}` |
+| `list_exports` | `filter?`, `limit?`, `offset?` | `{exports:[{name,ordinal,addr,rva,forwarder,function}],count,total,offset,truncated,next_offset}`（DLL 的入口面） |
+| `get_metadata` | — | 格式/架构/image base/entry（含名字）/镜像与文件大小/subsystem/时间戳/TLS 回调/段（start,end,size,perm,kind）/`counts`（函数、导入、导出、字符串）/解析警告 |
 | `callgraph` | `limit?`, `offset?` | `{nodes,node_total,edges:[{from,to,from_name,to_name}],edge_total,offset,truncated,next_offset}`（节点或边被裁剪都为 true） |
 | `search_bytes` | `hex?` 或 `ascii?`, `limit?`, `offset?` | `{hits:[{addr}],count,total,offset,truncated,next_offset}`（扫描可读映射段，1 MiB 分块；`total` 是已检查的命中数，不是命中总数） |
 | `function_summary` | `addr?` | 名字/范围/指令数/原型/调用者（数量 + 函数列表）/调用的函数/引用字符串/API 标签 |
@@ -189,6 +191,18 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
   get_pseudocode(startLine=N+1)` 注释，不会静默返回截短的文档
 
 `{id}` 是项目文件名（不含扩展名）。
+
+## 提示模板
+
+`prompts/list` 提供四个模板，`prompts/get` 渲染成一条 user 消息（triage / CTF 会先注入一行
+镜像事实：格式、架构、base、entry、函数/导入/导出/字符串数量，模型不必先查元数据）：
+
+| 模板 | 参数 | 用途 |
+|---|---|---|
+| `triage_sample` | — | 恶意样本初筛：行为、网络/文件/注册表/进程/加密指标（带地址）、最可疑的 5 个函数、未验证项 |
+| `explain_function` | `addr`（必填） | 解释单个函数：伪代码 + 调用者 + API/常量，并给出置信度 |
+| `propose_names` | `filter?`（默认 `sub_`） | 给函数提命名建议（带证据与置信度），明确要求不要直接改名；`--write` 下先确认再用一次 `batch` 应用 |
+| `ctf_outline` | — | crackme/CTF 解题大纲：从入口跟到输入校验，列出要读/要 patch 的地址 |
 
 ## 示例会话
 

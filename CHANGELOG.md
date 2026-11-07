@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Exports, image metadata and prompt templates.** Two read tools every DLL and every triage
+  question needs were missing: `list_exports` (name/ordinal/VA/forwarder, filter + paging) and
+  `get_metadata` (format, arch, base, entry, sizes, subsystem, timestamp, TLS callbacks,
+  sections with permissions, function/import/export/string counts, parser warnings). The MCP
+  server also advertises `prompts` now: `triage_sample`, `explain_function`,
+  `propose_names` and `ctf_outline`, each rendered with a one-line image summary so the model
+  starts from facts (`prompts/list`, `prompts/get`). Both tools are shared with the in-app
+  agent through `recraft-query`.
+
 - **Tool metadata a client can act on.** Every MCP tool now carries `title`, `annotations`
   and an `outputSchema`, and successful `tools/call` results include `structuredContent`
   next to the JSON text block. Read tools declare `readOnlyHint: true`; write tools declare

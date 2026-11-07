@@ -7,6 +7,7 @@
 //! tool result carries. The MCP server and the in-app agent both call through
 //! [`crate::call`], so a query is written once.
 
+use recraft_common::Address;
 use recraft_core::Session;
 use serde_json::{Value, json};
 
@@ -169,6 +170,99 @@ pub fn xrefs(
         "offset": offset,
         "truncated": next < total,
         "next_offset": if next < total { json!(next) } else { Value::Null },
+    }))
+}
+
+/// `list_exports`: the export table, paged and filterable like the other lists.
+pub fn exports(session: &Session, arguments: &Value, budget: Budget) -> Result<Value, String> {
+    let image = session.image();
+    let base = image.image_base.get();
+    let filter = arguments
+        .get("filter")
+        .and_then(Value::as_str)
+        .map(str::to_ascii_lowercase);
+    let limit = limit_of(arguments, 500, budget);
+    let offset = offset_of(arguments);
+    let mut items = Vec::new();
+    let mut matched = 0usize;
+    for entry in &image.exports {
+        if let Some(filter) = &filter
+            && !entry
+                .name
+                .as_deref()
+                .map(|name| name.to_ascii_lowercase().contains(filter))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        matched += 1;
+        if matched <= offset {
+            continue;
+        }
+        if items.len() < limit {
+            let addr = Address::new(base + u64::from(entry.rva));
+            items.push(json!({
+                "name": entry.name,
+                "ordinal": entry.ordinal,
+                "addr": hex(addr),
+                "rva": format!("{:#x}", entry.rva),
+                "forwarder": entry.forwarder,
+                "function": session.name_at(addr).ok().flatten(),
+            }));
+        }
+    }
+    Ok(json!({
+        "exports": items,
+        "count": items.len(),
+        "total": matched,
+        "offset": offset,
+        "truncated": offset.saturating_add(items.len()) < matched,
+        "next_offset": if offset.saturating_add(items.len()) < matched {
+            json!(offset + items.len())
+        } else {
+            Value::Null
+        },
+    }))
+}
+
+/// `get_metadata`: image-level facts every investigation starts from.
+pub fn metadata(session: &Session) -> Result<Value, String> {
+    let image = session.image();
+    let sections: Vec<Value> = session
+        .segments()
+        .iter()
+        .map(|segment| {
+            json!({
+                "name": segment.name,
+                "start": hex(segment.range.start),
+                "end": hex(segment.range.end),
+                "size": segment.len(),
+                "perm": format!("{:?}", segment.perm),
+                "kind": format!("{:?}", segment.kind),
+            })
+        })
+        .collect();
+    let functions = session.functions().map_err(|e| e.to_string())?.len();
+    Ok(json!({
+        "format": if image.is_64 { "pe32+" } else { "pe32" },
+        "arch": if image.is_64 { "x86-64" } else { "x86" },
+        "image_base": hex(image.image_base),
+        "entry_point": hex(image.entry_point),
+        "entry_name": session.name_at(image.entry_point).ok().flatten(),
+        "size_of_image": image.size_of_image,
+        "size_of_headers": image.size_of_headers,
+        "file_size": image.file_size,
+        "subsystem": image.subsystem,
+        "timestamp": image.timestamp,
+        "tls_callbacks": image.tls_callbacks.iter().map(|addr| hex(*addr)).collect::<Vec<_>>(),
+        "sections": sections,
+        "counts": {
+            "functions": functions,
+            "imports": image.imports.iter().map(|module| module.functions.len()).sum::<usize>(),
+            "exports": image.exports.len(),
+            "strings": session.strings().map_err(|e| e.to_string())?.len(),
+        },
+        "warnings": image.warnings,
     }))
 }
 

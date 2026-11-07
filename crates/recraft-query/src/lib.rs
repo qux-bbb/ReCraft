@@ -63,7 +63,7 @@ impl Budget {
 }
 
 /// Tool names served by this crate, in the order they are advertised.
-pub const READ_TOOLS: [&str; 11] = [
+pub const READ_TOOLS: [&str; 13] = [
     "list_functions",
     "get_disassembly",
     "get_pseudocode",
@@ -71,6 +71,8 @@ pub const READ_TOOLS: [&str; 11] = [
     "xrefs_from",
     "list_strings",
     "list_imports",
+    "list_exports",
+    "get_metadata",
     "callgraph",
     "search_bytes",
     "function_summary",
@@ -99,6 +101,8 @@ pub fn call(
         "xrefs_from" => tools::xrefs(session, arguments, budget, false),
         "list_strings" => tools::strings(session, arguments, budget),
         "list_imports" => tools::imports(session),
+        "list_exports" => tools::exports(session, arguments, budget),
+        "get_metadata" => tools::metadata(session),
         "callgraph" => tools::callgraph(session, arguments, budget),
         "search_bytes" => tools::search_bytes(session, arguments, budget),
         "function_summary" => tools::summary(session, arguments),
@@ -199,6 +203,28 @@ pub fn specs(budget: &Budget) -> Vec<Value> {
             "inputSchema": {"type": "object"},
         }),
         json!({
+            "name": "list_exports",
+            "description": "Export table (DLL entry surface): name, ordinal, address, forwarder. `filter` runs before `offset`/`limit`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "string", "description": "Case-insensitive export name substring."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": rows},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
+            },
+        }),
+        json!({
+            "name": "get_metadata",
+            "description": "Image metadata: format, architecture, image base, entry point, sizes, subsystem, timestamp, sections, counts and parser warnings.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "addr": {"type": ["integer", "string"], "description": "Ignored; metadata is image-wide."},
+                },
+            },
+        }),
+        json!({
             "name": "callgraph",
             "description": "Function-level call graph derived from persisted call xrefs. Pages both `nodes` and `edges` with `offset`/`limit` and reports `node_total`/`edge_total`.",
             "inputSchema": {
@@ -270,6 +296,8 @@ fn title_of(name: &str) -> &'static str {
         "xrefs_from" => "References from address",
         "list_strings" => "Strings",
         "list_imports" => "Imports",
+        "list_exports" => "Exports",
+        "get_metadata" => "Image metadata",
         "callgraph" => "Call graph",
         "search_bytes" => "Search bytes",
         "function_summary" => "Function summary",

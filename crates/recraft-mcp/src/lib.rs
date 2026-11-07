@@ -71,6 +71,47 @@ fn instructions(write: bool) -> &'static str {
 }
 type ToolResult = std::result::Result<Value, String>;
 
+/// Prompt body: sample triage.
+const TRIAGE_PROMPT: &str = "Produce a triage report for this sample. Use get_metadata, \
+list_imports, list_exports, find_api_callers, list_strings and function_summary before \
+concluding. Cover: (1) what the program appears to do; (2) network, file, registry, process and \
+crypto indicators, each with the 0x address that proves it; (3) the five most suspicious \
+functions, ranked, with one line of evidence each; (4) what you could not verify. Cite \
+addresses as 0x... and do not modify the project.";
+
+/// Prompt body: explain one function.
+const EXPLAIN_PROMPT: &str = "1) Call function_summary for it. 2) Call get_pseudocode and read \
+the whole body, paging with startLine while `truncated` is true. 3) Call xrefs_to to see how it \
+is reached. Then explain: purpose, inputs/outputs, side effects, notable constants and APIs, and \
+how confident you are. Cite addresses as 0x...";
+
+/// Prompt body: propose names without applying them.
+const NAMES_PROMPT: &str = "1) Call list_functions with the filter, 200 rows at a time. 2) For \
+each candidate read function_summary and get_pseudocode. 3) Propose a short, specific name with \
+the evidence (strings, APIs, callers) and a confidence. Do not rename anything: if this server \
+runs with --write, ask for confirmation first, then apply the accepted names with a single \
+`batch` call.";
+
+/// Prompt body: CTF solving outline.
+const CTF_PROMPT: &str = "Work out how to solve this challenge. Start at the entry point and \
+follow the input path: use find_api_callers for ReadFile/scanf/GetDlgItemText/strcmp and \
+xrefs_to on the comparison, then read the functions that matter with get_pseudocode. Outline the \
+steps to the key or flag with the addresses to read or patch, and state what is unverified.";
+
+fn prompt_description(name: &str) -> &'static str {
+    match name {
+        "triage_sample" => {
+            "Report what the binary does, its indicators, and the most suspicious functions."
+        }
+        "explain_function" => "Explain one function from its pseudocode, callers and API usage.",
+        "propose_names" => {
+            "Propose names for sub_* functions with evidence, without renaming anything."
+        }
+        "ctf_outline" => "Plan a crackme/CTF solve from the entry point and the validation path.",
+        _ => "ReCraft prompt",
+    }
+}
+
 /// A project opened for MCP access.
 pub struct McpServer {
     session: Session,
@@ -173,6 +214,7 @@ impl McpServer {
                     "capabilities": {
                         "tools": {"listChanged": false},
                         "resources": {"subscribe": false, "listChanged": false},
+                        "prompts": {"listChanged": false},
                     },
                     "serverInfo": {"name": "recraft", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": instructions(self.write),
@@ -187,6 +229,8 @@ impl McpServer {
                 Ok(json!({"resourceTemplates": self.resource_templates()}))
             }
             "resources/read" => self.read_resource(&params),
+            "prompts/list" => Ok(json!({"prompts": self.prompts()})),
+            "prompts/get" => self.read_prompt(&params),
             other => Err((-32601, format!("method not found: {other}"))),
         };
 
@@ -485,6 +529,114 @@ impl McpServer {
             }
             Err(message) => Err((-32603, format!("resource error: {message}"))),
         }
+    }
+
+    // ----------------------------------------------------------- prompts ----
+
+    /// Prompt templates a client can offer as slash commands or buttons.
+    fn prompts(&self) -> Vec<Value> {
+        vec![
+            json!({
+                "name": "triage_sample",
+                "title": "Triage sample",
+                "description": prompt_description("triage_sample"),
+                "arguments": [],
+            }),
+            json!({
+                "name": "explain_function",
+                "title": "Explain function",
+                "description": prompt_description("explain_function"),
+                "arguments": [{
+                    "name": "addr",
+                    "description": "Address, symbol name or 'entry'.",
+                    "required": true,
+                }],
+            }),
+            json!({
+                "name": "propose_names",
+                "title": "Propose function names",
+                "description": prompt_description("propose_names"),
+                "arguments": [{
+                    "name": "filter",
+                    "description": "Name substring to restrict candidates (default: sub_).",
+                    "required": false,
+                }],
+            }),
+            json!({
+                "name": "ctf_outline",
+                "title": "CTF solving outline",
+                "description": prompt_description("ctf_outline"),
+                "arguments": [],
+            }),
+        ]
+    }
+
+    fn read_prompt(&mut self, params: &Value) -> std::result::Result<Value, (i64, String)> {
+        let Some(name) = params.get("name").and_then(Value::as_str) else {
+            return Err((-32602, "prompts/get requires a name".to_owned()));
+        };
+        let arguments = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let text = match name {
+            "triage_sample" => format!("{}\n\n{TRIAGE_PROMPT}", self.image_facts()),
+            "ctf_outline" => format!("{}\n\n{CTF_PROMPT}", self.image_facts()),
+            "explain_function" => {
+                let Some(addr) = arguments.get("addr").and_then(Value::as_str) else {
+                    return Err((
+                        -32602,
+                        "explain_function needs the `addr` argument".to_owned(),
+                    ));
+                };
+                format!(
+                    "Explain the function at {addr} in this ReCraft project.\n\n{EXPLAIN_PROMPT}"
+                )
+            }
+            "propose_names" => {
+                let filter = arguments
+                    .get("filter")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sub_");
+                format!(
+                    "Propose names for the functions whose name contains `{filter}`.\n\n{NAMES_PROMPT}"
+                )
+            }
+            other => return Err((-32602, format!("unknown prompt: {other}"))),
+        };
+        Ok(json!({
+            "description": prompt_description(name),
+            "messages": [{"role": "user", "content": {"type": "text", "text": text}}],
+        }))
+    }
+
+    /// One-line image summary embedded in the prompts, so the model starts with facts
+    /// instead of discovering the image format on its first tool call.
+    fn image_facts(&self) -> String {
+        let image = self.session.image();
+        let functions = self.session.functions().map(|rows| rows.len()).unwrap_or(0);
+        let strings = self.session.strings().map(|rows| rows.len()).unwrap_or(0);
+        let imports: usize = image
+            .imports
+            .iter()
+            .map(|module| module.functions.len())
+            .sum();
+        format!(
+            "Image: {} {}, base {}, entry {} ({}), {} functions, {} imports, {} exports, {} strings.",
+            if image.is_64 { "PE32+" } else { "PE32" },
+            if image.is_64 { "x86-64" } else { "x86" },
+            hex(image.image_base),
+            hex(image.entry_point),
+            self.session
+                .name_at(image.entry_point)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "-".to_owned()),
+            functions,
+            imports,
+            image.exports.len(),
+            strings,
+        )
     }
 
     // ----------------------------------------------------------- helpers ----
@@ -1477,6 +1629,86 @@ mod tests {
         let text = response["result"]["contents"][0]["text"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert!(parsed["count"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn metadata_and_exports_describe_the_image() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let meta = tool_json(&mut server, "get_metadata", json!({}));
+        assert_eq!(meta["format"], "pe32+", "{meta}");
+        assert_eq!(meta["arch"], "x86-64", "{meta}");
+        assert!(
+            meta["entry_point"].as_str().unwrap().starts_with("0x"),
+            "{meta}"
+        );
+        assert!(
+            meta["sections"].as_array().unwrap().len() >= 2,
+            "metadata must list the mapped sections: {meta}"
+        );
+        assert!(meta["counts"]["functions"].as_u64().unwrap() > 0, "{meta}");
+
+        let exports = tool_json(&mut server, "list_exports", json!({}));
+        assert!(exports["exports"].is_array(), "{exports}");
+        assert_eq!(exports["count"], exports["total"], "{exports}");
+        // notepad.exe exports nothing, but the shape must hold for a DLL too.
+        assert_eq!(exports["truncated"], false, "{exports}");
+    }
+
+    #[test]
+    fn prompts_render_with_project_facts() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let listed = call(&mut server, "prompts/list", json!({}));
+        let names: Vec<&str> = listed["result"]["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|prompt| prompt["name"].as_str())
+            .collect();
+        for expected in [
+            "triage_sample",
+            "explain_function",
+            "propose_names",
+            "ctf_outline",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "missing prompt {expected}: {names:?}"
+            );
+        }
+
+        let triage = call(&mut server, "prompts/get", json!({"name": "triage_sample"}));
+        let text = triage["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("Image: PE32+"), "{text}");
+        assert!(text.contains("functions"), "{text}");
+        assert!(text.contains("0x"), "{text}");
+
+        let explain = call(
+            &mut server,
+            "prompts/get",
+            json!({"name": "explain_function", "arguments": {"addr": "entry"}}),
+        );
+        assert!(
+            explain["result"]["messages"][0]["content"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("entry"),
+            "{explain}"
+        );
+
+        let missing = call(
+            &mut server,
+            "prompts/get",
+            json!({"name": "explain_function"}),
+        );
+        assert_eq!(missing["error"]["code"], -32602, "{missing}");
+        let unknown = call(&mut server, "prompts/get", json!({"name": "nope"}));
+        assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
     }
 
     #[test]

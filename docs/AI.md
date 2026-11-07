@@ -308,7 +308,8 @@ exact 一列标成区间；accepted/partial 才是稳定的判断口径。逐条
 | `find_api_callers` | 哪些函数调用某个导入 API（如 `CreateFileW`） |
 | `list_strings` | 按内容搜字符串表（`filter`） |
 | `get_disassembly` | 原始反汇编 |
-| `list_imports` / `callgraph` / `search_bytes` | 导入表、调用图、字节搜索 |
+| `list_imports` / `list_exports` / `get_metadata` | 导入表、导出表、镜像元数据（段、base、entry、计数） |
+| `callgraph` / `search_bytes` | 调用图、字节搜索 |
 
 - **只读**：工具只查库与反编译，不写项目；重命名仍然走 Proposal/apply。模型给出的重命名
   只是正文建议。
