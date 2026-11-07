@@ -126,6 +126,7 @@ void sub_140005d70_l1(void) {
                                                 al = 1;
                                             } else {
                                                 rdx = (rbx + 0xADDR);
+                                                loc_ADDR:
                                                 sub_140005ce0(rbx, rdx);
                                             }
                                             loc_ADDR:
@@ -167,6 +168,7 @@ void sub_140005d70_l1(void) {
                             }
                         }
                         rdx = (rbx + 0xADDR);
+                        goto loc_ADDR;
                         loc_ADDR:
                         rcx = *(u64*)((rbx + 0xADDR));
                         rax = (rcx + 8);

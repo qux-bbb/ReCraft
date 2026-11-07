@@ -132,6 +132,7 @@ void internal/abi.NewName_l1(void) {
             rsi += rax;
             rdi = var_50;
             if (rdi > 0xADDR) {
+                loc_ADDR:
                 runtime.panicBounds(rcx, rdx, r8, r9);
             } else {
                 r9 = r8;
@@ -156,5 +157,6 @@ void internal/abi.NewName_l1(void) {
         break;
     }
         runtime.panicBounds(rcx, rdx, r8, r9);
+        goto loc_ADDR;
     return;
 }

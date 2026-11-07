@@ -19,6 +19,7 @@ void sub_140006d38_l1(void) {
                 if (eax != -1) {
                     loc_ADDR:
                     *(u32*)(rdi) += 1;
+                    loc_ADDR:
                     r14 += 1;
                     if (r14 != rbp) continue;
                 } else {
@@ -37,7 +38,11 @@ void sub_140006d38_l1(void) {
             loc_ADDR:
             r8 = rsi;
             sub_14000acfc(0xADDR, *(u64*)(r15));
+            if (eax != -1) {
+                goto loc_ADDR;
+            }
             *(u32*)(rdi) = -1;
+            goto loc_ADDR;
         *(u32*)(rdi) = -1;
     }
     *(u64*)((rsi + 0xADDR)) = rbx;

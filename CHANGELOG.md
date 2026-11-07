@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A leftover block no longer falls out of its region into whatever is printed next.** When
+  a loop body or region emits a block after its main walk, that block's fallthrough target is
+  often no longer the next statement; the emitter only printed nothing, so control silently
+  fell into unrelated code (a missing branch: `sub_140006d38` lost its `if (eax != -1)` guard,
+  `sub_140005d70` and Go's `internal/abi.NewName` lost a jump). The leftover listing now
+  passes the block that really follows and spells the fallthrough out as `goto loc_…` when it
+  is not that block. Structured rate is unchanged (crackme 460/495, notepad 494/506); three
+  snapshots gained the jump they were missing.
+
 ### Changed
 
 - **Tool output schemas are field-by-field.** Every read tool (in `recraft-query`) and write

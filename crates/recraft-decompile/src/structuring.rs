@@ -2917,6 +2917,9 @@ struct Structurer {
     call_arg_counts: HashMap<u64, usize>,
     emitted: Vec<bool>,
     labeled: Vec<bool>,
+    /// Blocks a `goto` names although they have a single predecessor: the label has to be
+    /// printed wherever the block ends up.
+    forced_labels: Vec<bool>,
     bodies: Vec<BlockLift>,
     /// Instruction addresses of `push`/`pop` bookkeeping kept out of the listing.
     hidden: BTreeSet<u64>,
@@ -3029,6 +3032,7 @@ impl Structurer {
             call_arg_counts,
             emitted,
             labeled: vec![false; bodies.len()],
+            forced_labels: vec![false; bodies.len()],
             hidden: hidden_push_pop_pairs(
                 cfg.blocks
                     .iter()
@@ -3457,8 +3461,13 @@ impl Structurer {
             if current >= self.blocks.len() || self.emitted[current] || stop.contains(&current) {
                 // Falling out of a `while (1)` body loops back, so a body that leaves the
                 // loop has to say so. Only the loop exit is handled here: it needs a
-                // `break`, and the caller already continues at that block after the loop,
-                // so nothing else in the output moves.
+                // `break`, and the caller already continues at that block after the loop.
+                //
+                // The other exit cannot be written as a `goto` here: measured 2026-11-07,
+                // doing so costs the structured rate (crackme 460→443, notepad 494→485
+                // functions with gotos) because the added jump forces the enclosing region
+                // out of shape. It needs the alternate exit block to stay in place
+                // (node splitting), see docs/NEXT.md §1.0.
                 if current < self.blocks.len()
                     && let Some(&(loop_header, loop_exit)) = self.loop_stack.last()
                     && current == loop_exit
@@ -3508,7 +3517,7 @@ impl Structurer {
                     }
                 }
             }
-            if self.predecessors[current].len() > 1
+            if (self.predecessors[current].len() > 1 || self.forced_labels[current])
                 && !self.labeled[current]
                 && current != self.entry
             {
@@ -4368,18 +4377,22 @@ impl Structurer {
         body: &BTreeSet<usize>,
         level: usize,
     ) {
-        let order: Vec<usize> = body.iter().copied().collect();
-        for &block in &order {
-            if self.emitted[block] {
-                continue;
-            }
+        // Only the blocks this listing will actually print: `next` has to be the block that
+        // really follows, otherwise a fallthrough looks implicit but lands nowhere.
+        let order: Vec<usize> = body
+            .iter()
+            .copied()
+            .filter(|block| !self.emitted[*block])
+            .collect();
+        for (position, &block) in order.iter().enumerate() {
             self.emitted[block] = true;
             lines.push(PseudoLine {
                 addr: self.blocks[block].entry,
                 text: format!("{}loc_{:x}:", indent(level), self.blocks[block].entry.get()),
             });
             self.emit_simple(lines, block, level);
-            self.emit_raw_flow(lines, block, level);
+            let next = order.get(position + 1).copied();
+            self.emit_raw_flow_next(lines, block, level, next);
         }
     }
     /// Emit a block's own flow as raw jumps. `next` is the block that will be emitted right
@@ -4411,16 +4424,22 @@ impl Structurer {
                 }
             }
             // No block follows in this listing: the region ends here, so its fallthrough
-            // successor has to be named. A block that was already emitted keeps its own
-            // placement and is reached through the label the emitter gave it.
-            None => {
-                if self.emitted[not_taken] {
-                    return;
-                }
-            }
+            // successor has to be named.
+            None => {}
         }
         if not_taken == block || self.blocks[not_taken].entry.get() >= self.end.get() {
             return;
+        }
+        if self.emitted[not_taken] {
+            // Emitted before this block, so falling further down the listing does not reach
+            // it. It keeps its own placement: only a labelled jump can name it, and a block
+            // reached from another path as well already carries that label.
+            if !self.labeled[not_taken] {
+                return;
+            }
+        } else {
+            // It is printed later; force the label so the jump can name it.
+            self.forced_labels[not_taken] = true;
         }
         lines.push(PseudoLine {
             addr: self.blocks[block].entry,
