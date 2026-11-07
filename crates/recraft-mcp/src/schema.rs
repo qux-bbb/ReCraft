@@ -157,7 +157,7 @@ fn write_tools() -> Vec<Value> {
             "idempotentHint": !matches!(name.as_str(), "batch" | "undo"),
             "openWorldHint": false,
         });
-        tool["outputSchema"] = json!({"type": "object", "additionalProperties": true});
+        tool["outputSchema"] = write_output_schema(&name);
     }
     tools
 }
@@ -174,5 +174,104 @@ fn write_title_of(name: &str) -> &'static str {
         "batch" => "Batch edits",
         "undo" => "Undo",
         _ => "ReCraft write tool",
+    }
+}
+
+fn out_string() -> Value {
+    json!({"type": "string"})
+}
+
+fn out_integer() -> Value {
+    json!({"type": "integer"})
+}
+
+fn out_boolean() -> Value {
+    json!({"type": "boolean"})
+}
+
+fn out_nullable_string() -> Value {
+    json!({"type": ["string", "null"]})
+}
+
+fn out_string_list() -> Value {
+    json!({"type": "array", "items": {"type": "string"}})
+}
+
+/// JSON Schema for one write tool's `structuredContent`.
+fn write_output_schema(name: &str) -> Value {
+    let with_change = |extra: Value, required: Value| {
+        let mut properties = json!({
+            "tool": out_string(),
+            "seq": out_integer(),
+            "addr": out_string(),
+            "dirty": out_string_list(),
+            "undo": out_boolean(),
+            "note": out_string(),
+        });
+        for (key, value) in extra.as_object().cloned().unwrap_or_default() {
+            properties[key] = value;
+        }
+        json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        })
+    };
+    match name {
+        // Shared `change_payload` shape.
+        "rename" | "set_comment" | "set_prototype" | "apply_type" => with_change(
+            json!({
+                "previous": out_nullable_string(),
+                "value": out_nullable_string(),
+            }),
+            json!(["tool", "seq", "addr", "previous", "value", "dirty", "undo"]),
+        ),
+        "define_function" => with_change(
+            json!({
+                "previous_end": out_nullable_string(),
+                "end": out_string(),
+            }),
+            json!([
+                "tool",
+                "seq",
+                "addr",
+                "previous_end",
+                "end",
+                "dirty",
+                "undo"
+            ]),
+        ),
+        "define_struct" => with_change(
+            json!({"name": out_nullable_string()}),
+            json!(["tool", "seq", "name", "dirty", "undo"]),
+        ),
+        "batch" => with_change(
+            json!({
+                "count": out_integer(),
+                "commands": out_string_list(),
+            }),
+            json!(["tool", "seq", "count", "commands", "dirty", "undo"]),
+        ),
+        "undo" => {
+            let record = json!({
+                "seq": out_integer(),
+                "cmd": out_string(),
+                "origin": out_string(),
+                "ts": out_integer(),
+                "batch": json!({"type": ["integer", "null"]}),
+            });
+            json!({
+                "type": "object",
+                "properties": {
+                    "undone": out_boolean(),
+                    "records": json!({"type": "array", "items": {"type": "object", "properties": record, "required": ["seq", "cmd", "origin"]}}),
+                    "dirty": out_string_list(),
+                    "dry_run": out_boolean(),
+                    "would_undo": json!({"type": "array", "items": {"type": "object", "properties": record.clone()}}),
+                    "message": out_string(),
+                },
+            })
+        }
+        _ => json!({"type": "object", "additionalProperties": true}),
     }
 }

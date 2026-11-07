@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tool output schemas are field-by-field.** Every read tool (in `recraft-query`) and write
+  tool now declares a real `outputSchema` — the documented fields, their types, and which of
+  them always appear — instead of a bare `{"type": "object"}`. Tests keep the docs honest:
+  one validates every schema, then runs seven read tools and five write tools and asserts the
+  results contain no undocumented field and every required field. Clients can validate or
+  render `structuredContent` directly.
+
 - **Resource subscriptions on stdio.** `serve-mcp` (stdio) now advertises
   `resources.subscribe: true` and implements `resources/subscribe` /
   `resources/unsubscribe`; after any write or `undo` the server sends one

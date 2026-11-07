@@ -122,10 +122,10 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 
 **工具元数据**：`tools/list` 里每个工具都带 `title`、`annotations`（读工具
 `readOnlyHint: true`；写工具 `readOnlyHint: false` + `destructiveHint: true`，`undo`/`batch`
-另有 `idempotentHint: false`）和 `outputSchema`（对象即可，暂不做逐字段约束）。`tools/call`
-成功时同时返回 `content[0].text`（JSON 字符串，兼容老客户端）与 `structuredContent`
-（同样的对象，2025-06-18 客户端直接消费，不必二次解析文本）。客户端可以据此自动放行只读
-工具、对写工具保留确认。
+另有 `idempotentHint: false`）和**逐字段的 `outputSchema`**（每个结果对象的字段与类型、
+以及哪些字段必然出现）。`tools/call` 成功时同时返回 `content[0].text`（JSON 字符串，
+兼容老客户端）与 `structuredContent`（同样的对象，2025-06-18 客户端直接消费，不必二次
+解析文本）。客户端可以据此自动放行只读工具、对写工具保留确认，并校验/渲染结构化结果。
 
 ### 写工具（`--write`）
 

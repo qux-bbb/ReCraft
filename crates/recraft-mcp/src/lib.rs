@@ -838,6 +838,72 @@ mod tests {
     }
 
     #[test]
+    fn write_results_match_their_output_schemas() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let listed = call(&mut server, "tools/list", json!({}));
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let check = |name: &str, value: &Value| {
+            let schema = &tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("no spec for {name}"))["outputSchema"];
+            let properties = schema["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} has no output properties"));
+            assert!(!properties.is_empty(), "{name}");
+            for field in value.as_object().unwrap().keys() {
+                assert!(
+                    properties.contains_key(field),
+                    "{name} returned undocumented field {field}: {value}"
+                );
+            }
+            for required in schema["required"].as_array().cloned().unwrap_or_default() {
+                let required = required.as_str().unwrap();
+                assert!(
+                    value.get(required).is_some(),
+                    "{name} is missing required field {required}: {value}"
+                );
+            }
+        };
+
+        let first = first_function(&mut server);
+        let renamed = tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": first, "name": "schema_check"}),
+        );
+        check("rename", &renamed);
+
+        let batch = tool_json(
+            &mut server,
+            "batch",
+            json!({"commands": [{"type": "comment", "addr": first, "text": "x"}]}),
+        );
+        check("batch", &batch);
+
+        let defined = tool_json(
+            &mut server,
+            "define_struct",
+            json!({"name": "SCHEMA_CHECK", "size": 4, "fields": ["0:a:u32"]}),
+        );
+        check("define_struct", &defined);
+
+        let function = tool_json(
+            &mut server,
+            "define_function",
+            json!({"start": first, "end": "0x140001a00"}),
+        );
+        check("define_function", &function);
+
+        let undone = tool_json(&mut server, "undo", json!({}));
+        check("undo", &undone);
+        let preview = tool_json(&mut server, "undo", json!({"dryRun": true}));
+        check("undo", &preview);
+    }
+
+    #[test]
     fn xref_lists_report_their_totals() {
         let Some(mut server) = notepad_project() else {
             return;

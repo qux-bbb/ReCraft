@@ -279,9 +279,9 @@ pub fn specs(budget: &Budget) -> Vec<Value> {
             "idempotentHint": true,
             "openWorldHint": false,
         });
-        // Every read tool returns an object; the permissive schema lets a 2025-06-18 client
-        // consume `structuredContent` instead of re-parsing the text block.
-        spec["outputSchema"] = json!({"type": "object", "additionalProperties": true});
+        // A 2025-06-18 client validates and renders `structuredContent` against this; the
+        // shape mirrors what the executor actually returns (see `tools.rs`).
+        spec["outputSchema"] = output_schema(&name);
     }
     listed
 }
@@ -303,6 +303,381 @@ fn title_of(name: &str) -> &'static str {
         "function_summary" => "Function summary",
         "find_api_callers" => "Find API callers",
         _ => "ReCraft tool",
+    }
+}
+
+// ------------------------------------------------------------ output schemas --
+//
+// The schemas below describe the objects in `tools.rs` field by field. They are kept
+// permissive about extra fields (`additionalProperties` is not set to false), so a new
+// result field never breaks an existing client, but every documented field is typed.
+
+fn out_string() -> Value {
+    json!({"type": "string"})
+}
+
+fn out_integer() -> Value {
+    json!({"type": "integer"})
+}
+
+fn out_boolean() -> Value {
+    json!({"type": "boolean"})
+}
+
+fn out_nullable_string() -> Value {
+    json!({"type": ["string", "null"]})
+}
+
+fn out_nullable_integer() -> Value {
+    json!({"type": ["integer", "null"]})
+}
+
+fn out_array(items: Value) -> Value {
+    json!({"type": "array", "items": items})
+}
+
+fn out_object(properties: Value) -> Value {
+    json!({"type": "object", "properties": properties})
+}
+
+fn out_schema(properties: Value, required: &[&str]) -> Value {
+    json!({"type": "object", "properties": properties, "required": required})
+}
+
+/// Fields every paged list tool shares.
+fn out_page(properties: &mut serde_json::Map<String, Value>, with_limit: bool) {
+    properties.insert("count".to_owned(), out_integer());
+    properties.insert("total".to_owned(), out_integer());
+    properties.insert("offset".to_owned(), out_integer());
+    if with_limit {
+        properties.insert("limit".to_owned(), out_integer());
+    }
+    properties.insert("truncated".to_owned(), out_boolean());
+    properties.insert("next_offset".to_owned(), out_nullable_integer());
+}
+
+/// JSON Schema for one read tool's `structuredContent`.
+fn output_schema(name: &str) -> Value {
+    match name {
+        "list_functions" => {
+            let mut properties = serde_json::Map::new();
+            properties.insert(
+                "functions".to_owned(),
+                out_array(out_object(json!({
+                    "name": out_nullable_string(),
+                    "start": out_string(),
+                    "end": out_string(),
+                    "size": out_integer(),
+                }))),
+            );
+            out_page(&mut properties, true);
+            out_schema(
+                Value::Object(properties),
+                &[
+                    "functions",
+                    "count",
+                    "total",
+                    "offset",
+                    "limit",
+                    "truncated",
+                    "next_offset",
+                ],
+            )
+        }
+        "get_disassembly" => out_schema(
+            json!({
+                "start": out_string(),
+                "lines": out_array(out_object(json!({
+                    "addr": out_string(),
+                    "bytes": out_string(),
+                    "mnemonic": out_string(),
+                    "operands": out_string(),
+                    "name": out_nullable_string(),
+                    "comment": out_nullable_string(),
+                }))),
+                "count": out_integer(),
+            }),
+            &["start", "lines", "count"],
+        ),
+        "get_pseudocode" => out_schema(
+            json!({
+                "function": out_string(),
+                "name": out_nullable_string(),
+                "level": out_string(),
+                "text": out_string(),
+                "start_line": out_integer(),
+                "end_line": out_integer(),
+                "returned_lines": out_integer(),
+                "total_lines": out_integer(),
+                "truncated": out_boolean(),
+                "cached": out_boolean(),
+                "next_start_line": out_nullable_integer(),
+                "hint": out_string(),
+                "lines": out_array(out_object(json!({
+                    "addr": out_string(),
+                    "text": out_string(),
+                }))),
+            }),
+            &[
+                "function",
+                "name",
+                "level",
+                "text",
+                "start_line",
+                "end_line",
+                "returned_lines",
+                "total_lines",
+                "truncated",
+                "cached",
+                "next_start_line",
+            ],
+        ),
+        "xrefs_to" | "xrefs_from" => {
+            let mut properties = serde_json::Map::new();
+            properties.insert("addr".to_owned(), out_string());
+            properties.insert(
+                "xrefs".to_owned(),
+                out_array(out_object(json!({
+                    "from": out_string(),
+                    "to": out_string(),
+                    "kind": out_string(),
+                    "function": out_nullable_string(),
+                }))),
+            );
+            out_page(&mut properties, false);
+            out_schema(
+                Value::Object(properties),
+                &[
+                    "addr",
+                    "xrefs",
+                    "count",
+                    "total",
+                    "offset",
+                    "truncated",
+                    "next_offset",
+                ],
+            )
+        }
+        "list_strings" => {
+            let mut properties = serde_json::Map::new();
+            properties.insert(
+                "strings".to_owned(),
+                out_array(out_object(json!({
+                    "addr": out_string(),
+                    "length": out_integer(),
+                    "encoding": out_string(),
+                    "text": out_string(),
+                }))),
+            );
+            out_page(&mut properties, true);
+            out_schema(
+                Value::Object(properties),
+                &[
+                    "strings",
+                    "count",
+                    "total",
+                    "offset",
+                    "limit",
+                    "truncated",
+                    "next_offset",
+                ],
+            )
+        }
+        "list_imports" => out_schema(
+            json!({
+                "modules": out_array(out_object(json!({
+                    "module": out_string(),
+                    "iat": out_string(),
+                    "functions": out_array(out_object(json!({
+                        "name": out_nullable_string(),
+                        "ordinal": out_nullable_integer(),
+                        "hint": out_nullable_integer(),
+                        "iat": out_string(),
+                    }))),
+                }))),
+            }),
+            &["modules"],
+        ),
+        "list_exports" => {
+            let mut properties = serde_json::Map::new();
+            properties.insert(
+                "exports".to_owned(),
+                out_array(out_object(json!({
+                    "name": out_nullable_string(),
+                    "ordinal": out_integer(),
+                    "addr": out_string(),
+                    "rva": out_string(),
+                    "forwarder": out_nullable_string(),
+                    "function": out_nullable_string(),
+                }))),
+            );
+            out_page(&mut properties, false);
+            out_schema(
+                Value::Object(properties),
+                &[
+                    "exports",
+                    "count",
+                    "total",
+                    "offset",
+                    "truncated",
+                    "next_offset",
+                ],
+            )
+        }
+        "get_metadata" => out_schema(
+            json!({
+                "format": out_string(),
+                "arch": out_string(),
+                "image_base": out_string(),
+                "entry_point": out_string(),
+                "entry_name": out_nullable_string(),
+                "size_of_image": out_integer(),
+                "size_of_headers": out_integer(),
+                "file_size": out_integer(),
+                "subsystem": out_integer(),
+                "timestamp": out_integer(),
+                "tls_callbacks": out_array(out_string()),
+                "sections": out_array(out_object(json!({
+                    "name": out_string(),
+                    "start": out_string(),
+                    "end": out_string(),
+                    "size": out_integer(),
+                    "perm": out_string(),
+                    "kind": out_string(),
+                }))),
+                "counts": out_object(json!({
+                    "functions": out_integer(),
+                    "imports": out_integer(),
+                    "exports": out_integer(),
+                    "strings": out_integer(),
+                })),
+                "warnings": out_array(out_string()),
+            }),
+            &[
+                "format",
+                "arch",
+                "image_base",
+                "entry_point",
+                "entry_name",
+                "size_of_image",
+                "size_of_headers",
+                "file_size",
+                "subsystem",
+                "timestamp",
+                "tls_callbacks",
+                "sections",
+                "counts",
+                "warnings",
+            ],
+        ),
+        "callgraph" => out_schema(
+            json!({
+                "nodes": out_array(out_object(json!({
+                    "start": out_string(),
+                    "name": out_nullable_string(),
+                }))),
+                "node_total": out_integer(),
+                "edges": out_array(out_object(json!({
+                    "from": out_string(),
+                    "from_name": out_nullable_string(),
+                    "to": out_string(),
+                    "to_name": out_nullable_string(),
+                }))),
+                "edge_total": out_integer(),
+                "offset": out_integer(),
+                "truncated": out_boolean(),
+                "next_offset": out_nullable_integer(),
+            }),
+            &[
+                "nodes",
+                "node_total",
+                "edges",
+                "edge_total",
+                "offset",
+                "truncated",
+                "next_offset",
+            ],
+        ),
+        "search_bytes" => out_schema(
+            json!({
+                "hits": out_array(out_object(json!({"addr": out_string()}))),
+                "count": out_integer(),
+                "offset": out_integer(),
+                "total": out_integer(),
+                "truncated": out_boolean(),
+                "next_offset": out_nullable_integer(),
+            }),
+            &[
+                "hits",
+                "count",
+                "offset",
+                "total",
+                "truncated",
+                "next_offset",
+            ],
+        ),
+        "function_summary" => out_schema(
+            json!({
+                "name": out_nullable_string(),
+                "start": out_string(),
+                "end": out_string(),
+                "size": out_integer(),
+                "instructions": out_integer(),
+                "truncated": out_boolean(),
+                "prototype": out_nullable_string(),
+                "callers": out_integer(),
+                "caller_functions": out_array(out_object(json!({
+                    "addr": out_string(),
+                    "name": out_nullable_string(),
+                    "site": out_string(),
+                }))),
+                "calls": out_array(out_object(json!({
+                    "addr": out_string(),
+                    "name": out_nullable_string(),
+                }))),
+                "strings": out_array(out_object(json!({
+                    "addr": out_string(),
+                    "text": out_string(),
+                }))),
+                "api_tags": out_array(out_object(json!({
+                    "addr": out_string(),
+                    "rule": out_string(),
+                    "category": out_string(),
+                }))),
+                "segment": out_nullable_string(),
+            }),
+            &[
+                "name",
+                "start",
+                "end",
+                "size",
+                "instructions",
+                "truncated",
+                "prototype",
+                "callers",
+                "caller_functions",
+                "calls",
+                "strings",
+                "api_tags",
+                "segment",
+            ],
+        ),
+        "find_api_callers" => out_schema(
+            json!({
+                "functions": out_array(out_object(json!({
+                    "name": out_nullable_string(),
+                    "addr": out_string(),
+                    "api": out_string(),
+                    "category": out_string(),
+                    "site": out_string(),
+                }))),
+                "count": out_integer(),
+                "total": out_integer(),
+                "truncated": out_boolean(),
+            }),
+            &["functions", "count", "total", "truncated"],
+        ),
+        _ => json!({"type": "object", "additionalProperties": true}),
     }
 }
 
@@ -491,6 +866,75 @@ mod tests {
             .find(|spec| spec["name"] == "list_functions")
             .expect("list_functions spec");
         assert_eq!(list["inputSchema"]["properties"]["limit"]["maximum"], 200);
+    }
+
+    /// Every schema is a well-formed object schema and matches a real result.
+    #[test]
+    fn output_schemas_are_well_formed_and_match_results() {
+        let Some(mut session) = project() else {
+            return;
+        };
+        let entry = format!("{:#x}", session.entry_point().get());
+        let listed = specs(&Budget::mcp());
+        for spec in &listed {
+            let name = spec["name"].as_str().unwrap();
+            let schema = &spec["outputSchema"];
+            assert_eq!(schema["type"], "object", "{name}");
+            let properties = schema["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} has no properties"));
+            assert!(!properties.is_empty(), "{name}");
+            for (field, definition) in properties {
+                assert!(
+                    definition.get("type").is_some(),
+                    "{name}.{field} has no type: {definition}"
+                );
+            }
+            for required in schema["required"].as_array().cloned().unwrap_or_default() {
+                let required = required.as_str().unwrap();
+                assert!(
+                    properties.contains_key(required),
+                    "{name} requires unknown field {required}"
+                );
+            }
+        }
+
+        // Results must not grow a field the schema does not describe.
+        let cases = [
+            ("list_functions", json!({"limit": 2})),
+            ("function_summary", json!({"addr": entry})),
+            ("get_pseudocode", json!({"addr": entry})),
+            ("xrefs_to", json!({"addr": entry})),
+            ("get_metadata", json!({})),
+            ("list_exports", json!({})),
+            ("find_api_callers", json!({"api": "Write"})),
+        ];
+        for (name, arguments) in cases {
+            let value = call(&mut session, name, &arguments, &Budget::mcp())
+                .unwrap_or_else(|error| panic!("{name} failed: {error}"));
+            let spec = listed
+                .iter()
+                .find(|spec| spec["name"] == name)
+                .unwrap_or_else(|| panic!("no spec for {name}"));
+            let schema = &spec["outputSchema"];
+            let properties = schema["properties"].as_object().unwrap();
+            let object = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} is not an object"));
+            for field in object.keys() {
+                assert!(
+                    properties.contains_key(field),
+                    "{name} returned undocumented field {field}"
+                );
+            }
+            for required in schema["required"].as_array().unwrap() {
+                let required = required.as_str().unwrap();
+                assert!(
+                    object.contains_key(required),
+                    "{name} is missing required field {required}"
+                );
+            }
+        }
     }
 
     #[test]
