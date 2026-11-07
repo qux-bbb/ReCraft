@@ -1,7 +1,7 @@
 # MCP server（read-only，M2）
 
-ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户端（Claude Desktop、
-Cursor、自研 agent 等）。默认只暴露只读工具 + 资源；加 `--write` 后额外暴露**写工具**
+ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户端（OpenCode、
+自研 agent 等）。默认只暴露只读工具 + 资源；加 `--write` 后额外暴露**写工具**
 （`rename`、`set_comment`、`set_prototype`、`apply_type`、`define_function`、`batch` 和
 `undo`），所有写操作走与 GUI 相同的 Command 总线并写入带来源标记的 journal，可以 undo
 回退（`batch` 一整组一起回退）。写工具默认关闭，`serve-mcp` 不加 `--write` 时服务器对项目
@@ -46,28 +46,51 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
   `scripts/e2e.ps1` 会后台启动真实 HTTP 服务（随机端口 + token），断言 `/health`、携带
   token 的 `initialize` 返回 `serverInfo`、无 token 请求返回 401，然后强制结束进程。
 
-客户端配置示例（Claude Desktop 风格，stdio）：
+客户端配置示例（OpenCode，stdio）：由 OpenCode 自己拉起 `serve-mcp`，先准备项目：
+
+```powershell
+recraft-cli import C:\Windows\System32\notepad.exe -o C:\work\notepad.rcraft
+recraft-cli analyze C:\work\notepad.rcraft
+opencode mcp add recraft-notepad -- C:\path\to\recraft-cli.exe serve-mcp C:\work\notepad.rcraft
+```
+
+`opencode mcp add` 默认写项目配置（`opencode.json`），加 `--global` 写全局
+（`~/.config/opencode/opencode.jsonc`）；要写工具就在命令末尾加 `--write`。等价的配置文件
+（OpenCode V2 形状，服务器放在 `mcp.servers` 下）：
 
 ```json
 {
-  "mcpServers": {
-    "recraft-notepad": {
-      "command": "C:\\path\\to\\recraft-cli.exe",
-      "args": ["serve-mcp", "C:\\work\\notepad.rcraft"]
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "recraft-notepad": {
+        "type": "local",
+        "command": ["C:\\path\\to\\recraft-cli.exe", "serve-mcp", "C:\\work\\notepad.rcraft"]
+      }
     }
   }
 }
 ```
 
-走 HTTP 的客户端填 **URL + Authorization 头**，没有 `command`/`args`（各客户端字段名略有
-差异，下面是最常见的形态）：
+旧写法（服务器名直接挂在 `mcp` 下、`"enabled": true`、`command` 仍是数组）OpenCode 也照读，
+已存在的配置不必迁移；新加的建议按上面的 `mcp.servers` 放。
+
+走 HTTP 的客户端填 **URL + Authorization 头**，没有 `command`/`args`：
+
+```powershell
+opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authorization=Bearer demo
+```
 
 ```json
 {
-  "mcpServers": {
-    "recraft-http": {
-      "url": "http://127.0.0.1:8765/mcp",
-      "headers": { "Authorization": "Bearer demo" }
+  "mcp": {
+    "servers": {
+      "recraft-http": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8765/mcp",
+        "oauth": false,
+        "headers": { "Authorization": "Bearer demo" }
+      }
     }
   }
 }
@@ -75,8 +98,11 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 
 - `url` 指向 `--bind` 地址下的 `/mcp` 端点，header 里的 token 必须与 `--token` 一致；
   `/health` 只用于探活，不要当 MCP 端点。
-- Claude Desktop 的 `mcpServers` 只接受 `command`/`args`（stdio）；要接 HTTP 需要一个本地
-  桥接（例如 `mcp-remote`），或者直接用上面的 stdio 配置。
+- OpenCode 的 remote 服务器**默认走 OAuth**，只认 header token 的端点必须写 `oauth: false`，
+  否则它会去找授权服务器。
+- 验证：`opencode mcp list` 显示 `✓ recraft-notepad connected`。刚改完配置时它可能先报
+  “No MCP servers configured”——list 连的是后台常驻服务、异步重载配置，等几秒或重开客户端
+  再跑（`--standalone` 读不到项目配置，别用它排查）。
 
 ## 协议
 

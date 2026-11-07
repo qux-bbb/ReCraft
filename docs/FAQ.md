@@ -50,12 +50,13 @@ ReCraft 只做**静态解析**，不加载、不执行、不解包样本；但�
 必须回馈，这正是这类工具该守的规则。贡献按 inbound = outbound 接受（`git commit -s` 签
 DCO），不需要 CLA，也不做版权转让。
 
-## 9. 有 MCP 吗？能接 Claude/Cursor 吗？
+## 9. 有 MCP 吗？怎么接 OpenCode？
 
 有。`recraft-cli serve-mcp <project>` 通过 stdio 提供反汇编、伪代码、xrefs、字符串、导入、
 调用图、字节搜索、函数摘要等只读工具与项目资源；加 `--write` 后再提供 `rename`、`set_comment`、
 `set_prototype`、`apply_type`、`define_function`、`undo` 写工具（走命令总线，每步可撤销）。
-配置示例见 [docs/DEMO.md](DEMO.md)。
+接入步骤与配置示例见 [docs/MCP.md](MCP.md)（`opencode mcp add` 或 `mcp.servers`），演示脚本见
+[docs/DEMO.md](DEMO.md)。
 
 ## 10. 什么时候有公开预览？
 

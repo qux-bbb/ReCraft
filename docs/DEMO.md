@@ -125,12 +125,22 @@ applied 3 proposal(s) through the command bus (undoable)
 
 ## 对接 MCP 客户端
 
+OpenCode 作客户端（自己拉起 `serve-mcp`）：
+
+```powershell
+opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp C:\path\to\project.rcraft
+```
+
+等价的 `opencode.json`：
+
 ```json
 {
-  "mcpServers": {
-    "recraft": {
-      "command": "C:\\path\\to\\recraft-cli.exe",
-      "args": ["serve-mcp", "C:\\path\\to\\project.rcraft"]
+  "mcp": {
+    "servers": {
+      "recraft": {
+        "type": "local",
+        "command": ["C:\\path\\to\\recraft-cli.exe", "serve-mcp", "C:\\path\\to\\project.rcraft"]
+      }
     }
   }
 }
@@ -159,7 +169,7 @@ recraft-cli ai explain demo.rcraft --addr entry --llm
 2. **导入与分析**（2 min）：1 GiB 样本门禁（zip 体积、内存 ≤512 MiB）、函数发现、API 分类。
 3. **反编译**（3 min）：L2 结构化、字段/数组/结构体/原型、golden 回归与质量门禁。
 4. **AI 与写回**（2 min）：Proposal 带证据与置信度；只有人工确认才经命令总线写入，可 undo。
-5. **生态**（1 min）：MCP 让 Claude/Cursor 等直接查询项目；纯本地、无云端依赖。
+5. **生态**（1 min）：MCP 让 OpenCode 等直接查询项目；纯本地、无云端依赖。
 6. **路线**（1 min）：M3 打包/预览 → 动态调试（后续版本）。
 
 ## 排障

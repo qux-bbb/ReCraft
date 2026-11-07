@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MCP client docs are OpenCode-first.** The client section of `docs/MCP.md` now shows
+  `opencode mcp add` plus the `mcp.servers` `local` / `remote` config shapes (including
+  `oauth: false` for the header-token HTTP endpoint, and the `opencode mcp list` reload quirk)
+  instead of the Claude Desktop `mcpServers` example, which was the only client documented.
+  `docs/DEMO.md`, `docs/FAQ.md` §9 and both READMEs now name the same client, so nothing in the
+  docs teaches a Claude Desktop / Cursor setup any more.
+
 - **Tool output schemas are field-by-field.** Every read tool (in `recraft-query`) and write
   tool now declares a real `outputSchema` — the documented fields, their types, and which of
   them always appear — instead of a bare `{"type": "object"}`. Tests keep the docs honest:

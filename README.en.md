@@ -27,7 +27,7 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
   confidence; writes go through the same journaled command bus as manual edits (undoable).
 - **Provider required**: AI features use a configured LLM provider; prompts
   are redacted + budgeted, results cached and audited locally.
-- **MCP-native**: Claude/Cursor and other agents can query functions, pseudocode, xrefs,
+- **MCP-native**: OpenCode and other agents can query functions, pseudocode, xrefs,
   strings, imports and call graphs through an MCP server; `--write` also renames, comments
   and sets prototypes, each step undoable.
 - **Built for triage**: API behaviour tagging, strings/xrefs, runtime symbol recovery
