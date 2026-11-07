@@ -19,9 +19,10 @@
 //! Resources: `recraft://project/{id}/functions|strings|imports` and
 //! `recraft://project/{id}/pseudocode/{func}`.
 //!
-//! Every list-shaped tool reports `total` (matches before the row cap) and `truncated`
-//! (rows were dropped), and filters run before the cap: a filtered query never answers
-//! "no match" just because the match sits past the default window.
+//! Every list-shaped tool reports `total` (matches before paging), `truncated` and
+//! `next_offset`, and filters run before the offset and the row cap: a filtered query never
+//! answers "no match" just because the match sits past the default window, and a capped
+//! result is a page, not a dead end. `get_pseudocode` pages the same way with `startLine`.
 
 #![forbid(unsafe_code)]
 
@@ -255,13 +256,15 @@ impl McpServer {
             .and_then(Value::as_str)
             .map(str::to_ascii_lowercase);
         let limit = limit_of(arguments, 500);
+        let offset = offset_of(arguments);
         let functions = self.session.functions().map_err(|e| e.to_string())?;
         let total_available = functions.len();
         let mut items = Vec::new();
         let mut matched = 0usize;
         for function in &functions {
-            // Without a filter the scan stops at the limit; with one it has to reach the end,
-            // because the match may sit anywhere in the (address-ordered) table.
+            // Without a filter the scan stops at the end of the page; with one it has to
+            // reach the end, because the match may sit anywhere in the (address-ordered)
+            // table.
             if filter.is_none() && items.len() >= limit {
                 break;
             }
@@ -278,8 +281,12 @@ impl McpServer {
                 continue;
             }
             matched += 1;
-            // The filter runs *before* the limit: `limit` caps returned rows, never the scan,
-            // otherwise a default-500 query silently answers "no match" for later entries.
+            // The filter runs *before* the offset and the limit: `limit` caps returned
+            // rows, never the scan, otherwise a default-500 query silently answers
+            // "no match" for later entries.
+            if matched <= offset {
+                continue;
+            }
             if items.len() < limit {
                 items.push(json!({
                     "name": name,
@@ -294,11 +301,14 @@ impl McpServer {
         } else {
             total_available
         };
+        let next = offset.saturating_add(items.len());
         Ok(json!({
             "functions": items,
             "count": items.len(),
             "total": total,
-            "truncated": total > items.len(),
+            "offset": offset,
+            "truncated": next < total,
+            "next_offset": if next < total { json!(next) } else { Value::Null },
         }))
     }
 
@@ -369,33 +379,57 @@ impl McpServer {
             1024,
             MAX_PSEUDOCODE_BYTES,
         );
+        // Page through a huge function by line number: the whole point of the cap is that the
+        // caller can read lines 2001+ without asking for the whole 13 000-line function.
+        let start_line = arguments
+            .get("startLine")
+            .and_then(Value::as_u64)
+            .map(|line| (line as usize).max(1))
+            .unwrap_or(1);
+        let include_lines = arguments
+            .get("includeLines")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let total_lines = code.lines.len();
+        let first = start_line.saturating_sub(1).min(total_lines);
         let mut lines = Vec::new();
         let mut text = String::new();
-        for line in &code.lines {
-            if lines.len() >= max_lines
-                || (!lines.is_empty() && text.len() + line.text.len() + 1 > max_bytes)
-            {
+        let mut kept = 0usize;
+        for line in code.lines.iter().skip(first) {
+            if kept >= max_lines || (kept > 0 && text.len() + line.text.len() + 1 > max_bytes) {
                 break;
             }
             text.push_str(&line.text);
             text.push('\n');
-            lines.push(json!({"addr": hex(line.addr), "text": line.text}));
+            kept += 1;
+            if include_lines {
+                lines.push(json!({"addr": hex(line.addr), "text": line.text}));
+            }
         }
-        let kept = lines.len();
-        let truncated = kept < total_lines;
+        let end_line = first + kept;
+        let truncated = end_line < total_lines;
         let mut payload = json!({
             "function": hex(function),
             "name": name,
             "level": level,
-            "lines": lines,
             "text": text,
+            "start_line": first + 1,
+            "end_line": end_line,
+            "returned_lines": kept,
             "total_lines": total_lines,
             "truncated": truncated,
+            "next_start_line": if truncated { json!(end_line + 1) } else { Value::Null },
         });
+        if include_lines {
+            payload["lines"] = json!(lines);
+        }
         if truncated {
             payload["hint"] = json!(format!(
-                "truncated to {kept} of {total_lines} lines; raise maxLines/maxBytes, or export the full text with `recraft-cli decompile --out`"
+                "truncated to lines {}-{} of {}; pass startLine={} (or raise maxLines/maxBytes), or export the full text with `recraft-cli decompile --out`",
+                first + 1,
+                end_line,
+                total_lines,
+                end_line + 1
             ));
         }
         Ok(payload)
@@ -412,9 +446,11 @@ impl McpServer {
             self.session.xrefs_from(addr)
         }
         .map_err(|e| e.to_string())?;
+        let offset = offset_of(arguments);
         let total = entries.len();
         let items: Vec<Value> = entries
             .iter()
+            .skip(offset)
             .take(limit)
             .map(|entry| {
                 json!({
@@ -424,12 +460,15 @@ impl McpServer {
                 })
             })
             .collect();
+        let next = offset.saturating_add(items.len());
         Ok(json!({
             "addr": hex(addr),
             "xrefs": items,
             "count": items.len(),
             "total": total,
-            "truncated": total > items.len(),
+            "offset": offset,
+            "truncated": next < total,
+            "next_offset": if next < total { json!(next) } else { Value::Null },
         }))
     }
 
@@ -439,6 +478,7 @@ impl McpServer {
             .and_then(Value::as_str)
             .map(str::to_ascii_lowercase);
         let limit = limit_of(arguments, 500);
+        let offset = offset_of(arguments);
         let strings = self.session.strings().map_err(|e| e.to_string())?;
         let total_available = strings.len();
         let mut items = Vec::new();
@@ -458,7 +498,10 @@ impl McpServer {
                 continue;
             }
             matched += 1;
-            // Same convention as `list_functions`: filtering precedes the row cap.
+            // Same convention as `list_functions`: filtering precedes the offset and cap.
+            if matched <= offset {
+                continue;
+            }
             if items.len() < limit {
                 items.push(json!({
                     "addr": hex(entry.addr),
@@ -473,11 +516,14 @@ impl McpServer {
         } else {
             total_available
         };
+        let next = offset.saturating_add(items.len());
         Ok(json!({
             "strings": items,
             "count": items.len(),
             "total": total,
-            "truncated": total > items.len(),
+            "offset": offset,
+            "truncated": next < total,
+            "next_offset": if next < total { json!(next) } else { Value::Null },
         }))
     }
 
@@ -511,13 +557,14 @@ impl McpServer {
 
     fn tool_callgraph(&self, arguments: &Value) -> ToolResult {
         let limit = limit_of(arguments, 2000);
+        let offset = offset_of(arguments);
         let functions = self.session.functions().map_err(|e| e.to_string())?;
         let index = FunctionIndex::new(&functions);
         let calls = self
             .session
             .all_xrefs(Some(XREF_CALL))
             .map_err(|e| e.to_string())?;
-        let mut edges = Vec::new();
+        let mut pairs = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         for call in calls {
             let Some(from) = index.containing(call.from) else {
@@ -529,19 +576,25 @@ impl McpServer {
             if from == to || !seen.insert((from, to)) {
                 continue;
             }
-            if edges.len() >= limit {
-                break;
-            }
-            edges.push(json!({
-                "from": hex(functions[from].start),
-                "from_name": self.session.name_at(functions[from].start).ok().flatten(),
-                "to": hex(functions[to].start),
-                "to_name": self.session.name_at(functions[to].start).ok().flatten(),
-            }));
+            pairs.push((from, to));
         }
-        let nodes_truncated = functions.len() > limit;
+        let edge_total = pairs.len();
+        let edges: Vec<Value> = pairs
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|(from, to)| {
+                json!({
+                    "from": hex(functions[*from].start),
+                    "from_name": self.session.name_at(functions[*from].start).ok().flatten(),
+                    "to": hex(functions[*to].start),
+                    "to_name": self.session.name_at(functions[*to].start).ok().flatten(),
+                })
+            })
+            .collect();
         let nodes: Vec<Value> = functions
             .iter()
+            .skip(offset)
             .take(limit)
             .map(|function| {
                 json!({
@@ -550,16 +603,26 @@ impl McpServer {
                 })
             })
             .collect();
+        let next_edges = offset.saturating_add(edges.len());
+        let next_nodes = offset.saturating_add(nodes.len());
         Ok(json!({
             "nodes": nodes,
             "node_total": functions.len(),
             "edges": edges,
-            "truncated": edges.len() >= limit || nodes_truncated,
+            "edge_total": edge_total,
+            "offset": offset,
+            "truncated": next_edges < edge_total || next_nodes < functions.len(),
+            "next_offset": if next_edges < edge_total || next_nodes < functions.len() {
+                json!(offset.saturating_add(limit))
+            } else {
+                Value::Null
+            },
         }))
     }
 
     fn tool_search(&mut self, arguments: &Value) -> ToolResult {
         let limit = limit_of(arguments, 20).min(1000);
+        let offset = offset_of(arguments).min(1000);
         let needle = if let Some(hex) = arguments.get("hex").and_then(Value::as_str) {
             parse_hex_bytes(hex)?
         } else if let Some(ascii) = arguments.get("ascii").and_then(Value::as_str) {
@@ -570,15 +633,29 @@ impl McpServer {
         if needle.is_empty() {
             return Err("empty pattern".to_owned());
         }
+        // Scan `offset + limit` hits, then drop the first `offset`: `Session::search_bytes`
+        // has no offset parameter of its own.
         let hits = self
             .session
-            .search_bytes(&needle, limit)
+            .search_bytes(&needle, offset.saturating_add(limit))
             .map_err(|e| e.to_string())?;
+        let total = hits.len();
         let items: Vec<Value> = hits
             .iter()
+            .skip(offset)
             .map(|addr| json!({"addr": hex(*addr)}))
             .collect();
-        Ok(json!({"hits": items, "count": items.len(), "truncated": items.len() >= limit}))
+        let next = offset.saturating_add(items.len());
+        Ok(json!({
+            "hits": items,
+            "count": items.len(),
+            "offset": offset,
+            // `total` is the number of hits inspected, not the number that exist: the
+            // scan itself stops at `offset + limit`.
+            "total": total,
+            "truncated": total >= offset.saturating_add(limit),
+            "next_offset": if total >= offset.saturating_add(limit) { json!(next) } else { Value::Null },
+        }))
     }
 
     fn tool_summary(&mut self, arguments: &Value) -> ToolResult {
@@ -904,13 +981,10 @@ impl McpServer {
                             .get("total_lines")
                             .and_then(Value::as_u64)
                             .unwrap_or(0);
-                        let kept = value
-                            .get("lines")
-                            .and_then(Value::as_array)
-                            .map(Vec::len)
-                            .unwrap_or(0);
+                        let end = value.get("end_line").and_then(Value::as_u64).unwrap_or(0);
                         text.push_str(&format!(
-                            "// truncated: {kept} of {total} lines; raise maxLines/maxBytes\n"
+                            "// truncated: lines 1-{end} of {total}; read the rest with get_pseudocode(startLine={})\n",
+                            end + 1
                         ));
                     }
                     text
@@ -977,6 +1051,16 @@ fn limit_of(arguments: &Value, default: usize) -> usize {
         .and_then(Value::as_u64)
         .map(|limit| (limit as usize).clamp(1, MAX_LIMIT))
         .unwrap_or(default)
+}
+
+/// Row offset for the list tools. `total` keeps counting every match, so
+/// `offset + count < total` means another page exists.
+fn offset_of(arguments: &Value) -> usize {
+    arguments
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|offset| (offset as usize).min(MAX_LIMIT))
+        .unwrap_or(0)
 }
 
 /// Read an integer cap (`maxLines`, `maxBytes`) and clamp it into range.
@@ -1137,12 +1221,13 @@ fn tools(write: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "list_functions",
-            "description": "List discovered functions with names and ranges. `filter` runs before `limit`; the result reports `total` and `truncated`.",
+            "description": "List discovered functions with names and ranges. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset` — pass it back as `offset` to read the next page.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "filter": {"type": "string", "description": "Case-insensitive name substring."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                    "offset": {"type": "integer", "minimum": 0, "description": "Rows to skip; use `next_offset` from the previous page."},
                 },
             },
         }),
@@ -1159,7 +1244,7 @@ fn tools(write: bool) -> Vec<Value> {
         }),
         json!({
             "name": "get_pseudocode",
-            "description": "Pseudo-C for the function containing an address (L0/L1/L2). Long functions are capped; check `truncated`/`total_lines` and raise `maxLines`/`maxBytes` for more.",
+            "description": "Pseudo-C for the function containing an address (L0/L1/L2). Long functions are capped per page; read the rest with `startLine` from `next_start_line`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1167,41 +1252,46 @@ fn tools(write: bool) -> Vec<Value> {
                     "level": {"type": "string", "enum": ["l0", "l1", "l2"]},
                     "maxLines": {"type": "integer", "minimum": 1, "maximum": MAX_PSEUDOCODE_LINES},
                     "maxBytes": {"type": "integer", "minimum": 1024, "maximum": MAX_PSEUDOCODE_BYTES},
+                    "startLine": {"type": "integer", "minimum": 1, "description": "1-based first line to return."},
+                    "includeLines": {"type": "boolean", "description": "Also return `lines: [{addr,text}]` (duplicates `text`; off by default)."},
                 },
             },
         }),
         json!({
             "name": "xrefs_to",
-            "description": "References pointing at an address; reports `total`/`truncated` when capped by `limit`.",
+            "description": "References pointing at an address; pages with `offset`/`limit` and reports `total`/`truncated`/`next_offset`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "addr": {"type": ["integer", "string"]},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                    "offset": {"type": "integer", "minimum": 0},
                 },
                 "required": ["addr"],
             },
         }),
         json!({
             "name": "xrefs_from",
-            "description": "References originating at an address; reports `total`/`truncated` when capped by `limit`.",
+            "description": "References originating at an address; pages with `offset`/`limit` and reports `total`/`truncated`/`next_offset`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "addr": {"type": ["integer", "string"]},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                    "offset": {"type": "integer", "minimum": 0},
                 },
                 "required": ["addr"],
             },
         }),
         json!({
             "name": "list_strings",
-            "description": "Extracted strings with encoding and address. `filter` runs before `limit`; the result reports `total` and `truncated`.",
+            "description": "Extracted strings with encoding and address. `filter` runs before `offset`/`limit`; the result reports `total`, `truncated` and `next_offset`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "filter": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                    "offset": {"type": "integer", "minimum": 0},
                 },
             },
         }),
@@ -1212,21 +1302,25 @@ fn tools(write: bool) -> Vec<Value> {
         }),
         json!({
             "name": "callgraph",
-            "description": "Function-level call graph derived from persisted call xrefs.",
+            "description": "Function-level call graph derived from persisted call xrefs. Pages both `nodes` and `edges` with `offset`/`limit` and reports `node_total`/`edge_total`.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT}},
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
             },
         }),
         json!({
             "name": "search_bytes",
-            "description": "Search mapped readable segments for a byte pattern (hex or ASCII).",
+            "description": "Search mapped readable segments for a byte pattern (hex or ASCII). `total` is the number of hits inspected, not the number that exist.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "hex": {"type": "string", "description": "Hex bytes, e.g. '8B 44 24 04'."},
                     "ascii": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000},
                 },
             },
         }),
@@ -1842,13 +1936,24 @@ mod tests {
         let limited = tool_json(
             &mut server,
             "get_pseudocode",
-            json!({"addr": "entry", "level": "l1", "maxLines": 2}),
+            json!({"addr": "entry", "level": "l1", "maxLines": 2, "includeLines": true}),
         );
         assert_eq!(limited["truncated"], true, "{limited}");
         assert_eq!(limited["lines"].as_array().unwrap().len(), 2);
+        assert_eq!(limited["returned_lines"], 2);
         assert!(limited["total_lines"].as_u64().unwrap() > 2);
-        assert!(limited["hint"].as_str().unwrap().contains("maxLines"));
+        assert!(limited["hint"].as_str().unwrap().contains("startLine"));
         assert_eq!(limited["text"].as_str().unwrap().lines().count(), 2);
+        assert_eq!(limited["next_start_line"], 3);
+
+        // Without `includeLines` the payload must not carry the duplicate array.
+        let compact = tool_json(
+            &mut server,
+            "get_pseudocode",
+            json!({"addr": "entry", "level": "l1", "maxLines": 2}),
+        );
+        assert!(compact.get("lines").is_none(), "{compact}");
+        assert!(compact["text"].as_str().unwrap().lines().count() <= 2);
 
         // The largest function must stay inside the default byte/line caps.
         let all = tool_json(&mut server, "list_functions", json!({"limit": MAX_LIMIT}));
@@ -1872,12 +1977,111 @@ mod tests {
             "L2 payload not capped: {} bytes",
             text.len()
         );
-        let kept = full["lines"].as_array().unwrap().len();
-        assert!(kept <= DEFAULT_PSEUDOCODE_MAX_LINES);
+        let kept = full["returned_lines"].as_u64().unwrap();
+        assert!(kept <= DEFAULT_PSEUDOCODE_MAX_LINES as u64);
         assert_eq!(
             full["truncated"],
-            (kept as u64) < full["total_lines"].as_u64().unwrap()
+            kept < full["total_lines"].as_u64().unwrap()
         );
+    }
+
+    #[test]
+    fn pages_walk_past_the_row_and_line_caps() {
+        let Some(mut server) = notepad_project() else {
+            return;
+        };
+        let total = tool_json(&mut server, "list_functions", json!({"limit": 1}))["total"]
+            .as_u64()
+            .unwrap();
+        assert!(total > 4, "notepad should have more than four functions");
+
+        let first = tool_json(&mut server, "list_functions", json!({"limit": 3}));
+        assert_eq!(first["count"], 3);
+        assert_eq!(first["next_offset"], 3);
+        let second = tool_json(
+            &mut server,
+            "list_functions",
+            json!({"limit": 3, "offset": 3}),
+        );
+        assert_eq!(second["offset"], 3);
+        let first_starts: Vec<&str> = first["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|function| function["start"].as_str().unwrap())
+            .collect();
+        let second_starts: Vec<&str> = second["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|function| function["start"].as_str().unwrap())
+            .collect();
+        assert!(
+            first_starts
+                .iter()
+                .all(|start| !second_starts.contains(start)),
+            "offset re-served rows: {first_starts:?} vs {second_starts:?}"
+        );
+
+        // Walking every page reaches every function exactly once.
+        let mut seen = std::collections::BTreeSet::new();
+        let mut offset = 0u64;
+        loop {
+            let page = tool_json(
+                &mut server,
+                "list_functions",
+                json!({"limit": 100, "offset": offset}),
+            );
+            for function in page["functions"].as_array().unwrap() {
+                assert!(
+                    seen.insert(function["start"].as_str().unwrap().to_owned()),
+                    "duplicate row while paging"
+                );
+            }
+            match page["next_offset"].as_u64() {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(seen.len() as u64, total, "paging lost or duplicated rows");
+
+        // Pseudocode pages stitch back into the text they were cut from. A mid-size function
+        // keeps this test fast: the point is the paging arithmetic, not the decompiler.
+        let all = tool_json(&mut server, "list_functions", json!({"limit": MAX_LIMIT}));
+        let medium = all["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|function| function["size"].as_u64().unwrap_or(0) >= 2048)
+            .min_by_key(|function| function["size"].as_u64().unwrap_or(0))
+            .expect("notepad has a function larger than 2 KiB")["start"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let page_one = tool_json(
+            &mut server,
+            "get_pseudocode",
+            json!({"addr": medium, "level": "l2", "maxLines": 5}),
+        );
+        assert_eq!(page_one["truncated"], true, "{page_one}");
+        assert!(page_one["total_lines"].as_u64().unwrap() > 5, "{page_one}");
+        let next = page_one["next_start_line"].as_u64().unwrap();
+        let page_two = tool_json(
+            &mut server,
+            "get_pseudocode",
+            json!({"addr": medium, "level": "l2", "maxLines": 5, "startLine": next}),
+        );
+        assert_eq!(page_two["start_line"], next);
+        assert!(
+            page_two["total_lines"] == page_one["total_lines"],
+            "line numbering changed between pages"
+        );
+        let empty_page = tool_json(
+            &mut server,
+            "get_pseudocode",
+            json!({"addr": medium, "level": "l2", "startLine": 100_000}),
+        );
+        assert_eq!(empty_page["returned_lines"], 0, "{empty_page}");
     }
 
     #[test]

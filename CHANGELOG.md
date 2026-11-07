@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP list tools page, and pseudocode pages by line.** Every list-shaped tool
+  (`list_functions`, `list_strings`, `xrefs_to`, `xrefs_from`, `callgraph`, `search_bytes`)
+  takes `offset` and returns `offset`/`next_offset` alongside `count`/`total`, so a
+  31 803-function DLL (shell32) can be walked to the end instead of stopping at the 5 000-row
+  cap; `callgraph` also reports `edge_total`. `get_pseudocode` takes `startLine` and returns
+  `start_line`/`end_line`/`returned_lines`/`next_start_line`, so lines 2 001+ of a 13 084-line
+  function are reachable without raising `maxLines`; the per-line `lines` array is now opt-in
+  (`includeLines`) and no longer duplicates `text` (1.8 MB → 0.7 MB for that function).
+  `docs/MCP.md` documents the paging contract.
+
 - **MCP can write, behind `--write`.** `recraft-cli serve-mcp <project> --write` registers
   `rename`, `set_comment`, `set_prototype`, `apply_type`, `define_function` and `undo` next to
   the read tools. Each write goes through the same journaled command bus as the GUI, so it is

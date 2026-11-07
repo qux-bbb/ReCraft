@@ -95,15 +95,15 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 
 | 工具 | 参数 | 返回 |
 |---|---|---|
-| `list_functions` | `filter?`, `limit?` | `{functions:[{name,start,end,size}],count,total,truncated}` |
+| `list_functions` | `filter?`, `limit?`, `offset?` | `{functions:[{name,start,end,size}],count,total,offset,truncated,next_offset}` |
 | `get_disassembly` | `addr?`, `count?` | `{start,lines:[{addr,bytes,mnemonic,operands,name,comment}],count}` |
-| `get_pseudocode` | `addr?`, `level?`=`l0/l1/l2`, `maxLines?`=2000, `maxBytes?`=256 KiB | `{function,name,level,lines,text,total_lines,truncated,hint?}` |
-| `xrefs_to` | `addr`, `limit?` | `{addr,xrefs:[{from,to,kind}],count,total,truncated}` |
-| `xrefs_from` | `addr`, `limit?` | 同上 |
-| `list_strings` | `filter?`, `limit?` | `{strings:[{addr,length,encoding,text}],count,total,truncated}` |
+| `get_pseudocode` | `addr?`, `level?`=`l0/l1/l2`, `maxLines?`=2000, `maxBytes?`=256 KiB, `startLine?`, `includeLines?` | `{function,name,level,text,start_line,end_line,returned_lines,total_lines,truncated,next_start_line,hint?}`；`includeLines:true` 时额外给 `lines:[{addr,text}]` |
+| `xrefs_to` | `addr`, `limit?`, `offset?` | `{addr,xrefs:[{from,to,kind}],count,total,offset,truncated,next_offset}` |
+| `xrefs_from` | `addr`, `limit?`, `offset?` | 同上 |
+| `list_strings` | `filter?`, `limit?`, `offset?` | `{strings:[{addr,length,encoding,text}],count,total,offset,truncated,next_offset}` |
 | `list_imports` | — | `{modules:[{module,iat,functions:[{name,ordinal,hint,iat}]}]}` |
-| `callgraph` | `limit?` | `{nodes,node_total,edges:[{from,to,from_name,to_name}],truncated}`（节点或边被裁剪都为 true） |
-| `search_bytes` | `hex?` 或 `ascii?`, `limit?` | `{hits:[{addr}],count,truncated}`（扫描可读映射段，1 MiB 分块） |
+| `callgraph` | `limit?`, `offset?` | `{nodes,node_total,edges:[{from,to,from_name,to_name}],edge_total,offset,truncated,next_offset}`（节点或边被裁剪都为 true） |
+| `search_bytes` | `hex?` 或 `ascii?`, `limit?`, `offset?` | `{hits:[{addr}],count,total,offset,truncated,next_offset}`（扫描可读映射段，1 MiB 分块；`total` 是已检查的命中数，不是命中总数） |
 | `function_summary` | `addr?` | 名字/范围/指令数/调用者/调用的函数/引用字符串/API 标签 |
 
 ### 写工具（`--write`）
@@ -130,12 +130,17 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 语义与 GUI/CLI 完全一致：命令在同一个 SQLite 事务里写入并记录 inverse，`undo` 就是 GUI 的
 撤销。项目文件同时被 GUI 打开时，GUI 需要重新载入才能看到新名字/注释。
 
-**过滤与截断约定**：`filter` 先于 `limit` 生效——`limit` 只限制返回行数，不会截断扫描，
-所以命中项在表的任何位置都能被找到；列表型工具都报告 `truncated`，并在适用时给出
-`count`（实返行数）与 `total`（截断前的命中总数），`callgraph` 额外给出 `node_total`。
+**过滤、分页与截断约定**：`filter` 先于 `offset`/`limit` 生效——`limit` 只限制返回行数，
+不会截断扫描，所以命中项在表的任何位置都能被找到；列表型工具都报告 `truncated`，给出
+`count`（实返行数）、`total`（命中总数）和 `next_offset`（下一页的 `offset`，无下一页时为
+`null`），`callgraph` 额外给出 `node_total`/`edge_total`。**任何规模的表都能分页读完**：
+不带 `offset` 的首页只是第一页，不是全部。
 `get_pseudocode` 默认截断到 2 000 行 / 256 KiB（`maxLines`、`maxBytes` 可调，上限
-100 000 行 / 8 MiB），被裁剪时返回 `truncated: true`、`total_lines` 和一句 `hint`。
-客户端应先看 `truncated`，再决定收窄查询还是抬高上限，而不是把结果当成完整数据。
+100 000 行 / 8 MiB），被裁剪时返回 `truncated: true`、`start_line`/`end_line`/
+`returned_lines`/`total_lines`、`next_start_line` 和一句 `hint`；用 `startLine` 从下一页接着读，
+巨函数不必一次全取。默认只返回 `text`，`lines`（带每行地址）要 `includeLines:true` 才返回，
+避免同一段文本在结果里出现两次。
+客户端应先看 `truncated`，再决定收窄查询、翻页还是抬高上限，而不是把结果当成完整数据。
 
 `tools/call` 的 `result.content[0].text` 是 **JSON 字符串**（工具结果为结构化数据），
 便于客户端二次解析。
@@ -146,8 +151,8 @@ curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
 - `recraft://project/{id}/strings` → `list_strings`
 - `recraft://project/{id}/imports` → `list_imports`
 - `recraft://project/{id}/pseudocode/{func}` → L1 伪代码纯文本（`func` 可为名字/地址）；
-  超过默认上限时末尾追加 `// truncated: N of M lines; raise maxLines/maxBytes` 注释，
-  不会静默返回截短的文档
+  超过默认上限时末尾追加 `// truncated: lines 1-N of M; read the rest with
+  get_pseudocode(startLine=N+1)` 注释，不会静默返回截短的文档
 
 `{id}` 是项目文件名（不含扩展名）。
 
