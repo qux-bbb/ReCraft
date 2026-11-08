@@ -246,3 +246,140 @@ fn the_dispatcher_recognises_elf_without_a_hint() {
     let loaded = recraft_format::load(&bytes).expect("dispatched to the ELF loader");
     assert_eq!(loaded.format, Format::Elf);
 }
+
+// --- a stripped image: function boundaries only from `.eh_frame` -----------------
+
+const EH_FRAME_OFFSET: usize = 0x1080;
+const EH_FRAME_VA: u64 = 0x401_080;
+
+fn build_eh_frame() -> Vec<u8> {
+    // CIE: version 1, augmentation "zR", code align 1, data align -8, return reg 16,
+    // one byte of augmentation data: `DW_EH_PE_pcrel | DW_EH_PE_sdata4`.
+    let mut cie = Vec::new();
+    cie.extend_from_slice(&0u32.to_le_bytes()); // CIE id
+    cie.push(1); // version
+    cie.extend_from_slice(b"zR\0");
+    cie.push(1); // code alignment
+    cie.push(0x78); // data alignment: sleb128(-8)
+    cie.push(16); // return address register
+    cie.push(1); // augmentation data length
+    cie.push(0x1b); // DW_EH_PE_pcrel | DW_EH_PE_sdata4
+
+    let mut fde = Vec::new();
+    // The CIE pointer is the distance back from this field to the CIE start; the CIE
+    // starts at 0 and this field is at 0x11 + 4, so the value is 0x15.
+    fde.extend_from_slice(&0x15u32.to_le_bytes());
+    // initial_location is pcrel from the field's own address (0x11 + 8 = 0x19).
+    let field_va = EH_FRAME_VA + 0x11 + 8;
+    let delta = (TEXT_VA as i64 - field_va as i64) as i32;
+    fde.extend_from_slice(&delta.to_le_bytes());
+    fde.extend_from_slice(&6i32.to_le_bytes()); // address_range: main's six bytes
+    fde.push(0); // augmentation data length
+
+    let mut section = Vec::new();
+    section.extend_from_slice(&(cie.len() as u32).to_le_bytes());
+    section.extend_from_slice(&cie);
+    section.extend_from_slice(&(fde.len() as u32).to_le_bytes());
+    section.extend_from_slice(&fde);
+    section
+}
+
+fn build_stripped_elf() -> Vec<u8> {
+    let eh_frame = build_eh_frame();
+    let shoff = SHOFF;
+    let mut file = vec![0u8; shoff + 4 * 64];
+
+    file[..4].copy_from_slice(b"\x7fELF");
+    file[4] = 2;
+    file[5] = 1;
+    file[6] = 1;
+    put_u16(&mut file, 16, 2);
+    put_u16(&mut file, 18, 0x3e);
+    put_u32(&mut file, 20, 1);
+    put_u64(&mut file, 24, TEXT_VA);
+    put_u64(&mut file, 32, 0x40);
+    put_u64(&mut file, 40, shoff as u64);
+    put_u16(&mut file, 52, 64);
+    put_u16(&mut file, 54, 56);
+    put_u16(&mut file, 56, 1);
+    put_u16(&mut file, 58, 64);
+    put_u16(&mut file, 60, 4);
+    put_u16(&mut file, 62, 3);
+
+    file[TEXT_OFFSET..TEXT_OFFSET + 0x20].copy_from_slice(&[0x90u8; 0x20]);
+    file[TEXT_OFFSET..TEXT_OFFSET + 6].copy_from_slice(&[0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3]);
+    file[EH_FRAME_OFFSET..EH_FRAME_OFFSET + eh_frame.len()].copy_from_slice(&eh_frame);
+
+    let loaded_size = (EH_FRAME_OFFSET + eh_frame.len() - TEXT_OFFSET) as u64;
+    let ph = 0x40;
+    put_u32(&mut file, ph, 1);
+    put_u32(&mut file, ph + 4, 5);
+    put_u64(&mut file, ph + 8, TEXT_OFFSET as u64);
+    put_u64(&mut file, ph + 16, TEXT_VA);
+    put_u64(&mut file, ph + 24, TEXT_VA);
+    put_u64(&mut file, ph + 32, loaded_size);
+    put_u64(&mut file, ph + 40, loaded_size);
+    put_u64(&mut file, ph + 48, 0x1000);
+
+    let shstrtab = b"\0.text\0.eh_frame\0.shstrtab\0";
+    let shstrtab_offset = EH_FRAME_OFFSET + eh_frame.len();
+    file[shstrtab_offset..shstrtab_offset + shstrtab.len()].copy_from_slice(shstrtab);
+
+    write_section(
+        &mut file,
+        shoff + 64,
+        1,
+        1,
+        0x6,
+        TEXT_VA,
+        TEXT_OFFSET as u64,
+        0x20,
+        0,
+        0,
+        16,
+        0,
+    );
+    write_section(
+        &mut file,
+        shoff + 128,
+        7,
+        1,
+        0x2,
+        EH_FRAME_VA,
+        EH_FRAME_OFFSET as u64,
+        eh_frame.len() as u64,
+        0,
+        0,
+        8,
+        0,
+    );
+    write_section(
+        &mut file,
+        shoff + 192,
+        17,
+        3,
+        0,
+        0,
+        shstrtab_offset as u64,
+        shstrtab.len() as u64,
+        0,
+        0,
+        1,
+        0,
+    );
+
+    file
+}
+
+#[test]
+fn a_stripped_elf_gets_function_ranges_from_eh_frame() {
+    let loaded = recraft_format::load(&build_stripped_elf()).expect("stripped ELF should parse");
+    assert!(loaded.image.symbols.is_empty());
+    let ranges: Vec<(u64, u64)> = loaded
+        .image
+        .pdata_functions
+        .iter()
+        .map(|range| (range.start.get(), range.end.get()))
+        .collect();
+    assert_eq!(ranges, [(TEXT_VA, TEXT_VA + 6)]);
+}
