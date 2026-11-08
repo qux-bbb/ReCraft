@@ -1026,11 +1026,17 @@ mod tests {
                 report.structured(),
                 report.total()
             );
-            assert!(
-                report.coverage() >= 0.97,
-                "{bits}: coverage {:.3}",
-                report.coverage()
+            // The corpus is rebuilt with whatever MSVC the machine has, so its instruction mix —
+            // and therefore this number — drifts between toolchains: the 2026-11-05 build measured
+            // 97.4% (x64) / 97.6% (x86), the 2026-11-08 CI build 97.0%. A 0.96 floor still catches
+            // a real semantic regression (DESIGN §7.4 asks for 95%) without failing on a compiler
+            // update. The measured value is printed so CI logs show the drift.
+            let coverage = report.coverage();
+            println!(
+                "{bits}: {} functions, coverage {coverage:.3}",
+                report.total()
             );
+            assert!(coverage >= 0.96, "{bits}: coverage {coverage:.3}");
             assert!(
                 report.total() >= 30,
                 "{bits}: only {} functions",
