@@ -1613,6 +1613,22 @@ fn install_initial_names(conn: &Connection, image: &Image) -> Result<()> {
     let mut statement = conn
         .prepare("INSERT OR IGNORE INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)")
         .map_err(command::db_err)?;
+    // Names the container carries itself (ELF `.symtab`/`.dynsym`). They go in first so
+    // a real symbol at the entry point wins over the synthetic `start` label; PE leaves
+    // `symbols` empty, so its naming order is unchanged.
+    for symbol in &image.symbols {
+        if symbol.name.is_empty() || symbol.address.get() == 0 {
+            continue;
+        }
+        let display = recraft_common::demangle(&symbol.name).unwrap_or_else(|| symbol.name.clone());
+        statement
+            .execute(params![
+                symbol.address.get() as i64,
+                display,
+                NAME_KIND_LOADER
+            ])
+            .map_err(command::db_err)?;
+    }
     statement
         .execute(params![
             image.entry_point.get() as i64,

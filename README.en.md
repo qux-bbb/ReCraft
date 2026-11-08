@@ -3,7 +3,7 @@
 [简体中文](README.md) | **English**
 
 > **Status: 0.1.0 (technical preview) is out** — M0–M4 are complete; build artifacts are on
-> [Releases](https://github.com/qux-bbb/ReCraft/releases). Import/analyze PE32/PE32+
+> [Releases](https://github.com/qux-bbb/ReCraft/releases). Import/analyze PE32/PE32+ and ELF64
 > (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type writes through a journaled command bus with undo, an MCP server (read-only
 > by default, `--write` enables the write tools), and provider-backed AI (explain / rename

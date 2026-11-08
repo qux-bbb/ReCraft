@@ -11,6 +11,17 @@
 
 ## [未发布]
 
+### 新增
+
+- **ELF64（x86-64）支持。** `recraft-format` 新增 ELF 加载器：ELF/程序头/节表、`.dynsym` +
+  `.symtab`、`PT_DYNAMIC`（SONAME、`DT_NEEDED`）、GOT/PLT 重定位（`R_X86_64_JUMP_SLOT`、
+  `GLOB_DAT`）→ 导入表、`.eh_frame` FDE 与符号大小 → 函数范围，符号名直接进入名字表。
+  `import` 与 GUI 拖放按魔术字自动识别，`info` 显示 `ELF64 (x64)`，`Session` 记录
+  `format=elf64` / `arch=x64`。`cargo test -p recraft-decompile --test elf_smoke` 用合成的
+  ELF 跑通 import → analyze → decompile → lint（`main` 读作 `return 1;`），不依赖 Linux
+  工具链。已知限制：仅 ELF64 小端 x86-64（ARM64 随 ARM64 lifter）、不解析 DWARF/IFUNC/
+  符号版本、`.symtab` 是主要命名来源（stripped 二进制靠 `.eh_frame` 划范围）。
+
 ### 变更
 
 - **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`

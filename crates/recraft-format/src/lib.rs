@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! Executable format loaders (PE first; other formats behind the same trait).
+//! Executable format loaders: PE32/PE32+ and ELF64, both behind [`Loader`].
 //!
 //! Part of ReCraft. See `docs/DESIGN.md` for the architecture.
 //!
@@ -28,6 +28,9 @@ use recraft_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 pub use recraft_common::Address;
+
+pub mod elf;
+pub use elf::ElfLoader;
 
 /// Typical page size used by PE section alignment.
 pub const PAGE_SIZE: u64 = 0x1000;
@@ -158,6 +161,10 @@ pub struct Image {
     pub exports: Vec<Export>,
     pub tls_callbacks: Vec<Address>,
     pub pdata_functions: Vec<FunctionRange>,
+    /// Names the container itself carries beyond exports/imports (ELF symbol
+    /// tables today; PE leaves this empty and relies on exports plus linker maps).
+    #[serde(default)]
+    pub symbols: Vec<SymbolName>,
     pub overlay_file_offset: Option<u64>,
     pub file_size: u64,
     /// Non-fatal problems found while parsing (malformed import/export/TLS tables,
@@ -258,6 +265,14 @@ pub struct FunctionRange {
     pub end: Address,
 }
 
+/// A named address from the container (ELF `.symtab`/`.dynsym`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SymbolName {
+    pub address: Address,
+    pub name: String,
+    pub size: u64,
+}
+
 /// Common interface implemented by every executable-format loader.
 pub trait Loader {
     const NAME: &'static str;
@@ -309,6 +324,8 @@ pub fn detect(bytes: &[u8]) -> bool {
 pub fn detect_format(bytes: &[u8]) -> Option<Format> {
     if PeLoader::detect(bytes) {
         Some(Format::Pe)
+    } else if ElfLoader::detect(bytes) {
+        Some(Format::Elf)
     } else {
         None
     }
@@ -319,8 +336,11 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
     if PeLoader::detect(bytes) {
         return PeLoader::load(bytes);
     }
+    if ElfLoader::detect(bytes) {
+        return ElfLoader::load(bytes);
+    }
     Err(Error::format(
-        "unrecognised executable format (PE32/PE32+ is supported; ELF is next)",
+        "unrecognised executable format (PE32/PE32+ and ELF64 are supported)",
     ))
 }
 
@@ -482,6 +502,7 @@ pub fn load_pe(bytes: &[u8]) -> Result<Image> {
         exports,
         tls_callbacks,
         pdata_functions,
+        symbols: Vec::new(),
         overlay_file_offset,
         file_size,
         warnings,
@@ -1134,6 +1155,7 @@ mod tests {
                 start: Address::new(0x1400_1000),
                 end: Address::new(0x1400_1100),
             }],
+            symbols: Vec::new(),
             overlay_file_offset: Some(0x2000),
             file_size: 0x3000,
             warnings: vec!["warning".to_owned()],
