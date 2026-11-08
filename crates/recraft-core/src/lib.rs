@@ -20,6 +20,9 @@ pub use command::{
     StructDef, StructField,
 };
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
+// Loaders live in `recraft-format`; front ends and the decompiler read them through
+// the session, so the vocabulary is re-exported here.
+pub use recraft_format::{Arch, Format, Image, LoadedImage};
 pub use script::{COMMAND_TYPES, parse_command, resolve_address};
 pub use segments::{Perm, Segment, SegmentKind};
 pub use session::{FUNC_FLAG_AUTO, Session, UndoRecord, UndoReport};

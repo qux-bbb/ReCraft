@@ -594,3 +594,28 @@ fn broken_pdata_degrades_to_empty_ranges() {
     let image = load(&bytes).expect("broken .pdata must not fail the load");
     assert!(image.pdata_functions.is_empty());
 }
+
+#[test]
+fn the_dispatcher_reports_format_and_arch() {
+    let bytes = build_pe(true);
+    let loaded = recraft_format::load(&bytes).expect("PE32+ should parse");
+    assert_eq!(loaded.format, recraft_format::Format::Pe);
+    assert_eq!(loaded.arch, recraft_format::Arch::X64);
+    assert!(loaded.image.is_64);
+
+    let loaded = recraft_format::load(&build_pe(false)).expect("PE32 should parse");
+    assert_eq!(loaded.arch, recraft_format::Arch::X86);
+    assert!(!loaded.image.is_64);
+
+    assert_eq!(
+        recraft_format::detect_format(&bytes),
+        Some(recraft_format::Format::Pe)
+    );
+    assert_eq!(recraft_format::detect_format(b"not an executable"), None);
+
+    let error = recraft_format::load(b"\x7fELF\x02\x01\x01").unwrap_err();
+    assert!(
+        error.to_string().contains("unrecognised executable format"),
+        "{error}"
+    );
+}

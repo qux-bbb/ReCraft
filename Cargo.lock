@@ -3046,6 +3046,7 @@ version = "0.1.0"
 dependencies = [
  "recraft-common",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

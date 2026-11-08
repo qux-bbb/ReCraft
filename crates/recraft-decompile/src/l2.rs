@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use recraft_common::{Address, Result};
-use recraft_core::Session;
+use recraft_core::{Arch, Session};
 use recraft_decode::iced_x86;
 use recraft_ir::{BinOp, Expr, ExprId, Lifter, Reg, RegView, Stmt};
 
@@ -420,14 +420,26 @@ pub struct L2Info {
 
 /// Recover argument names, return type and calling convention.
 pub fn recover_l2(session: &mut Session, start: Address, end: Address) -> Result<L2Info> {
-    let abi = if session.image().is_64 {
-        CallingConvention::System
-    } else {
-        detect_x86_abi(session, start, end)?
-    };
+    let abi = calling_convention(session, start, end)?;
     let args = recover_args(session, start, end)?;
     let ret = recover_return(session, start, end)?;
     Ok(L2Info { args, ret, abi })
+}
+
+/// The calling convention a function's compiler used, looked up by architecture.
+///
+/// x64 has a single convention (the Microsoft x64 one, which needs no keyword),
+/// 32-bit x86 needs the epilogue to tell cdecl from stdcall, and AArch64 will use
+/// AAPCS64 (also keyword-free) once its lifter exists.
+fn calling_convention(
+    session: &mut Session,
+    start: Address,
+    end: Address,
+) -> Result<CallingConvention> {
+    match session.arch() {
+        Arch::X86 => detect_x86_abi(session, start, end),
+        Arch::X64 | Arch::Aarch64 => Ok(CallingConvention::System),
+    }
 }
 
 /// `ret imm16` (stdcall) vs `ret` (cdecl) in the function epilogue.

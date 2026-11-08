@@ -20,6 +20,10 @@
   不需要重新导入。这是一次零输出变化的重构：789 个 golden 快照、`lint` 与反编译文本不变。
 - **CI 增加 Linux 作业。** `core crates (Linux)` 在 `ubuntu-latest` 上跑 11 个可移植 crate 的
   测试，用来持续证明 ADR-009 的可移植性；它也是 ELF 语料（只能在 Linux 上编译）的前置条件。
+- **调用约定改为按架构查表。** `recover_l2` 不再用 `image().is_64` 二分，而是按
+  `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与将来的
+  AArch64 用无关键字约定。`recraft-core` 重导出 `Arch`/`Format`/`Image`/`LoadedImage`，
+  反编译器因此不必直接依赖加载层。
 
 ## [0.1.0] - 2026-11-08
 

@@ -1074,3 +1074,79 @@ fn read_cstring(bytes: &[u8], offset: usize, maximum: usize) -> Result<String> {
     };
     Ok(String::from_utf8_lossy(&slice[..length]).into_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arch_reports_width_flags_and_names() {
+        assert_eq!(Arch::X86.pointer_size(), 4);
+        assert_eq!(Arch::X64.pointer_size(), 8);
+        assert_eq!(Arch::Aarch64.pointer_size(), 8);
+
+        assert!(!Arch::X86.is_64());
+        assert!(Arch::X64.is_64());
+        assert!(Arch::Aarch64.is_64());
+
+        for arch in [Arch::X86, Arch::X64, Arch::Aarch64] {
+            assert_eq!(Arch::from_name(arch.name()), Some(arch));
+        }
+        assert_eq!(Arch::from_name("aarch64"), Some(Arch::Aarch64));
+        assert_eq!(Arch::from_name("mips"), None);
+    }
+
+    #[test]
+    fn format_meta_names_round_trip() {
+        assert_eq!(Format::Pe.meta_name(Arch::X64), "pe32+");
+        assert_eq!(Format::Pe.meta_name(Arch::X86), "pe32");
+        assert_eq!(Format::Elf.meta_name(Arch::Aarch64), "elf64");
+        assert_eq!(Format::Pe.name(), "PE");
+        assert_eq!(Format::Elf.name(), "ELF");
+
+        for (format, arch) in [
+            (Format::Pe, Arch::X64),
+            (Format::Pe, Arch::X86),
+            (Format::Elf, Arch::Aarch64),
+        ] {
+            assert_eq!(Format::from_meta(format.meta_name(arch)), Some(format));
+        }
+        assert_eq!(Format::from_meta("macho"), None);
+    }
+
+    #[test]
+    fn image_survives_a_json_round_trip() {
+        // `Image` is what a project stores in `meta.image_meta`; the round trip is
+        // the contract that keeps 0.1.0 projects openable.
+        let image = Image {
+            is_64: true,
+            image_base: Address::new(0x1400_0000),
+            entry_point: Address::new(0x1400_1000),
+            size_of_image: 0x3000,
+            size_of_headers: 0x400,
+            subsystem: 3,
+            timestamp: 7,
+            sections: Vec::new(),
+            imports: Vec::new(),
+            exports: Vec::new(),
+            tls_callbacks: vec![Address::new(0x1400_2000)],
+            pdata_functions: vec![FunctionRange {
+                start: Address::new(0x1400_1000),
+                end: Address::new(0x1400_1100),
+            }],
+            overlay_file_offset: Some(0x2000),
+            file_size: 0x3000,
+            warnings: vec!["warning".to_owned()],
+        };
+
+        let json = serde_json::to_string(&image).expect("serialize");
+        let back: Image = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.entry_point, image.entry_point);
+        assert_eq!(back.image_base, image.image_base);
+        assert_eq!(back.pdata_functions.len(), 1);
+        assert_eq!(back.pdata_functions[0].end, Address::new(0x1400_1100));
+        assert_eq!(back.tls_callbacks, image.tls_callbacks);
+        assert_eq!(back.overlay_file_offset, Some(0x2000));
+        assert_eq!(back.warnings, image.warnings);
+    }
+}
