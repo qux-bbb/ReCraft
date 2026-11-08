@@ -919,7 +919,10 @@ fn import_symbol_name(function: &recraft_format::ImportFunction) -> String {
 
 fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
     let bytes = std::fs::read(file)?;
-    let image = recraft_format::load(&bytes)?;
+    let loaded = recraft_format::load(&bytes)?;
+    let image = loaded.image;
+    let arch = loaded.arch;
+    let format = loaded.format;
 
     if as_json {
         let sections: Vec<Value> = image
@@ -982,8 +985,12 @@ fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
     println!("File:    {} ({} bytes)", file.display(), image.file_size);
     println!(
         "Format:  {} ({})",
-        if image.is_64 { "PE32+" } else { "PE32" },
-        if image.is_64 { "x64" } else { "x86" }
+        match (format, arch) {
+            (recraft_format::Format::Pe, recraft_format::Arch::X64) => "PE32+",
+            (recraft_format::Format::Pe, _) => "PE32",
+            (recraft_format::Format::Elf, _) => "ELF64",
+        },
+        arch.name()
     );
     println!(
         "Image:   {:#x} .. {:#x}",

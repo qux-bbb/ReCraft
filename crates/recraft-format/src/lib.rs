@@ -52,9 +52,100 @@ const DIRECTORY_EXCEPTION: usize = 3;
 const DIRECTORY_TLS: usize = 9;
 const DIRECTORY_DELAY_IMPORT: usize = 13;
 
-/// A loaded PE image.
+/// Executable container formats ReCraft can load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    Pe,
+    Elf,
+}
+
+impl Format {
+    /// Short name for reports and the UI.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pe => "PE",
+            Self::Elf => "ELF",
+        }
+    }
+
+    /// Value stored in a project's `meta.format`. The PE spellings are the ones
+    /// 0.1.0 wrote, so old projects keep parsing.
+    pub fn meta_name(self, arch: Arch) -> &'static str {
+        match (self, arch) {
+            (Self::Pe, Arch::X64) => "pe32+",
+            (Self::Pe, _) => "pe32",
+            (Self::Elf, _) => "elf64",
+        }
+    }
+
+    /// Parse a `meta.format` value.
+    pub fn from_meta(value: &str) -> Option<Self> {
+        match value {
+            "pe32" | "pe32+" => Some(Self::Pe),
+            "elf64" => Some(Self::Elf),
+            _ => None,
+        }
+    }
+}
+
+/// Instruction set of a loaded image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Arch {
+    X86,
+    X64,
+    Aarch64,
+}
+
+impl Arch {
+    /// Width of a pointer in bytes.
+    pub fn pointer_size(self) -> u8 {
+        match self {
+            Self::X86 => 4,
+            Self::X64 | Self::Aarch64 => 8,
+        }
+    }
+
+    pub fn is_64(self) -> bool {
+        self != Self::X86
+    }
+
+    /// Name used in reports (`info`, MCP results, the UI).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::X86 => "x86",
+            Self::X64 => "x64",
+            Self::Aarch64 => "arm64",
+        }
+    }
+
+    /// Parse a `meta.arch` value.
+    pub fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "x86" => Some(Self::X86),
+            "x64" => Some(Self::X64),
+            "arm64" | "aarch64" => Some(Self::Aarch64),
+            _ => None,
+        }
+    }
+}
+
+/// A parsed image plus what its loader decided about it.
+#[derive(Debug, Clone)]
+pub struct LoadedImage {
+    pub image: Image,
+    pub format: Format,
+    pub arch: Arch,
+}
+
+/// A loaded executable image, independent of its container format.
+///
+/// PE is the only loader today, so several fields still describe PE structures
+/// (`.pdata` ranges, TLS callbacks, the IAT). They are kept as the vocabulary a
+/// second loader maps onto: `.pdata` ranges become `function_ranges` from
+/// `.eh_frame`, imports come from the GOT, and so on.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PeImage {
+pub struct Image {
     pub is_64: bool,
     pub image_base: Address,
     pub entry_point: Address,
@@ -74,7 +165,7 @@ pub struct PeImage {
     pub warnings: Vec<String>,
 }
 
-impl PeImage {
+impl Image {
     /// Find the section that maps `va` (headers are not represented).
     pub fn segment_containing(&self, va: Address) -> Option<&Section> {
         self.sections.iter().find(|section| {
@@ -170,12 +261,13 @@ pub struct FunctionRange {
 /// Common interface implemented by every executable-format loader.
 pub trait Loader {
     const NAME: &'static str;
+    const FORMAT: Format;
 
     fn detect(bytes: &[u8]) -> bool
     where
         Self: Sized;
 
-    fn load(bytes: &[u8]) -> Result<PeImage>
+    fn load(bytes: &[u8]) -> Result<LoadedImage>
     where
         Self: Sized;
 }
@@ -185,13 +277,20 @@ pub struct PeLoader;
 
 impl Loader for PeLoader {
     const NAME: &'static str = "PE";
+    const FORMAT: Format = Format::Pe;
 
     fn detect(bytes: &[u8]) -> bool {
         detect(bytes)
     }
 
-    fn load(bytes: &[u8]) -> Result<PeImage> {
-        load(bytes)
+    fn load(bytes: &[u8]) -> Result<LoadedImage> {
+        let image = load_pe(bytes)?;
+        let arch = if image.is_64 { Arch::X64 } else { Arch::X86 };
+        Ok(LoadedImage {
+            image,
+            format: Format::Pe,
+            arch,
+        })
     }
 }
 
@@ -206,8 +305,27 @@ pub fn detect(bytes: &[u8]) -> bool {
     matches!(read_u16(bytes, pe_offset + 24), Ok(0x10b | 0x20b))
 }
 
+/// Detect the format of `bytes` without parsing it.
+pub fn detect_format(bytes: &[u8]) -> Option<Format> {
+    if PeLoader::detect(bytes) {
+        Some(Format::Pe)
+    } else {
+        None
+    }
+}
+
+/// Parse `bytes` with whichever loader recognises it.
+pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
+    if PeLoader::detect(bytes) {
+        return PeLoader::load(bytes);
+    }
+    Err(Error::format(
+        "unrecognised executable format (PE32/PE32+ is supported; ELF is next)",
+    ))
+}
+
 /// Parse a PE32/PE32+ image.
-pub fn load(bytes: &[u8]) -> Result<PeImage> {
+pub fn load_pe(bytes: &[u8]) -> Result<Image> {
     let file_size = bytes.len() as u64;
     let pe_offset = pe_offset(bytes).ok_or_else(|| Error::format("not a PE image"))?;
 
@@ -351,7 +469,7 @@ pub fn load(bytes: &[u8]) -> Result<PeImage> {
         .checked_add(u64::from(entry_rva))
         .ok_or_else(|| Error::format("entry point address overflow"))?;
 
-    Ok(PeImage {
+    Ok(Image {
         is_64,
         image_base: Address(image_base),
         entry_point: Address(entry_point),

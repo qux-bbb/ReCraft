@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use recraft_common::{Address, AddressRange, Error, Result};
 use recraft_decode::{DecodeCache, FlowKind, Formatter, Insn, Mode, decode};
-use recraft_format::PeImage;
+use recraft_format::{Arch, Format, Image};
 use recraft_storage::{JournalEntry, Project};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -35,6 +35,11 @@ const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
 const FLAGS_CACHE_PAGES: usize = 1024;
 const DECODE_CACHE_ENTRIES: usize = 65_536;
+
+/// `meta` key holding the serialized [`Image`].
+const IMAGE_META_KEY: &str = "image_meta";
+/// The key 0.1.0 wrote the same JSON under; read for older projects.
+const LEGACY_IMAGE_META_KEY: &str = "pe_meta";
 /// Upper bound on the instruction sweep used to find the instruction before an address.
 const SWEEP_LIMIT: usize = 50_000;
 
@@ -149,7 +154,9 @@ fn unix_now() -> i64 {
 /// Open/create one ReCraft project and provide the analysis-facing API.
 pub struct Session {
     project: Project,
-    image: PeImage,
+    image: Image,
+    format: Format,
+    arch: Arch,
     mode: Mode,
     segments: Vec<Segment>,
     image_cache: ImageCache,
@@ -161,16 +168,19 @@ pub struct Session {
 }
 
 impl Session {
-    /// Import a PE file into a new project at `path`.
+    /// Import an executable file into a new project at `path`.
     pub fn create(
         path: &Path,
         bytes: &[u8],
         progress: &mut dyn FnMut(u64, u64),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self> {
-        let image = recraft_format::load(bytes)?;
-        let segments = segments::from_pe(&image);
-        let format_name = if image.is_64 { "pe32+" } else { "pe32" };
+        let loaded = recraft_format::load(bytes)?;
+        let image = loaded.image;
+        let format = loaded.format;
+        let arch = loaded.arch;
+        let segments = segments::from_image(&image);
+        let format_name = format.meta_name(arch);
         let original_name = path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -186,14 +196,17 @@ impl Session {
         )?;
 
         let json = serde_json::to_string(&image)
-            .map_err(|error| Error::internal(format!("serialize PE metadata: {error}")))?;
-        project.set_meta_string("pe_meta", &json)?;
+            .map_err(|error| Error::internal(format!("serialize image metadata: {error}")))?;
+        project.set_meta_string(IMAGE_META_KEY, &json)?;
+        project.set_meta_string("arch", arch.name())?;
         write_segments(project.conn(), &segments)?;
         install_initial_names(project.conn(), &image)?;
 
         Ok(Self {
             mode: Mode::from_is_64(image.is_64),
             image,
+            format,
+            arch,
             segments,
             project,
             image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
@@ -206,15 +219,30 @@ impl Session {
     /// Re-open an existing project (no image bytes are re-read up front).
     pub fn open(path: &Path) -> Result<Self> {
         let project = Project::open(path)?;
-        let json = project.meta_string("pe_meta")?.ok_or_else(|| {
-            Error::storage("project is missing PE metadata (re-import the binary)")
+        // `image_meta` is the neutral key; 0.1.0 wrote the same JSON under `pe_meta`.
+        let json = match project.meta_string(IMAGE_META_KEY)? {
+            Some(json) => Some(json),
+            None => project.meta_string(LEGACY_IMAGE_META_KEY)?,
+        };
+        let json = json.ok_or_else(|| {
+            Error::storage("project is missing image metadata (re-import the binary)")
         })?;
-        let image: PeImage = serde_json::from_str(&json)
-            .map_err(|error| Error::internal(format!("corrupt PE metadata: {error}")))?;
-        let segments = segments::from_pe(&image);
+        let image: Image = serde_json::from_str(&json)
+            .map_err(|error| Error::internal(format!("corrupt image metadata: {error}")))?;
+        let format = project
+            .meta_string("format")?
+            .and_then(|value| Format::from_meta(&value))
+            .unwrap_or(Format::Pe);
+        let arch = project
+            .meta_string("arch")?
+            .and_then(|value| Arch::from_name(&value))
+            .unwrap_or(if image.is_64 { Arch::X64 } else { Arch::X86 });
+        let segments = segments::from_image(&image);
         Ok(Self {
             mode: Mode::from_is_64(image.is_64),
             image,
+            format,
+            arch,
             segments,
             project,
             image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
@@ -248,8 +276,18 @@ impl Session {
         self.project.path()
     }
 
-    pub fn image(&self) -> &PeImage {
+    pub fn image(&self) -> &Image {
         &self.image
+    }
+
+    /// Container format the project was imported from.
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    /// Instruction set of the imported image.
+    pub fn arch(&self) -> Arch {
+        self.arch
     }
 
     pub fn mode(&self) -> Mode {
@@ -1571,7 +1609,7 @@ fn perm_id(perm: segments::Perm) -> i64 {
     }
 }
 
-fn install_initial_names(conn: &Connection, image: &PeImage) -> Result<()> {
+fn install_initial_names(conn: &Connection, image: &Image) -> Result<()> {
     let mut statement = conn
         .prepare("INSERT OR IGNORE INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)")
         .map_err(command::db_err)?;

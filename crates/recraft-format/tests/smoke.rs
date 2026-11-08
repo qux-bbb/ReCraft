@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use recraft_common::Address;
-use recraft_format::load;
+use recraft_format::load_pe as load;
 
 fn check(path: &str) {
     if !Path::new(path).exists() {

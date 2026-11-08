@@ -67,6 +67,21 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/ai-cache-smoke.ps1
 
+  core:
+    name: core crates (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # ADR-009: the headless core is portable. This job proves it on every push,
+      # which is also what the ELF work needs (Linux-built corpus samples).
+      - name: cargo test (portable crates)
+        run: |
+          cargo test -p recraft-common -p recraft-format -p recraft-decode -p recraft-ir \
+            -p recraft-storage -p recraft-core -p recraft-analysis -p recraft-decompile \
+            -p recraft-query -p recraft-mcp -p recraft-ai
+
   package:
     name: windows package (zip)
     runs-on: windows-latest

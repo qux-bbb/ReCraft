@@ -11,6 +11,16 @@
 
 ## [未发布]
 
+### 变更
+
+- **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`
+  与 `Arch`，`Loader` trait 返回带格式与架构的 `LoadedImage`，`load()` 按魔术字分派（PE 是
+  唯一实现，其他格式报 `unrecognised executable format`）。项目把 `format` 与新增的 `arch`
+  写进 `meta`，镜像 JSON 的键从 `pe_meta` 改为 `image_meta`，旧项目仍从 `pe_meta` 读取，
+  不需要重新导入。这是一次零输出变化的重构：789 个 golden 快照、`lint` 与反编译文本不变。
+- **CI 增加 Linux 作业。** `core crates (Linux)` 在 `ubuntu-latest` 上跑 11 个可移植 crate 的
+  测试，用来持续证明 ADR-009 的可移植性；它也是 ELF 语料（只能在 Linux 上编译）的前置条件。
+
 ## [0.1.0] - 2026-11-08
 
 首个公开技术预览：Windows PE 静态分析 + 自研反编译器 + IDA 风格原生界面 + 内置 MCP

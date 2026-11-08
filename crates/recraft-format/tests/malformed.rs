@@ -36,7 +36,7 @@ impl Rng {
     }
 }
 
-fn exercise(image: &recraft_format::PeImage) {
+fn exercise(image: &recraft_format::Image) {
     // Public accessors must not panic even for a partly malformed image.
     let _ = image.segment_containing(image.image_base);
     let _ = image.segment_containing(recraft_common::Address::new(image.size_of_image));
@@ -63,7 +63,7 @@ fn random_blobs_never_panic() {
         for byte in &mut bytes {
             *byte = rng.next() as u8;
         }
-        if let Ok(image) = recraft_format::load(&bytes) {
+        if let Ok(image) = recraft_format::load_pe(&bytes) {
             exercise(&image);
         }
     }
@@ -78,7 +78,7 @@ fn truncated_images_never_panic() {
     for _ in 0..400 {
         let len = rng.below(valid.len());
         let bytes = &valid[..len];
-        if let Ok(image) = recraft_format::load(bytes) {
+        if let Ok(image) = recraft_format::load_pe(bytes) {
             exercise(&image);
         }
     }
@@ -98,14 +98,14 @@ fn mutated_headers_never_panic() {
             let index = rng.below(0x400.min(bytes.len()));
             bytes[index] ^= 1u8 << (rng.below(8) as u32);
         }
-        if let Ok(image) = recraft_format::load(&bytes) {
+        if let Ok(image) = recraft_format::load_pe(&bytes) {
             exercise(&image);
         }
     }
     // Truncating at the DOS header/e_lfanew boundary must also be safe.
     for len in [0usize, 1, 2, 0x3c, 0x3f, 0x40, 0x100] {
         if len <= valid.len() {
-            let _ = recraft_format::load(&valid[..len]);
+            let _ = recraft_format::load_pe(&valid[..len]);
         }
     }
 }

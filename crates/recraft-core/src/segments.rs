@@ -4,7 +4,7 @@
 //! Virtual address space: segments derived from the loader output.
 
 use recraft_common::{Address, AddressRange};
-use recraft_format::PeImage;
+use recraft_format::Image;
 use serde::{Deserialize, Serialize};
 
 /// What a segment is for.
@@ -87,12 +87,12 @@ impl Segment {
     }
 }
 
-/// Build the initial segment list from a parsed PE image.
+/// Build the initial segment list from a parsed image.
 ///
 /// Node: PE sections may overlap in the wild; we keep them as-is (sorted by address)
 /// and let callers pick the first match. The headers segment is only added when it
 /// does not overlap the first section.
-pub fn from_pe(image: &PeImage) -> Vec<Segment> {
+pub fn from_image(image: &Image) -> Vec<Segment> {
     let image_base = image.image_base.get();
     let image_end = image_base.saturating_add(image.size_of_image);
     let mut segments = Vec::new();
@@ -155,8 +155,8 @@ mod tests {
     use super::*;
     use recraft_format::Section;
 
-    fn image(sections: Vec<Section>) -> PeImage {
-        PeImage {
+    fn image(sections: Vec<Section>) -> Image {
+        Image {
             is_64: true,
             image_base: Address::new(0x1400_0000),
             entry_point: Address::new(0x1400_1000),
@@ -197,7 +197,7 @@ mod tests {
                 ..Section::default()
             },
         ]);
-        let segments = from_pe(&image);
+        let segments = from_image(&image);
         assert_eq!(segments.len(), 3);
 
         let headers = &segments[0];

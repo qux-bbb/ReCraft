@@ -5,7 +5,7 @@
 //! so the tests do not depend on checked-in binaries or an assembler.
 
 use recraft_common::Address;
-use recraft_format::{PeImage, detect, load};
+use recraft_format::{Image, detect, load_pe as load};
 
 const DOS_STUB_SIZE: usize = 0x80;
 const OPTIONAL_OFFSET: usize = DOS_STUB_SIZE + 24;
@@ -286,7 +286,7 @@ fn build_pe_with_delay_attributes(is_64: bool, delay_fields_are_va: bool) -> Vec
     bytes
 }
 
-fn exports_named<'a>(image: &'a PeImage, name: &str) -> &'a recraft_format::Export {
+fn exports_named<'a>(image: &'a Image, name: &str) -> &'a recraft_format::Export {
     image
         .exports
         .iter()
