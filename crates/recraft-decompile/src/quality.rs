@@ -1054,6 +1054,69 @@ mod tests {
         assert_eq!(report.affected(), 0);
         assert_eq!(report.checked, report.functions * 2);
     }
+
+    /// The Linux ELF corpus, built by `corpus/build-linux.sh`. Like every other corpus
+    /// binary it is a build product, so a clean checkout skips these tests.
+    fn linux_corpus(stripped: bool) -> Option<(Session, tempfile::TempDir)> {
+        let name = if stripped {
+            "libcorpus-stripped.so"
+        } else {
+            "libcorpus.so"
+        };
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/linux")
+            .join(name);
+        let bytes = std::fs::read(path).ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("linux-corpus.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        Some((session, dir))
+    }
+
+    #[test]
+    fn the_linux_corpus_passes_every_output_invariant() {
+        let Some((mut session, _dir)) = linux_corpus(false) else {
+            return;
+        };
+        let report = lint(&mut session, usize::MAX, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert!(
+            report.functions >= 25,
+            "the ELF corpus should expose at least 25 functions, found {}",
+            report.functions
+        );
+    }
+
+    #[test]
+    fn the_stripped_linux_corpus_is_discovered_from_eh_frame() {
+        let Some((session, _dir)) = linux_corpus(true) else {
+            return;
+        };
+        let functions = session.functions().unwrap();
+        // No `.symtab`: every function here comes from `.eh_frame` FDEs.
+        assert!(
+            functions.len() >= 20,
+            "only {} functions found in the stripped object",
+            functions.len()
+        );
+    }
+
+    #[test]
+    fn the_linux_corpus_keeps_its_snapshots() {
+        let Some((mut session, _dir)) = linux_corpus(false) else {
+            return;
+        };
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/elf");
+        if !dir.exists() {
+            eprintln!("skipping: no committed ELF snapshots yet");
+            return;
+        }
+        let report = check_golden(&mut session, &dir).unwrap();
+        assert!(report.mismatched.is_empty(), "{:?}", report.mismatched);
+        assert!(report.missing.is_empty(), "{:?}", report.missing);
+    }
     #[test]
     fn lint_catches_each_invariant_violation() {
         let kinds = |text: &str| -> Vec<LintKind> {

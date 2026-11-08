@@ -23,6 +23,9 @@ pub fn categorize(api: &str) -> &'static str {
                 "QUERYPERFORMANCECOUNTER",
                 "GETSYSTEMTIMEASFILETIME",
                 "NTSETINFORMATIONTHREAD",
+                // POSIX: a tracer attached to this process is being detected/evaded.
+                "PTRACE",
+                "PRCTL",
             ],
         ),
         (
@@ -47,7 +50,10 @@ pub fn categorize(api: &str) -> &'static str {
             ],
         ),
         ("registry", &["REG"]),
-        ("crypto", &["CRYPT", "BCRYPT", "NCRYPT", "CERT"]),
+        (
+            "crypto",
+            &["CRYPT", "BCRYPT", "NCRYPT", "CERT", "OPENSSL", "EVP_"],
+        ),
         (
             "service",
             &[
@@ -67,6 +73,7 @@ pub fn categorize(api: &str) -> &'static str {
                 "SLEEP",
                 "CREATEMUTEX",
                 "CREATEEVENT",
+                "PTHREAD",
             ],
         ),
         (
@@ -86,6 +93,13 @@ pub fn categorize(api: &str) -> &'static str {
                 "FREELIBRARY",
                 "WINEXEC",
                 "SHELLEXECUTE",
+                // POSIX: fork/exec, signals and dynamic loading.
+                "FORK",
+                "EXEC",
+                "SYSTEM",
+                "WAITPID",
+                "KILL",
+                "DLOPEN",
             ],
         ),
         (
@@ -104,6 +118,19 @@ pub fn categorize(api: &str) -> &'static str {
                 "SETFILEATTRIBUTES",
                 "SETFILEPOINTER",
                 "CREATEDIRECTORY",
+                // POSIX stdio and directory calls.
+                "FOPEN",
+                "FREAD",
+                "FWRITE",
+                "FCLOSE",
+                "UNLINK",
+                "RENAME",
+                "MKDIR",
+                "OPENDIR",
+                "READDIR",
+                "CHMOD",
+                "TRUNCATE",
+                "LSEEK",
             ],
         ),
         (
@@ -129,6 +156,11 @@ pub fn categorize(api: &str) -> &'static str {
                 "GLOBALALLOC",
                 "MALLOC",
                 "FREE",
+                "CALLOC",
+                "REALLOC",
+                // POSIX memory mapping.
+                "MMAP",
+                "MUNMAP",
             ],
         ),
     ];
@@ -157,5 +189,21 @@ mod tests {
         assert_eq!(categorize("VirtualAlloc"), "process");
         assert_eq!(categorize("CryptAcquireContextW"), "crypto");
         assert_eq!(categorize("SomeUnknownApi"), "other");
+    }
+
+    #[test]
+    fn categorizes_common_posix_apis() {
+        assert_eq!(categorize("ptrace"), "anti-analysis");
+        assert_eq!(categorize("socket"), "network");
+        assert_eq!(categorize("connect"), "network");
+        assert_eq!(categorize("fork"), "process");
+        assert_eq!(categorize("execve"), "process");
+        assert_eq!(categorize("dlopen"), "process");
+        assert_eq!(categorize("pthread_create"), "thread");
+        assert_eq!(categorize("fopen"), "file");
+        assert_eq!(categorize("opendir"), "file");
+        assert_eq!(categorize("mmap"), "memory");
+        assert_eq!(categorize("malloc"), "memory");
+        assert_eq!(categorize("EVP_EncryptInit"), "crypto");
     }
 }

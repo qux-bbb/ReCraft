@@ -76,11 +76,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # ADR-009: the headless core is portable. This job proves it on every push,
       # which is also what the ELF work needs (Linux-built corpus samples).
+      - name: build ELF corpus (gcc)
+        run: bash corpus/build-linux.sh
       - name: cargo test (portable crates)
         run: |
           cargo test -p recraft-common -p recraft-format -p recraft-decode -p recraft-ir \
             -p recraft-storage -p recraft-core -p recraft-analysis -p recraft-decompile \
             -p recraft-query -p recraft-mcp -p recraft-ai
+      - name: ELF corpus quality gate
+        run: |
+          set -euo pipefail
+          project="$RUNNER_TEMP/elf-corpus.rcraft"
+          cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus.so -o "$project"
+          cargo run --quiet -p recraft-cli -- analyze "$project"
+          cargo run --quiet -p recraft-cli -- metrics "$project" --min-structured 0.6 --min-coverage 0.9
+          cargo run --quiet -p recraft-cli -- lint "$project"
+          if [ -d tests/golden/elf ]; then
+            # Committed snapshots: this is the regression gate.
+            cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf --check
+          else
+            # First run on a clean tree: create them, then prove the round trip.
+            cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf
+            cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf --check
+          fi
+      - name: upload ELF snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: elf-golden
+          path: tests/golden/elf
+          if-no-files-found: ignore
 
   package:
     name: windows package (zip)

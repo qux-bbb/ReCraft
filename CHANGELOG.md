@@ -22,6 +22,14 @@
   工具链。已知限制：仅 ELF64 小端 x86-64（ARM64 随 ARM64 lifter）、不解析 DWARF/IFUNC/
   符号版本、`.symtab` 是主要命名来源（stripped 二进制靠 `.eh_frame` 划范围）。
 
+- **Linux ELF 语料与门禁。** `corpus/linux/functions.c` 是同一组形状的可移植 C 样本
+  （30 个导出函数，外加 `printf`/`malloc`/`memcpy`/`getenv` 等真实 libc 调用，因此能看到
+  PLT/GOT 重定位），`corpus/build-linux.sh` 用 `gcc -O2` 打成 `libcorpus.so` 并产出
+  `strip --strip-all` 的副本。CI 的 Linux 作业现在会：编译语料 → 跑可移植 crate 的测试
+  （含 ELF 的 lint 门禁与 stripped 二进制的 `.eh_frame` 函数发现）→ 生成/校验 ELF golden。
+  API 行为分类补了 POSIX 对应项（`ptrace`、`fork`/`exec`、`dlopen`、`fopen`/`opendir`、
+  `mmap`、`pthread_*`、OpenSSL）。
+
 ### 变更
 
 - **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`
