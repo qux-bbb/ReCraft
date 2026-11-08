@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use recraft_analysis::{analyze, persist};
+use recraft_analysis::{analyze, extract_strings, persist, persist_strings};
 use recraft_common::{Address, AddressRange, Error, Result, demangle};
 use recraft_core::{CodeData, Command, CommentKind, Session, StructDef, StructField};
 use recraft_decompile::pseudocode_l0;
@@ -251,6 +251,14 @@ enum Commands {
         /// Export only the functions that still contain a fallback jump.
         #[arg(long)]
         only_unstructured: bool,
+    },
+    /// Decompile the functions listed by a DecBench eval kit into a submission.
+    Decbench {
+        /// Unpacked eval kit directory (contains `functions.json` and `binaries/`).
+        kit: PathBuf,
+        /// Where to write `results.json` and the per-binary `.c` files.
+        #[arg(long, short = 'o')]
+        out: PathBuf,
     },
     /// Run automatic analysis (function discovery) and persist it into the project.
     Analyze {
@@ -786,6 +794,7 @@ fn run(cli: Cli) -> Result<()> {
             println!("wrote {written} files to {}", dir.display());
             Ok(())
         }
+        Commands::Decbench { kit, out } => cmd_decbench(&kit, &out),
         Commands::Rename {
             project,
             addr,
@@ -915,8 +924,8 @@ fn materialize_project(input: &Path) -> Result<MaterializedProject> {
         let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false)?;
         let result = analyze(&mut session)?;
         persist(&mut session, &result)?;
-        let strings = recraft_analysis::extract_strings(&mut session, 4, 4_000_000)?;
-        recraft_analysis::persist_strings(&mut session, &strings)?;
+        let strings = extract_strings(&mut session, 4, 4_000_000)?;
+        persist_strings(&mut session, &strings)?;
     }
     Ok(MaterializedProject {
         path: project,
@@ -1125,6 +1134,156 @@ fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
 }
 
 // ----------------------------------------------------------------- import ----
+
+// --------------------------------------------------------------- decbench ----
+
+/// Decompile the functions a DecBench eval kit asks for, in the kit's submission
+/// layout: one whole-binary `.c` per binary plus a `results.json` mapping each
+/// function identifier to the address the kit listed.
+fn cmd_decbench(kit: &Path, out: &Path) -> Result<()> {
+    let manifest_path = kit.join("functions.json");
+    let manifest = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        Error::invalid_argument(format!("cannot read {}: {error}", manifest_path.display()))
+    })?;
+    let manifest: Value = serde_json::from_str(&manifest).map_err(|error| {
+        Error::invalid_argument(format!("cannot parse {}: {error}", manifest_path.display()))
+    })?;
+    let public = manifest
+        .get("public")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::invalid_argument("functions.json has no `public` map"))?;
+
+    std::fs::create_dir_all(out)?;
+    let mut results = serde_json::Map::new();
+    let mut written_binaries = 0usize;
+    let mut written_functions = 0usize;
+    let mut skipped = 0usize;
+
+    for (binary, addresses) in public {
+        let path = kit.join("binaries").join(binary);
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skip {binary}: not in binaries/");
+            skipped += 1;
+            continue;
+        };
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("eval.rcraft");
+        let mut session = match Session::create(&project, &bytes, &mut |_, _| {}, &|| false) {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!("skip {binary}: {error}");
+                skipped += 1;
+                continue;
+            }
+        };
+        let result = analyze(&mut session)?;
+        persist(&mut session, &result)?;
+        let strings = extract_strings(&mut session, 4, 4_000_000)?;
+        persist_strings(&mut session, &strings)?;
+
+        let mut bodies = Vec::new();
+        let mut functions = serde_json::Map::new();
+        if let Some(list) = addresses.as_array() {
+            for address in list {
+                let Some(text) = address.as_str() else {
+                    continue;
+                };
+                let Some(addr) = parse_hex_address(text) else {
+                    continue;
+                };
+                let Ok(pseudo) = recraft_decompile::pseudocode_l2(&session, Address::new(addr))
+                else {
+                    continue;
+                };
+                let body = pseudo
+                    .lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let Some(identifier) = function_identifier(&body) else {
+                    continue;
+                };
+                functions.insert(identifier, Value::String(text.to_owned()));
+                bodies.push(body);
+            }
+        }
+        if bodies.is_empty() {
+            skipped += 1;
+            continue;
+        }
+
+        let stem = Path::new(binary)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(binary);
+        let file_name = format!("{stem}.c");
+        let mut text = String::new();
+        for body in bodies {
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&body);
+            text.push('\n');
+        }
+        std::fs::write(out.join(&file_name), text)?;
+        written_functions += functions.len();
+        results.insert(
+            file_name,
+            json!({ "binary": binary, "functions": Value::Object(functions) }),
+        );
+        written_binaries += 1;
+    }
+
+    let submission = json!({
+        "decompiler": { "name": "recraft", "version": env!("CARGO_PKG_VERSION") },
+        "results": Value::Object(results),
+    });
+    let text = serde_json::to_string_pretty(&submission)
+        .map_err(|error| Error::internal(format!("serialize results.json: {error}")))?;
+    std::fs::write(out.join("results.json"), text)?;
+    println!(
+        "wrote {written_binaries} binaries / {written_functions} functions ({skipped} skipped) to {}",
+        out.display()
+    );
+    Ok(())
+}
+
+/// Parse a kit address (`"0x1234"` or bare hex).
+fn parse_hex_address(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let text = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    u64::from_str_radix(text, 16).ok()
+}
+
+/// The identifier of the top-level function definition in a rendered chunk.
+fn function_identifier(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || !line.ends_with('{') {
+            continue;
+        }
+        let Some(open) = line.find('(') else {
+            continue;
+        };
+        let head = line[..open].trim_end();
+        let name = head
+            .rsplit(|character: char| character.is_whitespace() || character == '*')
+            .next()?;
+        let valid = !name.is_empty()
+            && !name.starts_with(|character: char| character.is_ascii_digit())
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_');
+        if valid {
+            return Some(name.to_owned());
+        }
+    }
+    None
+}
 
 fn cmd_import(file: &Path, out: &Path) -> Result<()> {
     // Name the file: the OS message alone ("the system cannot find the file") does not say which
@@ -3498,6 +3657,23 @@ mod tests {
         ));
         // Only stdout print failures are treated as the pipe case.
         assert!(!is_broken_pipe_message("os error 32"));
+    }
+
+    #[test]
+    fn decbench_helpers_read_kit_addresses_and_identifiers() {
+        assert_eq!(parse_hex_address("0x401000"), Some(0x40_1000));
+        assert_eq!(parse_hex_address("401000"), Some(0x40_1000));
+        assert_eq!(parse_hex_address("0x"), None);
+
+        let body =
+            "// L2 structure recovery (1 blocks)\nint32 sub_1030(void) {\n    return 1;\n}\n";
+        assert_eq!(function_identifier(body).as_deref(), Some("sub_1030"));
+        assert_eq!(
+            function_identifier("int32 *ptr_fn(void) {"),
+            Some("ptr_fn".to_owned())
+        );
+        // Names that are not C identifiers are skipped rather than reported.
+        assert_eq!(function_identifier("int32 recraft::square(void) {"), None);
     }
 
     #[test]

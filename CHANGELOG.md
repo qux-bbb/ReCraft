@@ -30,6 +30,11 @@
   API 行为分类补了 POSIX 对应项（`ptrace`、`fork`/`exec`、`dlopen`、`fopen`/`opendir`、
   `mmap`、`pthread_*`、OpenSSL）。
 
+- **DecBench 对照可用。** 新增 `recraft-cli decbench <kit> -o <dir>`：读 DecBench 评测套件的
+  `functions.json`，逐二进制 import/analyze 后按目标地址渲染 L2 伪 C，写成套件要求的
+  `results/<bin>.c` + `results.json`。sample-set（223 个二进制、250 个函数）实测 147 个
+  二进制产出、`package.py` 校验通过，耗时约 65 秒；指标含义、实测数字与差距见
+  `docs/DECBENCH.md`。
 - **Itanium C++ 名字可读了。** `recraft-common::demangle` 在 MSVC 与 Rust 之后新增 Itanium
   ABI 分支（`cpp_demangle`，MIT/Apache）：ELF 上的 `_Z…`、Mach-O 的 `__Z…` 现在显示为
   `recraft::square(int)` 这样的名字，并随符号名进入名字表。配套加了
@@ -38,6 +43,10 @@
 
 ### 修复
 
+- **重叠段不再撞 UNIQUE 约束。** 真实 ELF 里 `.tbss` 与 `.bss` 同址（PE 也可能重叠），
+  `Segments::from_image` 现在按地址排序后丢弃落在前一段内部的段（相邻段保留），修复了
+  `UNIQUE constraint failed: segment.start` 导致整个二进制打不开的问题；DecBench 套件里
+  另有 5 个 ELF64 因此从跳过变可用。
 - **`recraft-cli … | head` 不再 panic。** Rust 默认忽略 `SIGPIPE`，管道被消费方提前关闭时
   `println!` 会以 broken pipe 失败并 panic（退出码 101）。现在 Unix 恢复 `SIGPIPE` 的默认
   行为（安静退出，状态 141），Windows 把 `os error 109/232` 的 stdout 写失败转成安静退出

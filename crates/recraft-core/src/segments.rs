@@ -147,7 +147,21 @@ pub fn from_image(image: &Image) -> Vec<Segment> {
     }
 
     segments.sort_by_key(|segment| segment.range.start);
-    segments
+    // Real ELF objects alias addresses: `.tbss` starts exactly where `.bss` does, and
+    // a note section can sit inside the header range. The address space is a single
+    // mapping, so keep the first (lowest) view and drop later segments that start
+    // inside it; adjacent segments (start == previous end) are kept.
+    let mut deduped: Vec<Segment> = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let overlaps = deduped
+            .last()
+            .is_some_and(|previous| segment.range.start < previous.range.end);
+        if overlaps {
+            continue;
+        }
+        deduped.push(segment);
+    }
+    deduped
 }
 
 #[cfg(test)]
@@ -173,6 +187,18 @@ mod tests {
             overlay_file_offset: None,
             file_size: 0x3000,
             warnings: Vec::new(),
+        }
+    }
+
+    fn section(name: &str, va: u64, virtual_size: u64, raw_size: u32) -> Section {
+        Section {
+            name: name.to_owned(),
+            va: Address::new(va),
+            virtual_size,
+            raw_offset: 0x400,
+            raw_size,
+            characteristics: 0x4000_0040,
+            ..Section::default()
         }
     }
 
@@ -217,5 +243,27 @@ mod tests {
         let data = &segments[2];
         assert_eq!(data.kind, SegmentKind::Bss); // virtual size > raw size
         assert!(data.perm.is_writable());
+    }
+
+    #[test]
+    fn aliased_sections_do_not_duplicate_a_segment_start() {
+        // `.tbss` starts exactly where `.bss` does in real ELF objects (and PE can
+        // alias too); the address space is one mapping, so only the first survives.
+        let segments = from_image(&image(vec![
+            section(".data", 0x1400_1000, 0x200, 0x200),
+            section(".bss", 0x1400_2000, 0x400, 0),
+            section(".tbss", 0x1400_2000, 0x400, 0),
+            section(".edata", 0x1400_2600, 0x100, 0x100),
+        ]));
+        let starts: Vec<u64> = segments
+            .iter()
+            .map(|segment| segment.range.start.get())
+            .collect();
+        let mut unique = starts.clone();
+        unique.dedup();
+        assert_eq!(starts, unique, "duplicate segment starts: {starts:?}");
+        assert!(segments.iter().any(|segment| segment.name == ".edata"));
+        assert!(segments.iter().any(|segment| segment.name == ".bss"));
+        assert!(!segments.iter().any(|segment| segment.name == ".tbss"));
     }
 }
