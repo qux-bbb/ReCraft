@@ -61,5 +61,7 @@ DCO），不需要 CLA，也不做版权转让。
 
 ## 10. 什么时候有公开预览？
 
-里程碑见 [docs/ROADMAP.md](ROADMAP.md)。M0–M4 的功能与产物已落地；公开预览待代码签名与
-干净 VM 复验。预览前检查清单在 [docs/M4.md](M4.md)。
+已经发布了：**0.1.0（技术预览）** 的 zip / MSI 在
+[GitHub Releases](https://github.com/qux-bbb/ReCraft/releases)，本版未签名（SmartScreen
+会提示），请用 `SHA256SUMS.txt` 校验。里程碑见 [docs/ROADMAP.md](ROADMAP.md)，发布检查
+清单见 [docs/M4.md](M4.md)。

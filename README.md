@@ -2,14 +2,16 @@
 
 **简体中文** | [English](README.en.md)
 
-> **状态：M3 已完成，M4 功能与产物完成；公开预览待代码签名与干净 VM 复验。**
+> **状态：0.1.0（技术预览）已发布** —— M0–M4 完成，发布包见
+> [Releases](https://github.com/qux-bbb/ReCraft/releases)。
 > 支持导入/分析 PE32/PE32+（x64 + Win32）；带签名、ABI 和类型的结构化伪 C；通过带撤销的
 > 日志命令总线执行重命名/注释/原型/结构体类型写入；MCP 服务器（默认只读，`--write` 开写
 > 工具）；AI 辅助（解释 / 重命名建议 / 初筛）及 propose-apply UI。
 > 质量门禁：语料语义覆盖率 **97.4%**、结构化率 **100%**；真实样本 notepad 覆盖率
 > **99.6%**、结构化 **97.6%**（494/506）；crackme **92.9%**（460/495）、Go
 > **91.9%**（2,998/3,261）；1 GiB 样本：导入约 4 秒，
-> 分析约 0.3 秒，峰值 5.6 MiB（debug）。预览清单见 [`docs/M4.md`](docs/M4.md)，
+> 分析约 0.3 秒，峰值 5.6 MiB（debug）。发布包未签名（SmartScreen 会提示“未知发布者”），
+> 请用 `SHA256SUMS.txt` 校验；预览清单见 [`docs/M4.md`](docs/M4.md)，
 > 常见问题见 [`docs/FAQ.md`](docs/FAQ.md)。
 
 ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的原生桌面反汇编器与反编译器，

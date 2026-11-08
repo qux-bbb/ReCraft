@@ -2,8 +2,8 @@
 
 [简体中文](README.md) | **English**
 
-> **Status: M3 complete; M4 features and artifacts are complete. The public preview
-> awaits code signing and a clean-VM re-check.** Import/analyze PE32/PE32+
+> **Status: 0.1.0 (technical preview) is out** — M0–M4 are complete; build artifacts are on
+> [Releases](https://github.com/qux-bbb/ReCraft/releases). Import/analyze PE32/PE32+
 > (x64 + Win32), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type writes through a journaled command bus with undo, an MCP server (read-only
 > by default, `--write` enables the write tools), and provider-backed AI (explain / rename
@@ -11,7 +11,8 @@
 > Quality gates: corpus semantic coverage **97.4%**, structured rate **100%**; notepad
 > **99.6%** coverage and **97.6%** structured (494/506); crackme **92.9%** (460/495),
 > Go **91.9%** (2,998/3,261); 1 GiB
-> sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). See
+> sample: import ~4 s, analyze ~0.3 s, peak 5.6 MiB (debug). The builds are not code-signed
+> (SmartScreen will warn) — verify them against `SHA256SUMS.txt`. See
 > [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
 
 ReCraft is an AI-native reverse-engineering platform: a native desktop disassembler and
