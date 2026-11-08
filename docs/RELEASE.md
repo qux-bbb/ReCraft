@@ -61,6 +61,36 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
   -RequireMsi`（`dotnet tool restore` 还原 WiX 5.0.2）→ `verify-package.ps1` →
   `verify-msi.ps1`（结构/载荷 + 安装→CLI→卸载）→ 上传 `recraft-windows-x64-msi`。
 
+## 本机验证（2026-11-08，0.1.0 发布前重打）
+
+上一节的包是 2026-11-03 的，落后约 150 个提交（MCP 写模式/分页、十几个反编译 pass、
+UI 修复都不在里面，`VERSION.txt` 还留着已移除的商业许可字样）。0.1.0 前用 HEAD 重打：
+
+```
+[package] zip: dist\recraft-v0.1.0-windows-x64.zip (14.9 MiB)
+[package] msi: dist\recraft-v0.1.0-windows-x64.msi (13.4 MiB)
+[package] SHA256: dist\SHA256SUMS.txt
+[verify] SHA256SUMS matches recraft-v0.1.0-windows-x64.zip
+[verify] MSI SHA256 + compound-file header OK (13.4 MiB)
+[verify] analyze/decompile/AI/metrics OK (functions=506)
+[verify] PACKAGE PASS
+[msi] structure OK (8 table checks, per-machine)
+[msi] payload OK (10 files + 40 docs, byte-identical to dist\ReCraft-0.1.0)
+[msi] PASS (structure + payload)          # -SkipInstall：本机提示符未提权
+```
+
+同批跑过的其它门禁（Windows 10 x64，MSVC 19.4x）：
+
+- `demo.ps1 -Recraft dist\ReCraft-0.1.0\recraft-cli.exe` → `DEMO PASS`（AI 步骤按设计
+  在未配置 provider 时跳过）
+- `e2e.ps1` → `E2E PASS`；`ai-cache-smoke.ps1` → `PASS`
+- `bench-large.ps1 -OverlayMB 1024` → import 8.75 s、analyze 0.57 s、峰值 1.9 MiB，`PASS`
+- `lint` notepad 506 / crackme 495 → 0 findings；`golden --check` 789/789
+- `cargo deny check licenses bans sources` → 全部 ok
+
+包内 `VERSION.txt` 的 license 行已是 `AGPL-3.0-only (see LICENSE)`，`serve-mcp` 带
+`--write`。完整安装→CLI→卸载仍按下一节说明在提权提示符或 CI msi job 里复验。
+
 ## 本机验证（2026-11-03，改为 MSI 单安装包后重跑）
 
 ```
