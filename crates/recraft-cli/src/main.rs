@@ -546,7 +546,7 @@ fn restore_sigpipe() {
     // SAFETY: `signal` only changes this process's disposition; the constants are the
     // POSIX values on every Unix target we build for.
     unsafe {
-        extern "C" {
+        unsafe extern "C" {
             fn signal(signum: i32, handler: usize) -> usize;
         }
         const SIGPIPE: i32 = 13;
