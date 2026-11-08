@@ -8,7 +8,7 @@
 #   pwsh -File scripts/bench-large.ps1 -Json               # machine-readable result
 #
 # Measures:
-#   - import wall time (target < 60 s)
+#   - import wall time (target < 120 s)
 #   - analyze wall time (target < 5 s: interactive budget for a mapped-code sample)
 #   - peak working set of the analyze process (target <= 512 MiB)
 #
@@ -18,7 +18,10 @@
 param(
     [string]$PEFile = (Join-Path $env:SystemRoot 'System32\notepad.exe'),
     [int]$OverlayMB = 1024,
-    [double]$ImportMaxSeconds = 60.0,
+    # A dev box imports 1 GiB in ~9 s; a shared windows-latest runner has been seen at
+    # 68 s when the packaging jobs compete for disk, so the default keeps an
+    # order-of-magnitude regression gate without failing on runner I/O variance.
+    [double]$ImportMaxSeconds = 120.0,
     [double]$AnalyzeMaxSeconds = 5.0,
     [int]$MemoryMaxMiB = 512,
     [string]$Recraft = '',
