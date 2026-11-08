@@ -22,7 +22,13 @@ AGPL-3.0-only (no GPL-2.0-only / GPL-3.0 code is used). Direct dependencies:
 | clap | CLI parsing | MIT OR Apache-2.0 |
 | tracing | diagnostics | MIT |
 | ureq + rustls | HTTPS transport for LLM providers | MIT OR Apache-2.0 |
+| webpki-roots (via ureq/rustls) | bundled CA roots | CDLA-Permissive-2.0 |
+| arboard → clipboard-win / error-code | desktop clipboard | BSL-1.0 (Boost) |
+| epaint default fonts | fallback glyphs | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 |
 | tempfile | tests and temporary projects | MIT OR Apache-2.0 |
+
+`BSL-1.0`、`CDLA-Permissive-2.0` 与字体许可（`OFL-1.1`、`Ubuntu-font-1.0`）都不是互斥型
+copyleft，与 AGPL-3.0-only 兼容；两种字体许可都允许把字体作为二进制的一部分嵌入分发。
 
 Animation/UI fonts: the build embeds a subset of **Noto Sans Mono CJK**, licensed under the
 SIL Open Font License 1.1. Malware samples, signatures and analysis outputs are never
