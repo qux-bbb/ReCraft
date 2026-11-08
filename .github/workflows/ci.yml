@@ -94,6 +94,17 @@ jobs:
           cargo run --quiet -p recraft-cli -- metrics "$project" --json | jq -c '{coverage, intrinsic_top}'
           cargo run --quiet -p recraft-cli -- metrics "$project" --min-structured 0.6 --min-coverage 0.9
           cargo run --quiet -p recraft-cli -- lint "$project"
+          # A closed pipe (`| head`) must exit quietly, not panic with status 101.
+          cargo build --quiet -p recraft-cli
+          set +e
+          ./target/debug/recraft-cli funcs "$project" | head -n 1 > /dev/null
+          pipe_status=${PIPESTATUS[0]}
+          set -e
+          echo "closed-pipe exit status: $pipe_status"
+          if [ "$pipe_status" -eq 101 ]; then
+            echo "recraft-cli panicked on a closed pipe"
+            exit 1
+          fi
           if [ -d tests/golden/elf ]; then
             # Committed snapshots: this is the regression gate.
             cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf --check

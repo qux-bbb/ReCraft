@@ -38,6 +38,10 @@
 
 ### 修复
 
+- **`recraft-cli … | head` 不再 panic。** Rust 默认忽略 `SIGPIPE`，管道被消费方提前关闭时
+  `println!` 会以 broken pipe 失败并 panic（退出码 101）。现在 Unix 恢复 `SIGPIPE` 的默认
+  行为（安静退出，状态 141），Windows 把 `os error 109/232` 的 stdout 写失败转成安静退出
+  （状态 0）。CI 的 Linux 作业加了对应的回归检查。
 - **`endbr64`/`endbr32` 不再算未建模指令。** Ubuntu 的 gcc 默认开 `-fcf-protection`，在
   每个函数入口插一条 CET 落点；提升器此前把它当 `__asm`，于是第一版 Linux 语料的
   覆盖率只有 **84.8%**（43 个函数几乎每个一条）。现在与 `nop` 一样只产生 fallthrough，

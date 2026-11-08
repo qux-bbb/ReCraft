@@ -517,6 +517,8 @@ impl MarkKind {
 }
 
 fn main() -> ExitCode {
+    restore_sigpipe();
+    install_broken_pipe_hook();
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -525,6 +527,58 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Rust ignores `SIGPIPE`, so `recraft-cli funcs … | head` used to panic with a
+/// broken-pipe error instead of exiting quietly like every other Unix filter.
+/// Restoring the default disposition gives the expected behaviour (the process dies
+/// with `SIGPIPE`, exit status 141).
+#[cfg(unix)]
+fn restore_sigpipe() {
+    // SAFETY: `signal` only changes this process's disposition; the constants are the
+    // POSIX values on every Unix target we build for.
+    unsafe {
+        extern "C" {
+            fn signal(signum: i32, handler: usize) -> usize;
+        }
+        const SIGPIPE: i32 = 13;
+        const SIG_DFL: usize = 0;
+        signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_sigpipe() {}
+
+/// Windows has no `SIGPIPE`: the write fails with `ERROR_BROKEN_PIPE` and `println!`
+/// panics. Turn that one panic into a quiet exit, so `… | more` / `| head` behave.
+fn install_broken_pipe_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        if is_broken_pipe_message(message) {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+}
+
+/// Whether a panic message is the "the consumer closed the pipe" case.
+fn is_broken_pipe_message(message: &str) -> bool {
+    // std panics with "failed printing to stdout: <io error>". The OS error code is the
+    // stable part (the text is localized):
+    //   32  EPIPE / ERROR_BROKEN_PIPE on Unix ("Broken pipe")
+    //   109 ERROR_BROKEN_PIPE on Windows ("The pipe has been ended.")
+    //   232 ERROR_NO_DATA on Windows ("管道正在被关闭。")
+    message.starts_with("failed printing to stdout")
+        && ["os error 32", "os error 109", "os error 232"]
+            .iter()
+            .any(|code| message.contains(code))
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -3422,6 +3476,29 @@ fn cmd_redo(project: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_closed_pipe_panics() {
+        assert!(is_broken_pipe_message(
+            "failed printing to stdout: Broken pipe (os error 32)"
+        ));
+        assert!(is_broken_pipe_message(
+            "failed printing to stdout: The pipe has been ended. (os error 109)"
+        ));
+        assert!(is_broken_pipe_message(
+            "failed printing to stdout: 管道正在被关闭。 (os error 232)"
+        ));
+    }
+
+    #[test]
+    fn leaves_other_panics_alone() {
+        assert!(!is_broken_pipe_message("index out of bounds"));
+        assert!(!is_broken_pipe_message(
+            "failed printing to stdout: No space left on device (os error 28)"
+        ));
+        // Only stdout print failures are treated as the pipe case.
+        assert!(!is_broken_pipe_message("os error 32"));
+    }
 
     #[test]
     fn the_builtin_signatures_parse() {
