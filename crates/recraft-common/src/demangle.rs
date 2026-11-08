@@ -53,7 +53,8 @@ pub fn demangle(name: &str) -> Option<String> {
 
     // Itanium C++ (`_Z...`, GCC/Clang on ELF; `__Z...` from Mach-O objects). Rust's
     // legacy scheme shares the `_ZN` prefix, so this runs only after `try_demangle`
-    // declined the symbol.
+    // declined the symbol. Parameters are dropped: the L2 signature re-derives them
+    // from the ABI, and keeping both produced `int32 recraft::square(double)(int64 arg1)`.
     // Mach-O prefixes one more underscore (`__Z...`), so strip exactly that one.
     let itanium = if name.starts_with("_Z") {
         Some(name.to_owned())
@@ -62,7 +63,8 @@ pub fn demangle(name: &str) -> Option<String> {
     };
     if let Some(itanium) = itanium
         && let Ok(symbol) = cpp_demangle::Symbol::new(itanium.as_bytes())
-        && let Ok(text) = symbol.demangle()
+        && let Ok(text) =
+            symbol.demangle_with_options(&cpp_demangle::DemangleOptions::new().no_params())
     {
         let text = text.trim().to_owned();
         if !text.is_empty() && text != name {
