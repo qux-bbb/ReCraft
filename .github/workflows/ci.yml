@@ -107,7 +107,10 @@ jobs:
           cpp_project="$RUNNER_TEMP/elf-cpp.rcraft"
           cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus-cpp.so -o "$cpp_project"
           cargo run --quiet -p recraft-cli -- analyze "$cpp_project"
-          cargo run --quiet -p recraft-cli -- funcs "$cpp_project" | head -n 12
+          # Print the first names so the log shows the demangling; write to a file first
+          # because `| head` closes the pipe and Rust's stdout panics on EPIPE.
+          cargo run --quiet -p recraft-cli -- funcs "$cpp_project" > "$RUNNER_TEMP/cpp-funcs.txt"
+          head -n 12 "$RUNNER_TEMP/cpp-funcs.txt"
           cargo run --quiet -p recraft-cli -- lint "$cpp_project"
           if [ -d tests/golden/elf-cpp ]; then
             cargo run --quiet -p recraft-cli -- golden "$cpp_project" --dir tests/golden/elf-cpp --check
