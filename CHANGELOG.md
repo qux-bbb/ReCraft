@@ -30,6 +30,13 @@
   API 行为分类补了 POSIX 对应项（`ptrace`、`fork`/`exec`、`dlopen`、`fopen`/`opendir`、
   `mmap`、`pthread_*`、OpenSSL）。
 
+### 修复
+
+- **`endbr64`/`endbr32` 不再算未建模指令。** Ubuntu 的 gcc 默认开 `-fcf-protection`，在
+  每个函数入口插一条 CET 落点；提升器此前把它当 `__asm`，于是第一版 Linux 语料的
+  覆盖率只有 **84.8%**（43 个函数几乎每个一条）。现在与 `nop` 一样只产生 fallthrough，
+  并补了单元测试。
+
 ### 变更
 
 - **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`

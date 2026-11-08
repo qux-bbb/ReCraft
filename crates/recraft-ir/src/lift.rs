@@ -314,7 +314,9 @@ impl Lifter {
                 _ => self.intrinsic(insn, &mut stmts),
             },
             M::Ret | M::Retf | M::Iret => Flow::Return,
-            M::Nop => Flow::Fallthrough,
+            // CET landing pads: Ubuntu's gcc enables -fcf-protection by default, which puts
+            // endbr64 at every function entry. It has no source-level effect.
+            M::Nop | M::Endbr64 | M::Endbr32 => Flow::Fallthrough,
             M::Int3 => self.intrinsic(insn, &mut stmts),
             mnemonic => {
                 if let Some(kind) = condition_of(mnemonic) {
@@ -1539,6 +1541,21 @@ fn lift_one(bytes: &[u8], ip: u64) -> (Lifter, LiftedInsn) {
 mod tests {
     use super::*;
     use recraft_common::Address;
+
+    #[test]
+    fn endbr64_lifts_to_nothing() {
+        // f3 0f 1e fa: the CET landing pad Ubuntu's gcc puts at every entry.
+        let insn = recraft_decode::decode(
+            &[0xf3, 0x0f, 0x1e, 0xfa],
+            Address::new(0x1000),
+            recraft_decode::Mode::X64,
+        )
+        .expect("endbr64 decoded");
+        let mut lifter = Lifter::new();
+        let item = lifter.lift(&insn);
+        assert!(matches!(item.flow, Flow::Fallthrough));
+        assert!(item.stmts.is_empty(), "endbr64 must not produce statements");
+    }
 
     #[test]
     fn test_flags_support_signed_conditional_jumps() {

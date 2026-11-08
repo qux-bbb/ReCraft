@@ -89,6 +89,9 @@ jobs:
           project="$RUNNER_TEMP/elf-corpus.rcraft"
           cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus.so -o "$project"
           cargo run --quiet -p recraft-cli -- analyze "$project"
+          # Keep the intrinsic mix visible in the log: a regression there is what the
+          # coverage floor below is about.
+          cargo run --quiet -p recraft-cli -- metrics "$project" --json | jq -c '{coverage, intrinsic_top}'
           cargo run --quiet -p recraft-cli -- metrics "$project" --min-structured 0.6 --min-coverage 0.9
           cargo run --quiet -p recraft-cli -- lint "$project"
           if [ -d tests/golden/elf ]; then
