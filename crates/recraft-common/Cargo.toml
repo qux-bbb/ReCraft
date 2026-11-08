@@ -11,6 +11,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+cpp_demangle = "0.5.1"
 msvc-demangler = "0.11.0"
 rustc-demangle = "0.1.28"
 serde = { version = "1.0.229", features = ["derive"] }

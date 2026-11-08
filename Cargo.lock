@@ -806,6 +806,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpp_demangle"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0667304c32ea56cb4cd6d2d7c0cfe9a2f8041229db8c033af7f8d69492429def"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3038,6 +3047,7 @@ dependencies = [
 name = "recraft-common"
 version = "0.1.0"
 dependencies = [
+ "cpp_demangle",
  "msvc-demangler",
  "rustc-demangle",
  "serde",

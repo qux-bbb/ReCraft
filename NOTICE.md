@@ -16,7 +16,9 @@ AGPL-3.0-only (no GPL-2.0-only / GPL-3.0 code is used). Direct dependencies:
 | iced-x86 | x86/x64 decoder | MIT |
 | rusqlite (bundled) | project storage | MIT; bundled SQLite is public domain |
 | goblin / pelite | PE parsing helpers | MIT |
-| rustc-demangle | symbol demangling | MIT OR Apache-2.0 |
+| rustc-demangle | Rust symbol demangling | MIT OR Apache-2.0 |
+| msvc-demangler | MSVC C++ demangling | MIT/NCSA |
+| cpp_demangle | Itanium C++ demangling (ELF) | MIT OR Apache-2.0 |
 | rayon | parallel analysis | MIT OR Apache-2.0 |
 | serde / serde_json | serialization | MIT OR Apache-2.0 |
 | clap | CLI parsing | MIT OR Apache-2.0 |

@@ -30,6 +30,12 @@
   API 行为分类补了 POSIX 对应项（`ptrace`、`fork`/`exec`、`dlopen`、`fopen`/`opendir`、
   `mmap`、`pthread_*`、OpenSSL）。
 
+- **Itanium C++ 名字可读了。** `recraft-common::demangle` 在 MSVC 与 Rust 之后新增 Itanium
+  ABI 分支（`cpp_demangle`，MIT/Apache）：ELF 上的 `_Z…`、Mach-O 的 `__Z…` 现在显示为
+  `recraft::square(int)` 这样的名字，并随符号名进入名字表。配套加了
+  `corpus/linux/functions.cpp`（命名空间、类方法、重载、模板）与 CI 的 C++ 语料门禁
+  （`tests/golden/elf-cpp`）。
+
 ### 修复
 
 - **`endbr64`/`endbr32` 不再算未建模指令。** Ubuntu 的 gcc 默认开 `-fcf-protection`，在

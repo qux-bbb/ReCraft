@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! Symbol demangling for loader names (MSVC C++, Rust legacy and v0).
+//! Symbol demangling for loader names (MSVC and Itanium C++, Rust legacy and v0).
 
 use msvc_demangler::DemangleFlags;
 
@@ -51,6 +51,25 @@ pub fn demangle(name: &str) -> Option<String> {
         }
     }
 
+    // Itanium C++ (`_Z...`, GCC/Clang on ELF; `__Z...` from Mach-O objects). Rust's
+    // legacy scheme shares the `_ZN` prefix, so this runs only after `try_demangle`
+    // declined the symbol.
+    // Mach-O prefixes one more underscore (`__Z...`), so strip exactly that one.
+    let itanium = if name.starts_with("_Z") {
+        Some(name.to_owned())
+    } else {
+        name.strip_prefix("__Z").map(|rest| format!("_Z{rest}"))
+    };
+    if let Some(itanium) = itanium
+        && let Ok(symbol) = cpp_demangle::Symbol::new(itanium.as_bytes())
+        && let Ok(text) = symbol.demangle()
+    {
+        let text = text.trim().to_owned();
+        if !text.is_empty() && text != name {
+            return Some(text);
+        }
+    }
+
     None
 }
 
@@ -89,6 +108,19 @@ mod tests {
         let v0 = "_RNvCs15kBYyAo9fc_7mycrate4main";
         let demangled = demangle(v0).expect("v0 Rust name not demangled");
         assert!(demangled.contains("mycrate::main"), "{demangled}");
+    }
+
+    #[test]
+    fn demangles_itanium_cpp() {
+        // `foo::bar()` and `square(int)` in the Itanium ABI.
+        let method = demangle("_ZN3foo3barEv").expect("Itanium name not demangled");
+        assert!(method.contains("foo::bar"), "{method}");
+        let plain = demangle("_Z6squarei").expect("Itanium function not demangled");
+        assert!(plain.contains("square"), "{plain}");
+
+        // Mach-O object files add a leading underscore.
+        let macho = demangle("__Z6squarei").expect("Mach-O Itanium name not demangled");
+        assert!(macho.contains("square"), "{macho}");
     }
 
     #[test]

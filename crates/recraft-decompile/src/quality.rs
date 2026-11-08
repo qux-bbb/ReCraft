@@ -1114,15 +1114,10 @@ mod tests {
 
     /// The Linux ELF corpus, built by `corpus/build-linux.sh`. Like every other corpus
     /// binary it is a build product, so a clean checkout skips these tests.
-    fn linux_corpus(stripped: bool) -> Option<(Session, tempfile::TempDir)> {
-        let name = if stripped {
-            "libcorpus-stripped.so"
-        } else {
-            "libcorpus.so"
-        };
+    fn linux_corpus_file(file: &str) -> Option<(Session, tempfile::TempDir)> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../corpus/build/linux")
-            .join(name);
+            .join(file);
         let bytes = std::fs::read(path).ok()?;
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("linux-corpus.rcraft");
@@ -1130,6 +1125,15 @@ mod tests {
         let result = analyze(&mut session).unwrap();
         persist(&mut session, &result).unwrap();
         Some((session, dir))
+    }
+
+    fn linux_corpus(stripped: bool) -> Option<(Session, tempfile::TempDir)> {
+        let name = if stripped {
+            "libcorpus-stripped.so"
+        } else {
+            "libcorpus.so"
+        };
+        linux_corpus_file(name)
     }
 
     #[test]
@@ -1168,6 +1172,44 @@ mod tests {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/elf");
         if !dir.exists() {
             eprintln!("skipping: no committed ELF snapshots yet");
+            return;
+        }
+        let report = check_golden(&mut session, &dir).unwrap();
+        assert!(report.mismatched.is_empty(), "{:?}", report.mismatched);
+        assert!(report.missing.is_empty(), "{:?}", report.missing);
+    }
+
+    #[test]
+    fn the_cpp_elf_corpus_demangles_itanium_names() {
+        let Some((mut session, _dir)) = linux_corpus_file("libcorpus-cpp.so") else {
+            return;
+        };
+        let functions = session.functions().unwrap();
+        let mut demangled = 0;
+        for function in &functions {
+            if let Some(name) = session.name_at(function.start).unwrap()
+                && name.contains("recraft::")
+            {
+                demangled += 1;
+            }
+        }
+        assert!(
+            demangled >= 3,
+            "expected demangled Itanium names, got {demangled} of {} functions",
+            functions.len()
+        );
+        let report = lint(&mut session, usize::MAX, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+    }
+
+    #[test]
+    fn the_cpp_elf_corpus_keeps_its_snapshots() {
+        let Some((mut session, _dir)) = linux_corpus_file("libcorpus-cpp.so") else {
+            return;
+        };
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/elf-cpp");
+        if !dir.exists() {
+            eprintln!("skipping: no committed C++ ELF snapshots yet");
             return;
         }
         let report = check_golden(&mut session, &dir).unwrap();
