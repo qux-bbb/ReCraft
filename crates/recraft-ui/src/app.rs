@@ -37,6 +37,11 @@ const DATA_ROW_BYTES: u64 = 8;
 /// cannot stall the UI.
 const DATA_WALK_LIMIT: usize = 200_000;
 const MONO_SIZE: f32 = 12.5;
+/// Fraction of the font size by which the monospace CJK fallback is lifted so its
+/// baseline lines up with Consolas (see [`ui_fonts`]). The gap is proportional to the
+/// size, so the listing zoom keeps it correct at every step; epaint rounds the offset to
+/// whole points, which leaves at most 1 px at some sizes.
+const MONO_CJK_Y_OFFSET_FACTOR: f32 = -0.25;
 const ROW_HEIGHT: f32 = 15.0;
 const ZOOM_MIN: f32 = 0.75;
 const ZOOM_MAX: f32 = 2.0;
@@ -1418,7 +1423,6 @@ impl Default for ReCraftApp {
 
 impl ReCraftApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let mut app = Self {
             recent: load_recent(),
@@ -2365,55 +2369,7 @@ impl ReCraftApp {
     }
 
     fn install_fonts(&mut self, ctx: &egui::Context) {
-        let mut fonts = egui::FontDefinitions::default();
-        let candidates = [
-            ("consolas", "C:\\Windows\\Fonts\\consola.ttf"),
-            ("consolas_bold", "C:\\Windows\\Fonts\\consolab.ttf"),
-            ("segoeui", "C:\\Windows\\Fonts\\segoeui.ttf"),
-        ];
-        let mut loaded = false;
-        for (name, path) in candidates {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts
-                    .font_data
-                    .insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
-                loaded = true;
-            }
-        }
-        // CJK fallback (IDA's UI is English but ReCraft ships a Chinese UI too).
-        for (name, path) in [
-            ("cjk", "C:\\Windows\\Fonts\\msyh.ttc"),
-            ("cjk", "C:\\Windows\\Fonts\\simhei.ttf"),
-            ("cjk", "C:\\Windows\\Fonts\\simsun.ttc"),
-        ] {
-            if let Ok(bytes) = std::fs::read(path) {
-                let mut data = egui::FontData::from_owned(bytes);
-                data.index = 0;
-                fonts.font_data.insert(name.to_owned(), data.into());
-                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                    fonts
-                        .families
-                        .entry(family)
-                        .or_default()
-                        .push(name.to_owned());
-                }
-                loaded = true;
-                break;
-            }
-        }
-        for (name, family) in [
-            ("consolas", egui::FontFamily::Monospace),
-            ("segoeui", egui::FontFamily::Proportional),
-        ] {
-            if fonts.font_data.contains_key(name) {
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .insert(0, name.to_owned());
-            }
-        }
-        if loaded {
+        if let Some(fonts) = ui_fonts() {
             ctx.set_fonts(fonts);
         }
     }
@@ -4002,9 +3958,13 @@ impl ReCraftApp {
     }
 
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
+        // One font for the whole bar (IDA's status bar is uniform too). Mixing Body
+        // (13 px Segoe UI) and Monospace (12.5 px Consolas) labels in one row leaves
+        // their baselines ~3 px apart, because egui centres widget boxes in the row
+        // rather than aligning text baselines.
         egui::Panel::bottom("recraft_bottom").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.weak(self.t("status_au_idle"));
+                ui.label(RichText::new(self.t("status_au_idle")).monospace().weak());
                 ui.separator();
                 let color = if self.is_error {
                     Color32::from_rgb(0xe0, 0x6a, 0x6a)
@@ -4012,10 +3972,14 @@ impl ReCraftApp {
                     ui.visuals().weak_text_color()
                 };
                 if !self.status.is_empty() {
-                    ui.colored_label(color, &self.status);
+                    ui.label(RichText::new(self.status.as_str()).monospace().color(color));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak(self.t("ui_synchronized_with_hex_view"));
+                    ui.label(
+                        RichText::new(self.t("ui_synchronized_with_hex_view"))
+                            .monospace()
+                            .weak(),
+                    );
                     ui.separator();
                     if let Some((start, _)) = self.current_function() {
                         let name = self
@@ -4023,7 +3987,7 @@ impl ReCraftApp {
                             .as_ref()
                             .and_then(|session| session.name_at(start).ok().flatten())
                             .unwrap_or_else(|| format!("sub_{:x}", start.get()));
-                        ui.label(format!("{name}."));
+                        ui.label(RichText::new(format!("{name}.")).monospace());
                     }
                     if let Some(line) = self.disasm_rows.get(self.selected) {
                         let bytes = line
@@ -9108,28 +9072,84 @@ fn resolve_address(session: &Session, raw: &str) -> Result<Address, String> {
         .map_err(|_| format!("invalid address or unknown symbol: {raw}"))
 }
 
-fn install_fonts(ctx: &egui::Context) {
+/// IDA-like font stack: Consolas for code, Segoe UI for chrome, and a CJK face as the
+/// last fallback in both families.
+///
+/// `None` means no Windows font file could be read, in which case egui's built-in
+/// fonts stay installed (missing files must not blank out the UI).
+fn ui_fonts() -> Option<egui::FontDefinitions> {
     let mut fonts = egui::FontDefinitions::default();
-    for path in [
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
+    let mut loaded = false;
+    for (name, path) in [
+        ("consolas", "C:\\Windows\\Fonts\\consola.ttf"),
+        ("consolas_bold", "C:\\Windows\\Fonts\\consolab.ttf"),
+        ("segoeui", "C:\\Windows\\Fonts\\segoeui.ttf"),
     ] {
         if let Ok(bytes) = std::fs::read(path) {
             fonts
                 .font_data
-                .insert("cjk".to_owned(), egui::FontData::from_owned(bytes).into());
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .push("cjk".to_owned());
-            }
-            ctx.set_fonts(fonts);
-            return;
+                .insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
+            loaded = true;
         }
     }
+
+    // CJK fallback (IDA's UI is English but ReCraft ships a Chinese UI too).
+    //
+    // epaint does not align a fallback face on the Latin baseline: it centres the
+    // fallback's line box inside the row
+    // (`pos.y = face_ascent + 0.5 * (row_height - face_height)`, epaint's
+    // `text_layout.rs`). Microsoft YaHei's ascent is 1.06 em against Consolas' 0.74 em,
+    // so in monospace text every Chinese glyph would sit ~3 px lower than the Latin
+    // text around it. Segoe UI and YaHei happen to share ascent and row height at the
+    // sizes the UI uses, so only the monospace fallback needs the correction.
+    // Guarded by `cjk_monospace_baseline_matches_latin`.
+    for path in [
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simsun.ttc",
+    ] {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        // The tweak lives on `FontData`, so the two families need one entry each. They
+        // share a single leaked buffer instead of reading (and holding) the file twice.
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        fonts
+            .font_data
+            .insert("cjk".to_owned(), egui::FontData::from_static(bytes).into());
+        let mut aligned = egui::FontData::from_static(bytes);
+        aligned.tweak.y_offset_factor = MONO_CJK_Y_OFFSET_FACTOR;
+        fonts
+            .font_data
+            .insert("cjk_mono".to_owned(), aligned.into());
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("cjk".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("cjk_mono".to_owned());
+        loaded = true;
+        break;
+    }
+
+    for (name, family) in [
+        ("consolas", egui::FontFamily::Monospace),
+        ("segoeui", egui::FontFamily::Proportional),
+    ] {
+        if fonts.font_data.contains_key(name) {
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .insert(0, name.to_owned());
+        }
+    }
+
+    loaded.then_some(fonts)
 }
 
 #[cfg(test)]
@@ -9149,6 +9169,58 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Guardrail for the CJK fallback tweak: epaint centres a fallback face inside the
+    /// row instead of aligning baselines, so a CJK face with a taller ascent drifts
+    /// below the Latin text of the same line. Monospace text (output pane, listing,
+    /// status bar) must stay aligned. Skips when the Windows fonts are unavailable.
+    ///
+    /// `Glyph::pos.y` is the face's own baseline; epaint shifts the rendered bitmap by
+    /// `round(size * y_offset_factor)`, so that is the visible correction.
+    #[test]
+    fn cjk_monospace_baseline_matches_latin() {
+        use egui::emath::GuiRounding as _;
+
+        let Some(fonts) = ui_fonts() else {
+            return;
+        };
+        assert_eq!(
+            fonts.font_data["cjk_mono"].tweak.y_offset_factor, MONO_CJK_Y_OFFSET_FACTOR,
+            "the monospace CJK fallback must carry the baseline tweak"
+        );
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        // 11 px is the output pane, 12/12.5 the listing, 20 the zoomed-in listing.
+        for size in [11.0, 12.0, MONO_SIZE, 13.0, 20.0] {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                "已改 0x14",
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::monospace(size),
+                    ..Default::default()
+                },
+            );
+            let galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+            let baseline = |ch: char| {
+                galley.rows[0]
+                    .glyphs
+                    .iter()
+                    .find(|glyph| glyph.chr == ch)
+                    .map(|glyph| glyph.pos.y)
+                    .expect("glyph is in the galley")
+            };
+            let applied = (size * MONO_CJK_Y_OFFSET_FACTOR).round_ui();
+            let offset = baseline('已') + applied - baseline('0');
+            assert!(
+                offset.abs() <= 1.0,
+                "monospace {size}px: CJK baseline is {offset}px off the Latin baseline \
+                 after the tweak; re-tune MONO_CJK_Y_OFFSET_FACTOR"
+            );
+        }
     }
 
     /// Pane the dock shows in its focused leaf: the view that owns the screen right now.
