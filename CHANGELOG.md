@@ -43,6 +43,9 @@
 
 ### 修复
 
+- **冷片段合并只对 PE 生效。** `merge_pdata_functions` 是 `.pdata` 的概念（把落到下一段里的
+  冷片段接回原函数）；ELF 的范围来自 `.symtab`/`.eh_frame`，本来就精确，`analyze` 现在对
+  非 PE 格式直接按原样使用，不再套用 PE 的合并启发式。
 - **重叠段不再撞 UNIQUE 约束。** 真实 ELF 里 `.tbss` 与 `.bss` 同址（PE 也可能重叠），
   `Segments::from_image` 现在按地址排序后丢弃落在前一段内部的段（相邻段保留），修复了
   `UNIQUE constraint failed: segment.start` 导致整个二进制打不开的问题；DecBench 套件里

@@ -150,7 +150,17 @@ pub fn analyze_with_options(
         .iter()
         .map(|range| AddressRange::new(range.start, range.end))
         .collect();
-    let pdata_ranges = merge_pdata_functions(session, &raw_pdata)?;
+    // Cold-fragment merging is a PE `.pdata` concept: it re-attaches fragments that
+    // fall through into the next recorded range. ELF ranges come from `.symtab` /
+    // `.eh_frame` and are already exact, so they are taken verbatim.
+    let pdata_ranges = if session.format() == recraft_core::Format::Pe {
+        merge_pdata_functions(session, &raw_pdata)?
+    } else {
+        raw_pdata
+            .iter()
+            .map(|range| (range.start, range.end))
+            .collect()
+    };
     for (start, end) in &pdata_ranges {
         seed(
             &segments,
