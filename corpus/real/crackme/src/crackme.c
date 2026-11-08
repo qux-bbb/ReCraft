@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Copyright (c) 2026 ReCraft contributors
+ *
  * Simple Crackme v2.0  --  C edition
  *
  * A tiny crackme: it accepts exactly one input string.
