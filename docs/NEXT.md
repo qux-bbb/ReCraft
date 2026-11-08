@@ -471,8 +471,11 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
 - `__asm` 剩余 138 行：原子指令（`lock xadd`/`lock cmpxchg`/`xchg`）、单操作数
   `imul`/`mul`、间接 `jmp`、未建模标志的分支。前者可在 lifter 层展开为三条语句，
   后者需要更完整的标志建模。
-- lint 并行化：`Session` 是 `&mut`（渲染需要 lift 指令），需要先把渲染改成只读快照
-  才能按函数并行；当前 Go 全量 L1 自检约 9 分钟。
+- 已完成：**lint/渲染并行化**（2026-11-08）。渲染只需要读，`SessionView` 把这条读路径
+  抽成 trait，`Session`（`&self` + 内部可变缓存）与新的 `SessionSnapshot`（预读段字节与名字/
+  原型/字符串元数据，`Sync`）各实现一次；`recraft lint` 用 rayon 按函数并行。同时把
+  `DecodeCache` 命中路径的 O(缓存大小) LRU 扫描改成 O(1)。Go 3261 个函数的全量 L1 自检
+  从 **19 分 39 秒降到约 2.7 秒**，五套输出逐字节不变。
 - 伪 C 中 Go/C++ 符号名（`go:buildid`、`internal/abi.Name.ReadVarint`）不是合法 C 标识符，
   为便于与符号表对照而保留原样；若要合法化，需在渲染层做标识符清洗并同步 golden。
 

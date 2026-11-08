@@ -122,7 +122,7 @@ corpus 31/31、corpus86 32/32 不变。Go 全样本仍 **2998/3261（91.9%）**�
 （11-06 收尾报告确认结构率未变）。notepad 的 506 张快照已用当前构建重跑 `--check`，
 mismatched 0；notepad/crackme 的 L1+L2 `lint` 实测各 **0 findings**。
 
-`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels`、`inline asm statements`、`switch statements` 与 `max nesting depth`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 506（L1+L2 共 1012 份）、crackme 495、corpus 31、corpus86 32 在 2026-11-05 复测 **0 findings**；Go 3261 个函数只复测了前 300 个（L1，0 findings）与 60 份快照（`--check` 无变化），全量 lint 未重跑（耗时超过 15 分钟，改动只影响扫描可达性、不改变 Go 的函数集合与快照）。
+`recraft-cli metrics <project>` 一次打印上述全部计数（含 `labels`、`inline asm statements`、`switch statements` 与 `max nesting depth`）。`recraft-cli lint --level l1|l2` 对全部样本做不变量自检：notepad 506（L1+L2 共 1012 份）、crackme 495、corpus 31、corpus86 32 在 2026-11-05 复测 **0 findings**。**2026-11-08 全量复测**：Go 3261 个函数也全量跑了（L1 0 findings，L1+L2 亦 0 findings）；全量 L1 从 **19 分 39 秒**（19.7 分钟）降到 **约 2.7 秒**（渲染改为只读 `SessionView` 快照 + rayon 按函数并行，同时去掉 `DecodeCache` 命中路径的 O(缓存大小) 扫描）。五套 lint 输出（`--json`）逐字节不变；notepad 54.8 s → 8.5 s、crackme 40.5 s → 0.5 s（均为 L1+L2）。
 语义覆盖率达到 95% 目标：`push/pop`（栈语义）、`imul`、`cmov`、SSE 子集
 （`movd/movdqa`、`paddd/paddq`、`psrldq/pslldq`、`punpck*` 以外的 pack 运算、
 `xorps`、`addss/mulss/divss`、`cvttss2si` 等）已进入 IR。剩余 13 条 intrinsic 是

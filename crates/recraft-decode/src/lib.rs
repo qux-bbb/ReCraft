@@ -393,11 +393,17 @@ fn classify_flow(instruction: &iced_x86::Instruction) -> FlowKind {
     }
 }
 
-/// Bounded LRU-ish decode cache: insertion order is used for eviction.
+/// Bounded decode cache: insertion order is used for eviction (FIFO).
 ///
 /// Decoding is cheap, but the analysis pipeline decodes the same bytes many times
 /// (recursive descent + xrefs + formatting). The cache is keyed by address: callers
 /// must invalidate entries when bytes change (patches, user code/data edits).
+///
+/// A hit is a plain hash lookup. An earlier revision also moved the key to the back of
+/// `order` on every hit to approximate LRU, but that scan is O(cache size) and, once the
+/// cache filled up, dominated every analysis pass (a 3 261-function Go sample needed ~20
+/// minutes for `recraft lint` almost entirely in that scan). FIFO keeps the working set of
+/// one function, which is what matters here, without the per-hit cost.
 pub struct DecodeCache {
     entries: HashMap<u64, Insn>,
     order: VecDeque<u64>,
@@ -414,16 +420,7 @@ impl DecodeCache {
     }
 
     pub fn get(&mut self, addr: Address) -> Option<Insn> {
-        let insn = self.entries.get(&addr.get()).copied()?;
-        // Move to the back (most recently used). `VecDeque::retain` is O(n), but
-        // hitting the same line twice is the common case, so only touch when needed.
-        if let Some(position) = self.order.iter().position(|&key| key == addr.get()) {
-            if position + 1 != self.order.len() {
-                self.order.remove(position);
-                self.order.push_back(addr.get());
-            }
-        }
-        Some(insn)
+        self.entries.get(&addr.get()).copied()
     }
 
     pub fn insert(&mut self, insn: Insn) {

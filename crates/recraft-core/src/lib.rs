@@ -13,6 +13,7 @@ mod flags;
 mod script;
 mod segments;
 mod session;
+mod snapshot;
 mod view;
 
 pub use command::{
@@ -26,4 +27,5 @@ pub use recraft_format::{Arch, Format, Image, LoadedImage};
 pub use script::{COMMAND_TYPES, parse_command, resolve_address};
 pub use segments::{Perm, Segment, SegmentKind};
 pub use session::{FUNC_FLAG_AUTO, Session, UndoRecord, UndoReport};
-pub use view::{DisasmLine, FunctionInfo, StringEntry, XrefEntry};
+pub use snapshot::SessionSnapshot;
+pub use view::{DisasmLine, FunctionInfo, SessionView, StringEntry, XrefEntry};

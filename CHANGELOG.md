@@ -50,6 +50,12 @@
   `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与将来的
   AArch64 用无关键字约定。`recraft-core` 重导出 `Arch`/`Format`/`Image`/`LoadedImage`，
   反编译器因此不必直接依赖加载层。
+- **lint/渲染改为只读快照 + 按函数并行。** 反编译渲染现在只依赖只读的 `SessionView`
+  （`Session` 与新增的 `SessionSnapshot` 各实现一次；快照预读段字节、名字、原型、字符串
+  元数据并实现 `Sync`），`recraft lint` 用 rayon 按函数并行。同时把 `DecodeCache` 命中时
+  O(缓存大小) 的 LRU 扫描改成 O(1) 查找 + FIFO 淘汰。Go 3261 个函数的全量 L1 自检
+  **19 分 39 秒 → 约 2.7 秒**，L1+L2 约 14 秒；notepad 54.8 s → 8.5 s、crackme 40.5 s →
+  0.5 s；五套 lint 输出逐字节不变，789 份 golden 快照不变。
 
 ## [0.1.0] - 2026-11-08
 

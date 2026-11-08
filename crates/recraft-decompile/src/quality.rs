@@ -17,8 +17,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use rayon::prelude::*;
 use recraft_common::{Address, Error, Result};
-use recraft_core::Session;
+use recraft_core::{Session, SessionView};
 use recraft_ir::{Lifter, Stmt};
 
 use crate::{pseudocode_l1, pseudocode_l2};
@@ -341,31 +342,54 @@ pub fn lint(session: &mut Session, limit: usize, level: LintLevel) -> Result<Lin
             "no functions: run `analyze` before linting the output",
         ));
     }
+    if functions.is_empty() {
+        // `--limit 0` would otherwise look like a clean run that inspected nothing.
+        return Err(Error::invalid_argument(
+            "no texts checked: raise --limit above 0",
+        ));
+    }
     let mut report = LintReport {
         functions: total,
         checked: 0,
         findings: Vec::new(),
     };
-    for function in functions {
-        let name = session.name_at(function.start)?;
-        let mut texts = Vec::with_capacity(2);
-        if level != LintLevel::L2 {
-            texts.push(pseudocode_l1(session, function.start)?.text());
-        }
-        if level != LintLevel::L1 {
-            texts.push(pseudocode_l2(session, function.start)?.text());
-        }
-        for text in texts {
-            report.checked += 1;
-            for (kind, detail) in lint_text(&text) {
-                report.findings.push(LintFinding {
-                    start: function.start,
-                    name: name.clone(),
-                    kind,
-                    detail,
-                });
+    // Every function renders independently of every other one, so the whole set is checked
+    // on all cores through a read-only snapshot of the session (rendering itself needs
+    // nothing but `&SessionView`). The serial `&mut Session` loop this replaced needed many
+    // minutes on the Go sample.
+    let view = session.snapshot()?;
+    let per_text = match level {
+        LintLevel::Both => 2,
+        LintLevel::L1 | LintLevel::L2 => 1,
+    };
+    report.checked = functions.len() * per_text;
+    let batches: Result<Vec<Vec<LintFinding>>> = functions
+        .par_iter()
+        .map(|function| {
+            let name = view.name_at(function.start)?;
+            let mut texts = Vec::with_capacity(per_text);
+            if level != LintLevel::L2 {
+                texts.push(pseudocode_l1(&view, function.start)?.text());
             }
-        }
+            if level != LintLevel::L1 {
+                texts.push(pseudocode_l2(&view, function.start)?.text());
+            }
+            let mut findings = Vec::new();
+            for text in texts {
+                for (kind, detail) in lint_text(&text) {
+                    findings.push(LintFinding {
+                        start: function.start,
+                        name: name.clone(),
+                        kind,
+                        detail,
+                    });
+                }
+            }
+            Ok(findings)
+        })
+        .collect();
+    for findings in batches? {
+        report.findings.extend(findings);
     }
     // Stable order so a truncated report always shows the lowest addresses.
     report
@@ -841,6 +865,39 @@ mod tests {
             "structured {:.3}",
             report.structured_rate()
         );
+    }
+
+    /// The snapshot feeds the parallel lint, so it has to answer every render query exactly
+    /// like the live session does: a silent difference here would change the gates' output.
+    #[test]
+    fn snapshot_renders_the_same_text_as_the_session() {
+        let Some((session, _dir)) = corpus() else {
+            return;
+        };
+        let snapshot = session.snapshot().unwrap();
+        let functions = session.functions().unwrap();
+        assert!(!functions.is_empty());
+        for function in &functions {
+            for (level, live, from_snapshot) in [
+                (
+                    "L1",
+                    pseudocode_l1(&session, function.start).unwrap().text(),
+                    pseudocode_l1(&snapshot, function.start).unwrap().text(),
+                ),
+                (
+                    "L2",
+                    pseudocode_l2(&session, function.start).unwrap().text(),
+                    pseudocode_l2(&snapshot, function.start).unwrap().text(),
+                ),
+            ] {
+                assert_eq!(
+                    live,
+                    from_snapshot,
+                    "{level} text at {:#x} differs between session and snapshot",
+                    function.start.get()
+                );
+            }
+        }
     }
 
     /// Number of snapshots committed for the real-world crackme fixture (`corpus/real/crackme`),

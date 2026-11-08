@@ -13,6 +13,7 @@
 //! Threading: the session is single-threaded (the writer thread). UI/MCP readers use a
 //! separate `ReadOnlyProject` connection.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,7 +30,8 @@ use crate::command::{
 };
 use crate::flags::{Flags, FlagsStore};
 use crate::segments::{self, Segment};
-use crate::view::{DisasmLine, FunctionInfo, StringEntry, XrefEntry};
+use crate::snapshot::SessionSnapshot;
+use crate::view::{DisasmLine, FunctionInfo, SessionView, StringEntry, XrefEntry};
 
 const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
@@ -159,9 +161,11 @@ pub struct Session {
     arch: Arch,
     mode: Mode,
     segments: Vec<Segment>,
-    image_cache: ImageCache,
+    // The two front-end caches are interior-mutable so `Session` can satisfy `SessionView`
+    // with `&self`; rendering never mutates the project itself.
+    image_cache: RefCell<ImageCache>,
     flags: FlagsStore,
-    decoders: DecodeCache,
+    decoders: RefCell<DecodeCache>,
     /// Provenance stamped on every journal record this session writes (`cli`, `mcp`,
     /// `gui`, `ai`, ...): the journal is shared by every front end.
     origin: String,
@@ -209,9 +213,9 @@ impl Session {
             arch,
             segments,
             project,
-            image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
+            image_cache: RefCell::new(ImageCache::new(IMAGE_CACHE_PAGES)),
             flags: FlagsStore::new(FLAGS_CACHE_PAGES),
-            decoders: DecodeCache::new(DECODE_CACHE_ENTRIES),
+            decoders: RefCell::new(DecodeCache::new(DECODE_CACHE_ENTRIES)),
             origin: "user".to_owned(),
         })
     }
@@ -245,9 +249,9 @@ impl Session {
             arch,
             segments,
             project,
-            image_cache: ImageCache::new(IMAGE_CACHE_PAGES),
+            image_cache: RefCell::new(ImageCache::new(IMAGE_CACHE_PAGES)),
             flags: FlagsStore::new(FLAGS_CACHE_PAGES),
-            decoders: DecodeCache::new(DECODE_CACHE_ENTRIES),
+            decoders: RefCell::new(DecodeCache::new(DECODE_CACHE_ENTRIES)),
             origin: "user".to_owned(),
         })
     }
@@ -315,7 +319,7 @@ impl Session {
     /// Copy up to `out.len()` image bytes starting at virtual address `addr`;
     /// returns the number of bytes copied. Reads stop at segment boundaries and
     /// never run into file bytes that are not mapped at `addr`.
-    pub fn read_at(&mut self, addr: Address, out: &mut [u8]) -> Result<usize> {
+    pub fn read_at(&self, addr: Address, out: &mut [u8]) -> Result<usize> {
         let mut filled = 0usize;
         while filled < out.len() {
             let cursor = addr.get().saturating_add(filled as u64);
@@ -344,8 +348,11 @@ impl Session {
                 image_cache,
                 ..
             } = self;
-            let read =
-                image_cache.read_file_at(project, file_offset, &mut out[filled..filled + take])?;
+            let read = image_cache.borrow_mut().read_file_at(
+                project,
+                file_offset,
+                &mut out[filled..filled + take],
+            )?;
             filled += read;
             if read < take {
                 break;
@@ -354,7 +361,7 @@ impl Session {
         Ok(filled)
     }
 
-    pub fn read_bytes(&mut self, addr: Address, len: usize) -> Result<Vec<u8>> {
+    pub fn read_bytes(&self, addr: Address, len: usize) -> Result<Vec<u8>> {
         let mut buffer = vec![0u8; len];
         let read = self.read_at(addr, &mut buffer)?;
         buffer.truncate(read);
@@ -362,8 +369,8 @@ impl Session {
     }
 
     /// Decode the instruction at `addr` (cached).
-    pub fn insn_at(&mut self, addr: Address) -> Result<Option<Insn>> {
-        if let Some(insn) = self.decoders.get(addr) {
+    pub fn insn_at(&self, addr: Address) -> Result<Option<Insn>> {
+        if let Some(insn) = self.decoders.borrow_mut().get(addr) {
             return Ok(Some(insn));
         }
         let mut raw = [0u8; 15];
@@ -374,7 +381,7 @@ impl Session {
         let Some(insn) = decode(&raw[..read], addr, self.mode) else {
             return Ok(None);
         };
-        self.decoders.insert(insn);
+        self.decoders.borrow_mut().insert(insn);
         Ok(Some(insn))
     }
 
@@ -945,12 +952,9 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
-    /// Stored string text at `addr`, decoded from its encoding (1 = ASCII, 2 = UTF-16LE).
-    ///
-    /// Returns `None` when the address is not the start of a stored string.
-    pub fn string_at(&mut self, addr: Address) -> Result<Option<String>> {
-        let row: Option<(u32, i64)> = self
-            .project
+    /// Length and encoding of the stored string that starts at `addr`, if any.
+    pub fn string_meta_at(&self, addr: Address) -> Result<Option<(u32, i64)>> {
+        self.project
             .conn()
             .query_row(
                 "SELECT len, enc FROM string WHERE addr = ?1",
@@ -958,28 +962,14 @@ impl Session {
                 |row| Ok((row.get::<_, i64>(0)? as u32, row.get(1)?)),
             )
             .optional()
-            .map_err(command::db_err)?;
-        let Some((len, enc)) = row else {
-            return Ok(None);
-        };
-        let mut bytes = vec![0u8; len.min(4096) as usize];
-        let read = self.read_at(addr, &mut bytes)?;
-        bytes.truncate(read);
-        let text = if enc == 2 {
-            let units: Vec<u16> = bytes
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                .take_while(|unit| *unit != 0)
-                .collect();
-            String::from_utf16_lossy(&units)
-        } else {
-            let end = bytes
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(bytes.len());
-            String::from_utf8_lossy(&bytes[..end]).into_owned()
-        };
-        Ok(Some(text))
+            .map_err(command::db_err)
+    }
+
+    /// Stored string text at `addr`, decoded from its encoding (1 = ASCII, 2 = UTF-16LE).
+    ///
+    /// Returns `None` when the address is not the start of a stored string.
+    pub fn string_at(&self, addr: Address) -> Result<Option<String>> {
+        SessionView::string_at(self, addr)
     }
 
     /// Cross-references pointing *to* `addr`.
@@ -1210,7 +1200,7 @@ impl Session {
             tx.commit().map_err(command::db_err)?;
         }
 
-        self.decoders.clear();
+        self.decoders.borrow_mut().clear();
         self.clear_pseudocode_cache()?;
         Ok(commands.iter().map(Command::effect).collect())
     }
@@ -1310,7 +1300,7 @@ impl Session {
             tx.commit().map_err(command::db_err)?;
         }
 
-        self.decoders.clear();
+        self.decoders.borrow_mut().clear();
         self.clear_pseudocode_cache()?;
         Ok(UndoReport {
             records,
@@ -1345,7 +1335,7 @@ impl Session {
             tx.commit().map_err(command::db_err)?;
         }
 
-        self.decoders.clear();
+        self.decoders.borrow_mut().clear();
         self.clear_pseudocode_cache()?;
         Ok(Some(effect))
     }
@@ -1673,6 +1663,67 @@ fn install_initial_names(conn: &Connection, image: &Image) -> Result<()> {
         }
     }
     Ok(())
+}
+
+impl Session {
+    /// A read-only snapshot of everything rendering reads from this project.
+    ///
+    /// Like `Session` itself the snapshot answers `SessionView`, but it owns all the data
+    /// it needs and is therefore `Sync`: function-level work can run on several threads at
+    /// once without a `&mut Session` each.
+    pub fn snapshot(&self) -> Result<SessionSnapshot> {
+        SessionSnapshot::capture(self)
+    }
+}
+
+impl SessionView for Session {
+    fn image(&self) -> &Image {
+        &self.image
+    }
+
+    fn segments(&self) -> &[Segment] {
+        &self.segments
+    }
+
+    fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    fn arch(&self) -> Arch {
+        self.arch
+    }
+
+    fn entry_point(&self) -> Address {
+        self.image.entry_point
+    }
+
+    fn functions(&self) -> Result<Vec<FunctionInfo>> {
+        Session::functions(self)
+    }
+
+    fn name_at(&self, addr: Address) -> Result<Option<String>> {
+        Session::name_at(self, addr)
+    }
+
+    fn prototype_at(&self, addr: Address) -> Result<Option<String>> {
+        Session::prototype_at(self, addr)
+    }
+
+    fn struct_for_arg(&self, func: Address, slot: u8) -> Result<Option<StructDef>> {
+        Session::struct_for_arg(self, func, slot)
+    }
+
+    fn insn_at(&self, addr: Address) -> Result<Option<Insn>> {
+        Session::insn_at(self, addr)
+    }
+
+    fn read_at(&self, addr: Address, out: &mut [u8]) -> Result<usize> {
+        Session::read_at(self, addr, out)
+    }
+
+    fn string_meta_at(&self, addr: Address) -> Result<Option<(u32, i64)>> {
+        Session::string_meta_at(self, addr)
+    }
 }
 
 #[cfg(test)]

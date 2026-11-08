@@ -15,7 +15,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_analysis::{Cfg, EdgeKind, build_cfg};
 use recraft_common::{Address, Error, Result};
+#[cfg(test)]
 use recraft_core::Session;
+use recraft_core::SessionView;
 use recraft_decode::iced_x86;
 use recraft_ir::{Flow, Reg, RegView};
 
@@ -23,12 +25,12 @@ use crate::l2::{ReturnKind, X64_ARG_REGS, parse_prototype};
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
-pub fn pseudocode_l1(session: &mut Session, start: Address) -> Result<Pseudocode> {
+pub fn pseudocode_l1(session: &dyn SessionView, start: Address) -> Result<Pseudocode> {
     structure(session, start, None)
 }
 
 /// Render structured pseudo-C with L2 signature, argument naming and stack slots.
-pub fn pseudocode_l2(session: &mut Session, start: Address) -> Result<Pseudocode> {
+pub fn pseudocode_l2(session: &dyn SessionView, start: Address) -> Result<Pseudocode> {
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
         return pseudocode_l1(session, start);
@@ -37,7 +39,11 @@ pub fn pseudocode_l2(session: &mut Session, start: Address) -> Result<Pseudocode
     structure(session, start, Some(info))
 }
 
-fn structure(session: &mut Session, start: Address, info: Option<L2Info>) -> Result<Pseudocode> {
+fn structure(
+    session: &dyn SessionView,
+    start: Address,
+    info: Option<L2Info>,
+) -> Result<Pseudocode> {
     let mut info = info;
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
@@ -1784,7 +1790,7 @@ struct LibraryFacts {
 /// code is a fixed idiom are recognised, so a false positive needs a function that
 /// materialises the same constants *and* has the same incoming-register shape.
 fn infer_library_role(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     ranges: &HashMap<u64, (Address, Address)>,
@@ -1793,7 +1799,7 @@ fn infer_library_role(
 }
 
 fn infer_library_role_at(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     ranges: &HashMap<u64, (Address, Address)>,
@@ -1838,7 +1844,7 @@ fn infer_library_role_at(
     None
 }
 
-fn library_facts(session: &mut Session, start: Address, end: Address) -> Option<LibraryFacts> {
+fn library_facts(session: &dyn SessionView, start: Address, end: Address) -> Option<LibraryFacts> {
     use iced_x86::{Mnemonic, OpKind, Register};
     const ARGUMENTS: [Register; 4] = [Register::RCX, Register::RDX, Register::R8, Register::R9];
     let mut facts = LibraryFacts::default();
@@ -1932,7 +1938,7 @@ fn library_facts(session: &mut Session, start: Address, end: Address) -> Option<
     }
     Some(facts)
 }
-pub(crate) fn is_variadic_target(session: &mut Session, start: Address, end: Address) -> bool {
+pub(crate) fn is_variadic_target(session: &dyn SessionView, start: Address, end: Address) -> bool {
     use iced_x86::{Mnemonic, OpKind, Register};
     // The four home-area slots of the x64 calling convention.
     const HOME: [(u64, Register); 4] = [
@@ -1969,7 +1975,7 @@ pub(crate) fn is_variadic_target(session: &mut Session, start: Address, end: Add
     spilled == 0b1111
 }
 
-fn entry_frame_size(session: &mut recraft_core::Session, cfg: &Cfg) -> Option<u64> {
+fn entry_frame_size(session: &dyn SessionView, cfg: &Cfg) -> Option<u64> {
     let block = cfg.blocks.first()?;
     for cfg_insn in &block.insns {
         let insn = session.insn_at(cfg_insn.addr).ok()??;
@@ -4718,7 +4724,7 @@ fn flat_loop_headers_of(
 /// its unique predecessor that ends with a conditional branch. A branch does not modify the
 /// flags, so the second test compares the same operands; re-lifting `cmp`/`test`/`bt` there
 /// expresses the condition in the new block's own arena.
-fn block_flag_sources(session: &mut Session, cfg: &Cfg) -> Result<Vec<Option<Address>>> {
+fn block_flag_sources(session: &dyn SessionView, cfg: &Cfg) -> Result<Vec<Option<Address>>> {
     use iced_x86::Mnemonic as M;
     let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); cfg.blocks.len()];
     for (index, block) in cfg.blocks.iter().enumerate() {
@@ -5182,7 +5188,7 @@ fn hide_callee_saves(lines: &mut Vec<PseudoLine>) {
 /// MSVC's `__chkstk` probe touches the guard pages of a frame larger than one page: the
 /// frame size goes into `eax` and the helper is called before the frame is set up. It has no
 /// source-level effect, so the call and its size load are compiler bookkeeping.
-fn hide_stack_probes(session: &mut Session, lines: &mut Vec<PseudoLine>) -> Result<()> {
+fn hide_stack_probes(session: &dyn SessionView, lines: &mut Vec<PseudoLine>) -> Result<()> {
     if lines.len() < 2 {
         return Ok(());
     }
@@ -10751,11 +10757,11 @@ mod tests {
 
     #[test]
     fn string_literals_keep_their_data_address() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "corpus_banner").unwrap();
-        let code = pseudocode_l2(&mut session, start).unwrap();
+        let code = pseudocode_l2(&session, start).unwrap();
         assert!(
             code.lines
                 .iter()
@@ -10798,11 +10804,11 @@ mod tests {
 
     #[test]
     fn switch_replaces_the_jump_table_dispatch() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "switcher_big").unwrap();
-        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        let text = pseudocode_l1(&session, start).unwrap().text();
         assert!(text.contains("switch (ecx)"), "{text}");
         assert!(!text.contains("__asm(\"jmp"), "dispatch left:\n{text}");
         assert!(!text.contains("rdx = 0x140000000"), "base load:\n{text}");
@@ -10853,11 +10859,11 @@ mod tests {
 
     #[test]
     fn l2_switch_selector_becomes_argument() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "switcher_big").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("switch (arg1)"), "{text}");
     }
 
@@ -10873,11 +10879,11 @@ mod tests {
 
     #[test]
     fn l2_names_arguments_and_stack_slots() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "add_leaf").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("int64 arg1"), "{text}");
         assert!(text.contains("int64 arg2"), "{text}");
         assert!(
@@ -10889,17 +10895,17 @@ mod tests {
         // from an argument, so it cannot be folded away); the argument/loop-only test cases
         // have their spills hidden as callee-save bookkeeping.
         let nested = function_start(&session, "uses_helper").unwrap();
-        let text = pseudocode_l2(&mut session, nested).unwrap().text();
+        let text = pseudocode_l2(&session, nested).unwrap().text();
         assert!(text.contains("var_"), "stack slots were not named:\n{text}");
     }
 
     #[test]
     fn l2_signature_has_return_type_and_abi() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "add_leaf").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(
             text.contains("int32 add_leaf(int64 arg1, int64 arg2)"),
             "{text}"
@@ -11845,11 +11851,11 @@ mod tests {
 
     #[test]
     fn l2_keeps_the_value_of_a_folded_counter_update() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "corpus_counter_bump").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         // The increment stays visible *and* the loaded value is not lost to the caller. The
         // accumulation folds into the load (`v1 = (dword_… + 1);`), so the value that is
         // stored back and the value that is returned must be the same local.
@@ -11869,11 +11875,11 @@ mod tests {
 
     #[test]
     fn l2_ignores_zeroing_idioms_and_follows_pointer_origins() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "bytes_op").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         // `xor r8d, r8d` must not become a parameter, and the pointer copied through
         // `r10`/`rdx` still belongs to the first argument.
         assert!(
@@ -11885,42 +11891,42 @@ mod tests {
 
     #[test]
     fn l2_types_scalar_arguments_by_read_width() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "count_bits").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("int32 count_bits(int32 arg1)"), "{text}");
     }
 
     #[test]
     fn l2_pointer_parameters_show_pointer_types() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "str_probe").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("int32 str_probe(char* arg1)"), "{text}");
     }
 
     #[test]
     fn l2_signature_follows_a_forwarded_argument() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "call_str").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("int32 call_str(int64 arg1)"), "{text}");
         assert!(text.contains("str_probe(arg1)"), "{text}");
     }
 
     #[test]
     fn l2_renders_struct_field_access_through_pointer_arguments() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "field_probe").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("int32 field_probe(int32* arg1)"), "{text}");
         assert!(text.contains("arg1->field_10"), "{text}");
     }
@@ -11937,13 +11943,13 @@ mod tests {
                 text: Some("int field_probe(const int* values)".to_owned()),
             })
             .unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(
             text.contains("// prototype: int field_probe(const int* values)"),
             "{text}"
         );
         session.undo().unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(!text.contains("// prototype:"), "{text}");
     }
 
@@ -11973,7 +11979,7 @@ mod tests {
                 struct_name: Some("Probe".to_owned()),
             })
             .unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("arg1->value"), "{text}");
         assert!(!text.contains("field_10"), "{text}");
 
@@ -11985,7 +11991,7 @@ mod tests {
                 struct_name: None,
             })
             .unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("arg1->field_10"), "{text}");
     }
 
@@ -12001,24 +12007,24 @@ mod tests {
                 text: Some("int __stdcall field_probe(const int* values, int count)".to_owned()),
             })
             .unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(
             text.contains("int32 __stdcall field_probe(int32* values, int32 count)"),
             "{text}"
         );
         assert!(text.contains("values->field_10"), "{text}");
         session.undo().unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(!text.contains("__stdcall"), "{text}");
     }
 
     #[test]
     fn scaled_index_addressing_renders_array_subscript() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "array_probe").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         // The index is only read through `edx`, so it is a scalar `int`.
         assert!(
             text.contains("int32 array_probe(int32* arg1, int32 arg2)"),
@@ -12040,7 +12046,7 @@ mod tests {
                 text: Some("int __stdcall stdcall_add(int a, int b)".to_owned()),
             })
             .unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(
             text.contains("int32 __stdcall stdcall_add(int32 a, int32 b)"),
             "{text}"
@@ -12050,19 +12056,19 @@ mod tests {
 
     #[test]
     fn early_exit_chains_and_guard_then_loop_are_structured() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         for name in ["early_chain", "bytes_op"] {
             let start = function_start(&session, name).unwrap();
-            let text = pseudocode_l1(&mut session, start).unwrap().text();
+            let text = pseudocode_l1(&session, start).unwrap().text();
             assert!(
                 !text.contains("goto loc_"),
                 "{name} still has a goto: {text}"
             );
         }
         let start = function_start(&session, "bytes_op").unwrap();
-        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        let text = pseudocode_l1(&session, start).unwrap().text();
         // Single-block loops become do-while; no goto fallback remains.
         assert!(text.contains("do {"), "{text}");
         assert!(text.contains("while ("), "{text}");
@@ -12070,11 +12076,11 @@ mod tests {
 
     #[test]
     fn single_block_loops_emit_do_while() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "count_bits").unwrap();
-        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        let text = pseudocode_l1(&session, start).unwrap().text();
         assert!(text.contains("do {"), "{text}");
         assert!(text.contains("} while ("), "{text}");
         assert!(!text.contains("goto loc_"), "{text}");
@@ -12082,11 +12088,11 @@ mod tests {
 
     #[test]
     fn jump_table_cases_inline_simple_leaves() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "switcher_big").unwrap();
-        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        let text = pseudocode_l1(&session, start).unwrap().text();
         assert!(text.contains("switch ("), "{text}");
         assert!(text.contains("case 0: {"), "{text}");
         assert!(text.contains("return;"), "{text}");
@@ -12095,11 +12101,11 @@ mod tests {
 
     #[test]
     fn complex_loop_headers_stay_structured() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "nested_loops").unwrap();
-        let text = pseudocode_l1(&mut session, start).unwrap().text();
+        let text = pseudocode_l1(&session, start).unwrap().text();
         assert!(!text.contains("goto loc_"), "{text}");
         // The loop's single exit test became a real condition instead of `while (1)`.
         assert!(!text.contains("while (1)"), "{text}");
@@ -12194,7 +12200,7 @@ mod tests {
             return;
         };
         let start = function_start(&session, "recursive").unwrap();
-        let before = pseudocode_l2(&mut session, start).unwrap().text();
+        let before = pseudocode_l2(&session, start).unwrap().text();
         // The call site names its argument (a local now, not the raw `rcx`).
         let argument = |text: &str| {
             text.split("recursive(")
@@ -12211,7 +12217,7 @@ mod tests {
                 text: Some("int recursive(int n)".to_owned()),
             })
             .unwrap();
-        let after = pseudocode_l2(&mut session, start).unwrap().text();
+        let after = pseudocode_l2(&session, start).unwrap().text();
         assert!(after.contains("int recursive(int n)"), "{after}");
         assert!(!argument(&after).is_empty(), "{after}");
         assert!(!after.contains("recursive()"), "{after}");
@@ -12229,7 +12235,7 @@ mod tests {
                 text: Some("int __cdecl recursive(int n)".to_owned()),
             })
             .unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("recursive("), "{text}");
         assert!(!text.contains("recursive()"), "{text}");
     }
@@ -12247,19 +12253,19 @@ mod tests {
             })
             .unwrap();
         let caller = function_start(&session, "call_str").unwrap();
-        let text = pseudocode_l2(&mut session, caller).unwrap().text();
+        let text = pseudocode_l2(&session, caller).unwrap().text();
         assert!(text.contains("str_probe((char*)"), "{text}");
         assert!(!text.contains("str_probe()"), "{text}");
     }
 
     #[test]
     fn output_is_deterministic() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "branchy").unwrap();
-        let first = pseudocode_l1(&mut session, start).unwrap().text();
-        let second = pseudocode_l1(&mut session, start).unwrap().text();
+        let first = pseudocode_l1(&session, start).unwrap().text();
+        let second = pseudocode_l1(&session, start).unwrap().text();
         assert_eq!(first, second);
     }
 
@@ -12428,11 +12434,11 @@ mod tests {
 
     #[test]
     fn l2_returns_the_computed_value() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let start = function_start(&session, "add_leaf").unwrap();
-        let text = pseudocode_l2(&mut session, start).unwrap().text();
+        let text = pseudocode_l2(&session, start).unwrap().text();
         assert!(text.contains("return (arg1 + arg2);"), "{text}");
         assert!(!text.contains("return;"), "{text}");
     }
@@ -12528,7 +12534,7 @@ mod tests {
 
     #[test]
     fn generated_signatures_declare_every_argument_they_use() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let starts: Vec<Address> = session
@@ -12538,7 +12544,7 @@ mod tests {
             .map(|function| function.start)
             .collect();
         for start in starts {
-            let text = pseudocode_l2(&mut session, start).unwrap().text();
+            let text = pseudocode_l2(&session, start).unwrap().text();
             let header = text
                 .lines()
                 .find(|line| line.trim_end().ends_with('{') && !line.trim_start().starts_with("//"))
@@ -12579,7 +12585,7 @@ mod tests {
 
     #[test]
     fn generated_labels_stay_inside_the_function() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let starts: Vec<Address> = session
@@ -12590,8 +12596,8 @@ mod tests {
             .collect();
         for start in starts {
             for text in [
-                pseudocode_l1(&mut session, start).unwrap().text(),
-                pseudocode_l2(&mut session, start).unwrap().text(),
+                pseudocode_l1(&session, start).unwrap().text(),
+                pseudocode_l2(&session, start).unwrap().text(),
             ] {
                 let signature = text
                     .lines()
@@ -12610,7 +12616,7 @@ mod tests {
     }
     #[test]
     fn generated_output_has_balanced_braces() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let starts: Vec<Address> = session
@@ -12621,8 +12627,8 @@ mod tests {
             .collect();
         for start in starts {
             for text in [
-                pseudocode_l1(&mut session, start).unwrap().text(),
-                pseudocode_l2(&mut session, start).unwrap().text(),
+                pseudocode_l1(&session, start).unwrap().text(),
+                pseudocode_l2(&session, start).unwrap().text(),
             ] {
                 assert_eq!(
                     text.matches('{').count(),
@@ -12661,7 +12667,7 @@ mod tests {
 
     #[test]
     fn generated_gotos_always_have_a_label() {
-        let Some((mut session, _dir)) = analyzed_corpus() else {
+        let Some((session, _dir)) = analyzed_corpus() else {
             return;
         };
         let starts: Vec<Address> = session
@@ -12671,7 +12677,7 @@ mod tests {
             .map(|function| function.start)
             .collect();
         for start in starts {
-            let text = pseudocode_l1(&mut session, start).unwrap().text();
+            let text = pseudocode_l1(&session, start).unwrap().text();
             let labels: BTreeSet<String> = text
                 .lines()
                 .filter_map(|line| {

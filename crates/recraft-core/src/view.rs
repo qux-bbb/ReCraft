@@ -3,9 +3,90 @@
 
 //! Read-only view types shared by the CLI, UI and MCP integrations.
 
-use recraft_common::Address;
+use recraft_common::{Address, Result};
+use recraft_decode::{Insn, Mode};
+use recraft_format::{Arch, Image};
 
+use crate::command::StructDef;
 use crate::flags::Flags;
+use crate::segments::Segment;
+
+/// Everything rendering needs to read from a project, behind `&self`.
+///
+/// [`crate::Session`] implements this directly, so a project can be rendered while it is
+/// borrowed immutably. [`crate::SessionSnapshot`] implements it over a preloaded copy and is
+/// `Sync`, which is what lets function-level work (lint, golden writes) run on several
+/// threads without a `&mut Session` each.
+pub trait SessionView {
+    fn image(&self) -> &Image;
+
+    fn segments(&self) -> &[Segment];
+
+    fn mode(&self) -> Mode;
+
+    fn arch(&self) -> Arch;
+
+    fn entry_point(&self) -> Address;
+
+    /// All defined functions, ordered by start address.
+    fn functions(&self) -> Result<Vec<FunctionInfo>>;
+
+    fn name_at(&self, addr: Address) -> Result<Option<String>>;
+
+    fn prototype_at(&self, addr: Address) -> Result<Option<String>>;
+
+    /// Struct layout bound to a function argument slot (`0` = first argument).
+    fn struct_for_arg(&self, func: Address, slot: u8) -> Result<Option<StructDef>>;
+
+    /// Decode the instruction at `addr` (cached).
+    fn insn_at(&self, addr: Address) -> Result<Option<Insn>>;
+
+    /// Copy up to `out.len()` image bytes starting at virtual address `addr`.
+    fn read_at(&self, addr: Address, out: &mut [u8]) -> Result<usize>;
+
+    /// Length and encoding of the stored string that starts at `addr`, if any.
+    fn string_meta_at(&self, addr: Address) -> Result<Option<(u32, i64)>>;
+
+    fn segment_containing(&self, addr: Address) -> Option<&Segment> {
+        self.segments()
+            .iter()
+            .find(|segment| segment.contains(addr))
+    }
+
+    fn read_bytes(&self, addr: Address, len: usize) -> Result<Vec<u8>> {
+        let mut buffer = vec![0u8; len];
+        let read = self.read_at(addr, &mut buffer)?;
+        buffer.truncate(read);
+        Ok(buffer)
+    }
+
+    /// Stored string text at `addr`, decoded from its encoding (1 = ASCII, 2 = UTF-16LE).
+    ///
+    /// Returns `None` when the address is not the start of a stored string.
+    fn string_at(&self, addr: Address) -> Result<Option<String>> {
+        let Some((len, enc)) = self.string_meta_at(addr)? else {
+            return Ok(None);
+        };
+        let mut bytes = vec![0u8; len.min(4096) as usize];
+        let read = self.read_at(addr, &mut bytes)?;
+        bytes.truncate(read);
+        let text = if enc == 2 {
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .take_while(|unit| *unit != 0)
+                .collect();
+            String::from_utf16_lossy(&units)
+        } else {
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end]).into_owned()
+        };
+        Ok(Some(text))
+    }
+}
 
 /// One rendered line of the linear disassembly view.
 #[derive(Debug, Clone)]

@@ -202,7 +202,7 @@ fn a_synthetic_elf_binary_analyzes_and_decompiles() {
     let name = session.name_at(Address::new(TEXT_VA)).expect("name_at");
     assert_eq!(name.as_deref(), Some("main"));
 
-    let text = pseudocode_l2(&mut session, Address::new(TEXT_VA)).expect("l2");
+    let text = pseudocode_l2(&session, Address::new(TEXT_VA)).expect("l2");
     let body: Vec<&str> = text.lines.iter().map(|line| line.text.as_str()).collect();
     let body = body.join("\n");
     assert!(body.contains("main"), "{body}");

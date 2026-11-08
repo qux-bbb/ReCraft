@@ -31,6 +31,7 @@ recraft-cli = { path = "crates/recraft-cli" }
 recraft-ui = { path = "crates/recraft-ui" }
 
 thiserror = "2"
+rayon = "1.12"
 
 # Third-party crates are added here when the first consumer lands, e.g.:
 #   iced-x86, goblin, rusqlite (bundled SQLite), egui/eframe/egui_dock,

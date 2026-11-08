@@ -2916,7 +2916,7 @@ fn cmd_eval(file: &Path, map: Option<&Path>, as_json: bool) -> Result<()> {
 }
 
 fn cmd_cfg(project: &Path, addr: Option<&str>, as_json: bool) -> Result<()> {
-    let mut session = Session::open(project)?;
+    let session = Session::open(project)?;
     let target = match addr {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
@@ -2930,7 +2930,7 @@ fn cmd_cfg(project: &Path, addr: Option<&str>, as_json: bool) -> Result<()> {
             "address is not inside a known function - run `recraft analyze` first",
         ));
     };
-    let cfg = recraft_analysis::build_cfg(&mut session, function.start, function.end)?;
+    let cfg = recraft_analysis::build_cfg(&session, function.start, function.end)?;
 
     if as_json {
         let blocks: Vec<Value> = cfg
@@ -3055,7 +3055,7 @@ fn cmd_decompile(project: &Path, options: DecompileOptions<'_>) -> Result<()> {
         l2,
         out_file,
     } = options;
-    let mut session = Session::open(project)?;
+    let session = Session::open(project)?;
     let start = match addr {
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
@@ -3075,11 +3075,11 @@ fn cmd_decompile(project: &Path, options: DecompileOptions<'_>) -> Result<()> {
     }
     let function_start = containing.unwrap_or(start);
     let code = if l2 {
-        recraft_decompile::pseudocode_l2(&mut session, function_start)?
+        recraft_decompile::pseudocode_l2(&session, function_start)?
     } else if structured {
-        recraft_decompile::pseudocode_l1(&mut session, function_start)?
+        recraft_decompile::pseudocode_l1(&session, function_start)?
     } else {
-        pseudocode_l0(&mut session, start, max_insns)?
+        pseudocode_l0(&session, start, max_insns)?
     };
 
     if as_json {

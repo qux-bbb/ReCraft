@@ -18,7 +18,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
-use recraft_core::{Session, StructDef};
+#[cfg(test)]
+use recraft_core::Session;
+use recraft_core::{SessionView, StructDef};
 use recraft_decode::iced_x86;
 use recraft_ir::{
     BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, RegView, Stmt, UnOp, cond_name,
@@ -79,7 +81,7 @@ pub(crate) struct BlockLift {
 
 /// `__chkstk` saves `r10`/`r11` just below the stack pointer after subtracting the probe
 /// size, which no ordinary prologue does.
-pub(crate) fn is_stack_probe(session: &mut Session, start: Address) -> Result<bool> {
+pub(crate) fn is_stack_probe(session: &dyn SessionView, start: Address) -> Result<bool> {
     let Some(first) = session.insn_at(start)? else {
         return Ok(false);
     };
@@ -123,7 +125,7 @@ pub(crate) fn is_stack_probe(session: &mut Session, start: Address) -> Result<bo
 /// registers to user-defined struct layouts (`apply_type`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lift_block(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     args: Option<&ArgNames>,
@@ -1060,7 +1062,7 @@ impl Pseudocode {
 
 /// Render L0 pseudo-C for the function starting at `start`.
 pub fn pseudocode_l0(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     max_insns: usize,
 ) -> Result<Pseudocode> {
@@ -1206,7 +1208,7 @@ pub fn pseudocode_l0(
     })
 }
 
-fn resolve_name(session: &Session, addr: Address) -> Result<String> {
+fn resolve_name(session: &dyn SessionView, addr: Address) -> Result<String> {
     if let Some(name) = session.name_at(addr)? {
         return Ok(name);
     }
@@ -1222,7 +1224,7 @@ fn arg_slot(reg: Reg) -> Option<usize> {
 
 /// Imported function names keyed by their IAT slot address. Indirect calls through the
 /// IAT are otherwise rendered as `(**(u64*)(0x...))()`, which hides which API is called.
-fn import_names(session: &Session) -> HashMap<u64, String> {
+fn import_names(session: &dyn SessionView) -> HashMap<u64, String> {
     let mut names = HashMap::new();
     for module in &session.image().imports {
         for function in &module.functions {
@@ -1276,7 +1278,7 @@ fn quote_c_string(text: &str) -> String {
 }
 
 /// Resolve address constants that name a stored string to quoted C literals.
-fn collect_literals(session: &mut Session, exprs: &[Expr]) -> Result<HashMap<u64, String>> {
+fn collect_literals(session: &dyn SessionView, exprs: &[Expr]) -> Result<HashMap<u64, String>> {
     let mut literals = HashMap::new();
     let mut values: BTreeSet<u64> = exprs
         .iter()
@@ -1318,7 +1320,7 @@ fn literal_references(literals: &HashMap<u64, String>) -> Vec<(String, Address)>
 }
 
 /// Read a NUL-terminated printable ASCII literal for short data not in the string table.
-fn read_c_literal(session: &mut Session, addr: Address) -> Option<String> {
+fn read_c_literal(session: &dyn SessionView, addr: Address) -> Option<String> {
     let mut bytes = [0u8; 64];
     let read = session.read_at(addr, &mut bytes).ok()?;
     let bytes = &bytes[..read];
@@ -2602,11 +2604,11 @@ mod tests {
     #[test]
     fn renders_notepad_entry() {
         let dir = TempDir::new().unwrap();
-        let Some(mut session) = session(&dir) else {
+        let Some(session) = session(&dir) else {
             return;
         };
         let entry = session.entry_point();
-        let code = pseudocode_l0(&mut session, entry, 64).unwrap();
+        let code = pseudocode_l0(&session, entry, 64).unwrap();
 
         assert!(!code.lines.is_empty());
         assert!(code.lines.iter().all(|line| line.addr.get() >= entry.get()));
@@ -2689,12 +2691,12 @@ mod tests {
     #[test]
     fn output_is_deterministic() {
         let dir = TempDir::new().unwrap();
-        let Some(mut session) = session(&dir) else {
+        let Some(session) = session(&dir) else {
             return;
         };
         let entry = session.entry_point();
-        let first = pseudocode_l0(&mut session, entry, 32).unwrap().text();
-        let second = pseudocode_l0(&mut session, entry, 32).unwrap().text();
+        let first = pseudocode_l0(&session, entry, 32).unwrap().text();
+        let second = pseudocode_l0(&session, entry, 32).unwrap().text();
         assert_eq!(first, second);
     }
 }

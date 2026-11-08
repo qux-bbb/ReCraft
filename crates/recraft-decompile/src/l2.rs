@@ -13,7 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use recraft_common::{Address, Result};
-use recraft_core::{Arch, Session};
+#[cfg(test)]
+use recraft_core::Session;
+use recraft_core::{Arch, SessionView};
 use recraft_decode::iced_x86;
 use recraft_ir::{BinOp, Expr, ExprId, Lifter, Reg, RegView, Stmt};
 
@@ -419,7 +421,7 @@ pub struct L2Info {
 }
 
 /// Recover argument names, return type and calling convention.
-pub fn recover_l2(session: &mut Session, start: Address, end: Address) -> Result<L2Info> {
+pub fn recover_l2(session: &dyn SessionView, start: Address, end: Address) -> Result<L2Info> {
     let abi = calling_convention(session, start, end)?;
     let args = recover_args(session, start, end)?;
     let ret = recover_return(session, start, end)?;
@@ -432,7 +434,7 @@ pub fn recover_l2(session: &mut Session, start: Address, end: Address) -> Result
 /// 32-bit x86 needs the epilogue to tell cdecl from stdcall, and AArch64 will use
 /// AAPCS64 (also keyword-free) once its lifter exists.
 fn calling_convention(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
 ) -> Result<CallingConvention> {
@@ -444,7 +446,7 @@ fn calling_convention(
 
 /// `ret imm16` (stdcall) vs `ret` (cdecl) in the function epilogue.
 fn detect_x86_abi(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
 ) -> Result<CallingConvention> {
@@ -475,7 +477,7 @@ fn detect_x86_abi(
 
 /// Return type from writes to `rax`/`eax` before the epilogue, with a tail-call or call
 /// fallback: a function whose value comes straight from a call returns a full register.
-fn recover_return(session: &mut Session, start: Address, end: Address) -> Result<ReturnKind> {
+fn recover_return(session: &dyn SessionView, start: Address, end: Address) -> Result<ReturnKind> {
     let (lifted, _exprs) = lift_function(session, start, end)?;
     let mut width: Option<u8> = None;
     let mut float_width: Option<u8> = None;
@@ -511,7 +513,7 @@ fn recover_return(session: &mut Session, start: Address, end: Address) -> Result
 }
 
 /// Find argument locations that the function reads before writing.
-pub fn recover_args(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
+pub fn recover_args(session: &dyn SessionView, start: Address, end: Address) -> Result<ArgNames> {
     let ranges = function_ranges(session)?;
     let mut memo = BTreeMap::new();
     recover_args_at(session, start, end, 0, &mut memo, &ranges)
@@ -519,7 +521,7 @@ pub fn recover_args(session: &mut Session, start: Address, end: Address) -> Resu
 
 /// All defined functions keyed by start, so a nested scan does not query the project once
 /// per call site.
-fn function_ranges(session: &Session) -> Result<HashMap<u64, (Address, Address)>> {
+fn function_ranges(session: &dyn SessionView) -> Result<HashMap<u64, (Address, Address)>> {
     Ok(session
         .functions()?
         .into_iter()
@@ -533,7 +535,7 @@ fn function_ranges(session: &Session) -> Result<HashMap<u64, (Address, Address)>
 const MAX_CALL_DEPTH: usize = 4;
 
 fn recover_args_at(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     depth: usize,
@@ -548,7 +550,7 @@ fn recover_args_at(
 }
 
 fn lift_function(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
 ) -> Result<(Vec<recraft_ir::LiftedInsn>, Vec<Expr>)> {
@@ -574,7 +576,7 @@ fn lift_function(
 }
 
 fn recover_x64(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     depth: usize,
@@ -635,7 +637,7 @@ fn recover_x64(
 /// (which rescans the whole range). Used while following direct calls, where only the
 /// arity matters.
 pub(crate) fn recover_arg_count(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     memo: &mut BTreeMap<u64, usize>,
@@ -666,7 +668,7 @@ struct IncomingScan {
 /// Registers whose incoming value the function consumes: read before their first write, or
 /// consumed as an argument by a direct call.
 fn scan_incoming_args(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     depth: usize,
@@ -770,7 +772,7 @@ fn scan_incoming_args(
 /// per conversion. None when the callee is not variadic or its first argument is not a
 /// literal format string, so the callee's own parameter count is used instead.
 fn variadic_argument_count(
-    session: &mut Session,
+    session: &dyn SessionView,
     target: u64,
     args: &[ExprId],
     exprs: &[Expr],
@@ -943,7 +945,7 @@ fn arg_register(name: &str) -> Option<Reg> {
 /// no recoverable body) consume nothing, so the caller's captured values still drive the
 /// call-site rendering.
 fn call_arity(
-    session: &mut Session,
+    session: &dyn SessionView,
     target: Address,
     depth: usize,
     memo: &mut BTreeMap<u64, usize>,
@@ -983,7 +985,7 @@ fn call_arity(
 /// `int64*`; mixed widths become `void*`. Arguments never used as a memory base keep
 /// the default `int64`.
 fn infer_pointer_types(
-    session: &mut Session,
+    session: &dyn SessionView,
     start: Address,
     end: Address,
     names: &BTreeMap<Reg, String>,
@@ -1154,7 +1156,7 @@ fn resolve_alias(aliases: &BTreeMap<Reg, Reg>, reg: Reg) -> Reg {
     current
 }
 
-fn recover_x86(session: &mut Session, start: Address, end: Address) -> Result<ArgNames> {
+fn recover_x86(session: &dyn SessionView, start: Address, end: Address) -> Result<ArgNames> {
     let (lifted, exprs) = lift_function(session, start, end)?;
     let mut frame_established = false;
     let mut esp_delta: i64 = 0;
@@ -1638,11 +1640,11 @@ mod tests {
 
     #[test]
     fn x64_add_leaf_uses_two_argument_registers() {
-        let Some((mut session, _dir)) = corpus_session("x64") else {
+        let Some((session, _dir)) = corpus_session("x64") else {
             return;
         };
         let (start, end) = bounds(&session, "add_leaf");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         let ordered = args.ordered();
         assert_eq!(ordered.len(), 2, "{ordered:?}");
         assert_eq!(ordered[0], ("rcx", "arg1"));
@@ -1651,11 +1653,11 @@ mod tests {
 
     #[test]
     fn x64_written_registers_are_not_arguments() {
-        let Some((mut session, _dir)) = corpus_session("x64") else {
+        let Some((session, _dir)) = corpus_session("x64") else {
             return;
         };
         let (start, end) = bounds(&session, "branchy");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         assert_eq!(args.ordered().len(), 1, "{:?}", args.ordered());
     }
 
@@ -1705,12 +1707,12 @@ mod tests {
 
     #[test]
     fn x86_stack_arguments_are_recovered() {
-        let Some((mut session, _dir)) = corpus_session("x86") else {
+        let Some((session, _dir)) = corpus_session("x86") else {
             return;
         };
         assert!(!session.image().is_64);
         let (start, end) = bounds(&session, "add_leaf");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         let stack = args.stack_ordered();
         assert_eq!(stack.len(), 2, "{stack:?}");
         assert_eq!(stack[0].1, "arg1");
@@ -1725,18 +1727,18 @@ mod tests {
 
     #[test]
     fn x86_stack_arguments_get_pointer_types() {
-        let Some((mut session, _dir)) = corpus_session("x86") else {
+        let Some((session, _dir)) = corpus_session("x86") else {
             return;
         };
         let (start, end) = bounds(&session, "str_probe");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         assert!(
             args.signature().contains("char* arg1"),
             "{}",
             args.signature()
         );
         let (start, end) = bounds(&session, "array_probe");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         assert!(
             args.signature().contains("int32* arg1, int32 arg2"),
             "{}",
@@ -1746,23 +1748,23 @@ mod tests {
 
     #[test]
     fn an_argument_read_through_two_slots_is_one_parameter() {
-        let Some((mut session, _dir)) = corpus_session("x86") else {
+        let Some((session, _dir)) = corpus_session("x86") else {
             return;
         };
         // nested_loops re-reads its argument after the prologue moves esp; that is still one
         // parameter, not two with the same name.
         let (start, end) = bounds(&session, "nested_loops");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         let signature = args.signature();
         assert_eq!(signature.matches("arg1").count(), 1, "{signature}");
     }
     #[test]
     fn return_types_and_x64_abi() {
-        let Some((mut session, _dir)) = corpus_session("x64") else {
+        let Some((session, _dir)) = corpus_session("x64") else {
             return;
         };
         let (start, end) = bounds(&session, "add_leaf");
-        let info = recover_l2(&mut session, start, end).unwrap();
+        let info = recover_l2(&session, start, end).unwrap();
         assert_eq!(info.ret, ReturnKind::Int32);
         assert_eq!(info.abi, CallingConvention::System);
         assert_eq!(info.args.ordered().len(), 2);
@@ -1770,28 +1772,28 @@ mod tests {
 
     #[test]
     fn x86_cdecl_vs_stdcall_is_detected() {
-        let Some((mut session, _dir)) = corpus_session("x86") else {
+        let Some((session, _dir)) = corpus_session("x86") else {
             return;
         };
         let (start, end) = bounds(&session, "add_leaf");
-        let cdecl = recover_l2(&mut session, start, end).unwrap();
+        let cdecl = recover_l2(&session, start, end).unwrap();
         assert_eq!(cdecl.abi, CallingConvention::Cdecl);
         assert_eq!(cdecl.ret, ReturnKind::Int32);
 
         // The stdcall probe is exported under both the plain and decorated names.
         let (start, end) = bounds(&session, "_stdcall_add@8");
-        let stdcall = recover_l2(&mut session, start, end).unwrap();
+        let stdcall = recover_l2(&session, start, end).unwrap();
         assert_eq!(stdcall.abi, CallingConvention::Stdcall);
         assert_eq!(stdcall.ret, ReturnKind::Int32);
     }
 
     #[test]
     fn pointer_arguments_are_typed_from_memory_access_width() {
-        let Some((mut session, _dir)) = corpus_session("x64") else {
+        let Some((session, _dir)) = corpus_session("x64") else {
             return;
         };
         let (start, end) = bounds(&session, "str_probe");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         assert!(
             args.signature().contains("char* arg1"),
             "{}",
@@ -1799,7 +1801,7 @@ mod tests {
         );
 
         let (start, end) = bounds(&session, "wide_probe");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         assert!(
             args.signature().contains("wchar_t* arg1"),
             "{}",
@@ -1808,7 +1810,7 @@ mod tests {
 
         // Pure arithmetic arguments stay int64.
         let (start, end) = bounds(&session, "add_leaf");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         assert!(
             args.signature().contains("int64 arg1"),
             "{}",
@@ -1818,13 +1820,13 @@ mod tests {
 
     #[test]
     fn x86_prologue_pushes_do_not_hide_arguments() {
-        let Some((mut session, _dir)) = corpus_session("x86") else {
+        let Some((session, _dir)) = corpus_session("x86") else {
             return;
         };
         // noinline_helper pushes before touching its arguments; the cumulative esp
         // adjustment still maps the observed [esp+N] reads back to incoming arguments.
         let (start, end) = bounds(&session, "noinline_helper");
-        let args = recover_args(&mut session, start, end).unwrap();
+        let args = recover_args(&session, start, end).unwrap();
         let stack = args.stack_ordered();
         assert_eq!(stack.len(), 2, "{stack:?}");
         assert_eq!(stack[0].1, "arg1");

@@ -11,8 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iced_x86::Register;
 use recraft_common::{Address, Result};
+#[cfg(test)]
 use recraft_core::Session;
-use recraft_decode::{FlowKind, Insn};
+use recraft_core::SessionView;
+use recraft_decode::{FlowKind, Formatter, Insn};
 use recraft_ir::{RegView, from_iced};
 
 const MAX_FUNCTION_INSTRUCTIONS: usize = 20_000;
@@ -76,7 +78,7 @@ struct RawInsn {
 }
 
 /// Build the CFG for `[start, end)`.
-pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<Cfg> {
+pub fn build_cfg(session: &dyn SessionView, start: Address, end: Address) -> Result<Cfg> {
     let mut raw: Vec<RawInsn> = Vec::new();
     let mut addr = start;
     while addr < end && raw.len() < MAX_FUNCTION_INSTRUCTIONS {
@@ -202,6 +204,7 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
     let mut external: Vec<(Address, Address)> = Vec::new();
 
     let mut new_blocks: Vec<BasicBlock> = Vec::with_capacity(blocks.len());
+    let mut formatter = Formatter::new();
     for block in &blocks {
         let (block_start, block_end) = (block.start, block.end);
         let first = *instruction_index.get(&block_start.get()).unwrap_or(&0);
@@ -211,16 +214,34 @@ pub fn build_cfg(session: &mut Session, start: Address, end: Address) -> Result<
             cursor += 1;
             count += 1;
         }
-        let lines = session.disasm(block_start, count)?;
-        let insns: Vec<CfgInsn> = lines
-            .iter()
-            .map(|line| CfgInsn {
-                addr: line.addr,
-                text: format!("{} {}", line.mnemonic, line.operands)
-                    .trim_end()
-                    .to_owned(),
-            })
-            .collect();
+        // Format from the instructions decoded above instead of asking the session for a
+        // second linear disassembly: the text is the same, but rendering a function no
+        // longer costs three project queries per instruction.
+        let mut insns: Vec<CfgInsn> = Vec::with_capacity(count);
+        for raw_insn in raw.iter().skip(first).take(count) {
+            let insn = &raw_insn.insn;
+            let (mnemonic, mut operands) = {
+                let (mnemonic, operands) = formatter.format_parts(insn);
+                (mnemonic.to_owned(), operands.to_owned())
+            };
+            let referenced = if insn.memory_is_direct() {
+                Some(Address::new(insn.memory_displacement64()))
+            } else if matches!(insn.flow(), FlowKind::Call | FlowKind::UnconditionalBranch) {
+                insn.branch_target()
+            } else {
+                None
+            };
+            if let Some(target) = referenced
+                && let Some(target_name) = session.name_at(target)?
+            {
+                operands.push_str("  ; ");
+                operands.push_str(&target_name);
+            }
+            insns.push(CfgInsn {
+                addr: raw_insn.addr,
+                text: format!("{mnemonic} {operands}").trim_end().to_owned(),
+            });
+        }
 
         let last = raw
             .iter()
@@ -354,7 +375,7 @@ fn trace_selector(raw: &[RawInsn], at: usize, index: Register) -> Option<RegView
 }
 
 fn detect_jump_table(
-    session: &mut Session,
+    session: &dyn SessionView,
     raw: &[RawInsn],
     jmp_index: usize,
     start: Address,
@@ -434,7 +455,7 @@ fn detect_jump_table(
 /// Read consecutive table entries that stay inside `[start, end)`; at least two valid
 /// entries are required so a stray indirect jump is not mistaken for a table.
 fn read_table(
-    session: &mut Session,
+    session: &dyn SessionView,
     table: Address,
     entry_size: usize,
     relative_base: u64,
@@ -536,6 +557,31 @@ mod tests {
         (function.start, function.end)
     }
 
+    /// `build_cfg` formats block text from the instructions it already decoded. That must
+    /// stay byte-identical to what the linear-disassembly view prints for the same block.
+    #[test]
+    fn block_text_matches_the_disassembly_view() {
+        let Some(path) = corpus_path() else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let (mut session, _dir) = open(&bytes);
+        let (start, end) = function_bounds(&mut session, "branchy");
+        let cfg = build_cfg(&session, start, end).unwrap();
+        assert!(!cfg.blocks.is_empty());
+        for block in &cfg.blocks {
+            let lines = session.disasm(block.start, block.insns.len()).unwrap();
+            assert_eq!(lines.len(), block.insns.len());
+            for (insn, line) in block.insns.iter().zip(&lines) {
+                assert_eq!(insn.addr, line.addr);
+                let expected = format!("{} {}", line.mnemonic, line.operands)
+                    .trim_end()
+                    .to_owned();
+                assert_eq!(insn.text, expected);
+            }
+        }
+    }
+
     #[test]
     fn branchy_has_three_blocks() {
         let Some(path) = corpus_path() else {
@@ -544,7 +590,7 @@ mod tests {
         let bytes = std::fs::read(path).unwrap();
         let (mut session, _dir) = open(&bytes);
         let (start, end) = function_bounds(&mut session, "branchy");
-        let cfg = build_cfg(&mut session, start, end).unwrap();
+        let cfg = build_cfg(&session, start, end).unwrap();
         assert!(
             cfg.blocks.len() >= 3,
             "expected >= 3 blocks, got {}",
@@ -566,7 +612,7 @@ mod tests {
         let bytes = std::fs::read(path).unwrap();
         let (mut session, _dir) = open(&bytes);
         let (start, end) = function_bounds(&mut session, "loopy");
-        let cfg = build_cfg(&mut session, start, end).unwrap();
+        let cfg = build_cfg(&session, start, end).unwrap();
         assert!(cfg.blocks.len() >= 3);
         let has_back_edge = cfg
             .blocks
@@ -585,7 +631,7 @@ mod tests {
         let bytes = std::fs::read(path).unwrap();
         let (mut session, _dir) = open(&bytes);
         let (start, end) = function_bounds(&mut session, "switcher_big");
-        let cfg = build_cfg(&mut session, start, end).unwrap();
+        let cfg = build_cfg(&session, start, end).unwrap();
         let table_edges: usize = cfg
             .blocks
             .iter()
@@ -616,7 +662,7 @@ mod tests {
             .iter()
             .find(|function| function.start == session.entry_point())
             .expect("entry function missing");
-        let cfg = build_cfg(&mut session, function.start, function.end).unwrap();
+        let cfg = build_cfg(&session, function.start, function.end).unwrap();
         assert!(!cfg.blocks.is_empty());
         for block in &cfg.blocks {
             assert!(
