@@ -238,16 +238,21 @@ mod tests {
         Some(Session::create(&path, &bytes, &mut |_, _| {}, &|| false).expect("create"))
     }
 
-    fn parse(entry: Value, virtual_names: &BTreeMap<String, Address>) -> Result<Command> {
-        let dir = TempDir::new().unwrap();
-        let Some(session) = session(&dir) else {
-            return Err(Error::internal("no sample"));
-        };
-        parse_command(&session, virtual_names, &entry)
+    fn parse(
+        session: &Session,
+        entry: Value,
+        virtual_names: &BTreeMap<String, Address>,
+    ) -> Result<Command> {
+        parse_command(session, virtual_names, &entry)
     }
 
     #[test]
     fn every_documented_type_is_parsed() {
+        let dir = TempDir::new().unwrap();
+        let Some(session) = session(&dir) else {
+            eprintln!("skipping: no Windows sample on this platform");
+            return;
+        };
         let empty = BTreeMap::new();
         let cases = [
             json!({"type": "rename", "addr": "entry", "name": "main_entry"}),
@@ -265,7 +270,7 @@ mod tests {
         );
         for entry in cases {
             let kind = entry["type"].as_str().unwrap().to_owned();
-            let parsed = parse(entry, &empty);
+            let parsed = parse(&session, entry, &empty);
             assert!(parsed.is_ok(), "{kind} failed: {parsed:?}");
             assert!(
                 COMMAND_TYPES.contains(&kind.as_str()),
@@ -273,19 +278,28 @@ mod tests {
             );
         }
         assert_eq!(
-            parse(json!({"type": "prototype", "addr": "entry"}), &empty)
-                .unwrap()
-                .name(),
+            parse(
+                &session,
+                json!({"type": "prototype", "addr": "entry"}),
+                &empty
+            )
+            .unwrap()
+            .name(),
             "prototype"
         );
         assert_eq!(
-            parse(json!({"type": "comment", "addr": "entry"}), &empty)
-                .unwrap()
-                .name(),
+            parse(
+                &session,
+                json!({"type": "comment", "addr": "entry"}),
+                &empty
+            )
+            .unwrap()
+            .name(),
             "comment"
         );
         assert_eq!(
             parse(
+                &session,
                 json!({"type": "define_function", "start": "entry", "end": "0x140001a00"}),
                 &empty
             )
@@ -297,9 +311,15 @@ mod tests {
 
     #[test]
     fn virtual_names_resolve_symbols_created_earlier_in_the_script() {
+        let dir = TempDir::new().unwrap();
+        let Some(session) = session(&dir) else {
+            eprintln!("skipping: no Windows sample on this platform");
+            return;
+        };
         let mut virtual_names = BTreeMap::new();
         virtual_names.insert("renamed".to_owned(), Address::new(0x1400019C0));
         let command = parse(
+            &session,
             json!({"type": "comment", "addr": "renamed", "text": "hi"}),
             &virtual_names,
         )
@@ -312,22 +332,32 @@ mod tests {
 
     #[test]
     fn bad_entries_are_rejected_with_the_offending_field() {
+        let dir = TempDir::new().unwrap();
+        let Some(session) = session(&dir) else {
+            eprintln!("skipping: no Windows sample on this platform");
+            return;
+        };
         let empty = BTreeMap::new();
-        let error = parse(json!({"type": "rename"}), &empty).unwrap_err();
+        let error = parse(&session, json!({"type": "rename"}), &empty).unwrap_err();
         assert!(error.to_string().contains("addr"), "{error}");
-        let error = parse(json!({"type": "nope"}), &empty).unwrap_err();
+        let error = parse(&session, json!({"type": "nope"}), &empty).unwrap_err();
         assert!(
             error.to_string().contains("unknown batch command type"),
             "{error}"
         );
         let error = parse(
+            &session,
             json!({"type": "define_function", "start": "entry", "end": "entry"}),
             &empty,
         )
         .unwrap_err();
         assert!(error.to_string().contains("end > start"), "{error}");
-        let error =
-            parse(json!({"type": "comment", "addr": "missing_symbol"}), &empty).unwrap_err();
+        let error = parse(
+            &session,
+            json!({"type": "comment", "addr": "missing_symbol"}),
+            &empty,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("missing_symbol"), "{error}");
     }
 }
