@@ -27,9 +27,8 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
   to an instruction address; golden snapshots guard every change.
 - **AI that proposes, never silently writes**: proposals carry evidence addresses and a
   confidence; writes go through the same journaled command bus as manual edits (undoable).
-- **Provider optional**: AI heuristics run offline; a configured LLM provider adds
-  model-backed explain/rename/polish, with prompts redacted + budgeted and results cached
-  and audited locally.
+- **AI needs a configured provider**: explain/rename/polish go to the model you configure,
+  with prompts redacted + budgeted and results cached and audited locally.
 - **MCP-native**: OpenCode and other agents can query functions, pseudocode, xrefs,
   strings, imports and call graphs through an MCP server; `--write` also renames, comments
   and sets prototypes, each step undoable.
