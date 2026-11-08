@@ -78,14 +78,14 @@ jobs:
       # which is also what the ELF work needs (Linux-built corpus samples).
       - name: build ELF corpus (gcc)
         run: bash corpus/build-linux.sh
-      - name: cargo test (portable crates)
-        run: |
-          cargo test -p recraft-common -p recraft-format -p recraft-decode -p recraft-ir \
-            -p recraft-storage -p recraft-core -p recraft-analysis -p recraft-decompile \
-            -p recraft-query -p recraft-mcp -p recraft-ai
       - name: ELF corpus quality gate
+        env:
+          # Set to 1 only when the corpus or its expectations changed on purpose: the
+          # step rewrites the snapshots before checking them.
+          RECRAFT_REGEN_ELF_SNAPSHOTS: "1"
         run: |
           set -euo pipefail
+          regen="${RECRAFT_REGEN_ELF_SNAPSHOTS:-0}"
           project="$RUNNER_TEMP/elf-corpus.rcraft"
           cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus.so -o "$project"
           cargo run --quiet -p recraft-cli -- analyze "$project"
@@ -105,6 +105,9 @@ jobs:
             echo "recraft-cli panicked on a closed pipe"
             exit 1
           fi
+          if [ "$regen" = "1" ]; then
+            cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf
+          fi
           if [ -d tests/golden/elf ]; then
             # Committed snapshots: this is the regression gate.
             cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf --check
@@ -118,17 +121,24 @@ jobs:
           cpp_project="$RUNNER_TEMP/elf-cpp.rcraft"
           cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus-cpp.so -o "$cpp_project"
           cargo run --quiet -p recraft-cli -- analyze "$cpp_project"
-          # Print the first names so the log shows the demangling; write to a file first
-          # because `| head` closes the pipe and Rust's stdout panics on EPIPE.
+          # Write the names to a file first: `| head` closes the pipe.
           cargo run --quiet -p recraft-cli -- funcs "$cpp_project" > "$RUNNER_TEMP/cpp-funcs.txt"
           head -n 12 "$RUNNER_TEMP/cpp-funcs.txt"
           cargo run --quiet -p recraft-cli -- lint "$cpp_project"
+          if [ "$regen" = "1" ]; then
+            cargo run --quiet -p recraft-cli -- golden "$cpp_project" --dir tests/golden/elf-cpp
+          fi
           if [ -d tests/golden/elf-cpp ]; then
             cargo run --quiet -p recraft-cli -- golden "$cpp_project" --dir tests/golden/elf-cpp --check
           else
             cargo run --quiet -p recraft-cli -- golden "$cpp_project" --dir tests/golden/elf-cpp
             cargo run --quiet -p recraft-cli -- golden "$cpp_project" --dir tests/golden/elf-cpp --check
           fi
+      - name: cargo test (portable crates)
+        run: |
+          cargo test -p recraft-common -p recraft-format -p recraft-decode -p recraft-ir \
+            -p recraft-storage -p recraft-core -p recraft-analysis -p recraft-decompile \
+            -p recraft-query -p recraft-mcp -p recraft-ai
       - name: upload ELF snapshots
         uses: actions/upload-artifact@v4
         with:
