@@ -17,6 +17,7 @@
 | [FAQ.md](FAQ.md) | 十问十答 |
 | [ROADMAP.md](ROADMAP.md) | 里程碑状态与近期优先项 |
 | [NEXT.md](NEXT.md) | 当前结构缺口（多入口循环）、实现地图与验收标准 |
+| [CHANGELOG-0.1.0.md](CHANGELOG-0.1.0.md) | 0.1.0 开发明细存档（完整增量/修复/移除记录） |
 | [cases/](cases/) | 真实样本案例（crackme Win64，含 SHA-256 与重建脚本） |
 | [ICON.md](ICON.md) | 图标概念与规范 |
 | REPORT-2026-*.md | 各阶段收尾报告（历史记录） |

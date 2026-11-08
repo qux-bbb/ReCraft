@@ -105,6 +105,10 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
    校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
 5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
 6. 代码签名后，在干净 Win10/Win11 虚拟机各复跑一次安装→启动 UI→卸载。
+7. 打附注标签并推送：`git tag -a v0.1.0 -m "ReCraft 0.1.0"` +
+   `git push origin main v0.1.0`；用 CHANGELOG 的 0.1.0 节作为 Release notes
+   （`gh release create v0.1.0 --notes-file <utf8 临时文件> <zip> <msi> SHA256SUMS.txt`）。
+   发布后把 README / ROADMAP / M4 里“公开预览待…”的状态行改成已发布版本。
 
 ## 限制
 
