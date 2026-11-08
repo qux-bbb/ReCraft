@@ -30,6 +30,12 @@
   API 行为分类补了 POSIX 对应项（`ptrace`、`fork`/`exec`、`dlopen`、`fopen`/`opendir`、
   `mmap`、`pthread_*`、OpenSSL）。
 
+- **DWARF 行号表。** 新增 `recraft-format/src/dwarf.rs`：解析 `.debug_line`（DWARF 2–5，含
+  v5 的 directory/file 表与 `.debug_line_str` 间接字符串），得到按地址排序的 `file:line`
+  行。`Image` 增加 `debug_lines`（serde default，旧项目照常打开），ELF 加载器自动读取；
+  `recraft-cli lines <project> [--addr] [--json]` 打印映射。ELF 语料新增 `-g` 构建
+  （`libcorpus-debug.so`），CI 的 Linux 作业验证行表能指回 `functions.c`。
+  类型信息（`.debug_info`）未做——行表只给位置，不给类型。
 - **DecBench 对照可用。** 新增 `recraft-cli decbench <kit> -o <dir>`：读 DecBench 评测套件的
   `functions.json`，逐二进制 import/analyze 后按目标地址渲染 L2 伪 C，写成套件要求的
   `results/<bin>.c` + `results.json`。sample-set（223 个二进制、250 个函数）实测 147 个

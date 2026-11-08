@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 pub use recraft_common::Address;
 
+pub mod dwarf;
 pub mod elf;
 pub use elf::ElfLoader;
 
@@ -165,6 +166,10 @@ pub struct Image {
     /// tables today; PE leaves this empty and relies on exports plus linker maps).
     #[serde(default)]
     pub symbols: Vec<SymbolName>,
+    /// DWARF line-table rows (`.debug_line`), sorted by address. Empty when the
+    /// binary carries no debug info or the table is malformed.
+    #[serde(default)]
+    pub debug_lines: Vec<crate::dwarf::SourceLine>,
     pub overlay_file_offset: Option<u64>,
     pub file_size: u64,
     /// Non-fatal problems found while parsing (malformed import/export/TLS tables,
@@ -503,6 +508,7 @@ pub fn load_pe(bytes: &[u8]) -> Result<Image> {
         tls_callbacks,
         pdata_functions,
         symbols: Vec::new(),
+        debug_lines: Vec::new(),
         overlay_file_offset,
         file_size,
         warnings,
@@ -1156,6 +1162,12 @@ mod tests {
                 end: Address::new(0x1400_1100),
             }],
             symbols: Vec::new(),
+            debug_lines: vec![crate::dwarf::SourceLine {
+                address: 0x1400_1000,
+                file: "demo.c".to_owned(),
+                line: 42,
+                column: 3,
+            }],
             overlay_file_offset: Some(0x2000),
             file_size: 0x3000,
             warnings: vec!["warning".to_owned()],
@@ -1168,6 +1180,8 @@ mod tests {
         assert_eq!(back.pdata_functions.len(), 1);
         assert_eq!(back.pdata_functions[0].end, Address::new(0x1400_1100));
         assert_eq!(back.tls_callbacks, image.tls_callbacks);
+        assert_eq!(back.debug_lines.len(), 1);
+        assert_eq!(back.debug_lines[0].line, 42);
         assert_eq!(back.overlay_file_offset, Some(0x2000));
         assert_eq!(back.warnings, image.warnings);
     }

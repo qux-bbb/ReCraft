@@ -1180,6 +1180,24 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_elf_corpus_carries_a_line_table() {
+        let Some((session, _dir)) = linux_corpus_file("libcorpus-debug.so") else {
+            return;
+        };
+        let lines = &session.image().debug_lines;
+        assert!(!lines.is_empty(), "the -g build should carry .debug_line");
+        assert!(
+            lines.iter().any(|row| row.file.contains("functions.c")),
+            "line table should point at functions.c, first row: {:?}",
+            lines.first()
+        );
+        assert!(
+            lines.iter().any(|row| row.line > 1),
+            "line numbers never advanced past line 1"
+        );
+    }
+
+    #[test]
     fn the_cpp_elf_corpus_demangles_itanium_names() {
         let Some((mut session, _dir)) = linux_corpus_file("libcorpus-cpp.so") else {
             return;

@@ -239,6 +239,17 @@ enum Commands {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Show the DWARF line table (`file:line` per address).
+    Lines {
+        project: PathBuf,
+        /// Start at this address (`0x...`, decimal, a symbol name, or `entry`).
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Write one L2 pseudo-C file per function into a directory.
     ExportPseudo {
         project: PathBuf,
@@ -778,6 +789,15 @@ fn run(cli: Cli) -> Result<()> {
                 },
             )
         }
+        Commands::Lines {
+            project,
+            addr,
+            limit,
+            json,
+        } => {
+            let materialized = materialize_project(&project)?;
+            cmd_lines(&materialized.path, addr.as_deref(), limit, json)
+        }
         Commands::ExportPseudo {
             project,
             dir,
@@ -1134,6 +1154,50 @@ fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
 }
 
 // ----------------------------------------------------------------- import ----
+
+// ------------------------------------------------------------------ lines ----
+
+/// Print the DWARF line table: where each address came from, as `file:line`.
+fn cmd_lines(project: &Path, addr: Option<&str>, limit: usize, as_json: bool) -> Result<()> {
+    let session = Session::open(project)?;
+    let lines = &session.image().debug_lines;
+    let start = match addr {
+        Some(raw) => resolve_address(&session, raw)?,
+        None => Address::new(0),
+    };
+    let rows: Vec<_> = lines
+        .iter()
+        .filter(|row| row.address >= start.get())
+        .take(limit.max(1))
+        .collect();
+    if as_json {
+        let values: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "address": format!("{:#x}", row.address),
+                    "file": row.file,
+                    "line": row.line,
+                    "column": row.column,
+                })
+            })
+            .collect();
+        let document = json!({ "rows": lines.len(), "lines": values });
+        let text = serde_json::to_string_pretty(&document)
+            .map_err(|error| Error::internal(format!("serialize lines: {error}")))?;
+        println!("{text}");
+        return Ok(());
+    }
+    if rows.is_empty() {
+        println!("no source lines (no .debug_line, or the table is malformed)");
+        return Ok(());
+    }
+    for row in &rows {
+        println!("{:#010x}  {}:{}", row.address, row.file, row.line);
+    }
+    println!("{} source line(s) total", lines.len());
+    Ok(())
+}
 
 // --------------------------------------------------------------- decbench ----
 

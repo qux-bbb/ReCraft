@@ -294,6 +294,14 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
             end: Address::new(end),
         })
         .collect();
+    image.debug_lines = crate::dwarf::parse_line_table(
+        &crate::dwarf::DwarfSections {
+            debug_line: section_data(bytes, &section_headers, &names, ".debug_line"),
+            debug_line_str: section_data(bytes, &section_headers, &names, ".debug_line_str"),
+            debug_str: section_data(bytes, &section_headers, &names, ".debug_str"),
+        },
+        8,
+    );
 
     if image.entry_point.get() == 0 {
         image.warnings.push("ELF has no entry point".to_owned());
@@ -800,6 +808,32 @@ fn eh_frame_functions(
         return Vec::new();
     };
     parse_eh_frame(data, section.sh_addr)
+}
+
+/// Raw bytes of a named section, or an empty slice when it is absent or truncated.
+fn section_data<'a>(
+    bytes: &'a [u8],
+    sections: &[SectionHeader],
+    names: &[String],
+    wanted: &str,
+) -> &'a [u8] {
+    let Some(section) = sections
+        .iter()
+        .zip(names.iter())
+        .find(|(section, name)| *name == wanted && section.sh_type != SHT_NOBITS)
+        .map(|(section, _)| section)
+    else {
+        return &[];
+    };
+    let (Ok(start), Ok(size)) = (
+        usize::try_from(section.sh_offset),
+        usize::try_from(section.sh_size),
+    ) else {
+        return &[];
+    };
+    bytes
+        .get(start..start.saturating_add(size).min(bytes.len()))
+        .unwrap_or(&[])
 }
 
 fn parse_eh_frame(data: &[u8], section_va: u64) -> Vec<(u64, u64)> {

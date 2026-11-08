@@ -184,6 +184,7 @@ mod tests {
             tls_callbacks: Vec::new(),
             pdata_functions: Vec::new(),
             symbols: Vec::new(),
+            debug_lines: Vec::new(),
             overlay_file_offset: None,
             file_size: 0x3000,
             warnings: Vec::new(),

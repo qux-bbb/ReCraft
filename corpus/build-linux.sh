@@ -34,6 +34,9 @@ else
     rm -f "$out/libcorpus-stripped.so"
 fi
 
+# A `-g` build so the DWARF line table is exercised end to end.
+"$cc" -O2 -g -fPIC -shared -o "$out/libcorpus-debug.so" "$repo/corpus/linux/functions.c"
+
 if command -v "$cxx" >/dev/null 2>&1; then
     "$cxx" -O2 -fPIC -shared -o "$out/libcorpus-cpp.so" "$repo/corpus/linux/functions.cpp"
 else
