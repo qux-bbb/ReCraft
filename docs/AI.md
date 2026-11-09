@@ -102,6 +102,29 @@ recraft-cli ai ask notepad.rcraft "哪些函数在操作注册表？" [--json] [
 精确匹配，其余按有序子串）与 `categorize_path`（`/proc` 路径）；`recraft-ai` 直接复用，
 不复制规则。
 
+Linux 样本（Debian 的 `sensors` 工具，带 `/proc` 与 ACPI 探测）上的实际输出片段：
+
+```text
+functions: 1837  instructions: 97909  strings: 2795
+api categories:
+  anti-analysis    3
+  file             141
+  memory           663
+  network          1
+  other            1614
+  process          1
+  thread           52
+path categories:
+  file             6
+suspicious functions:
+  63.1  0x00000165b0  main  [file,memory,network,other]  elf!__errno_location,elf!__isoc99_fscanf,elf!open,...
+      paths: /proc/acpi/ac_adapter, /proc/acpi/ac_adapter/%s/state, /proc/apm
+```
+
+API 标签由 `analyze` 落库：ELF 的 `call open@plt` 会被解析到 PLT 桩背后的导入并记在调用点
+上（PE 则记在 `call [IAT]` 上），所以 `suspicious` 归到的是真正调用 API 的函数，而不是
+PLT 桩本身。
+
 ## 实现与测试
 
 - 代码：`crates/recraft-ai`（`explain` / `suggest_names` / `triage` / `Proposal` /
