@@ -80,19 +80,11 @@
     </Property>
     <Launch Condition="Installed OR VCRUNTIME140" Message="!(loc.VCRuntimeMissing)" />
 
-    <!-- Optional steps. Both default to off: the MSI never edits the machine PATH or
-         drops desktop icons unless the user (or a silent install with ADDTOPATH=1 /
-         DESKTOPSHORTCUT=1) asks for it. The registry markers below are read back by
-         AppSearch before a major upgrade, so a choice made once carries over instead of
-         being silently dropped when the old product is removed. -->
-    <Property Id="ADDTOPATH" Value="0" Secure="yes" />
+    <!-- Optional steps. PATH is on by default so `recraft-cli` works in any terminal right
+         after setup; the desktop shortcut is off by default. Both can be turned off/on on
+         the options page or from the command line (ADDTOPATH=0, DESKTOPSHORTCUT=1). -->
+    <Property Id="ADDTOPATH" Value="1" Secure="yes" />
     <Property Id="DESKTOPSHORTCUT" Value="0" Secure="yes" />
-    <Property Id="PATHEXISTING">
-      <RegistrySearch Id="PathExistingSearch" Root="HKLM" Key="Software\ReCraft" Name="PathEntry" Type="raw" />
-    </Property>
-    <Property Id="DESKTOPSHORTCUTEXISTING">
-      <RegistrySearch Id="DesktopExistingSearch" Root="HKLM" Key="Software\ReCraft" Name="DesktopShortcut" Type="raw" />
-    </Property>
 
     <!-- Per-machine scope: files land in %ProgramFiles%\ReCraft and setup asks for
          administrator permission once (msiexec's own elevation). The no-install path stays
@@ -227,14 +219,14 @@
     </ComponentGroup>
 
     <!-- Optional components, gated by the OptionsDlg checkboxes (or by ADDTOPATH=1 /
-         DESKTOPSHORTCUT=1 in a silent install). `Installed`-style conditions are avoided:
-         the registry markers let AppSearch keep the authoring in sync on repair/upgrade. -->
+         DESKTOPSHORTCUT=1 in a silent install). The registry values double as the
+         components' key paths. -->
     <ComponentGroup Id="RecraftOptions" Directory="INSTALLFOLDER">
-      <Component Id="RecraftPathEntry" Guid="E4B4C3EB-9F70-4B4F-AD8E-5F4A6C8DAE04" Condition="ADDTOPATH = 1 OR PATHEXISTING">
+      <Component Id="RecraftPathEntry" Guid="E4B4C3EB-9F70-4B4F-AD8E-5F4A6C8DAE04" Condition="ADDTOPATH = 1">
         <Environment Id="PathEnvironment" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
         <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="PathEntry" Type="string" Value="1" KeyPath="yes" />
       </Component>
-      <Component Id="RecraftDesktopShortcut" Guid="F5C5D4FC-A081-4C50-BE9F-6A5B7D9EBF05" Condition="DESKTOPSHORTCUT = 1 OR DESKTOPSHORTCUTEXISTING">
+      <Component Id="RecraftDesktopShortcut" Guid="F5C5D4FC-A081-4C50-BE9F-6A5B7D9EBF05" Condition="DESKTOPSHORTCUT = 1">
         <Shortcut Id="DesktopShortcut"
                   Directory="DesktopFolder"
                   Name="ReCraft"

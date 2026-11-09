@@ -16,9 +16,9 @@
 - **安装包可用性。** 安装向导改为中文：WixUI 自带 zh-cn，自有字符串在
   `packaging/wix/zh-CN.wxl`；`scripts/package.ps1` 新增 `-Culture`（默认 zh-CN，
   `en-US` 用 `packaging/wix/en-US.wxl`），MSI 的 `Language`/`Codepage` 跟着切到 2052/936
-  或 1033/1252。目录页之后新增“安装选项”页（默认都不勾）：把 `recraft-cli` 加入系统 PATH、
-  创建桌面快捷方式；静默安装用 `ADDTOPATH=1` / `DESKTOPSHORTCUT=1`，选择记录在
-  `HKLM\Software\ReCraft`，升级时自动延续。新增开始菜单“ReCraft 命令行”（在安装目录
+  或 1033/1252。目录页之后新增“安装选项”页（PATH 默认勾选、桌面快捷方式默认不勾）：把
+  `recraft-cli` 加入系统 PATH、创建桌面快捷方式；静默安装用 `ADDTOPATH=0` /
+  `DESKTOPSHORTCUT=1`。新增开始菜单“ReCraft 命令行”（在安装目录
   打开 cmd），`recraft-cli.exe` 补上 App Paths（`Win+R` 可直接启动）；新增 Capabilities +
   RegisteredApplications，ReCraft 出现在“设置 → 默认应用”。安装文档补充“卸载不删除
   `%LOCALAPPDATA%\ReCraft`”的说明；`scripts/verify-msi.ps1` 的结构断言扩到 21 项，完整流程

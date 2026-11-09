@@ -37,9 +37,9 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
 - **中文向导**：WixUI 自带 zh-cn，自有字符串在 `packaging/wix/zh-CN.wxl`；MSI 的
   `Language`/`Codepage` 由 `scripts/package.ps1 -Culture` 推导（zh-CN → 2052/936，
   en-US → 1033/1252，英文串在 `packaging/wix/en-US.wxl`）。发布包默认中文。
-- **安装选项页**：目录页之后一页两个复选框，默认都不勾——把 `recraft-cli` 加入系统 PATH、
-  创建桌面快捷方式；静默安装用 `ADDTOPATH=1` / `DESKTOPSHORTCUT=1`。选择写在
-  `HKLM\Software\ReCraft`，升级时由 AppSearch 读回，不必再问一次。
+- **安装选项页**：目录页之后一页两个复选框——把 `recraft-cli` 加入系统 PATH（默认勾选）、
+  创建桌面快捷方式（默认不勾）；静默安装用 `ADDTOPATH=0` 关闭 PATH、`DESKTOPSHORTCUT=1`
+  打开桌面图标。
 - **CLI 入口**：开始菜单多一个“ReCraft 命令行”，快捷方式指向
   `cmd.exe /k cd /d [INSTALLFOLDER]`。
 - **默认应用集成**：`HKLM\Software\ReCraft\Capabilities` + `Software\RegisteredApplications`，
@@ -58,7 +58,7 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
     -d DocsDir=docs -d IconPath=assets\recraft.ico `
     -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
   ```
-- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=1] [DESKTOPSHORTCUT=1]`；
+- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=0] [DESKTOPSHORTCUT=1]`；
   `msiexec /x {ProductCode} /qn`（ProductCode 见“应用和功能”登记项）。
 - `scripts/verify-msi.ps1` 总是检查结构与载荷（21 项表断言：per-machine、两个快捷方式、
   CLI App Paths、Capabilities/RegisteredApplications、安装选项页与 PATH、zh-CN 2052/936、
@@ -174,6 +174,6 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 - 未做增量/自动更新；未做 MSIX。安装包只有 MSI 一种（按机器安装，需管理员）。
 - 发布 MSI 是中文向导；英文向导用 `scripts/package.ps1 -Culture en-US` 重打（产物同名，会
   覆盖中文包）。
-- PATH 与桌面快捷方式默认不勾选；PATH 写入的是**系统** PATH（按机器安装），卸载时移除。
+- PATH 默认加入**系统** PATH（可用 `ADDTOPATH=0` 关闭），卸载时移除；桌面快捷方式默认不建。
 - 卸载不删除 `%LOCALAPPDATA%\ReCraft`（布局/主题与最近项目），那是按用户的个人数据。
 - MSI 依赖固定的 WiX 5.0.2；发布前用 CI msi job 或 `verify-msi.ps1` 复验。

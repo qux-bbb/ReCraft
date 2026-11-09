@@ -214,12 +214,11 @@ until the project adopts a trusted OSS signing service:
 
 The release wizard is Chinese (WixUI ships zh-cn; ReCraft's own strings are in
 `packaging/wix/zh-CN.wxl`). Build an English MSI with
-`scripts/package.ps1 -Culture en-US`. After the folder page the wizard offers two optional
-steps, both off by default:
+`scripts/package.ps1 -Culture en-US`. After the folder page the wizard offers:
 
-- **Add to the system PATH** — makes `recraft-cli` runnable in any terminal
-  (`ADDTOPATH=1` for silent installs).
-- **Desktop shortcut** — the Start-menu shortcut is always created
+- **Add to the system PATH** (checked by default) — makes `recraft-cli` runnable in any
+  terminal; clear it to leave the machine PATH alone (`ADDTOPATH=0` for silent installs).
+- **Desktop shortcut** (off by default) — the Start-menu shortcut is always created
   (`DESKTOPSHORTCUT=1` for silent installs).
 
 Without the PATH option the CLI is still reachable: the Start menu gains a **ReCraft CLI**

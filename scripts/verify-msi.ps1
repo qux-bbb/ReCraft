@@ -12,11 +12,11 @@
 #     documents and docs/ tree as dist/ReCraft-<version>/ (byte-identical hashes).
 #
 # From an elevated prompt (the MSI is per-machine, so msiexec needs to elevate):
-#   - silent install into a temporary folder with ADDTOPATH=1 DESKTOPSHORTCUT=1 ->
-#     files / shortcuts / HKLM entries / PATH entry / installed CLI -> silent uninstall ->
-#     full cleanup (directory, shortcuts, registry, PATH entry);
-#   - silent install with the default folder and default options -> %ProgramFiles%\ReCraft,
-#     no PATH change and no desktop shortcut -> uninstall.
+#   - silent install into a temporary folder with ADDTOPATH=0 DESKTOPSHORTCUT=1 ->
+#     files / shortcuts / HKLM entries / desktop shortcut / installed CLI -> silent
+#     uninstall -> full cleanup (directory, shortcuts, registry);
+#   - silent install with the default folder and default options (PATH on, desktop off) ->
+#     %ProgramFiles%\ReCraft + PATH entry, no desktop shortcut -> uninstall -> PATH removed.
 #
 #   powershell -File scripts/verify-msi.ps1                 # full run (needs elevation)
 #   powershell -File scripts/verify-msi.ps1 -SkipInstall     # structure + payload only
@@ -221,13 +221,13 @@ try {
         return
     }
 
-    # ---- 3. silent install into a temporary folder, with both optional steps ---------------------
+    # ---- 3. silent install into a temporary folder, opting out of PATH ---------------------------
     # Native CLIs write progress to stderr; Windows PowerShell would turn that into a terminating
     # NativeCommandError under ErrorActionPreference=Stop.
     $ErrorActionPreference = 'Continue'
     $target = Join-Path $env:TEMP ('recraft-msi-install-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    Write-Host "[install] $Msi -> $target (ADDTOPATH=1 DESKTOPSHORTCUT=1)"
-    Install-Msi $target (Join-Path $work 'install.log') @('ADDTOPATH=1', 'DESKTOPSHORTCUT=1')
+    Write-Host "[install] $Msi -> $target (ADDTOPATH=0 DESKTOPSHORTCUT=1)"
+    Install-Msi $target (Join-Path $work 'install.log') @('ADDTOPATH=0', 'DESKTOPSHORTCUT=1')
 
     foreach ($entry in $payload) {
         Assert-Condition (Test-Path -LiteralPath (Join-Path $target $entry)) "missing installed file: $entry"
@@ -236,7 +236,7 @@ try {
     Assert-Condition ($menuLinks.Count -eq 2) "expected the GUI and CLI Start-menu shortcuts, found $($menuLinks.Count)"
     Assert-Condition (Test-Path -LiteralPath $desktopShortcut) 'desktop shortcut missing although DESKTOPSHORTCUT=1'
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    Assert-Condition (($machinePath -split ';') -contains $target) 'the install folder is missing from the machine PATH (ADDTOPATH=1)'
+    Assert-Condition (-not (($machinePath -split ';') -contains $target)) 'ADDTOPATH=0 still added the install folder to the machine PATH'
 
     $arp = Find-ArpKey 'ReCraft'
     Assert-Condition ($null -ne $arp) 'Apps & Features entry missing'
@@ -256,7 +256,7 @@ try {
     Assert-Condition ($fileAssociations.'.rcraft' -eq 'ReCraft.Project') 'Capabilities\FileAssociations\.rcraft missing'
     $registeredApps = Get-ItemProperty -LiteralPath 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue
     Assert-Condition ($registeredApps.ReCraft -eq 'Software\ReCraft\Capabilities') 'RegisteredApplications\ReCraft missing'
-    Write-Host "[install] files, GUI+CLI shortcuts, desktop shortcut, PATH, App Paths and Capabilities present ($($arpProps.DisplayName) $($arpProps.DisplayVersion), $installedCode)"
+    Write-Host "[install] files, GUI+CLI shortcuts, desktop shortcut, App Paths and Capabilities present ($($arpProps.DisplayName) $($arpProps.DisplayVersion), $installedCode)"
 
     $exe = Join-Path $target 'recraft-cli.exe'
     $info = & $exe info (Join-Path $env:SystemRoot 'System32\notepad.exe') 2>$null
@@ -291,7 +291,7 @@ try {
     Assert-Condition ($null -eq $registeredApps.ReCraft) 'RegisteredApplications\ReCraft still exists after uninstall'
     $reCraftKey = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft' -ErrorAction SilentlyContinue
     Assert-Condition ($null -eq $reCraftKey.InstallDir -and $null -eq $reCraftKey.PathEntry -and $null -eq $reCraftKey.DesktopShortcut) 'Software\ReCraft values still exist after uninstall'
-    Write-Host '[uninstall] directory, shortcuts, PATH entry, App Paths and Capabilities removed'
+    Write-Host '[uninstall] directory, shortcuts, App Paths and Capabilities removed'
     $installedCode = $null
 
     # ---- 4. default folder: %ProgramFiles%\ReCraft -----------------------------------------------
@@ -307,8 +307,8 @@ try {
         Assert-Condition (Test-Path -LiteralPath $shortcut) 'Start Menu shortcut missing after the default install'
         Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut created without DESKTOPSHORTCUT=1'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-        Assert-Condition (-not (($defaultMachinePath -split ';') -contains $defaultTarget)) 'the default install changed the machine PATH without ADDTOPATH=1'
-        Write-Host "[install] default folder OK ($defaultTarget, no PATH change, no desktop shortcut)"
+        Assert-Condition (($defaultMachinePath -split ';') -contains $defaultTarget) 'the default install did not add the install folder to the machine PATH (ADDTOPATH defaults to 1)'
+        Write-Host "[install] default folder OK ($defaultTarget, PATH added by default, no desktop shortcut)"
 
         Uninstall-Msi $installedCode (Join-Path $work 'uninstall-default.log')
         for ($attempt = 0; $attempt -lt 40; $attempt++) {
@@ -318,6 +318,8 @@ try {
         Assert-Condition (-not (Test-Path -LiteralPath $defaultTarget)) 'default install directory still exists after uninstall'
         Assert-Condition ($null -eq (Find-ArpKey 'ReCraft')) 'Apps & Features entry still exists after the default uninstall'
         Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after the default uninstall'
+        $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        Assert-Condition (-not (($defaultMachinePath -split ';') -contains $defaultTarget)) 'default install folder still on the machine PATH after uninstall'
         Write-Host '[uninstall] default folder removed'
         $installedCode = $null
     }
@@ -327,8 +329,8 @@ try {
     if ($installedCode) {
         Start-Process -FilePath 'msiexec.exe' -Wait -ArgumentList @('/x', $installedCode, '/qn') -ErrorAction SilentlyContinue
     }
-    # The ADDTOPATH=1 install extends the machine PATH; if the run failed before the
-    # uninstall removed it, put the stored value (and its REG_EXPAND_SZ kind) back so a
+    # The PATH install (on by default) extends the machine PATH; if the run failed before
+    # the uninstall removed it, put the stored value (and its REG_EXPAND_SZ kind) back so a
     # rerun starts clean.
     if ($originalMachinePath) {
         $currentMachinePath = Get-MachinePathRaw

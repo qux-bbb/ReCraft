@@ -68,10 +68,10 @@ DCO），不需要 CLA，也不做版权转让。
 
 ## 11. 安装后 `recraft-cli` 提示“不是内部或外部命令”？
 
-MSI 默认不改系统 PATH。三种用法任选：开始菜单里的 **ReCraft 命令行**（打开即位于安装目录）、
-`Win+R` 输入 `recraft-cli`（已注册 App Paths）、或者在安装选项页勾选“将 recraft-cli 加入系统
-PATH”（静默安装用 `ADDTOPATH=1`）。zip 免安装版不注册任何东西，直接运行解压目录里的
-`recraft-cli.exe`。
+MSI 默认会把安装目录加入系统 PATH，装完直接可用。若安装时取消了勾选（或静默安装用
+`ADDTOPATH=0`），还有两条路：开始菜单里的 **ReCraft 命令行**（打开即位于安装目录）、
+`Win+R` 输入 `recraft-cli`（已注册 App Paths）。zip 免安装版不注册任何东西，直接运行
+解压目录里的 `recraft-cli.exe`。
 
 ## 12. 卸载后为什么 `%LOCALAPPDATA%\ReCraft` 还在？
 
