@@ -13,6 +13,16 @@
 
 ### 新增
 
+- **MCP 多实例：不再绑定单个项目。** `serve-mcp` 的项目参数现在可选（省略即空注册表，
+  由客户端调用 `open_program`），并新增一组注册表工具：`open_program`（导入 PE/ELF 二进制
+  或打开已有 `.rcraft`，默认把数据库放到用户目录 `%LOCALAPPDATA%\ReCraft\projects`，按二进制
+  路径哈希命名，重复打开复用原项目并自动分析）、`list_instances`（id/路径/格式/架构/入口/
+  函数与字符串数/是否活动）、`use_instance`、`save_project`（WAL checkpoint + `VACUUM INTO`
+  一致副本，默认目标为用户目录，拒绝覆盖已有文件）与 `close_instance`。其余工具都接受可选
+  `instance` 参数，指定实例即切换活动实例；资源 URI 带实例 id，`resources/list` 列出全部实例。
+  多实例只在 stdio 成立（HTTP 无状态，每请求一个 Session，注册表工具会明确拒绝）。
+  `get_metadata` 现在按项目的真实格式/架构回报（ELF 不再误报 `pe32`/`x86-64`）。
+
 - **安装包可用性。** 安装向导改为中文：WixUI 自带 zh-cn，自有字符串在
   `packaging/wix/zh-CN.wxl`；`scripts/package.ps1` 新增 `-Culture`（默认 zh-CN，
   `en-US` 用 `packaging/wix/en-US.wxl`），MSI 的 `Language`/`Codepage` 跟着切到 2052/936

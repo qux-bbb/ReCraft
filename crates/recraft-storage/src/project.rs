@@ -484,6 +484,33 @@ impl Project {
             .map_err(db_err)?;
         Ok(())
     }
+
+    /// Write a self-contained copy of this project to `dest` (`VACUUM INTO`).
+    ///
+    /// SQLite reads the live database under its own transaction, so the copy is a
+    /// consistent snapshot even while this project stays open and writable; the source
+    /// file is not touched and no `-wal`/`-shm` sidecar is produced for the copy.
+    /// Refuses to overwrite an existing file: "save as" must not destroy a project.
+    pub fn copy_to(&self, dest: &Path) -> Result<()> {
+        if dest.exists() {
+            return Err(Error::invalid_argument(format!(
+                "target already exists: {}",
+                dest.display()
+            )));
+        }
+        if let Some(parent) = dest.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let dest = dest.to_str().ok_or_else(|| {
+            Error::invalid_argument("target path is not valid UTF-8 (copy with recraft-cli import)")
+        })?;
+        self.conn
+            .execute("VACUUM INTO ?1", [dest])
+            .map_err(db_err)?;
+        Ok(())
+    }
 }
 
 impl Drop for Project {

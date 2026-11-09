@@ -12,8 +12,90 @@ pub(crate) fn tools(write: bool) -> Vec<Value> {
     // The read surface lives in `recraft-query`, shared with the in-app agent: one schema,
     // one executor, no per-front-end wording or caps to drift.
     let mut tools = recraft_query::specs(&Budget::mcp());
+    tools.extend(instance_tools());
     if write {
         tools.extend(write_tools());
+    }
+    tools
+}
+
+/// Registry tools: which projects are open, how to add one, and how to save one.
+///
+/// They are always advertised, read-only server or not: opening a sample is how a client
+/// gets something to read, and it never mutates an existing project.
+fn instance_tools() -> Vec<Value> {
+    let mut tools = vec![
+        json!({
+            "name": "open_program",
+            "description": "Import a PE/ELF binary into a new project, or open an existing .rcraft project, and make it the active instance. A fresh import runs function discovery, xrefs and string extraction. Without `project`, the database goes to the per-user ReCraft folder (`%LOCALAPPDATA%\\ReCraft\\projects` on Windows), named after the binary so reopening the same program reuses the user's names and comments. `analyze: true` re-runs discovery on a project that is already open on disk. Calling it again for an already-open project just switches to that instance. stdio transport only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Executable to import, or an existing .rcraft project."},
+                    "project": {"type": "string", "description": "Database path to import into (must not exist); defaults to the per-user ReCraft folder."},
+                    "analyze": {"type": "boolean", "description": "Re-run discovery when opening an existing project (default: only fresh imports are analysed)."},
+                },
+                "required": ["path"],
+            },
+        }),
+        json!({
+            "name": "list_instances",
+            "description": "List the open projects: id, database path, format/arch, entry point, function and string counts, and which one is active. Every other tool accepts an optional `instance` argument with one of these ids.",
+            "inputSchema": {"type": "object", "properties": {}},
+        }),
+        json!({
+            "name": "use_instance",
+            "description": "Make one open project the active instance, so later calls without an `instance` argument address it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Instance id from list_instances."},
+                },
+                "required": ["id"],
+            },
+        }),
+        json!({
+            "name": "save_project",
+            "description": "Checkpoint the project database (flush the WAL) and, when `path` names a different file, write a consistent copy of the project there (SQLite VACUUM INTO). Defaults to the per-user ReCraft folder. The path must not already exist, and the open project is never modified by the copy.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Destination .rcraft file; defaults to the per-user ReCraft folder."},
+                    "instance": {"type": "string", "description": "Which open project to save (default: the active one)."},
+                },
+            },
+        }),
+        json!({
+            "name": "close_instance",
+            "description": "Close an open project and release its database handle. The project file stays on disk; a later open_program picks it up again. stdio transport only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Instance to close; defaults to the active one."},
+                },
+            },
+        }),
+    ];
+    for tool in &mut tools {
+        let name = tool["name"].as_str().unwrap_or_default().to_owned();
+        let read_only = name == "list_instances";
+        tool["title"] = json!(match name.as_str() {
+            "open_program" => "Open program",
+            "list_instances" => "List instances",
+            "use_instance" => "Use instance",
+            "save_project" => "Save project",
+            "close_instance" => "Close instance",
+            _ => "ReCraft instance tool",
+        });
+        tool["annotations"] = json!({
+            "readOnlyHint": read_only,
+            "destructiveHint": false,
+            "idempotentHint": matches!(
+                name.as_str(),
+                "list_instances" | "use_instance" | "close_instance"
+            ),
+            "openWorldHint": name == "open_program",
+        });
     }
     tools
 }

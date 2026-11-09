@@ -54,33 +54,38 @@ impl McpServer {
     // --------------------------------------------------------- resources ----
 
     pub(crate) fn resources(&self) -> Vec<Value> {
-        let base = format!("recraft://project/{}", self.project_id);
-        vec![
-            json!({
-                "uri": format!("{base}/functions"),
-                "name": "functions",
-                "mimeType": "application/json",
-            }),
-            json!({
-                "uri": format!("{base}/strings"),
-                "name": "strings",
-                "mimeType": "application/json",
-            }),
-            json!({
-                "uri": format!("{base}/imports"),
-                "name": "imports",
-                "mimeType": "application/json",
-            }),
-        ]
+        let mut resources = Vec::new();
+        for instance in &self.instances {
+            let base = format!("recraft://project/{}", instance.id);
+            for (suffix, mime) in [
+                ("functions", "application/json"),
+                ("strings", "application/json"),
+                ("imports", "application/json"),
+            ] {
+                resources.push(json!({
+                    "uri": format!("{base}/{suffix}"),
+                    "name": suffix,
+                    "mimeType": mime,
+                }));
+            }
+        }
+        resources
     }
 
     pub(crate) fn resource_templates(&self) -> Vec<Value> {
-        let base = format!("recraft://project/{}", self.project_id);
-        vec![json!({
-            "uriTemplate": format!("{base}/pseudocode/{{func}}"),
-            "name": "pseudocode",
-            "mimeType": "text/plain",
-        })]
+        self.instances
+            .iter()
+            .map(|instance| {
+                json!({
+                    "uriTemplate": format!(
+                        "recraft://project/{}/pseudocode/{{func}}",
+                        instance.id
+                    ),
+                    "name": "pseudocode",
+                    "mimeType": "text/plain",
+                })
+            })
+            .collect()
     }
 
     /// `resources/subscribe` / `resources/unsubscribe`.
@@ -115,12 +120,14 @@ impl McpServer {
         Ok(json!({}))
     }
 
-    /// Whether `uri` names one of this project's resources.
+    /// Whether `uri` names one of the open projects' resources.
     fn known_resource(&self, uri: &str) -> bool {
-        let prefix = format!("recraft://project/{}/", self.project_id);
-        uri.strip_prefix(&prefix).is_some_and(|rest| {
-            matches!(rest, "functions" | "strings" | "imports") || rest.starts_with("pseudocode/")
-        })
+        let Some((id, rest)) = split_resource_uri(uri) else {
+            return false;
+        };
+        self.find_instance(id).is_some()
+            && (matches!(rest, "functions" | "strings" | "imports")
+                || rest.starts_with("pseudocode/"))
     }
 
     pub(crate) fn read_resource(
@@ -130,42 +137,31 @@ impl McpServer {
         let Some(uri) = params.get("uri").and_then(Value::as_str) else {
             return Err((-32602, "resources/read requires a uri".to_owned()));
         };
-        let prefix = format!("recraft://project/{}/", self.project_id);
-        let Some(rest) = uri.strip_prefix(&prefix) else {
+        let Some((id, rest)) = split_resource_uri(uri) else {
             return Err((-32602, format!("unknown resource uri: {uri}")));
         };
+        // A resource URI names its instance, so reading one switches to it: the id is part
+        // of the address, and a client may interleave reads across open projects.
+        self.activate(id).map_err(|error| (-32602, error))?;
+        let session = self.session_mut().map_err(|error| (-32603, error))?;
         let read = |session: &mut Session, name: &str, arguments: Value| {
             recraft_query::call(session, name, &arguments, &Budget::mcp())
         };
         let (mime, result) = if rest == "functions" {
             (
                 "application/json",
-                read(
-                    &mut self.session,
-                    "list_functions",
-                    json!({"limit": MAX_LIMIT}),
-                ),
+                read(session, "list_functions", json!({"limit": MAX_LIMIT})),
             )
         } else if rest == "strings" {
             (
                 "application/json",
-                read(
-                    &mut self.session,
-                    "list_strings",
-                    json!({"limit": MAX_LIMIT}),
-                ),
+                read(session, "list_strings", json!({"limit": MAX_LIMIT})),
             )
         } else if rest == "imports" {
-            (
-                "application/json",
-                read(&mut self.session, "list_imports", json!({})),
-            )
+            ("application/json", read(session, "list_imports", json!({})))
         } else if let Some(target) = rest.strip_prefix("pseudocode/") {
             let value = json!({"addr": target, "level": "l2"});
-            (
-                "text/plain",
-                read(&mut self.session, "get_pseudocode", value),
-            )
+            ("text/plain", read(session, "get_pseudocode", value))
         } else {
             return Err((-32602, format!("unknown resource uri: {uri}")));
         };
@@ -287,21 +283,25 @@ impl McpServer {
     /// One-line image summary embedded in the prompts, so the model starts with facts
     /// instead of discovering the image format on its first tool call.
     pub(crate) fn image_facts(&self) -> String {
-        let image = self.session.image();
-        let functions = self.session.functions().map(|rows| rows.len()).unwrap_or(0);
-        let strings = self.session.strings().map(|rows| rows.len()).unwrap_or(0);
+        let Ok(session) = self.session_ref() else {
+            return "No project is open yet: call open_program with a binary or a .rcraft project."
+                .to_owned();
+        };
+        let image = session.image();
+        let functions = session.functions().map(|rows| rows.len()).unwrap_or(0);
+        let strings = session.strings().map(|rows| rows.len()).unwrap_or(0);
         let imports: usize = image
             .imports
             .iter()
             .map(|module| module.functions.len())
             .sum();
         format!(
-            "Image: {} {}, base {}, entry {} ({}), {} functions, {} imports, {} exports, {} strings.",
-            if image.is_64 { "PE32+" } else { "PE32" },
-            if image.is_64 { "x86-64" } else { "x86" },
+            "Image: {} ({}), base {}, entry {} ({}), {} functions, {} imports, {} exports, {} strings.",
+            session.format().name(),
+            session.arch().name(),
             hex(image.image_base),
             hex(image.entry_point),
-            self.session
+            session
                 .name_at(image.entry_point)
                 .ok()
                 .flatten()
@@ -312,4 +312,11 @@ impl McpServer {
             strings,
         )
     }
+}
+
+/// Split `recraft://project/{id}/{rest}` into the instance id and the resource path.
+fn split_resource_uri(uri: &str) -> Option<(&str, &str)> {
+    let rest = uri.strip_prefix("recraft://project/")?;
+    let (id, rest) = rest.split_once('/')?;
+    (!id.is_empty() && !rest.is_empty()).then_some((id, rest))
 }

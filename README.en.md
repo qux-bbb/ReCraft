@@ -253,10 +253,14 @@ journaled write tools): `list_functions`, `get_disassembly`, `get_pseudocode` (L
 `xrefs_to/from`, `list_strings`, `list_imports`, `list_exports`, `get_metadata`,
 `callgraph`, `search_bytes`, `function_summary`, `find_api_callers`, plus project
 resources; `--write` adds `rename`/`set_comment`/`set_prototype`/`apply_type`/
-`define_function`/`define_struct`/`batch`/`undo`.
+`define_function`/`define_struct`/`batch`/`undo`. The server is not tied to one project:
+`open_program` imports a PE/ELF on the spot (the database defaults to
+`%LOCALAPPDATA%\ReCraft\projects`), `list_instances`/`use_instance` switch between open
+samples, and `save_project` writes a copy of the project file.
 
 ```powershell
-cargo run -p recraft-cli -- serve-mcp notepad.rcraft
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft   # open one project up front
+cargo run -p recraft-cli -- serve-mcp                  # empty registry; open_program fills it
 # newline-delimited JSON-RPC 2.0 on stdin/stdout; see docs/MCP.md
 ```
 

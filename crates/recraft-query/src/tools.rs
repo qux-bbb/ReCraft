@@ -243,8 +243,10 @@ pub fn metadata(session: &Session) -> Result<Value, String> {
         .collect();
     let functions = session.functions().map_err(|e| e.to_string())?.len();
     Ok(json!({
-        "format": if image.is_64 { "pe32+" } else { "pe32" },
-        "arch": if image.is_64 { "x86-64" } else { "x86" },
+        // The image metadata is format-neutral (ELF and PE share it), so report what the
+        // project actually holds instead of assuming PE.
+        "format": session.format().meta_name(session.arch()),
+        "arch": session.arch().name(),
         "image_base": hex(image.image_base),
         "entry_point": hex(image.entry_point),
         "entry_name": session.name_at(image.entry_point).ok().flatten(),

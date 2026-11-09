@@ -48,13 +48,16 @@ impl McpServer {
 
     /// Apply one parsed edit and report the previous value, the new value and dirty ranges.
     pub(crate) fn apply_edit(&mut self, edit: Edit) -> ToolResult {
-        let previous = edit.previous(&self.session)?;
+        let previous = edit.previous(self.session_ref()?)?;
         let effect = self
-            .session
+            .session_mut()?
             .execute(edit.command.clone())
             .map_err(|e| e.to_string())?;
         self.notify_resources_updated();
-        let seq = self.session.last_journal_seq().map_err(|e| e.to_string())?;
+        let seq = self
+            .session_ref()?
+            .last_journal_seq()
+            .map_err(|e| e.to_string())?;
         if let Command::DefineFunc { start, end } = &edit.command {
             return Ok(json!({
                 "tool": edit.tool,
@@ -89,13 +92,14 @@ impl McpServer {
         for (index, entry) in entries.iter().enumerate() {
             let script = script_entry_or_structured(entry)
                 .map_err(|error| format!("command #{}: {error}", index + 1))?;
-            let command = recraft_core::parse_command(&self.session, &BTreeMap::new(), &script)
-                .map_err(|error| format!("command #{}: {error}", index + 1))?;
+            let command =
+                recraft_core::parse_command(self.session_ref()?, &BTreeMap::new(), &script)
+                    .map_err(|error| format!("command #{}: {error}", index + 1))?;
             commands.push(command);
         }
         let kinds: Vec<&str> = commands.iter().map(Command::name).collect();
         let effects = self
-            .session
+            .session_mut()?
             .execute_batch(&commands)
             .map_err(|e| e.to_string())?;
         self.notify_resources_updated();
@@ -105,7 +109,7 @@ impl McpServer {
         }
         Ok(json!({
             "tool": "batch",
-            "seq": self.session.last_journal_seq().map_err(|e| e.to_string())?,
+            "seq": self.session_ref()?.last_journal_seq().map_err(|e| e.to_string())?,
             "count": commands.len(),
             "commands": kinds,
             "dirty": dirty,
@@ -117,20 +121,20 @@ impl McpServer {
     /// Define or replace a user struct layout (the missing half of `apply_type`).
     pub(crate) fn tool_define_struct(&mut self, arguments: &Value) -> ToolResult {
         let entry = script_entry("define_struct", arguments)?;
-        let command = recraft_core::parse_command(&self.session, &BTreeMap::new(), &entry)
+        let command = recraft_core::parse_command(self.session_ref()?, &BTreeMap::new(), &entry)
             .map_err(|error| error.to_string())?;
         let name = arguments
             .get("name")
             .and_then(Value::as_str)
             .map(str::to_owned);
         let effect = self
-            .session
+            .session_mut()?
             .execute(command)
             .map_err(|error| error.to_string())?;
         self.notify_resources_updated();
         Ok(json!({
             "tool": "define_struct",
-            "seq": self.session.last_journal_seq().map_err(|e| e.to_string())?,
+            "seq": self.session_ref()?.last_journal_seq().map_err(|e| e.to_string())?,
             "name": name,
             "dirty": dirty_ranges(&effect),
             "undo": true,
@@ -145,7 +149,11 @@ impl McpServer {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if dry_run {
-            let Some(records) = self.session.undo_preview().map_err(|e| e.to_string())? else {
+            let Some(records) = self
+                .session_mut()?
+                .undo_preview()
+                .map_err(|e| e.to_string())?
+            else {
                 return Ok(json!({"undone": false, "dry_run": true, "message": "nothing to undo"}));
             };
             return Ok(json!({
@@ -154,8 +162,15 @@ impl McpServer {
             }));
         }
         let report = match seq {
-            Some(seq) => Some(self.session.undo_seq(seq).map_err(|e| e.to_string())?),
-            None => self.session.undo_report().map_err(|e| e.to_string())?,
+            Some(seq) => Some(
+                self.session_mut()?
+                    .undo_seq(seq)
+                    .map_err(|e| e.to_string())?,
+            ),
+            None => self
+                .session_mut()?
+                .undo_report()
+                .map_err(|e| e.to_string())?,
         };
         if report.is_some() {
             self.notify_resources_updated();
@@ -191,7 +206,7 @@ impl Edit {
         // The single tools and `batch` share the batch-script grammar (`recraft-core`), so
         // there is exactly one place that knows an argument shape.
         let entry = script_entry(tool, arguments)?;
-        let command = recraft_core::parse_command(&server.session, &BTreeMap::new(), &entry)
+        let command = recraft_core::parse_command(server.session_ref()?, &BTreeMap::new(), &entry)
             .map_err(|error| error.to_string())?;
         let addr = edit_address(&command)?;
         Ok(Edit {

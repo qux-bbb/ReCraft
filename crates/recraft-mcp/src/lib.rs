@@ -3,12 +3,18 @@
 
 //! Model Context Protocol server exposing the session API as tools and resources.
 //!
+//! The server is not tied to one project: it keeps a registry of open projects
+//! ("instances"), and `open_program` / `list_instances` / `use_instance` / `save_project` /
+//! `close_instance` manage them. Every other tool takes an optional `instance` argument, so a
+//! client can keep several samples open and address the one it means; an instance-picking call
+//! also makes that instance active for later calls.
+//!
 //! Transport: newline-delimited JSON-RPC 2.0 over stdio (MCP stdio transport), plus the
-//! optional HTTP mode. The server is **read-only by default**: `--write` opts into the
-//! journaled write tools (`rename`, `set_comment`, `set_prototype`, `apply_type`,
-//! `define_function`) and `undo`, so a plain `serve-mcp` never mutates user data. The only
-//! thing read-only mode writes is the derived `pseudocode` cache, which is rebuildable and
-//! dropped on every edit.
+//! optional HTTP mode (one project per request: the stateless transport cannot keep
+//! instances). The server is **read-only by default**: `--write` opts into the journaled
+//! write tools (`rename`, `set_comment`, `set_prototype`, `apply_type`, `define_function`)
+//! and `undo`, so a plain `serve-mcp` never mutates user data. The only thing read-only mode
+//! writes is the derived `pseudocode` cache, which is rebuildable and dropped on every edit.
 //!
 //! Read tools: `list_functions`, `get_disassembly`, `get_pseudocode`, `xrefs_to`,
 //! `xrefs_from`, `list_strings`, `list_imports`, `callgraph`, `search_bytes`,
@@ -28,8 +34,9 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use recraft_common::{Error, Result};
 use recraft_core::Session;
@@ -40,25 +47,30 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 /// Protocol revisions this server speaks; `initialize` echoes the client's choice when it is
 /// one of these, and falls back to [`PROTOCOL_VERSION`] otherwise.
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2024-11-05", "2025-06-18"];
-/// Server instructions. Clients copy this into the system prompt, so it states the
-/// read-only contract and the truncation convention rather than describing the project.
-const SERVER_INSTRUCTIONS_READ_ONLY: &str = "ReCraft serves one read-only reverse-engineering project. \
-Start with list_functions (its filter is a case-insensitive name substring), then \
-function_summary or get_pseudocode for one function; addresses accept 0x hex, decimal, a \
-symbol name, or 'entry'. Large payloads report truncated:true together with the untruncated \
-size; narrow the query or raise maxLines/maxBytes instead of assuming the result is complete.";
+/// Server instructions. Clients copy this into the system prompt, so it states the instance
+/// model, the read-only contract and the truncation convention rather than describing a project.
+const SERVER_INSTRUCTIONS_READ_ONLY: &str = "ReCraft serves reverse-engineering projects. Several \
+projects can be open at once (one per binary); each is an instance with an id. list_instances \
+shows them, open_program imports a PE/ELF binary or opens a .rcraft project, use_instance picks \
+one, and every other tool accepts an optional `instance` argument to address one (a call that \
+names an instance also makes it active). Start with list_functions (its filter is a \
+case-insensitive name substring), then function_summary or get_pseudocode for one function; \
+addresses accept 0x hex, decimal, a symbol name, or 'entry'. Large payloads report truncated:true \
+together with the untruncated size; narrow the query or raise maxLines/maxBytes instead of \
+assuming the result is complete.";
 /// Instructions for `--write`: same query guidance, plus the mutation contract.
-const SERVER_INSTRUCTIONS_WRITABLE: &str = "ReCraft serves one reverse-engineering project with \
-read tools and journaled write tools. Query with list_functions (case-insensitive name \
-substring), function_summary or get_pseudocode; addresses accept 0x hex, decimal, a symbol \
-name, or 'entry'. Write tools (rename, set_comment, set_prototype, apply_type, \
-define_function) mutate user data through the same command bus as the GUI: every call is \
-applied immediately and recorded in the project journal with its origin, and undo reverts the \
-newest change (or a whole batch) and reports what it reverted. Use batch to apply several \
-edits atomically so one undo removes them all. Prefer reading first (pseudocode/strings/xrefs) \
-and use a short, specific name; confirm with list_functions or get_pseudocode after a write. \
-Large payloads report truncated:true with next_offset/next_start_line; follow those fields \
-instead of assuming the result is complete.";
+const SERVER_INSTRUCTIONS_WRITABLE: &str = "ReCraft serves reverse-engineering projects: several \
+instances can be open at once, listed by list_instances and opened with open_program (a PE/ELF \
+binary, or a .rcraft project). Every tool accepts an optional `instance` argument; a call that \
+names one also makes it active. Query with list_functions (case-insensitive name substring), \
+function_summary or get_pseudocode; addresses accept 0x hex, decimal, a symbol name, or 'entry'. \
+Write tools (rename, set_comment, set_prototype, apply_type, define_function) mutate user data \
+through the same command bus as the GUI: every call is applied immediately and recorded in the \
+project journal with its origin, and undo reverts the newest change (or a whole batch) and \
+reports what it reverted. Use batch to apply several edits atomically so one undo removes them \
+all. Prefer reading first (pseudocode/strings/xrefs) and use a short, specific name; confirm with \
+list_functions or get_pseudocode after a write. Large payloads report truncated:true with \
+next_offset/next_start_line; follow those fields instead of assuming the result is complete.";
 
 fn instructions(write: bool) -> &'static str {
     if write {
@@ -69,6 +81,7 @@ fn instructions(write: bool) -> &'static str {
 }
 
 mod http;
+mod instances;
 mod resources;
 mod schema;
 mod write;
@@ -76,24 +89,37 @@ mod write;
 #[cfg(test)]
 pub(crate) use http::serve_http_listener_mode;
 pub use http::{serve_http, serve_http_writable};
+pub(crate) use instances::is_instance_tool;
 pub(crate) use schema::tools;
 pub(crate) use write::is_write_tool;
 
 type ToolResult = std::result::Result<Value, String>;
 
-/// A project opened for MCP access.
-pub struct McpServer {
+/// One open project: the database handle plus the handle clients use to address it.
+struct Instance {
+    /// Stable id for `use_instance`, the per-call `instance` argument and resource URIs.
+    /// Derived from the project file name, made unique with a `-2`, `-3`, ... suffix.
+    id: String,
     session: Session,
-    project_id: String,
+}
+
+/// A registry of projects opened for MCP access.
+pub struct McpServer {
+    instances: Vec<Instance>,
+    /// Index into `instances` of the project tools act on when they name none.
+    active: Option<usize>,
     /// `true` when `--write` enabled the journaled write tools.
     write: bool,
     /// Whether this transport can deliver `notifications/resources/updated` (stdio can,
     /// stateless HTTP cannot, so the capability is advertised per transport).
     subscribe: bool,
     /// URIs the client subscribed to.
-    subscriptions: std::collections::BTreeSet<String>,
+    subscriptions: BTreeSet<String>,
     /// Notifications produced by the last request, flushed by the transport.
     pending: Vec<Value>,
+    /// Where `open_program` puts imported projects and `save_project` copies them by default
+    /// (the per-user ReCraft folder unless a caller overrides it).
+    projects_dir: PathBuf,
 }
 
 impl McpServer {
@@ -112,29 +138,105 @@ impl McpServer {
         Self::open_mode(path, write, false)
     }
 
+    /// Start with no project open: the client calls `open_program` to add one.
+    pub fn empty(write: bool) -> Self {
+        McpServer {
+            instances: Vec::new(),
+            active: None,
+            write,
+            subscribe: true,
+            subscriptions: BTreeSet::new(),
+            pending: Vec::new(),
+            projects_dir: instances::user_project_dir(),
+        }
+    }
+
+    /// Put imported projects somewhere other than the per-user ReCraft folder.
+    pub fn with_projects_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.projects_dir = dir.into();
+        self
+    }
+
     fn open_mode(path: &Path, write: bool, subscribe: bool) -> Result<Self> {
-        let mut session = Session::open(path)?;
+        let mut instance = Instance::open(path)?;
         // Provenance for the shared journal: a GUI user and an MCP client must stay
         // distinguishable in the audit trail and in `undo` results.
-        session.set_origin("mcp");
-        let project_id = session
-            .path()
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "project".to_owned());
+        instance.session.set_origin("mcp");
         Ok(McpServer {
-            session,
-            project_id,
+            instances: vec![instance],
+            active: Some(0),
             write,
             subscribe,
-            subscriptions: std::collections::BTreeSet::new(),
+            subscriptions: BTreeSet::new(),
             pending: Vec::new(),
+            projects_dir: instances::user_project_dir(),
         })
     }
 
     /// Whether this server exposes the write tools.
     pub const fn is_writable(&self) -> bool {
         self.write
+    }
+
+    // ----------------------------------------------------------- instances ----
+
+    /// Index of the instance tools act on, or the "nothing open" error.
+    fn active_index(&self) -> std::result::Result<usize, String> {
+        self.active.ok_or_else(|| {
+            "no project is open yet: call open_program with a binary or a .rcraft project"
+                .to_owned()
+        })
+    }
+
+    fn session_mut(&mut self) -> std::result::Result<&mut Session, String> {
+        let index = self.active_index()?;
+        Ok(&mut self.instances[index].session)
+    }
+
+    fn session_ref(&self) -> std::result::Result<&Session, String> {
+        let index = self.active_index()?;
+        Ok(&self.instances[index].session)
+    }
+
+    /// Handle (instance id) of the project tools act on.
+    #[cfg(test)]
+    fn project_id(&self) -> std::result::Result<&str, String> {
+        let index = self.active_index()?;
+        Ok(&self.instances[index].id)
+    }
+
+    fn find_instance(&self, id: &str) -> Option<usize> {
+        self.instances.iter().position(|instance| instance.id == id)
+    }
+
+    /// Folder `open_program` imports into and `save_project` copies to by default.
+    fn projects_dir(&self) -> &Path {
+        &self.projects_dir
+    }
+
+    /// Make `id` the active instance (the "which instance" half of `use_instance`).
+    fn activate(&mut self, id: &str) -> std::result::Result<(), String> {
+        let index = self
+            .find_instance(id)
+            .ok_or_else(|| format!("unknown instance `{id}`; call list_instances for the ids"))?;
+        self.active = Some(index);
+        Ok(())
+    }
+
+    /// Id for a newly opened project: the file stem, made unique among open instances.
+    fn unique_id(&self, base: &str) -> String {
+        let base = if base.is_empty() { "project" } else { base };
+        if self.find_instance(base).is_none() {
+            return base.to_owned();
+        }
+        let mut suffix = 2;
+        loop {
+            let candidate = format!("{base}-{suffix}");
+            if self.find_instance(&candidate).is_none() {
+                return candidate;
+            }
+            suffix += 1;
+        }
     }
 
     /// Serve newline-delimited JSON-RPC on stdin/stdout until EOF.
@@ -262,6 +364,14 @@ impl McpServer {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        // Selecting an instance is orthogonal to the tool: a call that names one makes it
+        // active, so the next call without `instance` still addresses the same project.
+        if let Some(target) = arguments.get("instance").and_then(Value::as_str) {
+            self.activate(target).map_err(|error| (-32602, error))?;
+        }
+        if is_instance_tool(name) {
+            return Ok(tool_envelope(self.call_instance_tool(name, &arguments)));
+        }
         if is_write_tool(name) && !self.write {
             return Ok(json!({
                 "content": [{
@@ -272,7 +382,10 @@ impl McpServer {
             }));
         }
         let outcome: ToolResult = if recraft_query::is_read_tool(name) {
-            recraft_query::call(&mut self.session, name, &arguments, &Budget::mcp())
+            match self.session_mut() {
+                Ok(session) => recraft_query::call(session, name, &arguments, &Budget::mcp()),
+                Err(error) => Err(error),
+            }
         } else {
             match name {
                 "rename" => self.tool_rename(&arguments),
@@ -286,19 +399,24 @@ impl McpServer {
                 other => return Err((-32602, format!("unknown tool: {other}"))),
             }
         };
-        match outcome {
-            Ok(value) => Ok(json!({
-                "content": [{"type": "text", "text": value.to_string()}],
-                // 2025-06-18 clients read the structured form; older ones still get the JSON
-                // text block. Every tool declares an object `outputSchema`.
-                "structuredContent": value,
-                "isError": false,
-            })),
-            Err(message) => Ok(json!({
-                "content": [{"type": "text", "text": format!("error: {message}")}],
-                "isError": true,
-            })),
-        }
+        Ok(tool_envelope(outcome))
+    }
+}
+
+/// Wrap a tool outcome in the MCP `tools/call` result shape.
+fn tool_envelope(outcome: ToolResult) -> Value {
+    match outcome {
+        Ok(value) => json!({
+            "content": [{"type": "text", "text": value.to_string()}],
+            // 2025-06-18 clients read the structured form; older ones still get the JSON
+            // text block. Every tool declares an object `outputSchema`.
+            "structuredContent": value,
+            "isError": false,
+        }),
+        Err(message) => json!({
+            "content": [{"type": "text", "text": format!("error: {message}")}],
+            "isError": true,
+        }),
     }
 }
 
@@ -602,14 +720,18 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
-        // Every tool advertises its intent and a result schema, so a client can auto-approve
-        // the read-only ones and consume `structuredContent`.
+        // Every read tool advertises its intent and a result schema, so a client can
+        // auto-approve the read-only ones and consume `structuredContent`. The registry tools
+        // are advertised here too, but they manage instances rather than read a project.
         for tool in tools {
             let name = tool["name"].as_str().unwrap();
             assert!(
                 !tool["title"].as_str().unwrap_or_default().is_empty(),
                 "{name}"
             );
+            if is_instance_tool(name) {
+                continue;
+            }
             assert_eq!(
                 tool["annotations"]["readOnlyHint"], true,
                 "{name} should be read-only"
@@ -683,7 +805,10 @@ mod tests {
         let Some(mut server) = notepad_project() else {
             return;
         };
-        let uri = format!("recraft://project/{}/functions", server.project_id);
+        let uri = format!(
+            "recraft://project/{}/functions",
+            server.project_id().unwrap()
+        );
         let response = call(&mut server, "resources/read", json!({"uri": uri}));
         let text = response["result"]["contents"][0]["text"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(text).unwrap();
@@ -697,7 +822,7 @@ mod tests {
         };
         let meta = tool_json(&mut server, "get_metadata", json!({}));
         assert_eq!(meta["format"], "pe32+", "{meta}");
-        assert_eq!(meta["arch"], "x86-64", "{meta}");
+        assert_eq!(meta["arch"], "x64", "{meta}");
         assert!(
             meta["entry_point"].as_str().unwrap().starts_with("0x"),
             "{meta}"
@@ -743,7 +868,7 @@ mod tests {
         let text = triage["result"]["messages"][0]["content"]["text"]
             .as_str()
             .unwrap();
-        assert!(text.contains("Image: PE32+"), "{text}");
+        assert!(text.contains("Image: PE (x64)"), "{text}");
         assert!(text.contains("functions"), "{text}");
         assert!(text.contains("0x"), "{text}");
 
@@ -775,7 +900,10 @@ mod tests {
         let Some((mut server, _project)) = notepad_writable() else {
             return;
         };
-        let uri = format!("recraft://project/{}/functions", server.project_id);
+        let uri = format!(
+            "recraft://project/{}/functions",
+            server.project_id().unwrap()
+        );
         let subscribed = call(&mut server, "resources/subscribe", json!({"uri": uri}));
         assert!(subscribed["result"].is_object(), "{subscribed}");
         assert!(
@@ -818,7 +946,7 @@ mod tests {
             return;
         };
         let mut http = McpServer::open_http(&path, false).expect("open http server");
-        let http_uri = format!("recraft://project/{}/functions", http.project_id);
+        let http_uri = format!("recraft://project/{}/functions", http.project_id().unwrap());
         let rejected = call(&mut http, "resources/subscribe", json!({"uri": http_uri}));
         assert_eq!(rejected["error"]["code"], -32601, "{rejected}");
         let initialized = call(&mut http, "initialize", json!({}));
@@ -927,7 +1055,7 @@ mod tests {
         let Some(mut server) = notepad_project() else {
             return;
         };
-        let project_id = server.project_id.clone();
+        let project_id = server.project_id().unwrap().to_owned();
         let all = tool_json(&mut server, "list_functions", json!({"limit": MAX_LIMIT}));
         let biggest = all["functions"]
             .as_array()
@@ -1210,7 +1338,7 @@ mod tests {
             fallback["result"]["instructions"]
                 .as_str()
                 .unwrap()
-                .contains("read-only"),
+                .contains("open_program"),
             "{fallback}"
         );
     }
@@ -1276,7 +1404,7 @@ mod tests {
         let response = call(&mut writable, "tools/list", json!({}));
         for tool in response["result"]["tools"].as_array().unwrap() {
             let name = tool["name"].as_str().unwrap();
-            if recraft_query::is_read_tool(name) {
+            if recraft_query::is_read_tool(name) || is_instance_tool(name) {
                 continue;
             }
             assert_eq!(tool["annotations"]["readOnlyHint"], false, "{name}");
@@ -1511,5 +1639,217 @@ mod tests {
         };
         let undone = tool_json(&mut server, "undo", json!({}));
         assert_eq!(undone["undone"], false, "{undone}");
+    }
+
+    // ------------------------------------------------------------ instances ----
+
+    /// A project with analysed functions at `path`, derived from notepad.
+    fn analysed_project(path: &std::path::Path) -> bool {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return false;
+        };
+        let mut session = Session::create(path, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        true
+    }
+
+    fn tool_error(server: &mut McpServer, tool: &str, arguments: Value) -> String {
+        let response = call(
+            server,
+            "tools/call",
+            json!({"name": tool, "arguments": arguments}),
+        );
+        assert_eq!(
+            response["result"]["isError"], true,
+            "expected a tool error: {response}"
+        );
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[test]
+    fn instance_tools_are_advertised_even_read_only() {
+        let mut server = McpServer::empty(false);
+        let response = call(&mut server, "tools/list", json!({}));
+        let tools = response["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        for expected in [
+            "open_program",
+            "list_instances",
+            "use_instance",
+            "save_project",
+            "close_instance",
+        ] {
+            assert!(names.contains(&expected), "{expected} missing: {names:?}");
+        }
+        // They are registry tools, not project writes: `--write` must not be required.
+        let writable = schema::tools(true);
+        for expected in ["open_program", "save_project"] {
+            assert!(
+                writable
+                    .iter()
+                    .any(|tool| tool["name"].as_str() == Some(expected)),
+                "{expected} missing with --write"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_server_asks_for_open_program() {
+        let mut server = McpServer::empty(false);
+        let listed = tool_json(&mut server, "list_instances", json!({}));
+        assert_eq!(listed["count"], 0, "{listed}");
+        assert_eq!(listed["active"], Value::Null, "{listed}");
+        let error = tool_error(&mut server, "list_functions", json!({}));
+        assert!(error.contains("open_program"), "{error}");
+    }
+
+    #[test]
+    fn open_program_adds_instances_and_routes_calls_between_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.rcraft");
+        let second = dir.path().join("second.rcraft");
+        if !analysed_project(&first) || !analysed_project(&second) {
+            return;
+        }
+        // `second` is opened through the tool, so the registry starts with one project.
+        let mut server = McpServer::open_writable(&first).unwrap();
+        let opened = tool_json(
+            &mut server,
+            "open_program",
+            json!({"path": second.display().to_string()}),
+        );
+        assert_eq!(opened["id"], "second", "{opened}");
+        assert_eq!(opened["active"], true, "{opened}");
+        assert!(opened["functions"].as_u64().unwrap_or(0) > 0, "{opened}");
+
+        let listed = tool_json(&mut server, "list_instances", json!({}));
+        assert_eq!(listed["count"], 2, "{listed}");
+        assert_eq!(listed["active"], "second", "{listed}");
+
+        // A rename lands in the active instance only.
+        let renamed = tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": "entry", "name": "beta"}),
+        );
+        assert_eq!(renamed["value"], "beta", "{renamed}");
+        let in_second = tool_json(&mut server, "list_functions", json!({"filter": "beta"}));
+        assert_eq!(in_second["total"], 1, "{in_second}");
+
+        // Naming an instance routes the call there and leaves it active.
+        let in_first = tool_json(
+            &mut server,
+            "list_functions",
+            json!({"instance": "first", "filter": "beta"}),
+        );
+        assert_eq!(in_first["total"], 0, "{in_first}");
+        let listed = tool_json(&mut server, "list_instances", json!({}));
+        assert_eq!(listed["active"], "first", "{listed}");
+
+        let switched = tool_json(&mut server, "use_instance", json!({"id": "second"}));
+        assert_eq!(switched["active"], "second", "{switched}");
+
+        // Both projects' resources are listed, under their own instance ids.
+        let resources = call(&mut server, "resources/list", json!({}));
+        let uris: Vec<&str> = resources["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|resource| resource["uri"].as_str())
+            .collect();
+        assert!(
+            uris.contains(&"recraft://project/first/functions"),
+            "{uris:?}"
+        );
+        assert!(
+            uris.contains(&"recraft://project/second/strings"),
+            "{uris:?}"
+        );
+
+        let closed = tool_json(&mut server, "close_instance", json!({}));
+        assert_eq!(closed["closed"], true, "{closed}");
+        assert_eq!(closed["remaining"], 1, "{closed}");
+        let listed = tool_json(&mut server, "list_instances", json!({}));
+        assert_eq!(listed["active"], "first", "{listed}");
+    }
+
+    #[test]
+    fn open_program_imports_a_binary_into_the_projects_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        let mut server = McpServer::empty(false).with_projects_dir(&projects);
+        let program = std::path::Path::new("C:/Windows/System32/notepad.exe");
+        if !program.is_file() {
+            return;
+        }
+        let opened = tool_json(
+            &mut server,
+            "open_program",
+            json!({"path": program.display().to_string()}),
+        );
+        assert_eq!(opened["imported"], true, "{opened}");
+        assert_eq!(opened["id"], "notepad", "{opened}");
+        assert!(opened["functions"].as_u64().unwrap_or(0) > 0, "{opened}");
+        let project = std::path::PathBuf::from(opened["project"].as_str().unwrap());
+        assert!(project.starts_with(&projects), "{}", project.display());
+        assert!(project.is_file(), "{}", project.display());
+
+        // Re-opening the same program reuses the project instead of importing twice.
+        let again = tool_json(
+            &mut server,
+            "open_program",
+            json!({"path": program.display().to_string()}),
+        );
+        assert_eq!(again["reopened"], true, "{again}");
+        let listed = tool_json(&mut server, "list_instances", json!({}));
+        assert_eq!(listed["count"], 1, "{listed}");
+    }
+
+    #[test]
+    fn save_project_checkpoints_and_copies_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("save.rcraft");
+        if !analysed_project(&project) {
+            return;
+        }
+        let mut server = McpServer::open(&project).unwrap();
+        let target = dir.path().join("out").join("saved.rcraft");
+        let saved = tool_json(
+            &mut server,
+            "save_project",
+            json!({"path": target.display().to_string()}),
+        );
+        assert_eq!(saved["copied"], true, "{saved}");
+        assert!(target.is_file(), "{}", target.display());
+        let reopened = Session::open(&target).unwrap();
+        assert!(
+            reopened.functions().map(|rows| rows.len()).unwrap_or(0) > 0,
+            "the copy must carry the analysed functions"
+        );
+
+        // Saving over an existing file is refused instead of destroying a project.
+        let error = tool_error(
+            &mut server,
+            "save_project",
+            json!({"path": target.display().to_string()}),
+        );
+        assert!(error.contains("already exists"), "{error}");
+
+        // The default target is the per-user folder, so the same path checkpoints only.
+        let server_dir = dir.path().join("user");
+        let mut server = server.with_projects_dir(&server_dir);
+        let same = tool_json(&mut server, "save_project", json!({}));
+        assert_eq!(same["copied"], true, "{same}");
+        assert!(
+            std::path::PathBuf::from(same["path"].as_str().unwrap()).starts_with(&server_dir),
+            "{same}"
+        );
     }
 }

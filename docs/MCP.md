@@ -14,10 +14,36 @@ cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rc
 cargo run -p recraft-cli -- analyze notepad.rcraft
 cargo run -p recraft-cli -- serve-mcp notepad.rcraft            # 只读
 cargo run -p recraft-cli -- serve-mcp notepad.rcraft --write    # 只读 + 写工具
+cargo run -p recraft-cli -- serve-mcp                           # 不预开项目，由客户端 open_program
 ```
 
 传输：**stdio**，每条消息是一行 JSON-RPC 2.0（MCP stdio transport）。服务器只把
 响应写到 stdout；日志/诊断走 stderr。
+
+### 多实例（不绑定单个项目）
+
+服务器不再绑定一个项目：它维护一份「已打开项目」注册表，每个项目是一个**实例**，用
+短 id（项目文件名去扩展名，重名自动加 `-2`/`-3`，从二进制导入时用二进制名）寻址。
+
+| 工具 | 参数 | 说明 |
+|---|---|---|
+| `open_program` | `path`（PE/ELF 或 `.rcraft`）, `project?`, `analyze?` | 导入二进制或打开已有项目并设为活动实例；新导入自动跑函数发现 + xref + 字符串。`project` 不给时数据库落在**用户目录**（Windows `%LOCALAPPDATA%\ReCraft\projects`，Linux `$XDG_DATA_HOME/recraft/projects`），文件名按二进制路径哈希，因此同一程序再次打开会复用原项目（名字/注释都在）。重复打开已打开的同一项目只切过去。`analyze:true` 对已存在的项目重跑分析 |
+| `list_instances` | — | `{count, active, instances:[{id,active,project,format,arch,bits,image_base,entry,functions,strings,analyzed}]}` |
+| `use_instance` | `id` | 把某个实例设为活动实例 |
+| `save_project` | `path?`, `instance?` | 先 checkpoint（把 WAL 刷回项目文件），再在 `path` 与当前文件不同的情况下用 SQLite `VACUUM INTO` 写一份**一致快照**。目标已存在则拒绝（不覆盖用户项目）；不给 `path` 时复制到用户目录 |
+| `close_instance` | `id?` | 关闭实例、释放数据库句柄，项目文件保留 |
+
+其余所有工具（读工具、写工具、资源）都接受一个可选 `instance` 参数；**指定实例的调用会
+同时把它设为活动实例**，所以「切一次、后面省略」也成立。`resources/list` 会列出全部实例
+的资源（`recraft://project/<实例 id>/...`），`resources/read` 按 URI 里的 id 自动切换。
+
+两个实例之间互不影响：`get_metadata`/`list_functions`/写工具都只看活动实例；`save_project`
+只 checkpoint 当前实例，复制出来的文件可以再用 `open_program` 打开成第三个实例。
+
+多实例只在 **stdio** 上成立（registry 存在服务器进程里）。`--http` 必须带项目参数：HTTP 是
+无状态的，每个请求建一个 `Session`，`open_program`/`use_instance`/`close_instance` 会返回
+明确错误，`list_instances`/`save_project` 仍可用。
+
 
 ### HTTP 传输（`--http`）
 
@@ -237,7 +263,8 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
   超过默认上限时末尾追加 `// truncated: lines 1-N of M; read the rest with
   get_pseudocode(startLine=N+1)` 注释，不会静默返回截短的文档
 
-`{id}` 是项目文件名（不含扩展名）。
+`{id}` 是实例 id：项目文件名（不含扩展名）或二进制名；实例重名时带 `-2`/`-3` 后缀。
+`resources/list` 会为每个已打开实例各列一份。
 
 ## 提示模板
 
@@ -263,12 +290,14 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 
 ## 实现与测试
 
-- 代码：`crates/recraft-mcp`（`McpServer::open` / `open_writable` / `handle_message` /
-  `serve_stdio`）。
+- 代码：`crates/recraft-mcp`（`McpServer::open` / `open_writable` / `empty` /
+  `handle_message` / `serve_stdio`；实例注册表与 `open_program` 等在 `instances.rs`）。
 - 测试：`cargo test -p recraft-mcp`（notepad 真实样本：initialize/tools/list/tools/call、
   resources/read、filter 先于 limit 的回归、伪代码截断上限、恒定时间 token 比较、未知方法与
   未知工具的错误路径，以及 `--write` 的开关、rename 落库 + undo、comment/prototype 往返、
-  只读服务器拒绝写工具）。
+  只读服务器拒绝写工具；多实例部分覆盖空服务器提示、`open_program` 导入到用户目录并复用、
+  两个实例之间的调用路由与 `instance` 参数、`save_project` 的一致副本与拒绝覆盖、资源按实例
+  前缀、`close_instance`）。
 - E2E：`scripts/e2e.ps1` 第 11 步通过管道调用 `serve-mcp` 验证 initialize +
   `list_functions` + `resources/read`，并断言截断契约（`list_functions{limit:1}` 的
   `count/truncated/total`、`get_pseudocode{maxLines:1}` 的 `total_lines/truncated`）。
@@ -283,6 +312,8 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 - **反编译缓存**：`get_pseudocode` 第一次渲染后按指纹（函数范围/名字/原型/参数类型/结构体
   数量 + 反编译器版本）落库，第二次直接命中。实测 14 768 行的函数：冷 9.8 s → 热 16 ms；
   结果里 `cached` 字段标明是否命中。`includeLines` 请求逐行地址时不走缓存。
+- **多实例仅 stdio**：HTTP 是无状态传输（每请求一个 `Session`），注册表不跨请求；要多项目
+  就用 stdio，或者给每个项目各起一个 HTTP 服务。
 - 资源订阅只在 **stdio** 可用（`resources.subscribe = true`）：订阅后任何写操作都会推一条
   `notifications/resources/updated`。HTTP 是无状态的，不宣告该能力。
 - `search_bytes` 在 1 GiB 段上按需分块扫描，暂无通配符/正则；`callgraph` 基于已持久化

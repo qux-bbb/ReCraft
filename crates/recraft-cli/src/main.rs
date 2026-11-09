@@ -164,11 +164,14 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Serve the project over the Model Context Protocol (read-only tools; `--write`
+    /// Serve projects over the Model Context Protocol (read-only tools; `--write`
     /// adds the journaled write tools).
+    ///
+    /// PROJ is opened first; omit it to start with no project and let the client call the
+    /// open_program tool (stdio only, where the instance registry is kept).
     ServeMcp {
-        project: PathBuf,
-        /// Serve JSON-RPC over HTTP POST /mcp instead of stdio.
+        project: Option<PathBuf>,
+        /// Serve JSON-RPC over HTTP POST /mcp instead of stdio (needs a project).
         #[arg(long)]
         http: bool,
         /// HTTP bind address (with --http).
@@ -615,6 +618,11 @@ fn run(cli: Cli) -> Result<()> {
             write,
         } => {
             if http {
+                let Some(project) = project else {
+                    return Err(recraft_common::Error::invalid_argument(
+                        "serve-mcp --http needs a project; the instance registry is stdio-only",
+                    ));
+                };
                 let token = token.unwrap_or_else(generate_mcp_token);
                 if token.is_empty() {
                     return Err(recraft_common::Error::internal("empty MCP token"));
@@ -625,10 +633,20 @@ fn run(cli: Cli) -> Result<()> {
                 } else {
                     recraft_mcp::serve_http(&project, &bind, &token)
                 }
-            } else if write {
-                recraft_mcp::McpServer::open_writable(&project)?.serve_stdio()
             } else {
-                recraft_mcp::McpServer::open(&project)?.serve_stdio()
+                // Without a project the client opens programs with the open_program tool.
+                match project {
+                    Some(project) if write => {
+                        recraft_mcp::McpServer::open_writable(&project)?.serve_stdio()
+                    }
+                    Some(project) => recraft_mcp::McpServer::open(&project)?.serve_stdio(),
+                    None => {
+                        eprintln!(
+                            "[mcp] no project open; the client can add one with the open_program tool"
+                        );
+                        recraft_mcp::McpServer::empty(write).serve_stdio()
+                    }
+                }
             }
         }
         Commands::Batch {
