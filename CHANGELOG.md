@@ -117,7 +117,7 @@
   唯一实现，其他格式报 `unrecognised executable format`）。项目把 `format` 与新增的 `arch`
   写进 `meta`，镜像 JSON 的键从 `pe_meta` 改为 `image_meta`，旧项目仍从 `pe_meta` 读取，
   不需要重新导入。这是一次零输出变化的重构：789 个 golden 快照、`lint` 与反编译文本不变。
-- **CI 增加 Linux 作业。** `core crates (Linux)` 在 `ubuntu-latest` 上跑 11 个可移植 crate 的
+- **CI 增加 Linux 作业。** `core crates (Linux)` 在 `ubuntu-24.04` 上跑 11 个可移植 crate 的
   测试，用来持续证明 ADR-009 的可移植性；它也是 ELF 语料（只能在 Linux 上编译）的前置条件。
 - **调用约定改为按架构查表。** `recover_l2` 不再用 `image().is_64` 二分，而是按
   `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与将来的
@@ -129,6 +129,13 @@
   O(缓存大小) 的 LRU 扫描改成 O(1) 查找 + FIFO 淘汰。Go 3261 个函数的全量 L1 自检
   **19 分 39 秒 → 约 2.7 秒**，L1+L2 约 14 秒；notepad 54.8 s → 8.5 s、crackme 40.5 s →
   0.5 s；五套 lint 输出逐字节不变，789 份 golden 快照不变。
+- **CI 动作升到 Node 24，Linux 作业固定镜像。** `actions/checkout` v4 → v7、
+  `actions/upload-artifact` v4 → v7，消掉 GitHub Actions 报的 Node.js 20 弃用警告（这些动作从
+  v5 起声明 `node24`，要求 runner ≥ 2.327.1，GitHub 托管 runner 已满足；v6/v7 的其余改动——
+  凭据写独立文件、`pull_request_target` 禁止检出 fork——与本仓库无关）。`core` 与 `licenses`
+  两个作业改用 `ubuntu-24.04`：`ubuntu-latest` 从 2026-10-19 起迁往 Ubuntu 26，而提交的
+  `tests/golden/elf{,-cpp}` 依赖镜像里的 gcc/glibc，静默换镜像会让快照抖动；升级镜像要在
+  同一个 PR 里用 `RECRAFT_REGEN_ELF_SNAPSHOTS=1` 重建快照。
 
 ## [0.1.0] - 2026-11-08
 

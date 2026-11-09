@@ -13,7 +13,7 @@ jobs:
     name: build / clippy / test (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -69,9 +69,12 @@ jobs:
 
   core:
     name: core crates (Linux)
-    runs-on: ubuntu-latest
+    # Pinned on purpose: ubuntu-latest starts moving to Ubuntu 26 in Oct 2026, and the
+    # committed ELF snapshots depend on the image's gcc/glibc. Bump this deliberately and
+    # regenerate tests/golden/elf{,-cpp} with RECRAFT_REGEN_ELF_SNAPSHOTS=1 in the same PR.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # ADR-009: the headless core is portable. This job proves it on every push,
@@ -140,7 +143,7 @@ jobs:
             -p recraft-storage -p recraft-core -p recraft-analysis -p recraft-decompile \
             -p recraft-query -p recraft-mcp -p recraft-ai
       - name: upload ELF snapshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: elf-golden
           path: |
@@ -152,7 +155,7 @@ jobs:
     name: windows package (zip)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: release build + package
@@ -162,7 +165,7 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/verify-package.ps1
       - name: upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recraft-windows-x64
           path: |
@@ -174,7 +177,7 @@ jobs:
     name: windows installer (MSI)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # package.ps1 restores the WiX 5.0.2 pinned in .config/dotnet-tools.json and adds the
@@ -190,7 +193,7 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/verify-msi.ps1
       - name: upload MSI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recraft-windows-x64-msi
           path: |
@@ -200,9 +203,10 @@ jobs:
 
   licenses:
     name: license / ban / source policy
-    runs-on: ubuntu-latest
+    # Same pin as `core` so the policy gate does not change images mid-stream.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check licenses bans sources
