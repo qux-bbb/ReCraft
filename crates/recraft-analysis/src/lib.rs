@@ -315,6 +315,16 @@ pub fn analyze_with_options(
         }
     }
 
+    // ELF calls imported functions through 16-byte PLT stubs (`jmp [rip+got]`), so the
+    // IAT slot is referenced by the stub, not by the caller. Without this map an ELF
+    // sample only sees the handful of imports it loads directly (`-fno-plt` style);
+    // with it the tag lands on the call site, exactly like PE's `call [IAT]`.
+    let plt = if session.format() == recraft_core::Format::Elf {
+        plt_stubs(session, &segments, &iat)?
+    } else {
+        HashMap::new()
+    };
+
     let mut calls: Vec<(Address, Address)> = Vec::new();
     let mut jumps: Vec<(Address, Address)> = Vec::new();
     let mut data_refs: Vec<(Address, Address)> = Vec::new();
@@ -342,7 +352,10 @@ pub fn analyze_with_options(
             start,
             limit,
             &segments,
-            &iat,
+            &ImportTags {
+                iat: &iat,
+                plt: &plt,
+            },
             &mut instruction_total,
             options,
         )?;
@@ -508,13 +521,103 @@ fn is_mapped(segments: &[recraft_core::Segment], addr: Address) -> bool {
     segments.iter().any(|segment| segment.contains(addr))
 }
 
+/// Map every PLT stub entry address to the import it jumps through.
+///
+/// On x86-64 a PLT entry is a short stub ending in `ff 25 <disp32>` (`jmp [rip+disp]`);
+/// the jump target is the import's GOT slot, i.e. a key of `iat`. CET builds put
+/// `endbr64` (optionally with a `bnd` prefix) in front of the jump, so the entry is
+/// recorded under each plausible prefix length. A literal pattern scan over the
+/// executable segments is enough — `.plt` does not have to be parsed.
+fn plt_stubs(
+    session: &mut Session,
+    segments: &[recraft_core::Segment],
+    iat: &HashMap<u64, (String, String)>,
+) -> Result<HashMap<u64, (String, String)>> {
+    let mut stubs: HashMap<u64, (String, String)> = HashMap::new();
+    let mut chunk = vec![0u8; 64 * 1024];
+    for segment in segments {
+        if !segment.perm.is_executable() || segment.file_size == 0 {
+            continue;
+        }
+        let size = segment.file_size.min(segment.len());
+        let mut offset = 0u64;
+        while offset < size {
+            let want = ((size - offset) as usize).min(chunk.len());
+            if want < 6 {
+                break;
+            }
+            let read = session.read_at(
+                Address::new(segment.range.start.get() + offset),
+                &mut chunk[..want],
+            )?;
+            if read < 6 {
+                break;
+            }
+            scan_plt_bytes(
+                &chunk[..read],
+                segment.range.start.get() + offset,
+                iat,
+                &mut stubs,
+            );
+            // Overlap by five bytes so a `jmp [rip+disp]` cut by the chunk edge is seen.
+            offset += read as u64 - 5;
+        }
+    }
+    Ok(stubs)
+}
+
+/// Record the `jmp [rip+disp]` thunks in one window of executable bytes whose target is a
+/// known import slot, together with the entry address a `call` would land on.
+fn scan_plt_bytes(
+    bytes: &[u8],
+    base: u64,
+    iat: &HashMap<u64, (String, String)>,
+    out: &mut HashMap<u64, (String, String)>,
+) {
+    if bytes.len() < 6 {
+        return;
+    }
+    for index in 0..=bytes.len() - 6 {
+        if bytes[index] != 0xFF || bytes[index + 1] != 0x25 {
+            continue;
+        }
+        let disp = i32::from_le_bytes([
+            bytes[index + 2],
+            bytes[index + 3],
+            bytes[index + 4],
+            bytes[index + 5],
+        ]);
+        let insn = base + index as u64;
+        let target = insn.wrapping_add(6).wrapping_add_signed(i64::from(disp));
+        let Some(tag) = iat.get(&target) else {
+            continue;
+        };
+        out.insert(insn, tag.clone());
+        // A call lands on the entry start, which may carry prefixes in front of the
+        // jump (`endbr64`, `bnd`, `notrack`). Everything within five bytes before the
+        // `ff 25` belongs to the stub, so alias those addresses to the same import.
+        for back in 1..=5usize {
+            if index >= back {
+                out.insert(insn - back as u64, tag.clone());
+            }
+        }
+    }
+}
+
+/// The two ways an instruction references an import: a direct IAT/GOT memory operand,
+/// or a call to a PLT stub that jumps through one.
+struct ImportTags<'a> {
+    iat: &'a HashMap<u64, (String, String)>,
+    plt: &'a HashMap<u64, (String, String)>,
+}
+
 /// Walk one function's basic blocks.
 fn scan_function(
     session: &mut Session,
     start: Address,
     limit: Option<Address>,
     segments: &[recraft_core::Segment],
-    iat: &HashMap<u64, (String, String)>,
+    tags: &ImportTags<'_>,
     instruction_total: &mut u64,
     options: &AnalysisOptions,
 ) -> Result<ScanOutput> {
@@ -561,7 +664,7 @@ fn scan_function(
             if target.get() != 0 && is_mapped(segments, target) {
                 data_refs.push((addr, target));
             }
-            if let Some((qualified, category)) = iat.get(&target.get()) {
+            if let Some((qualified, category)) = tags.iat.get(&target.get()) {
                 api_refs.push((addr, qualified.clone(), category.clone()));
             }
         }
@@ -570,6 +673,10 @@ fn scan_function(
             FlowKind::Next => stack.push(next),
             FlowKind::Call => {
                 if let Some(target) = insn.branch_target() {
+                    // A call to a PLT stub is this sample's import reference.
+                    if let Some((qualified, category)) = tags.plt.get(&target.get()) {
+                        api_refs.push((addr, qualified.clone(), category.clone()));
+                    }
                     calls.push((addr, target));
                     // Direct call targets are functions even when we do not know this
                     // function's end yet; the caller filters out known-interior targets.
@@ -972,6 +1079,43 @@ mod tests {
             "api tag missing at {:#x}",
             site.get()
         );
+    }
+
+    /// The PLT scan turns `jmp [rip+got]` stubs into call-site tags: a normal ELF build
+    /// calls `open@plt`, so without this the import is never tagged in the function that
+    /// uses it (only a stub or a `-fno-plt` load would carry the tag).
+    #[test]
+    fn plt_thunks_are_recognised_with_and_without_endbr() {
+        let base = 0x1000u64;
+        let got = 0x9000u64;
+        // `endbr64; bnd jmp [rip+disp]` — the CET layout.
+        let mut bytes = vec![0xF3, 0x0F, 0x1E, 0xFA, 0xF2, 0xFF, 0x25, 0, 0, 0, 0];
+        let disp = (got as i64 - (base as i64 + 5 + 6)) as i32;
+        bytes[7..11].copy_from_slice(&disp.to_le_bytes());
+        let mut iat = HashMap::new();
+        iat.insert(got, ("elf!open".to_owned(), "file".to_owned()));
+
+        let mut stubs = HashMap::new();
+        scan_plt_bytes(&bytes, base, &iat, &mut stubs);
+        assert_eq!(
+            stubs.get(&base).map(|(rule, _)| rule.as_str()),
+            Some("elf!open")
+        );
+
+        // A plain `jmp [rip+disp]`, the layout without CET prefixes.
+        let mut plain = vec![0xFF, 0x25, 0, 0, 0, 0];
+        let disp = (got as i64 - (base as i64 + 6)) as i32;
+        plain[2..6].copy_from_slice(&disp.to_le_bytes());
+        let mut stubs = HashMap::new();
+        scan_plt_bytes(&plain, base, &iat, &mut stubs);
+        assert!(stubs.contains_key(&base));
+
+        // A jump that does not land on an import slot is not a stub.
+        let mut unknown = plain.clone();
+        unknown[2..6].copy_from_slice(&0i32.to_le_bytes());
+        let mut stubs = HashMap::new();
+        scan_plt_bytes(&unknown, base, &iat, &mut stubs);
+        assert!(stubs.is_empty());
     }
 
     #[test]

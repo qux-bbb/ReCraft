@@ -81,6 +81,12 @@
 
 ### 修复
 
+- **ELF 的 API 标签现在落在调用点上。** 普通 ELF 通过 PLT 桩（`jmp [rip+got]`）调用导入
+  函数，而桩本身不在函数列表里，所以此前只有少数 `-fno-plt` 风格的直接 GOT 引用能产生
+  标签，真实 ELF 样本的 triage 几乎是空的。`analyze` 现在扫描可执行段里的 `ff 25` 桩
+  （含 CET 的 `endbr64`/`bnd` 前缀），把 `call <桩>` 解析成导入名并在调用点打标签：样本上的
+  API 标签从个位数升到数千，`suspicious` 能正确归到 `main` 等具体函数；PE 的 IAT 路径不受
+  影响，L2 输出不变。
 - **`Reg` 前缀不再把无关符号判成注册表。** 旧规则是 `contains("REG")`，ELF 的
   `_ITM_deregisterTMCloneTable`、`__register_frame_info` 都被标成 registry，`RegisterClassW`
   也永远到不了 ui 规则；现在按 `RegOpen`/`RegSet`/`RegQuery`/`RegClose` 这类动词匹配，
