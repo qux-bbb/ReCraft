@@ -4,24 +4,31 @@
 # Verifies the MSI built by scripts/package.ps1 (DESIGN section 13).
 #
 # Always:
-#   - structure: per-machine summary bit, .rcraft association, Start-menu shortcut,
-#     Apps & Features properties, MajorUpgrade rule, VC++ runtime launch condition;
+#   - structure: per-machine summary bit, .rcraft association, Start-menu shortcuts,
+#     CLI App Paths + Capabilities/RegisteredApplications, PATH/desktop-shortcut options,
+#     Apps & Features properties, MajorUpgrade rule, VC++ runtime launch condition,
+#     zh-CN wizard localization (2052/936);
 #   - payload: an administrative install (`msiexec /a`) extracts the same binaries,
 #     documents and docs/ tree as dist/ReCraft-<version>/ (byte-identical hashes).
 #
 # From an elevated prompt (the MSI is per-machine, so msiexec needs to elevate):
-#   - silent install into a temporary folder -> files / Start-menu shortcut / HKLM
-#     Apps & Features entry -> installed CLI -> silent uninstall -> full cleanup;
-#   - silent install with the default folder -> %ProgramFiles%\ReCraft -> uninstall.
+#   - silent install into a temporary folder with ADDTOPATH=1 DESKTOPSHORTCUT=1 ->
+#     files / shortcuts / HKLM entries / PATH entry / installed CLI -> silent uninstall ->
+#     full cleanup (directory, shortcuts, registry, PATH entry);
+#   - silent install with the default folder and default options -> %ProgramFiles%\ReCraft,
+#     no PATH change and no desktop shortcut -> uninstall.
 #
 #   powershell -File scripts/verify-msi.ps1                 # full run (needs elevation)
 #   powershell -File scripts/verify-msi.ps1 -SkipInstall     # structure + payload only
 #   powershell -File scripts/verify-msi.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
+#   powershell -File scripts/verify-msi.ps1 -Culture en-US   # English build
 
 [CmdletBinding()]
 param(
     [string]$Msi = '',
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [ValidateSet('zh-CN', 'en-US')]
+    [string]$Culture = 'zh-CN'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +44,13 @@ if (-not $Msi -or -not (Test-Path -LiteralPath $Msi)) {
 $Msi = (Resolve-Path -LiteralPath $Msi).Path
 $version = ($Msi | Split-Path -Leaf) -replace '^recraft-v', '' -replace '-windows-x64\.msi$', ''
 $stage = Join-Path $repo "dist\ReCraft-$version"
+if ($Culture -eq 'zh-CN') {
+    $msiLanguage = 2052
+    $msiCodepage = 936
+} else {
+    $msiLanguage = 1033
+    $msiCodepage = 1252
+}
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $elevated = (New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -45,6 +59,9 @@ if (-not $elevated -and -not $SkipInstall) {
 }
 
 $shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ReCraft.lnk'
+$startMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'ReCraft.lnk'
+$machineEnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
 $defaultTarget = Join-Path $env:ProgramFiles 'ReCraft'
 $work = Join-Path $env:TEMP ('recraft-msi-check-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
@@ -72,9 +89,26 @@ function Find-ArpKey([string]$DisplayName) {
     return $null
 }
 
-function Install-Msi([string]$InstallFolder, [string]$LogPath) {
+# The machine PATH as stored, without expanding %VARS%, plus the registry value kind.
+# Restoring it through [Environment]::SetEnvironmentVariable would rewrite REG_EXPAND_SZ
+# as REG_SZ, so the finally block uses SetValue with the original kind instead.
+function Get-MachinePathRaw {
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($machineEnvironmentKey, $false)
+    if ($null -eq $key) { return $null }
+    try {
+        return [pscustomobject]@{
+            Value = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            Kind  = $key.GetValueKind('Path')
+        }
+    } finally {
+        $key.Close()
+    }
+}
+
+function Install-Msi([string]$InstallFolder, [string]$LogPath, [string[]]$Properties = @()) {
     $arguments = @('/i', $Msi, '/qn', '/l*v', $LogPath)
     if ($InstallFolder) { $arguments += "INSTALLFOLDER=$InstallFolder" }
+    foreach ($property in $Properties) { $arguments += $property }
     $process = Start-Process -FilePath 'msiexec.exe' -Wait -PassThru -ArgumentList $arguments
     if ($process.ExitCode -ne 0) {
         $tail = (Get-Content -LiteralPath $LogPath -Tail 25 -ErrorAction SilentlyContinue) -join "`n"
@@ -93,6 +127,7 @@ function Uninstall-Msi([string]$ProductCode, [string]$LogPath) {
 }
 
 $installedCode = $null
+$originalMachinePath = Get-MachinePathRaw
 try {
     # ---- 1. structure ----------------------------------------------------------------------------
     $wordCount = Get-SummaryWordCount $Msi
@@ -118,6 +153,19 @@ try {
         $tables = Get-Content -LiteralPath $decompiled -Raw
         $expected = @(
             @('<Shortcut Id="StartMenuShortcut"', 'Start-menu shortcut'),
+            @('Id="CliShortcut"', 'ReCraft CLI Start-menu shortcut'),
+            @('Target="[SystemFolder]cmd.exe"', 'CLI shortcut target'),
+            @('App Paths\recraft-cli.exe', 'CLI App Paths entry'),
+            @('Software\RegisteredApplications', 'RegisteredApplications entry'),
+            @('Software\ReCraft\Capabilities', 'Capabilities entry'),
+            @('Id="DesktopFolder"', 'desktop-shortcut folder'),
+            @('Id="RecraftPathEntry"', 'PATH option component'),
+            @('Id="OptionsDlg"', 'install options page'),
+            @('Name="PATH"', 'PATH environment entry'),
+            @('Property="ADDTOPATH"', 'PATH checkbox'),
+            @('Property="DESKTOPSHORTCUT"', 'desktop-shortcut checkbox'),
+            @(('Codepage="{0}"' -f $msiCodepage), "$Culture string codepage"),
+            @(('Language="{0}"' -f $msiLanguage), "$Culture package language"),
             @('Key=".rcraft"', '.rcraft project association'),
             @('ReCraft.Project', '.rcraft ProgId'),
             @('<Property Id="ARPPRODUCTICON"', 'Apps & Features product icon'),
@@ -173,18 +221,22 @@ try {
         return
     }
 
-    # ---- 3. silent install into a temporary folder -----------------------------------------------
+    # ---- 3. silent install into a temporary folder, with both optional steps ---------------------
     # Native CLIs write progress to stderr; Windows PowerShell would turn that into a terminating
     # NativeCommandError under ErrorActionPreference=Stop.
     $ErrorActionPreference = 'Continue'
     $target = Join-Path $env:TEMP ('recraft-msi-install-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    Write-Host "[install] $Msi -> $target"
-    Install-Msi $target (Join-Path $work 'install.log')
+    Write-Host "[install] $Msi -> $target (ADDTOPATH=1 DESKTOPSHORTCUT=1)"
+    Install-Msi $target (Join-Path $work 'install.log') @('ADDTOPATH=1', 'DESKTOPSHORTCUT=1')
 
     foreach ($entry in $payload) {
         Assert-Condition (Test-Path -LiteralPath (Join-Path $target $entry)) "missing installed file: $entry"
     }
-    Assert-Condition (Test-Path -LiteralPath $shortcut) 'Start Menu shortcut missing'
+    $menuLinks = @(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue)
+    Assert-Condition ($menuLinks.Count -eq 2) "expected the GUI and CLI Start-menu shortcuts, found $($menuLinks.Count)"
+    Assert-Condition (Test-Path -LiteralPath $desktopShortcut) 'desktop shortcut missing although DESKTOPSHORTCUT=1'
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    Assert-Condition (($machinePath -split ';') -contains $target) 'the install folder is missing from the machine PATH (ADDTOPATH=1)'
 
     $arp = Find-ArpKey 'ReCraft'
     Assert-Condition ($null -ne $arp) 'Apps & Features entry missing'
@@ -193,7 +245,18 @@ try {
     Assert-Condition ($arpProps.DisplayName -eq 'ReCraft') "unexpected DisplayName: $($arpProps.DisplayName)"
     Assert-Condition ($arpProps.DisplayVersion -eq $version) "unexpected DisplayVersion: $($arpProps.DisplayVersion)"
     $installedCode = Split-Path -Leaf $arp.PSPath
-    Write-Host "[install] files, shortcut and machine-wide Apps & Features entry present ($($arpProps.DisplayName) $($arpProps.DisplayVersion), $installedCode)"
+
+    # CLI discovery and Settings > Default apps integration.
+    $cliAppPathKey = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\recraft-cli.exe'
+    $cliAppPath = Get-Item -LiteralPath $cliAppPathKey -ErrorAction SilentlyContinue
+    Assert-Condition ($null -ne $cliAppPath -and $cliAppPath.GetValue('') -eq (Join-Path $target 'recraft-cli.exe')) 'CLI App Paths entry missing or pointing elsewhere'
+    $capabilities = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft\Capabilities' -ErrorAction SilentlyContinue
+    Assert-Condition ($capabilities.ApplicationName -eq 'ReCraft') 'Capabilities\ApplicationName missing'
+    $fileAssociations = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft\Capabilities\FileAssociations' -ErrorAction SilentlyContinue
+    Assert-Condition ($fileAssociations.'.rcraft' -eq 'ReCraft.Project') 'Capabilities\FileAssociations\.rcraft missing'
+    $registeredApps = Get-ItemProperty -LiteralPath 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue
+    Assert-Condition ($registeredApps.ReCraft -eq 'Software\ReCraft\Capabilities') 'RegisteredApplications\ReCraft missing'
+    Write-Host "[install] files, GUI+CLI shortcuts, desktop shortcut, PATH, App Paths and Capabilities present ($($arpProps.DisplayName) $($arpProps.DisplayVersion), $installedCode)"
 
     $exe = Join-Path $target 'recraft-cli.exe'
     $info = & $exe info (Join-Path $env:SystemRoot 'System32\notepad.exe') 2>$null
@@ -213,8 +276,22 @@ try {
     }
     Assert-Condition (-not (Test-Path -LiteralPath $target)) 'install directory still exists after uninstall'
     Assert-Condition (-not (Test-Path -LiteralPath $shortcut)) 'Start Menu shortcut still exists after uninstall'
+    Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after uninstall'
+    Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut still exists after uninstall'
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    Assert-Condition (-not (($machinePath -split ';') -contains $target)) 'install folder still on the machine PATH after uninstall'
     Assert-Condition ($null -eq (Find-ArpKey 'ReCraft')) 'Apps & Features entry still exists after uninstall'
-    Write-Host '[uninstall] directory, shortcut and Apps & Features entry removed'
+    # MSI removes the values it wrote; the (now empty) keys may legitimately remain, so
+    # assert on values rather than on key existence.
+    $cliAppPath = Get-Item -LiteralPath $cliAppPathKey -ErrorAction SilentlyContinue
+    Assert-Condition ($null -eq $cliAppPath -or -not $cliAppPath.GetValue('')) 'CLI App Paths value still exists after uninstall'
+    $capabilities = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft\Capabilities' -ErrorAction SilentlyContinue
+    Assert-Condition ($null -eq $capabilities.ApplicationName) 'Capabilities\ApplicationName still exists after uninstall'
+    $registeredApps = Get-ItemProperty -LiteralPath 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue
+    Assert-Condition ($null -eq $registeredApps.ReCraft) 'RegisteredApplications\ReCraft still exists after uninstall'
+    $reCraftKey = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft' -ErrorAction SilentlyContinue
+    Assert-Condition ($null -eq $reCraftKey.InstallDir -and $null -eq $reCraftKey.PathEntry -and $null -eq $reCraftKey.DesktopShortcut) 'Software\ReCraft values still exist after uninstall'
+    Write-Host '[uninstall] directory, shortcuts, PATH entry, App Paths and Capabilities removed'
     $installedCode = $null
 
     # ---- 4. default folder: %ProgramFiles%\ReCraft -----------------------------------------------
@@ -228,7 +305,10 @@ try {
         $installedCode = Split-Path -Leaf $arp.PSPath
         Assert-Condition (Test-Path -LiteralPath (Join-Path $defaultTarget 'recraft.exe')) "the default install did not land in $defaultTarget"
         Assert-Condition (Test-Path -LiteralPath $shortcut) 'Start Menu shortcut missing after the default install'
-        Write-Host "[install] default folder OK ($defaultTarget)"
+        Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut created without DESKTOPSHORTCUT=1'
+        $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        Assert-Condition (-not (($defaultMachinePath -split ';') -contains $defaultTarget)) 'the default install changed the machine PATH without ADDTOPATH=1'
+        Write-Host "[install] default folder OK ($defaultTarget, no PATH change, no desktop shortcut)"
 
         Uninstall-Msi $installedCode (Join-Path $work 'uninstall-default.log')
         for ($attempt = 0; $attempt -lt 40; $attempt++) {
@@ -237,6 +317,7 @@ try {
         }
         Assert-Condition (-not (Test-Path -LiteralPath $defaultTarget)) 'default install directory still exists after uninstall'
         Assert-Condition ($null -eq (Find-ArpKey 'ReCraft')) 'Apps & Features entry still exists after the default uninstall'
+        Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after the default uninstall'
         Write-Host '[uninstall] default folder removed'
         $installedCode = $null
     }
@@ -245,6 +326,23 @@ try {
 } finally {
     if ($installedCode) {
         Start-Process -FilePath 'msiexec.exe' -Wait -ArgumentList @('/x', $installedCode, '/qn') -ErrorAction SilentlyContinue
+    }
+    # The ADDTOPATH=1 install extends the machine PATH; if the run failed before the
+    # uninstall removed it, put the stored value (and its REG_EXPAND_SZ kind) back so a
+    # rerun starts clean.
+    if ($originalMachinePath) {
+        $currentMachinePath = Get-MachinePathRaw
+        if ($currentMachinePath -and $currentMachinePath.Value -ne $originalMachinePath.Value) {
+            $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($machineEnvironmentKey, $true)
+            if ($key) {
+                try {
+                    $key.SetValue('Path', $originalMachinePath.Value, $originalMachinePath.Kind)
+                    Write-Host '[uninstall] restored the machine PATH'
+                } finally {
+                    $key.Close()
+                }
+            }
+        }
     }
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }

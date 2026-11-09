@@ -12,18 +12,24 @@
 #   pwsh -File scripts/package.ps1 -NoBuild       # reuse target\release
 #   pwsh -File scripts/package.ps1 -NoMsi         # zip only (no dotnet/WiX toolchain)
 #   pwsh -File scripts/package.ps1 -RequireMsi    # fail if the WiX toolchain is missing (CI)
+#   pwsh -File scripts/package.ps1 -Culture en-US # English wizard instead of the zh-CN default
 #
 # The MSI follows the installation conventions of the PhotoCraft project
 # (storytold/photocraft): the project's own wizard art drawn from assets/recraft.png, a
 # Start-menu shortcut, an Apps & Features entry, and a .rcraft project association. It is a
 # per-machine install; the portable zip is the no-elevation, per-user path.
+#
+# -Culture picks the wizard language (stock WixUI dialogs plus the strings in
+# packaging\wix\<Culture>.wxl) and the MSI Language/Codepage pair that can represent it.
 
 [CmdletBinding()]
 param(
     [string]$Version = '',
     [switch]$NoBuild,
     [switch]$NoMsi,
-    [switch]$RequireMsi
+    [switch]$RequireMsi,
+    [ValidateSet('zh-CN', 'en-US')]
+    [string]$Culture = 'zh-CN'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -187,6 +193,14 @@ try {
             # MSI ProductVersion is numeric (major.minor.build); pre-release tags are dropped.
             $msiVersion = ($Version -split '-')[0]
             $msi = Join-Path $dist "recraft-v$Version-windows-x64.msi"
+            # Wizard language: the UI extension localizes the stock dialogs, the strings
+            # ReCraft adds come from packaging\wix\<Culture>.wxl. Chinese needs codepage 936
+            # in the MSI string table, English the traditional 1252.
+            $msiLanguage = if ($Culture -eq 'zh-CN') { 2052 } else { 1033 }
+            $msiCodepage = if ($Culture -eq 'zh-CN') { 936 } else { 1252 }
+            $locFile = Join-Path $repo "packaging\wix\$Culture.wxl"
+            if (-not (Test-Path -LiteralPath $locFile)) { throw "missing localization file: $locFile" }
+
             $artDir = Join-Path $repo '.tmp\installer-art'
             New-Item -ItemType Directory -Force -Path $artDir | Out-Null
             $banner = Join-Path $artDir 'banner.bmp'
@@ -194,11 +208,15 @@ try {
             New-InstallerArt (Join-Path $repo 'assets\recraft.png') $banner $dialog
 
             Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
-            Write-Host '[package] wix build (MSI)'
+            Write-Host "[package] wix build (MSI, $Culture)"
             $wixArgs = @(
                 'build', (Join-Path $repo 'packaging\wix\recraft.wxs')
                 '-arch', 'x64'
                 '-ext', 'WixToolset.UI.wixext', '-ext', 'WixToolset.Util.wixext'
+                '-culture', $Culture
+                '-loc', $locFile
+                '-d', "MsiLanguage=$msiLanguage"
+                '-d', "MsiCodepage=$msiCodepage"
                 '-d', "MsiVersion=$msiVersion"
                 '-d', "DisplayVersion=$Version"
                 '-d', "BinDir=$stage"

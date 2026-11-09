@@ -206,6 +206,23 @@ SmartScreen 会显示“未知发布者”：
    `%ProgramFiles%\ReCraft`，会请求一次管理员权限；不想装就直接解压 zip 用，
    无需提权、无需安装。
 
+安装向导是中文的（WixUI 自带 zh-cn，加上 `packaging/wix/zh-CN.wxl` 里的自有字符串；
+需要英文向导时用 `scripts/package.ps1 -Culture en-US` 重打）。目录页之后有一页安装选项，
+两项默认都不勾：
+
+- **加入系统 PATH**：勾选后可以在任意终端直接运行 `recraft-cli`（静默安装用
+  `ADDTOPATH=1`）。
+- **桌面快捷方式**：默认只建开始菜单快捷方式（静默安装用 `DESKTOPSHORTCUT=1`）。
+
+不勾 PATH 也能用：开始菜单多了一个 **ReCraft 命令行**，打开即位于安装目录；`recraft-cli.exe`
+和 GUI 一样注册了 App Paths，`Win+R` 输入 `recraft-cli` 也能启动。安装包还会把 ReCraft 登记到
+“设置 → 默认应用”的列表里（Capabilities/RegisteredApplications），`.rcraft` 的最终默认项仍由
+用户和系统选择决定。
+
+卸载会删除安装目录、开始菜单/桌面快捷方式、PATH 条目和 HKLM 注册项，但**不会删除**
+`%LOCALAPPDATA%\ReCraft`（`layout.json` 里的布局/主题和 `recent.txt` 最近项目）；要彻底清理，
+卸载后手动删除该目录即可。
+
 签名构建（以及确切的证书身份）将在可用时公布；在此之前，校验和就是完整性依据。
 
 ### 演示

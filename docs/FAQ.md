@@ -65,3 +65,15 @@ DCO），不需要 CLA，也不做版权转让。
 [GitHub Releases](https://github.com/qux-bbb/ReCraft/releases)，本版未签名（SmartScreen
 会提示），请用 `SHA256SUMS.txt` 校验。里程碑见 [docs/ROADMAP.md](ROADMAP.md)，发布检查
 清单见 [docs/M4.md](M4.md)。
+
+## 11. 安装后 `recraft-cli` 提示“不是内部或外部命令”？
+
+MSI 默认不改系统 PATH。三种用法任选：开始菜单里的 **ReCraft 命令行**（打开即位于安装目录）、
+`Win+R` 输入 `recraft-cli`（已注册 App Paths）、或者在安装选项页勾选“将 recraft-cli 加入系统
+PATH”（静默安装用 `ADDTOPATH=1`）。zip 免安装版不注册任何东西，直接运行解压目录里的
+`recraft-cli.exe`。
+
+## 12. 卸载后为什么 `%LOCALAPPDATA%\ReCraft` 还在？
+
+那里保存的是按用户的界面状态（`layout.json` 的停靠布局/主题、`recent.txt` 的最近项目）。
+MSI 是按机器安装，卸载不会替每个用户删除个人数据；要彻底清理，卸载后手动删除该目录即可。

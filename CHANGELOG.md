@@ -13,6 +13,17 @@
 
 ### 新增
 
+- **安装包可用性。** 安装向导改为中文：WixUI 自带 zh-cn，自有字符串在
+  `packaging/wix/zh-CN.wxl`；`scripts/package.ps1` 新增 `-Culture`（默认 zh-CN，
+  `en-US` 用 `packaging/wix/en-US.wxl`），MSI 的 `Language`/`Codepage` 跟着切到 2052/936
+  或 1033/1252。目录页之后新增“安装选项”页（默认都不勾）：把 `recraft-cli` 加入系统 PATH、
+  创建桌面快捷方式；静默安装用 `ADDTOPATH=1` / `DESKTOPSHORTCUT=1`，选择记录在
+  `HKLM\Software\ReCraft`，升级时自动延续。新增开始菜单“ReCraft 命令行”（在安装目录
+  打开 cmd），`recraft-cli.exe` 补上 App Paths（`Win+R` 可直接启动）；新增 Capabilities +
+  RegisteredApplications，ReCraft 出现在“设置 → 默认应用”。安装文档补充“卸载不删除
+  `%LOCALAPPDATA%\ReCraft`”的说明；`scripts/verify-msi.ps1` 的结构断言扩到 21 项，完整流程
+  增加 PATH/桌面快捷方式/App Paths/Capabilities/卸载清理检查。
+
 - **ELF64（x86-64）支持。** `recraft-format` 新增 ELF 加载器：ELF/程序头/节表、`.dynsym` +
   `.symtab`、`PT_DYNAMIC`（SONAME、`DT_NEEDED`）、GOT/PLT 重定位（`R_X86_64_JUMP_SLOT`、
   `GLOB_DAT`）→ 导入表、`.eh_frame` FDE 与符号大小 → 函数范围，符号名直接进入名字表。

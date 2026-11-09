@@ -212,6 +212,26 @@ until the project adopts a trusted OSS signing service:
    `%ProgramFiles%\ReCraft` and asks for administrator permission once; unzip the portable
    zip instead if you would rather not install anything.
 
+The release wizard is Chinese (WixUI ships zh-cn; ReCraft's own strings are in
+`packaging/wix/zh-CN.wxl`). Build an English MSI with
+`scripts/package.ps1 -Culture en-US`. After the folder page the wizard offers two optional
+steps, both off by default:
+
+- **Add to the system PATH** — makes `recraft-cli` runnable in any terminal
+  (`ADDTOPATH=1` for silent installs).
+- **Desktop shortcut** — the Start-menu shortcut is always created
+  (`DESKTOPSHORTCUT=1` for silent installs).
+
+Without the PATH option the CLI is still reachable: the Start menu gains a **ReCraft CLI**
+entry that opens a prompt in the install folder, and `recraft-cli.exe` is registered under
+App Paths like the GUI, so `Win+R` → `recraft-cli` works. The MSI also registers ReCraft in
+Settings → Default apps (Capabilities/RegisteredApplications); the final `.rcraft` default
+is still the user's choice.
+
+Uninstall removes the install folder, Start-menu/desktop shortcuts, the PATH entry and the
+HKLM registrations, but **leaves** `%LOCALAPPDATA%\ReCraft` (`layout.json` layout/theme and
+`recent.txt`); delete that folder after uninstalling for a clean slate.
+
 Signed builds (and the exact certificate identity) will be announced when available;
 until then checksums are the integrity reference.
 

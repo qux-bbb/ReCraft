@@ -14,11 +14,21 @@
   HKLM); the portable zip is the no-install, no-elevation path. This MSI is the only
   installer the project ships.
 
+  The wizard is localized: the stock WixUI dialogs come from the UI extension's own
+  zh-cn/en-us localization, and the strings ReCraft adds live in packaging\wix\zh-CN.wxl
+  and en-US.wxl. The release build is zh-CN (the product and its docs are Chinese-first);
+  an English MSI is one switch away:
+
     dotnet wix build packaging\wix\recraft.wxs -arch x64 ^
       -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext ^
+      -culture zh-CN -loc packaging\wix\zh-CN.wxl ^
+      -d MsiLanguage=2052 -d MsiCodepage=936 ^
       -d MsiVersion=0.1.0 -d DisplayVersion=0.1.0 -d BinDir=dist\ReCraft-0.1.0 ^
       -d DocsDir=docs -d IconPath=assets\recraft.ico ^
       -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
+
+  For en-US pass `-culture en-US -loc packaging\wix\en-US.wxl -d MsiLanguage=1033
+  -d MsiCodepage=1252`.
 
   VERSION is the numeric MSI ProductVersion (prerelease tags are dropped, so 1.2.3-rc.1
   and 1.2.3-rc.2 both install as 1.2.3); DISPLAYVERSION is what the wizard shows.
@@ -27,14 +37,24 @@
   <?ifndef DisplayVersion ?>
   <?define DisplayVersion = "$(var.MsiVersion)" ?>
   <?endif?>
+  <!-- LANGID and codepage of the build; scripts/package.ps1 derives both from -Culture.
+       Chinese UI strings require codepage 936, otherwise the MSI string table mangles
+       them. -->
+  <?ifndef MsiLanguage ?>
+  <?define MsiLanguage = 2052 ?>
+  <?endif?>
+  <?ifndef MsiCodepage ?>
+  <?define MsiCodepage = 936 ?>
+  <?endif?>
   <Package Name="ReCraft"
            Manufacturer="ReCraft contributors"
            Version="$(var.MsiVersion)"
            UpgradeCode="48ADE8C5-F79B-49EE-87BF-DB0FB7ED25A3"
            Scope="perMachine"
            Compressed="yes"
-           Language="1033">
-    <SummaryInformation Description="ReCraft $(var.DisplayVersion) - reverse engineering workbench (GUI + CLI)"
+           Language="$(var.MsiLanguage)"
+           Codepage="$(var.MsiCodepage)">
+    <SummaryInformation Description="!(loc.SummaryDescription)"
                         Manufacturer="ReCraft contributors" />
 
     <!-- A fresh ProductCode per build, so MajorUpgrade replaces the previous install in
@@ -58,8 +78,21 @@
         <FileSearch Id="VCRuntimeFileSearch" Name="vcruntime140.dll" />
       </DirectorySearch>
     </Property>
-    <Launch Condition="Installed OR VCRUNTIME140"
-            Message="ReCraft needs the Microsoft Visual C++ 2015-2022 Redistributable (x64). Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and run this setup again." />
+    <Launch Condition="Installed OR VCRUNTIME140" Message="!(loc.VCRuntimeMissing)" />
+
+    <!-- Optional steps. Both default to off: the MSI never edits the machine PATH or
+         drops desktop icons unless the user (or a silent install with ADDTOPATH=1 /
+         DESKTOPSHORTCUT=1) asks for it. The registry markers below are read back by
+         AppSearch before a major upgrade, so a choice made once carries over instead of
+         being silently dropped when the old product is removed. -->
+    <Property Id="ADDTOPATH" Value="0" Secure="yes" />
+    <Property Id="DESKTOPSHORTCUT" Value="0" Secure="yes" />
+    <Property Id="PATHEXISTING">
+      <RegistrySearch Id="PathExistingSearch" Root="HKLM" Key="Software\ReCraft" Name="PathEntry" Type="raw" />
+    </Property>
+    <Property Id="DESKTOPSHORTCUTEXISTING">
+      <RegistrySearch Id="DesktopExistingSearch" Root="HKLM" Key="Software\ReCraft" Name="DesktopShortcut" Type="raw" />
+    </Property>
 
     <!-- Per-machine scope: files land in %ProgramFiles%\ReCraft and setup asks for
          administrator permission once (msiexec's own elevation). The no-install path stays
@@ -73,21 +106,48 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
 
-    <Feature Id="Main" Title="ReCraft" Level="1">
+    <Feature Id="Main" Title="!(loc.FeatureTitle)" Level="1">
       <ComponentGroupRef Id="RecraftBinaries" />
       <ComponentGroupRef Id="RecraftDocuments" />
       <ComponentGroupRef Id="RecraftDocs" />
+      <ComponentGroupRef Id="RecraftOptions" />
     </Feature>
 
     <!-- The setup wizard: WixUI_InstallDir without its license page (the code is
          AGPL-3.0-only and LICENSE ships with the install; a later NewDialog on the same
-         button wins, which skips LicenseAgreementDlg). -->
+         button wins, which skips LicenseAgreementDlg). OptionsDlg sits between the folder
+         page and the confirmation page so the optional steps are visible once. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <UI>
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" Condition="NOT Installed" />
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" />
+      <!-- WixUI_InstallDir publishes its own VerifyReadyDlg jump at Order 4; the options
+           page needs a higher order so it wins (last NewDialog on a control wins). -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="OptionsDlg" Order="5" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="OptionsDlg" Order="2" Condition="NOT Installed" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchReCraft" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+
+      <Dialog Id="OptionsDlg" Width="370" Height="270" Title="!(loc.OptionsFrameTitle)">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" TabSkip="yes" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" TabSkip="yes" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes" TabSkip="yes" Text="!(loc.OptionsTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" TabSkip="yes" Text="!(loc.OptionsDescription)" />
+        <Control Id="AddToPath" Type="CheckBox" X="20" Y="60" Width="330" Height="17" Property="ADDTOPATH" CheckBoxValue="1" TabSkip="no" Text="!(loc.OptionsAddToPath)" />
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="84" Width="330" Height="17" Property="DESKTOPSHORTCUT" CheckBoxValue="1" TabSkip="no" Text="!(loc.OptionsDesktopShortcut)" />
+        <Control Id="OptionsNote" Type="Text" X="20" Y="112" Width="330" Height="60" Transparent="yes" NoPrefix="yes" TabSkip="yes" Text="!(loc.OptionsNote)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" TabSkip="no" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="InstallDirDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" TabSkip="no" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" TabSkip="no" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
     </UI>
     <!-- Our own art, generated by scripts/package.ps1 from assets/recraft.png (not WiX's
          stock bitmaps). -->
@@ -95,8 +155,8 @@
     <WixVariable Id="WixUIDialogBmp" Value="$(var.DialogBmp)" />
 
     <!-- Finish page: say what was installed and offer to start the GUI. -->
-    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="ReCraft $(var.DisplayVersion) is installed. The GUI is on the Start menu; the command line tool is recraft-cli.exe in the install folder." />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch ReCraft" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="!(loc.ExitOptionText)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="!(loc.ExitOptionCheckbox)" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <Property Id="WixShellExecTarget" Value="[#RecraftExe]" />
     <!-- Runs in the wizard's own (unelevated) process, so the app starts as the user. -->
@@ -110,13 +170,13 @@
           <Shortcut Id="StartMenuShortcut"
                     Directory="ProgramMenuFolder"
                     Name="ReCraft"
-                    Description="ReCraft reverse engineering workbench"
+                    Description="!(loc.GuiShortcutDescription)"
                     WorkingDirectory="INSTALLFOLDER"
                     Icon="ReCraftIcon.exe" />
         </File>
 
         <!-- .rcraft projects: the GUI opens the path given as its first argument. -->
-        <ProgId Id="ReCraft.Project" Description="ReCraft project" Icon="RecraftExe" IconIndex="0">
+        <ProgId Id="ReCraft.Project" Description="!(loc.ProgIdDescription)" Icon="RecraftExe" IconIndex="0">
           <Extension Id="rcraft" ContentType="application/x-recraft-project">
             <Verb Id="open" Command="Open" TargetFile="RecraftExe" Argument="&quot;%1&quot;" />
           </Extension>
@@ -131,10 +191,58 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\recraft.exe\SupportedTypes" Name=".dll" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\recraft.exe" Value="[#RecraftExe]" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
+
+        <!-- Capabilities + RegisteredApplications put ReCraft in Settings > Default apps
+             (".rcraft" can be pointed at it there). This registers the ability, not the
+             default: the user still chooses. .exe/.dll stay out of Capabilities so Windows
+             never offers ReCraft as a default for every executable. -->
+        <RegistryValue Root="HKMU" Key="Software\ReCraft\Capabilities" Name="ApplicationName" Value="ReCraft" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft\Capabilities" Name="ApplicationDescription" Value="!(loc.CapabilitiesDescription)" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft\Capabilities" Name="ApplicationIcon" Value="&quot;[INSTALLFOLDER]recraft.exe&quot;,0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft\Capabilities\FileAssociations" Name=".rcraft" Value="ReCraft.Project" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\RegisteredApplications" Name="ReCraft" Value="Software\ReCraft\Capabilities" Type="string" />
       </Component>
 
       <Component Id="RecraftCli" Guid="C2F2A1C9-7D5E-4F2D-8B6C-3D2E4A6B8F02">
         <File Id="RecraftCliExe" Source="$(var.BinDir)\recraft-cli.exe" KeyPath="yes" />
+        <!-- Same "App Paths" treatment as the GUI: Win+R / Start-menu search finds
+             recraft-cli without touching PATH. -->
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\recraft-cli.exe" Value="[#RecraftCliExe]" Type="string" />
+      </Component>
+
+      <!-- Opens a prompt already sitting in the install folder, so `recraft-cli` works
+           there even without the PATH option. Needs its own component because a Shortcut
+           nested in a File always targets that file, not cmd.exe. -->
+      <Component Id="RecraftCliShortcut" Guid="A6D6E5AD-B192-4D61-CFA0-7B6C8EAFC006">
+        <Shortcut Id="CliShortcut"
+                  Directory="ProgramMenuFolder"
+                  Name="!(loc.CliShortcutName)"
+                  Description="!(loc.CliShortcutDescription)"
+                  Target="[SystemFolder]cmd.exe"
+                  Arguments="/k cd /d &quot;[INSTALLFOLDER]&quot;"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="ReCraftIcon.exe" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="CliShortcut" Type="string" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Optional components, gated by the OptionsDlg checkboxes (or by ADDTOPATH=1 /
+         DESKTOPSHORTCUT=1 in a silent install). `Installed`-style conditions are avoided:
+         the registry markers let AppSearch keep the authoring in sync on repair/upgrade. -->
+    <ComponentGroup Id="RecraftOptions" Directory="INSTALLFOLDER">
+      <Component Id="RecraftPathEntry" Guid="E4B4C3EB-9F70-4B4F-AD8E-5F4A6C8DAE04" Condition="ADDTOPATH = 1 OR PATHEXISTING">
+        <Environment Id="PathEnvironment" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="PathEntry" Type="string" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="RecraftDesktopShortcut" Guid="F5C5D4FC-A081-4C50-BE9F-6A5B7D9EBF05" Condition="DESKTOPSHORTCUT = 1 OR DESKTOPSHORTCUTEXISTING">
+        <Shortcut Id="DesktopShortcut"
+                  Directory="DesktopFolder"
+                  Name="ReCraft"
+                  Description="!(loc.GuiShortcutDescription)"
+                  Target="[#RecraftExe]"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="ReCraftIcon.exe" />
+        <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 

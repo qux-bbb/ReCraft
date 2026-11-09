@@ -31,9 +31,19 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
 
 - **按机器安装**（`Scope="perMachine"`）：默认 `%ProgramFiles%\ReCraft`，一次 UAC 提示；
   开始菜单快捷方式、HKLM 卸载登记项；`.rcraft` 工程关联（GUI 接受 argv[1]，见
-  `crates/recraft-ui/src/main.rs`）、`recraft.exe` 的 App Paths（Win+R 输入 `recraft`）。
-  免提权的按用户安装由便携 zip 承担——Windows Installer 的 per-user 模式在管理员账户下
-  会被改判为 per-machine，为此专门做一套 ALLUSERS 策略不值得。
+  `crates/recraft-ui/src/main.rs`）、GUI 与 `recraft-cli.exe` 的 App Paths（Win+R 输入
+  `recraft` / `recraft-cli`）。免提权的按用户安装由便携 zip 承担——Windows Installer 的
+  per-user 模式在管理员账户下会被改判为 per-machine，为此专门做一套 ALLUSERS 策略不值得。
+- **中文向导**：WixUI 自带 zh-cn，自有字符串在 `packaging/wix/zh-CN.wxl`；MSI 的
+  `Language`/`Codepage` 由 `scripts/package.ps1 -Culture` 推导（zh-CN → 2052/936，
+  en-US → 1033/1252，英文串在 `packaging/wix/en-US.wxl`）。发布包默认中文。
+- **安装选项页**：目录页之后一页两个复选框，默认都不勾——把 `recraft-cli` 加入系统 PATH、
+  创建桌面快捷方式；静默安装用 `ADDTOPATH=1` / `DESKTOPSHORTCUT=1`。选择写在
+  `HKLM\Software\ReCraft`，升级时由 AppSearch 读回，不必再问一次。
+- **CLI 入口**：开始菜单多一个“ReCraft 命令行”，快捷方式指向
+  `cmd.exe /k cd /d [INSTALLFOLDER]`。
+- **默认应用集成**：`HKLM\Software\ReCraft\Capabilities` + `Software\RegisteredApplications`，
+  ReCraft 因此出现在“设置 → 默认应用”里；只登记能力，不抢 `.rcraft` 的默认项。
 - 启动条件会检查 `%SystemRoot%\System32\vcruntime140.dll`：GUI 动态链接 MSVC 运行时，
   缺 VC++ 2015–2022 可再发行组件时安装会直接给出下载地址，而不是装完打不开。
 - 生成：仓库内固定 WiX **5.0.2**（`.config/dotnet-tools.json`，`dotnet tool restore`），
@@ -42,15 +52,19 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
   ```powershell
   dotnet wix build packaging\wix\recraft.wxs -arch x64 `
     -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
+    -culture zh-CN -loc packaging\wix\zh-CN.wxl `
+    -d MsiLanguage=2052 -d MsiCodepage=936 `
     -d MsiVersion=0.1.0 -d DisplayVersion=0.1.0 -d BinDir=dist\ReCraft-0.1.0 `
     -d DocsDir=docs -d IconPath=assets\recraft.ico `
     -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
   ```
-- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>]`；
+- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=1] [DESKTOPSHORTCUT=1]`；
   `msiexec /x {ProductCode} /qn`（ProductCode 见“应用和功能”登记项）。
-- `scripts/verify-msi.ps1` 总是检查结构与载荷（per-machine 标记、`.rcraft` 关联、
-  快捷方式、`MajorUpgrade`、运行时启动条件；`msiexec /a` 解包后与 `dist/ReCraft-<version>/`
-  逐字节比对），`-SkipInstall` 用于免提权环境；完整安装→CLI→卸载流程需要提权提示符。
+- `scripts/verify-msi.ps1` 总是检查结构与载荷（21 项表断言：per-machine、两个快捷方式、
+  CLI App Paths、Capabilities/RegisteredApplications、安装选项页与 PATH、zh-CN 2052/936、
+  `.rcraft` 关联、`MajorUpgrade`、运行时启动条件；`msiexec /a` 解包后与
+  `dist/ReCraft-<version>/` 逐字节比对），`-SkipInstall` 用于免提权环境。完整流程额外验证
+  选项生效（PATH 条目、桌面快捷方式、CLI 入口）以及卸载后目录/快捷方式/PATH/注册项的清理。
 - `wix msi validate -ice ICE50` 由 `scripts/package.ps1` 顺带跑，仅告警不拦截。
 
 ## CI
@@ -60,6 +74,20 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
 - `msi` job（windows-latest，runner 自身已提权）：release 构建 → `scripts/package.ps1
   -RequireMsi`（`dotnet tool restore` 还原 WiX 5.0.2）→ `verify-package.ps1` →
   `verify-msi.ps1`（结构/载荷 + 安装→CLI→卸载）→ 上传 `recraft-windows-x64-msi`。
+
+## 本机验证（2026-11-09，安装选项 / 中文向导）
+
+```
+[package] wix build (MSI, zh-CN)
+[package] msi: dist\recraft-v0.1.0-windows-x64.msi (13.4 MiB)
+[msi] structure OK (21 table checks, per-machine)
+[msi] payload OK (10 files + 41 docs, byte-identical to dist\ReCraft-0.1.0)
+[msi] PASS (structure + payload)          # -SkipInstall：本机提示符未提权
+```
+
+同一份源码用 `-Culture en-US`（1033/1252）也构建通过，`wix msi decompile` 可见 `OptionsDlg`、
+CLI 快捷方式、PATH 环境项与 Capabilities/RegisteredApplications 表项。安装→选项生效→卸载的
+运行时断言需要提权提示符，本机未提权，仍由 CI 的 msi job 覆盖。
 
 ## 本机验证（2026-11-08，0.1.0 发布前重打）
 
@@ -144,4 +172,8 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 
 - 未做代码签名（需证书）；SmartScreen 会提示。
 - 未做增量/自动更新；未做 MSIX。安装包只有 MSI 一种（按机器安装，需管理员）。
+- 发布 MSI 是中文向导；英文向导用 `scripts/package.ps1 -Culture en-US` 重打（产物同名，会
+  覆盖中文包）。
+- PATH 与桌面快捷方式默认不勾选；PATH 写入的是**系统** PATH（按机器安装），卸载时移除。
+- 卸载不删除 `%LOCALAPPDATA%\ReCraft`（布局/主题与最近项目），那是按用户的个人数据。
 - MSI 依赖固定的 WiX 5.0.2；发布前用 CI msi job 或 `verify-msi.ps1` 复验。

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright (c) 2026 ReCraft contributors -->
+<!--
+  Chinese (Simplified) strings for the ReCraft MSI. The stock WixUI dialogs are
+  localized by the UI extension itself (WixToolset.UI.wixext ships zh-cn); this file
+  only carries the strings ReCraft adds on top of that.
+
+  Built with `-culture zh-CN -loc packaging\wix\zh-CN.wxl`; the package then uses
+  Codepage 936 (see scripts/package.ps1 and the MsiLanguage/MsiCodepage defines in
+  recraft.wxs).
+-->
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl"
+                 Culture="zh-CN"
+                 Codepage="936">
+  <String Id="SummaryDescription" Value="ReCraft 逆向工程工作台（GUI + CLI）" />
+  <String Id="FeatureTitle" Value="ReCraft" />
+
+  <String Id="GuiShortcutDescription" Value="ReCraft 逆向工程工作台" />
+  <String Id="CliShortcutName" Value="ReCraft 命令行" />
+  <String Id="CliShortcutDescription" Value="在安装目录打开命令提示符，直接运行 recraft-cli" />
+  <String Id="ProgIdDescription" Value="ReCraft 工程" />
+  <String Id="CapabilitiesDescription" Value="ReCraft 二进制逆向工程工作台" />
+
+  <String Id="VCRuntimeMissing" Value="ReCraft 需要 Microsoft Visual C++ 2015-2022 可再发行组件（x64）。请先从 https://aka.ms/vs/17/release/vc_redist.x64.exe 安装，然后重新运行安装程序。" />
+
+  <String Id="ExitOptionText" Value="ReCraft 已安装。GUI 在开始菜单；命令行工具 recraft-cli.exe 在安装目录，也可以从开始菜单的“ReCraft 命令行”打开。" />
+  <String Id="ExitOptionCheckbox" Value="启动 ReCraft" />
+
+  <String Id="OptionsFrameTitle" Value="ReCraft 安装程序" />
+  <String Id="OptionsTitle" Value="{\WixUI_Font_Title}安装选项" />
+  <String Id="OptionsDescription" Value="选择安装完成后要一并完成的操作。" />
+  <String Id="OptionsAddToPath" Value="将 recraft-cli 加入系统 PATH" />
+  <String Id="OptionsDesktopShortcut" Value="创建桌面快捷方式" />
+  <String Id="OptionsNote" Value="两项都可以不选：开始菜单的“ReCraft 命令行”会在安装目录打开命令提示符，Win+R 输入 recraft-cli 也能启动。" />
+</WixLocalization>

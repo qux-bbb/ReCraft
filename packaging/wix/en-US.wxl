@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright (c) 2026 ReCraft contributors -->
+<!--
+  English strings for the ReCraft MSI. The stock WixUI dialogs are localized by the UI
+  extension itself (en-us); this file only carries the strings ReCraft adds on top.
+
+  Built with `-culture en-US -loc packaging\wix\en-US.wxl`; the package then uses
+  Codepage 1252 (see scripts/package.ps1 and the MsiLanguage/MsiCodepage defines in
+  recraft.wxs). The release MSI is built with zh-CN; this file keeps an English build
+  one switch away.
+-->
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl"
+                 Culture="en-US"
+                 Codepage="1252">
+  <String Id="SummaryDescription" Value="ReCraft reverse engineering workbench (GUI + CLI)" />
+  <String Id="FeatureTitle" Value="ReCraft" />
+
+  <String Id="GuiShortcutDescription" Value="ReCraft reverse engineering workbench" />
+  <String Id="CliShortcutName" Value="ReCraft CLI" />
+  <String Id="CliShortcutDescription" Value="Open a command prompt in the install folder to run recraft-cli" />
+  <String Id="ProgIdDescription" Value="ReCraft project" />
+  <String Id="CapabilitiesDescription" Value="ReCraft binary reverse engineering workbench" />
+
+  <String Id="VCRuntimeMissing" Value="ReCraft needs the Microsoft Visual C++ 2015-2022 Redistributable (x64). Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and run this setup again." />
+
+  <String Id="ExitOptionText" Value="ReCraft is installed. The GUI is on the Start menu; recraft-cli.exe is in the install folder, and the Start menu's ReCraft CLI opens a prompt there." />
+  <String Id="ExitOptionCheckbox" Value="Launch ReCraft" />
+
+  <String Id="OptionsFrameTitle" Value="ReCraft Setup" />
+  <String Id="OptionsTitle" Value="{\WixUI_Font_Title}Installation Options" />
+  <String Id="OptionsDescription" Value="Choose the optional steps to complete during setup." />
+  <String Id="OptionsAddToPath" Value="Add recraft-cli to the system PATH" />
+  <String Id="OptionsDesktopShortcut" Value="Create a desktop shortcut" />
+  <String Id="OptionsNote" Value="Both are optional: the Start menu's ReCraft CLI opens a prompt in the install folder, and Win+R recraft-cli works either way." />
+</WixLocalization>
