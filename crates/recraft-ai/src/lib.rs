@@ -84,6 +84,16 @@ const WEIGHTS: [(&str, f32); 12] = [
     ("other", 0.2),
 ];
 
+/// Weight of one category; unknown categories still count a little, so a rule that is
+/// added later does not vanish from the ranking.
+fn weight_of(category: &str) -> f32 {
+    WEIGHTS
+        .iter()
+        .find(|(name, _)| *name == category)
+        .map(|(_, weight)| *weight)
+        .unwrap_or(0.5)
+}
+
 // --------------------------------------------------------------- proposals ----
 
 /// What a proposal asks the user to change.
@@ -594,6 +604,8 @@ pub struct Triage {
     pub functions: usize,
     pub instructions: u64,
     pub apis_by_category: BTreeMap<String, usize>,
+    /// `/proc` paths by category: behaviour that never shows up as an import.
+    pub paths_by_category: BTreeMap<String, usize>,
     pub suspicious: Vec<SuspiciousFunction>,
     pub urls: Vec<String>,
     pub strings: usize,
@@ -606,6 +618,17 @@ pub struct SuspiciousFunction {
     pub categories: Vec<String>,
     pub score: f32,
     pub apis: Vec<String>,
+    /// `/proc` literals this function references (see [`Triage::paths_by_category`]).
+    pub paths: Vec<String>,
+}
+
+/// Evidence accumulated per function: API categories, `/proc` paths and the weight.
+#[derive(Default)]
+struct FunctionEvidence {
+    categories: BTreeSet<String>,
+    apis: BTreeSet<String>,
+    paths: BTreeSet<String>,
+    score: f32,
 }
 
 pub fn triage(session: &mut Session) -> Result<Triage> {
@@ -618,8 +641,7 @@ pub fn triage(session: &mut Session) -> Result<Triage> {
         *apis_by_category.entry(category.clone()).or_insert(0) += 1;
     }
 
-    let mut per_function: BTreeMap<u64, (BTreeSet<String>, BTreeSet<String>, f32)> =
-        BTreeMap::new();
+    let mut per_function: BTreeMap<u64, FunctionEvidence> = BTreeMap::new();
     for (site, rule, category) in &api_tags {
         let Some(function) = functions
             .iter()
@@ -627,26 +649,54 @@ pub fn triage(session: &mut Session) -> Result<Triage> {
         else {
             continue;
         };
-        let weight = WEIGHTS
-            .iter()
-            .find(|(name, _)| name == category)
-            .map(|(_, weight)| *weight)
-            .unwrap_or(0.5);
-        let entry = per_function
-            .entry(function.start.get())
-            .or_insert_with(|| (BTreeSet::new(), BTreeSet::new(), 0.0));
-        entry.0.insert(category.clone());
-        entry.1.insert(rule.clone());
-        entry.2 += weight;
+        let entry = per_function.entry(function.start.get()).or_default();
+        entry.categories.insert(category.clone());
+        entry.apis.insert(rule.clone());
+        entry.score += weight_of(category);
     }
+
+    // `/proc` reads are behaviour, not imports: the literals live in the string table,
+    // so classify those and credit every function that references one. The xref scan is
+    // skipped when the sample carries no `/proc` path at all.
+    let mut paths_by_category: BTreeMap<String, usize> = BTreeMap::new();
+    let mut proc_paths: BTreeMap<Address, (&'static str, String)> = BTreeMap::new();
+    for entry in &strings {
+        let Some(text) = session.string_at(entry.addr)? else {
+            continue;
+        };
+        let Some(category) = recraft_analysis::categorize_path(&text) else {
+            continue;
+        };
+        *paths_by_category.entry(category.to_owned()).or_insert(0) += 1;
+        proc_paths.insert(entry.addr, (category, text));
+    }
+    if !proc_paths.is_empty() {
+        for xref in session.all_xrefs(Some(XREF_DATA))? {
+            let Some((category, text)) = proc_paths.get(&xref.to) else {
+                continue;
+            };
+            let Some(function) = functions
+                .iter()
+                .find(|function| xref.from >= function.start && xref.from < function.end)
+            else {
+                continue;
+            };
+            let entry = per_function.entry(function.start.get()).or_default();
+            entry.categories.insert((*category).to_owned());
+            entry.paths.insert(text.clone());
+            entry.score += weight_of(category);
+        }
+    }
+
     let mut suspicious: Vec<SuspiciousFunction> = per_function
         .into_iter()
-        .map(|(start, (categories, apis, score))| SuspiciousFunction {
+        .map(|(start, evidence)| SuspiciousFunction {
             name: session.name_at(Address::new(start)).ok().flatten(),
             start: Address::new(start),
-            categories: categories.into_iter().collect(),
-            score,
-            apis: apis.into_iter().collect(),
+            categories: evidence.categories.into_iter().collect(),
+            score: evidence.score,
+            apis: evidence.apis.into_iter().collect(),
+            paths: evidence.paths.into_iter().collect(),
         })
         .collect();
     suspicious.sort_by(|left, right| {
@@ -693,6 +743,7 @@ pub fn triage(session: &mut Session) -> Result<Triage> {
         functions: functions.len(),
         instructions: instruction_total,
         apis_by_category,
+        paths_by_category,
         suspicious,
         urls,
         strings: strings.len(),
@@ -840,6 +891,23 @@ mod tests {
         Some((session, dir))
     }
 
+    /// A Linux ELF corpus binary built by `corpus/build-linux.sh`. Like every other
+    /// corpus binary it is a build product, so a clean Windows checkout skips these.
+    fn linux_corpus(file: &str) -> Option<(Session, tempfile::TempDir)> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/linux")
+            .join(file);
+        let bytes = std::fs::read(path).ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ai-linux.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).unwrap();
+        recraft_analysis::persist_strings(&mut session, &strings).unwrap();
+        Some((session, dir))
+    }
+
     #[test]
     fn explain_entry_function() {
         let Some((mut session, _dir)) = notepad() else {
@@ -929,6 +997,55 @@ mod tests {
             "notepad should have API tags"
         );
         assert!(!report.suspicious.is_empty());
+    }
+
+    /// Acceptance for the Linux API table: an ELF sample must produce non-empty API
+    /// tags (`open`/`read`/`write` used to fall through to `other`).
+    #[test]
+    fn triage_tags_linux_elf_imports() {
+        let Some((mut session, _dir)) = linux_corpus("libcorpus.so") else {
+            return;
+        };
+        let report = triage(&mut session).unwrap();
+        assert!(
+            !report.apis_by_category.is_empty(),
+            "the ELF corpus should have API tags"
+        );
+        // `malloc`/`free` arrive through the GOT, so the memory rule must fire.
+        assert!(
+            report.apis_by_category.contains_key("memory"),
+            "missing memory in {:?}",
+            report.apis_by_category
+        );
+    }
+
+    /// The behaviour sample: Linux counterparts of the Win32 table plus `/proc` paths,
+    /// which are behaviour rather than imports.
+    #[test]
+    fn triage_tags_linux_behaviour_sample() {
+        let Some((mut session, _dir)) = linux_corpus("libcorpus-behaviors.so") else {
+            return;
+        };
+        let report = triage(&mut session).unwrap();
+        for category in ["file", "network", "anti-analysis", "process"] {
+            assert!(
+                report.apis_by_category.contains_key(category),
+                "missing {category} in {:?}",
+                report.apis_by_category
+            );
+        }
+        for category in ["anti-analysis", "network", "process"] {
+            assert!(
+                report.paths_by_category.contains_key(category),
+                "missing /proc {category} in {:?}",
+                report.paths_by_category
+            );
+        }
+        assert!(
+            report.suspicious.iter().any(|item| !item.paths.is_empty()),
+            "/proc reads should be credited to their functions: {:?}",
+            report.suspicious
+        );
     }
 
     #[test]

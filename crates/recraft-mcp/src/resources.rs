@@ -12,8 +12,8 @@ use crate::McpServer;
 /// Prompt body: sample triage.
 const TRIAGE_PROMPT: &str = "Produce a triage report for this sample. Use get_metadata, \
 list_imports, list_exports, find_api_callers, list_strings and function_summary before \
-concluding. Cover: (1) what the program appears to do; (2) network, file, registry, process and \
-crypto indicators, each with the 0x address that proves it; (3) the five most suspicious \
+concluding. Cover: (1) what the program appears to do; (2) network, file, registry, process, \
+/proc and crypto indicators, each with the 0x address that proves it; (3) the five most suspicious \
 functions, ranked, with one line of evidence each; (4) what you could not verify. Cite \
 addresses as 0x... and do not modify the project.";
 

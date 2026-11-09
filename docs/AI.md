@@ -89,17 +89,27 @@ recraft-cli ai ask notepad.rcraft "哪些函数在操作注册表？" [--json] [
 ## 样本摘要（triage）
 
 - `apis_by_category`：全样本 API 标签按类别计数。
+- `paths_by_category`：`/proc` 路径字面量按行为计数——`/proc/self/*` → anti-analysis、
+  `/proc/<pid>/{maps,mem,status,fd,…}` → process、`/proc/net/*` → network、其余 `/proc/*`
+  → file；其它字符串不参与。Linux 上读 `/proc` 是行为而不是导入，所以单独一组。
 - `suspicious`：按函数聚合 API 类别加权（injection 4、anti-analysis 3、service 2.5、
   registry/process 2、network/thread 1.5、crypto 1.2、memory/file 1、ui 0.5、other 0.2），
-  取 top-10。
+  取 top-10。`suspicious[].paths` 是该函数引用的 `/proc` 路径（按数据交叉引用归属），
+  与 API 标签一起按同一组权重累加。
 - `urls`：字符串表中 `http(s)://` 开头的去重 URL（最多 20）。
+
+分类规则只有一份：`crates/recraft-analysis/src/api.rs` 的 `categorize`（短 POSIX 名按整名
+精确匹配，其余按有序子串）与 `categorize_path`（`/proc` 路径）；`recraft-ai` 直接复用，
+不复制规则。
 
 ## 实现与测试
 
 - 代码：`crates/recraft-ai`（`explain` / `suggest_names` / `triage` / `Proposal` /
   `apply_proposals`）。
 - 测试：notepad 真实样本——解释入口函数、建议带证据、`apply` 后 `name_at` 生效且可 undo、
-  triage 类别非空、Proposal JSON roundtrip。
+  triage 类别非空、Proposal JSON roundtrip；ELF 侧用 `corpus/build/linux/libcorpus.so` 与
+  `libcorpus-behaviors.so`（Linux CI 构建，其它平台跳过）验证 API 标签与 `/proc` 路径标签
+  都非空。
 - CLI 冒烟纳入 `scripts/e2e.ps1`（triage JSON / suggest --out / apply --yes）。
 
 ## UI proposal 面板（M3）

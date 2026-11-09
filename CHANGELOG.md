@@ -51,6 +51,17 @@
   API 行为分类补了 POSIX 对应项（`ptrace`、`fork`/`exec`、`dlopen`、`fopen`/`opendir`、
   `mmap`、`pthread_*`、OpenSSL）。
 
+- **Linux API 行为分类补齐。** 分类表新增裸描述符调用：`open`/`openat`/`read`/`write`/
+  `pread`/`close`/`stat`/`ftruncate` 等按**整名精确匹配**（子串匹配会把 `OpenProcess`、
+  `ReadFile` 误判成文件操作），并忽略 `@GLIBC_2.2.5` 这类版本后缀；另补 `dlsym`/`dlclose`、
+  `mprotect`、`brk`/`sbrk`、`clone`。`/proc` 读取单独做路径分类：`/proc/self/*` →
+  anti-analysis、`/proc/<pid>/{maps,mem,status,fd,…}` → process、`/proc/net/*` → network、
+  其余 `/proc/*` → file。`ai triage` 新增 `paths_by_category` 和每个可疑函数的 `paths`，
+  `/proc` 字面量会按数据引用记到具体函数上并参与可疑度加权。新增
+  `corpus/linux/behaviors.c`（open/write、socket/connect、ptrace、dlopen、三种 `/proc`
+  读取）作为回归样本，由 `build-linux.sh` 构建，`recraft-ai` 的 ELF triage 测试用它验证
+  API 与路径标签都非空。
+
 - **DWARF 行号表。** 新增 `recraft-format/src/dwarf.rs`：解析 `.debug_line`（DWARF 2–5，含
   v5 的 directory/file 表与 `.debug_line_str` 间接字符串），得到按地址排序的 `file:line`
   行。`Image` 增加 `debug_lines`（serde default，旧项目照常打开），ELF 加载器自动读取；
@@ -70,6 +81,10 @@
 
 ### 修复
 
+- **`Reg` 前缀不再把无关符号判成注册表。** 旧规则是 `contains("REG")`，ELF 的
+  `_ITM_deregisterTMCloneTable`、`__register_frame_info` 都被标成 registry，`RegisterClassW`
+  也永远到不了 ui 规则；现在按 `RegOpen`/`RegSet`/`RegQuery`/`RegClose` 这类动词匹配，
+  ELF 样本上的假 registry 标签归零，真正的 `Reg*` API 不受影响。
 - **冷片段合并只对 PE 生效。** `merge_pdata_functions` 是 `.pdata` 的概念（把落到下一段里的
   冷片段接回原函数）；ELF 的范围来自 `.symtab`/`.eh_frame`，本来就精确，`analyze` 现在对
   非 PE 格式直接按原样使用，不再套用 PE 的合并启发式。
@@ -88,6 +103,9 @@
 
 ### 变更
 
+- **`recraft-ai` 依赖 `recraft-analysis`。** triage 要与 `analyze` 共用同一份 API 与
+  `/proc` 分类规则，不再复制一份；依赖方向仍单向（`recraft-analysis` 不反向依赖
+  `recraft-ai`），构建依赖图无环。
 - **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`
   与 `Arch`，`Loader` trait 返回带格式与架构的 `LoadedImage`，`load()` 按魔术字分派（PE 是
   唯一实现，其他格式报 `unrecognised executable format`）。项目把 `format` 与新增的 `arch`

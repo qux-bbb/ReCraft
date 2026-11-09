@@ -2523,12 +2523,14 @@ fn cmd_ai_triage(project: &Path, as_json: bool) -> Result<()> {
             "instructions": triage.instructions,
             "strings": triage.strings,
             "apis_by_category": triage.apis_by_category,
+            "paths_by_category": triage.paths_by_category,
             "suspicious": triage.suspicious.iter().map(|item| json!({
                 "start": format!("{:#x}", item.start.get()),
                 "name": item.name,
                 "categories": item.categories,
                 "score": item.score,
                 "apis": item.apis,
+                "paths": item.paths,
             })).collect::<Vec<_>>(),
             "urls": triage.urls,
         }));
@@ -2541,6 +2543,12 @@ fn cmd_ai_triage(project: &Path, as_json: bool) -> Result<()> {
     for (category, count) in &triage.apis_by_category {
         println!("  {category:16} {count}");
     }
+    if !triage.paths_by_category.is_empty() {
+        println!("path categories:");
+        for (category, count) in &triage.paths_by_category {
+            println!("  {category:16} {count}");
+        }
+    }
     println!("suspicious functions:");
     for item in &triage.suspicious {
         println!(
@@ -2551,6 +2559,9 @@ fn cmd_ai_triage(project: &Path, as_json: bool) -> Result<()> {
             item.categories.join(","),
             item.apis.join(",")
         );
+        if !item.paths.is_empty() {
+            println!("      paths: {}", item.paths.join(", "));
+        }
     }
     if !triage.urls.is_empty() {
         println!("urls:");

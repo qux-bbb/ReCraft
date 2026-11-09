@@ -83,7 +83,7 @@ recraft-ai（LLM 客户端/提示/脱敏/预算）供 app/mcp/ui 使用
 | `recraft-mcp` | MCP server（stdio/HTTP）、传输、写工具、资源 | core, query |
 | `recraft-cli` | headless：analyze/strings/imports/decompile/search/export/serve-mcp | core, analysis, decompile, ai, mcp |
 | `recraft-ui` | egui 应用、视图、自绘控件、i18n | core, analysis, decompile, ai |
-| `recraft-ai` | provider 抽象、提示模板、脱敏、token 预算、缓存、项目级 agent | common, core, query |
+| `recraft-ai` | provider 抽象、提示模板、脱敏、token 预算、缓存、项目级 agent、样本 triage | common, core, analysis, query |
 
 依赖方向必须单向，`core` 不得依赖 `analysis/decompile/ir`。新增 crate 需在本文档 ADR 中登记。
 

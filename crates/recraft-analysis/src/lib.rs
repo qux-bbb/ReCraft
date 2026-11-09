@@ -28,7 +28,7 @@ use recraft_common::{Address, AddressRange, Result};
 use recraft_core::Session;
 use recraft_decode::FlowKind;
 
-pub use api::categorize;
+pub use api::{categorize, categorize_path};
 pub use boundaries::merge_pdata_functions;
 pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
 pub use golang::{GoFunction, parse_pclntab};
