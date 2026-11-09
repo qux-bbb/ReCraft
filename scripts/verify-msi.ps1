@@ -105,6 +105,17 @@ function Get-MachinePathRaw {
     }
 }
 
+# A directory property formats with a trailing backslash, so `[INSTALLFOLDER]` lands on
+# PATH as `C:\...\ReCraft\`. Windows treats both spellings the same, so compare entries
+# with the separator trimmed instead of failing on it.
+function Test-PathEntry([string]$PathValue, [string]$Folder) {
+    $wanted = $Folder.TrimEnd('\')
+    foreach ($entry in ($PathValue -split ';')) {
+        if ($entry.TrimEnd('\') -ieq $wanted) { return $true }
+    }
+    return $false
+}
+
 function Install-Msi([string]$InstallFolder, [string]$LogPath, [string[]]$Properties = @()) {
     $arguments = @('/i', $Msi, '/qn', '/l*v', $LogPath)
     if ($InstallFolder) { $arguments += "INSTALLFOLDER=$InstallFolder" }
@@ -236,7 +247,7 @@ try {
     Assert-Condition ($menuLinks.Count -eq 2) "expected the GUI and CLI Start-menu shortcuts, found $($menuLinks.Count)"
     Assert-Condition (Test-Path -LiteralPath $desktopShortcut) 'desktop shortcut missing although DESKTOPSHORTCUT=1'
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    Assert-Condition (-not (($machinePath -split ';') -contains $target)) 'ADDTOPATH=0 still added the install folder to the machine PATH'
+    Assert-Condition (-not (Test-PathEntry $machinePath $target)) 'ADDTOPATH=0 still added the install folder to the machine PATH'
 
     $arp = Find-ArpKey 'ReCraft'
     Assert-Condition ($null -ne $arp) 'Apps & Features entry missing'
@@ -279,7 +290,7 @@ try {
     Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after uninstall'
     Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut still exists after uninstall'
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    Assert-Condition (-not (($machinePath -split ';') -contains $target)) 'install folder still on the machine PATH after uninstall'
+    Assert-Condition (-not (Test-PathEntry $machinePath $target)) 'install folder still on the machine PATH after uninstall'
     Assert-Condition ($null -eq (Find-ArpKey 'ReCraft')) 'Apps & Features entry still exists after uninstall'
     # MSI removes the values it wrote; the (now empty) keys may legitimately remain, so
     # assert on values rather than on key existence.
@@ -307,7 +318,7 @@ try {
         Assert-Condition (Test-Path -LiteralPath $shortcut) 'Start Menu shortcut missing after the default install'
         Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut created without DESKTOPSHORTCUT=1'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-        Assert-Condition (($defaultMachinePath -split ';') -contains $defaultTarget) 'the default install did not add the install folder to the machine PATH (ADDTOPATH defaults to 1)'
+        Assert-Condition (Test-PathEntry $defaultMachinePath $defaultTarget) "the default install did not add the install folder to the machine PATH (ADDTOPATH defaults to 1); PATH was: $defaultMachinePath"
         Write-Host "[install] default folder OK ($defaultTarget, PATH added by default, no desktop shortcut)"
 
         Uninstall-Msi $installedCode (Join-Path $work 'uninstall-default.log')
@@ -319,7 +330,7 @@ try {
         Assert-Condition ($null -eq (Find-ArpKey 'ReCraft')) 'Apps & Features entry still exists after the default uninstall'
         Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after the default uninstall'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-        Assert-Condition (-not (($defaultMachinePath -split ';') -contains $defaultTarget)) 'default install folder still on the machine PATH after uninstall'
+        Assert-Condition (-not (Test-PathEntry $defaultMachinePath $defaultTarget)) 'default install folder still on the machine PATH after uninstall'
         Write-Host '[uninstall] default folder removed'
         $installedCode = $null
     }
