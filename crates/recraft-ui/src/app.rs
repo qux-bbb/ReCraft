@@ -6678,28 +6678,26 @@ impl ReCraftApp {
         let extend_selection = ui.input(|input| input.modifiers.shift);
         let mut first_top: Option<f32> = None;
         let mut last_bottom: Option<f32> = None;
+        // Column header, reserved above the listing instead of being the first row *inside* it:
+        // as a scroll-area item the wheel carried it off the top with the instructions. IDA pins
+        // its column header, and the Strings list here already reserves its header the same way.
+        let header = format!(
+            "{:<14}{:<46}{:<9}{:<36}{}",
+            self.t("ui_address"),
+            self.t("ui_bytes"),
+            self.t("ui_mnemonic"),
+            self.t("ui_operands"),
+            self.t("ui_comment_2"),
+        );
+        let (header_rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), self.row_height()),
+            Sense::hover(),
+        );
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         if let Some(offset) = self.disasm_scroll_to.take() {
             area = area.vertical_scroll_offset(offset);
         }
         let scroll = area.show(ui, |ui| {
-            let header = format!(
-                "{:<14}{:<46}{:<9}{:<36}{}",
-                self.t("ui_address"),
-                self.t("ui_bytes"),
-                self.t("ui_mnemonic"),
-                self.t("ui_operands"),
-                self.t("ui_comment_2"),
-            );
-            ui.add(
-                egui::Label::new(
-                    RichText::new(header)
-                        .monospace()
-                        .strong()
-                        .size(self.mono_size()),
-                )
-                .truncate(),
-            );
             let width = ui.available_width().max(1000.0);
             for (index, line) in self.disasm_rows.iter().enumerate() {
                 // IDA renders names as inline labels above the instruction instead of a
@@ -6874,6 +6872,19 @@ impl ReCraftApp {
                 });
             }
         });
+        // Pinned header: painted over the reserved strip after the list so it can follow this
+        // frame's horizontal offset and keep its columns lined up with the rows. Clipping to the
+        // strip truncates it at the pane edge, as the old in-list label did.
+        ui.painter_at(header_rect).text(
+            egui::pos2(
+                header_rect.left() + 4.0 - scroll.state.offset.x,
+                header_rect.center().y,
+            ),
+            egui::Align2::LEFT_CENTER,
+            &header,
+            mono.clone(),
+            pal.text,
+        );
         self.follow_disasm_scroll(ui, &scroll);
         // Dragging above or below the window keeps selecting to that edge.
         if dragging
@@ -14118,6 +14129,88 @@ mod tests {
             (after_y - base_y).abs() < 2.0 * app.row_height(),
             "re-anchoring moved the text by {} px",
             after_y - base_y
+        );
+    }
+
+    /// The column header stays pinned while the listing scrolls. It used to be the first item
+    /// *inside* the scroll area, so the wheel carried it off the top with the instructions and
+    /// the columns were only visible at offset 0.
+    #[test]
+    fn headless_disassembly_header_stays_pinned_when_the_listing_scrolls() {
+        let Some((mut app, ctx, mut input)) = headless_disassembly() else {
+            return;
+        };
+        let mut frame = 0.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        let address_head = app.t("ui_address");
+        let header_pos = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with(&address_head) => {
+                        Some(text.pos)
+                    }
+                    _ => None,
+                })
+        };
+        let pos_of = |output: &egui::FullOutput, addr: u64| {
+            painted_rows(output)
+                .iter()
+                .find(|(painted, _)| *painted == addr)
+                .map(|(_, pos)| *pos)
+        };
+        let output = step(&mut input, &mut app);
+        let before = header_pos(&output).expect("the column header is painted");
+        let first_row = app.disasm_rows[0].addr.get();
+        let row_pos = pos_of(&output, first_row).expect("first row is painted");
+        let (row_before, row_before_y) = (row_pos.x, row_pos.y);
+        // The header columns must line up with the row text (both are inset by the same 4 px).
+        assert!(
+            (before.x - row_before).abs() < 0.5,
+            "header starts at {} but rows at {}",
+            before.x,
+            row_before
+        );
+        // Turn the wheel down over the listing: the rows move up, the header must not.
+        input
+            .events
+            .push(egui::Event::PointerMoved(before + egui::vec2(200.0, 120.0)));
+        let _ = step(&mut input, &mut app);
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -40.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut output = output;
+        for _ in 0..20 {
+            output = step(&mut input, &mut app);
+        }
+        assert!(
+            app.disasm_offset > 0.0,
+            "the wheel did not scroll the listing (offset {})",
+            app.disasm_offset
+        );
+        let after = header_pos(&output).expect("the header is painted after scrolling");
+        assert!(
+            (after.y - before.y).abs() < 1.0,
+            "the header moved from {} to {} while the listing scrolled",
+            before.y,
+            after.y
+        );
+        let row_after = pos_of(&output, first_row).expect("first row is still painted");
+        assert!(
+            row_after.y < row_before_y - 10.0,
+            "the first row did not scroll up ({row_before_y} -> {})",
+            row_after.y
         );
     }
 
