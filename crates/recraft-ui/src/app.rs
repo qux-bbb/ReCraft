@@ -7,6 +7,7 @@
 //! status), keyboard-first commands. All state changes go through `recraft-core`
 //! commands, so undo/redo behave exactly like the CLI.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,6 +44,9 @@ const MONO_SIZE: f32 = 12.5;
 /// whole points, which leaves at most 1 px at some sizes.
 const MONO_CJK_Y_OFFSET_FACTOR: f32 = -0.25;
 const ROW_HEIGHT: f32 = 15.0;
+/// Rows the Strings window paints per frame; a full string table would otherwise cost the
+/// whole frame. IDA caps its list the same way and reports the truncation in the status bar.
+const STRING_LIST_ROWS: usize = 2000;
 const ZOOM_MIN: f32 = 0.75;
 const ZOOM_MAX: f32 = 2.0;
 const ZOOM_STEP: f32 = 0.1;
@@ -656,6 +660,70 @@ fn data_xref_comment(session: &Session, addr: Address) -> Option<String> {
 /// a real section — including IDA-visible names such as `.text$mn` — is listed.
 fn is_header_string(segment: &str) -> bool {
     segment.eq_ignore_ascii_case("HEADER")
+}
+
+/// One string as the Strings window shows it.
+///
+/// A literal may carry control characters — the PE DOS stub is
+/// `This program cannot be run in DOS mode.\r\r\n$` — and egui breaks a galley at every
+/// `\n`, so such a row used to paint as two lines centred on the row: the first line hung
+/// over the header above it and the second line over the row below, both clipped by the row
+/// rect. The window is a one-line-per-entry list (as in IDA), so control characters are
+/// escaped into visible text instead. Printing the escape also keeps the row's `\t` from
+/// breaking the tab-separated columns Ctrl+C copies.
+fn string_cell_text(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(char::is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for ch in text.chars() {
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                let code = ch as u32;
+                if code <= 0xff {
+                    out.push_str(&format!("\\x{code:02x}"));
+                } else {
+                    out.push_str(&format!("\\u{{{code:x}}}"));
+                }
+            }
+            ch => out.push(ch),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Width of [`string_cell_text`]'s output in monospace cells, so the Strings window can size
+/// its string column to the widest literal it holds (IDA sizes those columns the same way).
+/// Characters the monospace fallback draws double-width count twice; treating every
+/// non-ASCII glyph as wide would overstate Latin-1 text, and counting them all as one would
+/// clip CJK.
+fn string_cell_units(text: &str) -> usize {
+    text.chars()
+        .map(|ch| {
+            let code = ch as u32;
+            let wide = matches!(
+                code,
+                0x1100..=0x115f
+                    | 0x2e80..=0x303e
+                    | 0x3041..=0x33ff
+                    | 0x3400..=0x4dbf
+                    | 0x4e00..=0x9fff
+                    | 0xa000..=0xa4cf
+                    | 0xac00..=0xd7a3
+                    | 0xf900..=0xfaff
+                    | 0xfe30..=0xfe6f
+                    | 0xff00..=0xff60
+                    | 0xffe0..=0xffe6
+                    | 0x1f300..=0x1f64f
+                    | 0x1f900..=0x1f9ff
+                    | 0x20000..=0x3fffd
+            );
+            if wide { 2 } else { 1 }
+        })
+        .sum()
 }
 
 /// Result of the background analysis worker.
@@ -2270,7 +2338,8 @@ impl ReCraftApp {
                 };
                 Some(format!(
                     "{address}\t{:08x}\t{encoding}\t{}",
-                    row.len, row.text
+                    row.len,
+                    string_cell_text(&row.text)
                 ))
             }
             Pane::Imports => {
@@ -4805,23 +4874,41 @@ impl ReCraftApp {
     }
 
     /// Output window: analysis/status log lines (IDA's Output pane).
+    ///
+    /// The rows were pinned at 11 px with the default 3 px item spacing, so one line's
+    /// descenders sat directly on the next line's ascenders: at 100 % zoom the first rows of
+    /// a line have very little ink and were visually swallowed by the line above (the
+    /// report's "已加载 那行顶部被挡住了"; the pixels were all there — a flat-top glyph such as
+    /// 口 renders its top stroke — the rows just had no air between them). The window now uses
+    /// the listing's monospace size laid out row by row with a real gap and a small top inset.
     fn output_pane(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
         let pal = self.palette();
         if self.log.is_empty() {
             ui.weak(self.t("ui_no_messages_yet"));
             return;
         }
+        let font = FontId::monospace(self.mono_size());
+        let row_gap = (self.row_height() * 0.25).max(4.0);
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.add_space(3.0);
+                let width = ui.available_width().max(200.0);
                 for line in &self.log {
                     let color = if line.starts_with("error:") {
                         Color32::from_rgb(0xe0, 0x6a, 0x6a)
                     } else {
                         pal.text
                     };
-                    ui.label(RichText::new(line).monospace().size(11.0).color(color));
+                    let galley = ui
+                        .painter()
+                        .layout(line.clone(), font.clone(), color, width);
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(width, galley.size().y + row_gap),
+                        Sense::hover(),
+                    );
+                    ui.painter().galley(rect.left_top(), galley, color);
                 }
             });
     }
@@ -4955,61 +5042,74 @@ impl ReCraftApp {
         });
         let filter = self.string_filter.to_lowercase();
         let hide_header = self.strings_hide_header;
+        // Rows the filter and the header switch keep, in list order. Built once so the
+        // column width below and the painted rows can never disagree.
+        let mut visible: Vec<usize> = Vec::new();
+        let mut more = false;
+        for (index, row) in self.strings.iter().enumerate() {
+            if hide_header && is_header_string(&row.segment) {
+                continue;
+            }
+            if !filter.is_empty() && !string_cell_text(&row.text).to_lowercase().contains(&filter) {
+                continue;
+            }
+            if visible.len() == STRING_LIST_ROWS {
+                more = true;
+                break;
+            }
+            visible.push(index);
+        }
         let mono_size = self.mono_size();
         let row_h = self.row_height().max(16.0);
         let scale = mono_size / MONO_SIZE;
         let addr_w = 280.0 * scale;
         let len_w = 90.0 * scale;
         let type_w = 70.0 * scale;
+        let string_x = addr_w + len_w + type_w;
         let selected = self
             .disasm_rows
             .get(self.selected)
             .map(|line| line.addr)
             .unwrap_or(self.disasm_start);
         let mono = FontId::monospace(mono_size);
-        let width = ui.available_width().max(640.0);
-        // Header row, aligned with the row offsets below.
-        let (header, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
-        let painter = ui.painter_at(header);
-        for (x, text) in [
-            (4.0, self.t("ui_address")),
-            (addr_w, self.t("ui_length")),
-            (addr_w + len_w, self.t("ui_type")),
-            (addr_w + len_w + type_w, self.t("ui_string")),
-        ] {
-            painter.text(
-                egui::pos2(header.left() + x, header.center().y),
-                egui::Align2::LEFT_CENTER,
-                text,
-                FontId::monospace(mono_size),
-                pal.text,
-            );
-        }
-        let mut shown = 0usize;
+        let widest = visible
+            .iter()
+            .map(|&index| string_cell_text(&self.strings[index].text))
+            .max_by_key(|text| string_cell_units(text));
+        // Lay the widest literal out once (egui caches the galley) so the column matches the
+        // font exactly, CJK fallback included.
+        let widest_w = widest
+            .map(|text| {
+                ui.painter()
+                    .layout_no_wrap(text.into_owned(), mono.clone(), pal.text)
+                    .size()
+                    .x
+            })
+            .unwrap_or(0.0);
+        // IDA's Strings window sizes its columns to their content and scrolls sideways when
+        // the widest literal does not fit, so a long string is reachable instead of being
+        // cut at the pane edge.
+        let content_width = (string_x + widest_w + 12.0).max(ui.available_width());
+        // Header row, aligned with the row offsets below and painted after the list so it
+        // can follow this frame's horizontal offset.
+        let (header, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), row_h), Sense::hover());
         let picked = self
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Strings)
             .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
         let mut picked_now = None;
-        egui::ScrollArea::vertical()
+        let scroll = egui::ScrollArea::both()
+            .id_salt("strings_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (index, row) in self.strings.iter().enumerate() {
-                    if hide_header && is_header_string(&row.segment) {
-                        continue;
-                    }
-                    if !filter.is_empty() && !row.text.to_lowercase().contains(&filter) {
-                        continue;
-                    }
-                    if shown >= 2000 {
-                        ui.weak(self.t("ui_first_2000_matches"));
-                        break;
-                    }
+                for (shown, &index) in visible.iter().enumerate() {
+                    let row = &self.strings[index];
                     let key = row.addr.get();
                     let is_selected = row.addr == selected || picked == Some(key);
                     let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(content_width, row_h), Sense::click());
                     if is_selected {
                         ui.painter().rect_filled(rect, 1.0, pal.selected_row);
                     } else if response.hovered() || shown % 2 == 1 {
@@ -5047,15 +5147,18 @@ impl ReCraftApp {
                         pal.mnemonic,
                     );
                     painter.text(
-                        egui::pos2(rect.left() + addr_w + len_w + type_w, rect.center().y),
+                        egui::pos2(rect.left() + string_x, rect.center().y),
                         egui::Align2::LEFT_CENTER,
-                        &row.text,
+                        string_cell_text(&row.text),
                         mono.clone(),
                         pal.text,
                     );
                     let response = response.on_hover_text(format!(
                         "{} · {} bytes · enc {} · kind {}",
-                        row.text, row.len, row.enc, row.kind
+                        string_cell_text(&row.text),
+                        row.len,
+                        row.enc,
+                        row.kind
                     ));
                     if response.clicked() {
                         *action = Action::SyncDisasm(row.addr);
@@ -5072,10 +5175,27 @@ impl ReCraftApp {
                             ui.close();
                         }
                     });
-                    shown += 1;
-                    let _ = index;
+                }
+                if more {
+                    ui.weak(self.t("ui_first_2000_matches"));
                 }
             });
+        let painter = ui.painter_at(header);
+        let left = header.left() - scroll.state.offset.x;
+        for (x, text) in [
+            (4.0, self.t("ui_address")),
+            (addr_w, self.t("ui_length")),
+            (addr_w + len_w, self.t("ui_type")),
+            (string_x, self.t("ui_string")),
+        ] {
+            painter.text(
+                egui::pos2(left + x, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                mono.clone(),
+                pal.text,
+            );
+        }
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Strings, key));
             self.copy_focus = CopyFocus::List(Pane::Strings);
@@ -12878,6 +12998,256 @@ mod tests {
         assert!(!is_header_string(".rdata"));
         assert!(!is_header_string(""));
         assert!(!is_header_string(".text"));
+    }
+
+    /// A literal keeps one line in the Strings window: control characters are escaped instead
+    /// of breaking the galley, and the escape keeps a `\t` out of the tab-separated row that
+    /// Ctrl+C copies.
+    #[test]
+    fn string_cells_escape_control_characters() {
+        // Printable text is passed through without a copy.
+        assert!(matches!(
+            string_cell_text("flag{strings_are_not_enough_you_know}"),
+            Cow::Borrowed(_)
+        ));
+        // The PE DOS stub is the real-world case: it ends in a CR/LF pair and a NUL.
+        assert_eq!(
+            string_cell_text("This program cannot be run in DOS mode.\r\r\n$"),
+            "This program cannot be run in DOS mode.\\r\\r\\n$"
+        );
+        assert_eq!(string_cell_text("a\tb\u{1}"), "a\\tb\\x01");
+        // The string column is sized in monospace cells: CJK fallback glyphs are double wide.
+        assert_eq!(string_cell_units("abcd"), 4);
+        assert_eq!(string_cell_units("已加载"), 6);
+    }
+
+    /// Build a Strings row for the headless rendering tests below.
+    fn ui_string_row(segment: &str, text: &str) -> StringRow {
+        StringRow {
+            addr: Address::new(0x140001000),
+            len: text.len() as u32,
+            enc: recraft_analysis::STRING_ENC_ASCII,
+            kind: 0,
+            segment: segment.to_owned(),
+            text: text.to_owned(),
+            raw: text.as_bytes().to_vec(),
+            name: None,
+        }
+    }
+
+    /// Render the Strings pane headlessly and return every painted text galley.
+    fn strings_frame(
+        app: &mut ReCraftApp,
+        ctx: &egui::Context,
+        input: &egui::RawInput,
+    ) -> Vec<(String, egui::Pos2, egui::Vec2, usize)> {
+        let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.pos,
+                    text.galley.size(),
+                    text.galley.rows.len(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Regression for the reported screenshot: the DOS stub row rendered as two lines because
+    /// egui breaks a galley at `\n`, so its first line hung over the column header and the
+    /// second over the next row, both clipped by the row rect. Escaped rows must paint as one
+    /// line inside the row's height.
+    #[test]
+    fn headless_strings_row_with_a_newline_stays_on_one_line() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-strings-lines.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let stub = "This program cannot be run in DOS mode.\r\r\n$";
+        app.strings_dirty = false; // keep the hand-built rows: no database refresh this frame
+        app.strings = vec![ui_string_row("HEADER", stub)];
+        app.strings_hide_header = false; // the stub lives in the PE header
+        app.focus_pane(Pane::Strings);
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let painted = strings_frame(&mut app, &ctx, &input);
+        let (text, _, size, rows) = painted
+            .iter()
+            .find(|(text, ..)| text.contains("DOS mode"))
+            .expect("the DOS stub row must be painted");
+        assert_eq!(
+            text, "This program cannot be run in DOS mode.\\r\\r\\n$",
+            "the row must show the escapes instead of raw control characters"
+        );
+        assert_eq!(*rows, 1, "the row must stay on a single line");
+        assert!(
+            size.y <= app.row_height() + 4.0,
+            "a single-line row must fit its height, got {} for {}",
+            size.y,
+            app.row_height()
+        );
+    }
+
+    /// A literal wider than the pane must stay reachable: the list sizes its string column to
+    /// the widest cell and scrolls sideways (as IDA's Strings window does) instead of cutting
+    /// the text at the pane edge.
+    #[test]
+    fn headless_strings_list_scrolls_sideways_to_the_end_of_a_long_literal() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-strings-scroll.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let long = format!("BEGIN-{}-END", "x".repeat(160));
+        app.strings_dirty = false;
+        app.strings = vec![ui_string_row(".rdata", &long)];
+        app.focus_pane(Pane::Strings);
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut input = egui::RawInput {
+            // The default window's minimum width: the literal cannot fit in the string column.
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let x_of = |painted: &[(String, egui::Pos2, egui::Vec2, usize)]| {
+            painted
+                .iter()
+                .find(|(text, ..)| text == &long)
+                .map(|(_, pos, ..)| pos.x)
+                .expect("the long literal is painted")
+        };
+        let painted = strings_frame(&mut app, &ctx, &input);
+        let before = x_of(&painted);
+        let row_y = painted
+            .iter()
+            .find(|(text, ..)| text.starts_with(".rdata:"))
+            .map(|(_, pos, ..)| pos.y)
+            .expect("the row's address cell is painted");
+        let row_x = painted
+            .iter()
+            .find(|(text, ..)| text.starts_with(".rdata:"))
+            .map(|(_, pos, ..)| pos.x)
+            .expect("the row's address cell is painted");
+
+        // Hover the row's address cell (the string column starts past the pane edge here),
+        // then wheel with Shift: egui maps that to the horizontal axis.
+        let pointer = egui::pos2(row_x + 10.0, row_y + 4.0);
+        let mut frame = 1.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let painted = strings_frame(app, &ctx, input);
+            input.events.clear();
+            painted
+        };
+        input.events.push(egui::Event::PointerMoved(pointer));
+        let _ = step(&mut input, &mut app);
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -600.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::SHIFT,
+        });
+        let mut painted = step(&mut input, &mut app);
+        // egui smooths a wheel notch over several frames.
+        for _ in 0..40 {
+            painted = step(&mut input, &mut app);
+        }
+        let after = x_of(&painted);
+        assert!(
+            after < before - 100.0,
+            "the list must scroll sideways to reach the tail of a long literal: {before} -> {after}"
+        );
+    }
+
+    /// The Output window must paint every log line whole and keep the rows apart. The rows
+    /// used to be pinned at 11 px with 3 px spacing, so one line's descenders sat on the next
+    /// line's ascenders and the thin top rows of a Chinese line looked cut off (the reported
+    /// "已加载 那行顶部被挡住了").
+    #[test]
+    fn headless_output_pane_paints_whole_lines_apart() {
+        let mut app = ReCraftApp {
+            log: vec![
+                "已加载 D:\\files\\projects\\ctf-simple-crackme\\challenge\\crackme_win_x64.rcraft"
+                    .to_owned(),
+                "把 .rcraft 项目或 PE 文件拖进窗口。".to_owned(),
+            ],
+            ..ReCraftApp::default()
+        };
+        app.focus_pane(Pane::Output);
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+        let lines: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with("已加载")
+                        || text.galley.text().starts_with("把 .rcraft") =>
+                {
+                    Some((text, clipped.clip_rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 2, "both log lines must be painted");
+        for (text, clip) in &lines {
+            assert_eq!(
+                text.galley.job.sections[0].format.font_id.family,
+                egui::FontFamily::Monospace,
+                "the log stays on the listing's monospace font"
+            );
+            assert_eq!(text.galley.rows.len(), 1, "a log line stays on one line");
+            let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+            assert!(
+                clip.contains_rect(rect),
+                "the log line must not be clipped: {rect:?} outside {clip:?}"
+            );
+        }
+        let (first, second) = (&lines[0].0, &lines[1].0);
+        assert!(
+            second.pos.y >= first.pos.y + first.galley.size().y,
+            "log lines must not overlap: {} then {}",
+            first.pos.y,
+            second.pos.y
+        );
     }
 
     #[test]
