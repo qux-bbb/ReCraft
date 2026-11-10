@@ -124,6 +124,11 @@
 
 ### 变更
 
+- **Strings 视图改用 IDA 同款的 `Shift+F12`。** IDA 的 Strings 窗口就是 `Shift+F12`，ReCraft
+  此前把 Strings 绑在 `F4`。现在 `Shift+F12` 打开/聚焦 Strings（页签关掉时重新停靠），Views
+  菜单的工具提示同步为该组合；`F4` 不再响应（IDA 的 F4 属于调试器，ReCraft 没有对应命令）。
+  新增无头测试：关掉 Strings 页签后按 `Shift+F12` 能重新停靠并置于前台。
+
 - **最短字符串长度默认 4 → 5。** 与 IDA 8.3 的 *Minimal string length* 默认值一致（实测：把
   `strwinsetup_t.minlen` 设成 4 会多出 `.bss` 这类 4 字符串，设成 8 只剩 28 条；IDA 的 Length
   列含终止符，但最小长度不含）。该值现在是项目设置 `strings.min_len`，`analyze` 时读取、GUI

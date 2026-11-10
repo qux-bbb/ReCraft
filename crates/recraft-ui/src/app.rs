@@ -451,7 +451,9 @@ impl Pane {
         match self {
             Pane::Functions => Some("F2"),
             Pane::Names => Some("F3"),
-            Pane::Strings => Some("F4"),
+            // IDA opens its Strings window with Shift+F12, so the pane uses that chord
+            // instead of joining the F-key family below.
+            Pane::Strings => Some("Shift+F12"),
             Pane::Imports => Some("F6"),
             Pane::Segments => Some("F8"),
             Pane::Hex => Some("F9"),
@@ -4497,13 +4499,16 @@ impl ReCraftApp {
         let Some(state) = self.dock.as_mut() else {
             return;
         };
+        if state.find_tab(&pane).is_none() {
+            state.push_to_focused_leaf(pane);
+        }
+        // A pane that was closed comes back as its leaf's active tab; marking the leaf
+        // focused too makes the reopened view the one keyboard navigation follows.
         if let Some(path) = state.find_tab(&pane) {
             let node_path = path.node_path();
             if state.set_active_tab(path).is_ok() {
                 state.set_focused_node_and_surface(node_path);
             }
-        } else {
-            state.push_to_focused_leaf(pane);
         }
     }
 
@@ -7934,15 +7939,18 @@ impl ReCraftApp {
             if input.key_pressed(Key::F5) {
                 action = Action::Decompile;
             }
-            // IDA-like pane focus shortcuts (F2-F11; F1/F5 are taken). Like IDA, analysis
-            // has no key of its own: it runs when the binary is loaded, and re-running it
-            // is a menu command.
+            // IDA opens its Strings window with Shift+F12; this is the one pane shortcut
+            // that matches IDA, so IDA muscle memory finds the list where it expects it.
+            if input.modifiers.shift && input.key_pressed(Key::F12) {
+                action = Action::FocusPane(Pane::Strings);
+            }
+            // Pane focus shortcuts (F2/F3, F6, F8-F11). Like IDA, analysis has no key of
+            // its own: it runs when the binary is loaded, and re-running it is a menu
+            // command.
             if input.key_pressed(Key::F2) {
                 action = Action::FocusPane(Pane::Functions);
             } else if input.key_pressed(Key::F3) {
                 action = Action::FocusPane(Pane::Names);
-            } else if input.key_pressed(Key::F4) {
-                action = Action::FocusPane(Pane::Strings);
             } else if input.key_pressed(Key::F6) {
                 action = Action::FocusPane(Pane::Imports);
             } else if input.key_pressed(Key::F8) {
@@ -13485,6 +13493,55 @@ mod tests {
             .and_then(|state| state.find_active_focused())
             .map(|(_, tab)| *tab);
         assert_eq!(active, Some(Pane::Functions));
+    }
+
+    #[test]
+    fn strings_shortcut_opens_the_strings_pane_like_ida() {
+        assert_eq!(
+            Pane::Strings.shortcut(),
+            Some("Shift+F12"),
+            "the Views menu must advertise IDA's Strings-window chord"
+        );
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        let path = app
+            .dock
+            .as_ref()
+            .and_then(|state| state.find_tab(&Pane::Strings))
+            .expect("Strings pane");
+        app.dock.as_mut().unwrap().remove_tab(path);
+
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        input
+            .events
+            .push(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        input.events.push(egui::Event::Key {
+            key: egui::Key::F12,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT,
+        });
+        let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+        output.textures_delta.clear();
+
+        let state = app.dock.as_mut().expect("dock");
+        assert!(
+            state.find_tab(&Pane::Strings).is_some(),
+            "Shift+F12 must re-dock a closed Strings pane, like IDA's window shortcut"
+        );
+        assert_eq!(
+            state.find_active_focused().map(|(_, tab)| *tab),
+            Some(Pane::Strings),
+            "Shift+F12 must bring the Strings pane to the front"
+        );
     }
 
     #[test]
