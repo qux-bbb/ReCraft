@@ -7,7 +7,7 @@ void sub_14000cc40_l1(void) {
     if (edx == 0) {
         SendMessageW(qword_ADDR, 0xADDR, &var_30, &var_34);
         SendMessageW(qword_ADDR, 0xADDR, var_30, 0);
-        sub_1400083f8(&var_40, 0xADDR, "%", (rax + 1));
+        sub_1400083f8(&var_40, 0xADDR, "%d", (rax + 1));
         SetDlgItemTextW(rbx, 0xADDR, &var_40);
         SetFocus(rbx);
         eax = 1;
@@ -27,13 +27,13 @@ void sub_14000cc40_l1(void) {
             if (dword_ADDR <= 0) {
                 MessageBoxW(rbx, qword_ADDR, qword_ADDR, 0);
                 SendMessageW(qword_ADDR, 0xADDR, 0, 0);
-                sub_1400083f8(&var_40, 0xADDR, "%", eax);
+                sub_1400083f8(&var_40, 0xADDR, "%d", eax);
                 SetDlgItemTextW(rbx, 0xADDR, &var_40);
                 SetFocus(rbx);
             } else if (eax == -1) {
                 MessageBoxW(rbx, qword_ADDR, qword_ADDR, 0);
                 SendMessageW(qword_ADDR, 0xADDR, 0, 0);
-                sub_1400083f8(&var_40, 0xADDR, "%", eax);
+                sub_1400083f8(&var_40, 0xADDR, "%d", eax);
                 SetDlgItemTextW(rbx, 0xADDR, &var_40);
                 SetFocus(rbx);
                 eax = 0;

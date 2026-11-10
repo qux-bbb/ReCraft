@@ -104,7 +104,7 @@ void sub_140021474_l1(void) {
                         r9d = dword_ADDR;
                         r9d += esi;
                         esi = 0xADDR;
-                        sub_1400083f8(&var_b8, esi, "%", r9);
+                        sub_1400083f8(&var_b8, esi, "%d", r9);
                         wcsnlen(&var_b8, esi);
                         rsi = off_140035a90;
                         ecx = (rax + rdi);

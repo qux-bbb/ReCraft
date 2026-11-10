@@ -5,7 +5,7 @@ void sub_14000b3e4_l1(void) {
     var_58 = 4;
     var_28 = rax;
     var_20 = 0;
-    RegGetValueW(0xADDR, "S", "ShowStoreBanner", 0xADDR, 0, &var_50, &var_58);
+    RegGetValueW(0xADDR, "Software\\Microsoft\\Notepad", "ShowStoreBanner", 0xADDR, 0, &var_50, &var_58);
     if (eax != 0) {
         var_28 = 0;
         var_20 = 0;

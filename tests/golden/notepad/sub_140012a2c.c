@@ -2,14 +2,14 @@
 void sub_140012a2c_l1(void) {
     edx = 0;
     sub_1400029dc(&var_40, 0, (rdx + 0xADDR));
-    eax = *(u32*)("l");
+    eax = *(u32*)("le");
     xmm0 = *(__m128*)("Lucida Console");
     var_30 = 0;
     hKey = 0;
     var_b8 = eax;
     var_bc = ax;
     var_a0 = xmm0;
-    var_b0 = *(f64*)("o");
+    var_b0 = *(f64*)("onsole");
     xmm0 = 0;
     ebx = (rax + 0xADDR);
     var_de = 0;
@@ -17,7 +17,7 @@ void sub_140012a2c_l1(void) {
     var_20 = rax;
     var_be = xmm0;
     var_ce = xmm0;
-    RegOpenKeyExW(0xADDR, "S", 0, 0xADDR);
+    RegOpenKeyExW(0xADDR, "Software\\Microsoft\\Notepad", 0, 0xADDR);
     if (eax == 0) {
         rcx = var_30;
     } else {

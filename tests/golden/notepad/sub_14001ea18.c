@@ -9,7 +9,7 @@ void sub_14001ea18_l1(void) {
     var_68 = 4;
     if (rcx == 0) {
         var_60 = eax;
-        RegCreateKeyW(0xADDR, "S", &hKey);
+        RegCreateKeyW(0xADDR, "Software\\Microsoft\\Notepad", &hKey);
         if (eax == 0) {
             rax = &var_30;
             var_28 = 4;

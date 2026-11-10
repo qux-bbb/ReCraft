@@ -283,6 +283,10 @@ enum Commands {
         /// Do not match the built-in CRT signatures after analysing.
         #[arg(long)]
         no_signatures: bool,
+        /// Minimum string length, in characters (IDA's *Minimal string length*). Stored in
+        /// the project and applied on every rebuild; defaults to the project setting.
+        #[arg(long)]
+        min_string_len: Option<usize>,
         #[arg(long)]
         json: bool,
     },
@@ -675,7 +679,14 @@ fn run(cli: Cli) -> Result<()> {
             out,
             json,
             no_signatures,
-        } => cmd_analyze(&project, out.as_deref(), json, !no_signatures),
+            min_string_len,
+        } => cmd_analyze(
+            &project,
+            out.as_deref(),
+            json,
+            !no_signatures,
+            min_string_len,
+        ),
         Commands::Reanalyze {
             project,
             addr,
@@ -904,13 +915,20 @@ fn is_project_file(path: &Path) -> bool {
 
 /// Create a project from a PE file and run the full analysis pass (functions, xrefs,
 /// strings) — the one-shot form used by `analyze <pe> --out`.
-fn import_and_analyze_pe(pe: &Path, out: &Path) -> Result<()> {
+fn import_and_analyze_pe(pe: &Path, out: &Path, min_string_len: Option<usize>) -> Result<()> {
     let bytes = std::fs::read(pe)
         .map_err(|error| Error::internal(format!("cannot read {}: {error}", pe.display())))?;
     let mut session = Session::create(out, &bytes, &mut |_, _| {}, &|| false)?;
     let result = analyze(&mut session)?;
     persist(&mut session, &result)?;
-    let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
+    let min_len = match min_string_len {
+        Some(value) => {
+            recraft_analysis::set_string_min_len(&mut session, value)?;
+            recraft_analysis::clamp_min_string_len(value)
+        }
+        None => recraft_analysis::DEFAULT_MIN_STRING_LEN,
+    };
+    let strings = recraft_analysis::extract_strings(&mut session, min_len, 200_000)?;
     recraft_analysis::persist_strings(&mut session, &strings)?;
     Ok(())
 }
@@ -962,7 +980,11 @@ fn materialize_project(input: &Path) -> Result<MaterializedProject> {
         let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false)?;
         let result = analyze(&mut session)?;
         persist(&mut session, &result)?;
-        let strings = extract_strings(&mut session, 4, 4_000_000)?;
+        let strings = extract_strings(
+            &mut session,
+            recraft_analysis::DEFAULT_MIN_STRING_LEN,
+            4_000_000,
+        )?;
         persist_strings(&mut session, &strings)?;
     }
     Ok(MaterializedProject {
@@ -1260,7 +1282,11 @@ fn cmd_decbench(kit: &Path, out: &Path) -> Result<()> {
         };
         let result = analyze(&mut session)?;
         persist(&mut session, &result)?;
-        let strings = extract_strings(&mut session, 4, 4_000_000)?;
+        let strings = extract_strings(
+            &mut session,
+            recraft_analysis::DEFAULT_MIN_STRING_LEN,
+            4_000_000,
+        )?;
         persist_strings(&mut session, &strings)?;
 
         let mut bodies = Vec::new();
@@ -1487,14 +1513,20 @@ fn cmd_reanalyze(project: &Path, raw: &str, len: u64, as_json: bool) -> Result<(
     Ok(())
 }
 
-fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool, signatures: bool) -> Result<()> {
+fn cmd_analyze(
+    project: &Path,
+    out: Option<&Path>,
+    as_json: bool,
+    signatures: bool,
+    min_string_len: Option<usize>,
+) -> Result<()> {
     // DESIGN §10: `analyze <file> --out project.rcraft` imports and analyses in one step.
     let owned_project;
     let project = if project.is_file() && !is_project_file(project) {
         let out = out.ok_or_else(|| {
             Error::unsupported("analyze <pe> needs --out <project.rcraft> (or import first)")
         })?;
-        import_and_analyze_pe(project, out)?;
+        import_and_analyze_pe(project, out, min_string_len)?;
         owned_project = out.to_path_buf();
         owned_project.as_path()
     } else {
@@ -1504,7 +1536,16 @@ fn cmd_analyze(project: &Path, out: Option<&Path>, as_json: bool, signatures: bo
     let started = Instant::now();
     let result = analyze(&mut session)?;
     persist(&mut session, &result)?;
-    let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
+    // The list is derived data, so its minimum length is a project setting: `--min-string-len`
+    // rewrites it (and applies immediately), otherwise the stored value is reused.
+    let min_len = match min_string_len {
+        Some(value) => {
+            recraft_analysis::set_string_min_len(&mut session, value)?;
+            recraft_analysis::clamp_min_string_len(value)
+        }
+        None => recraft_analysis::string_min_len(&session),
+    };
+    let strings = recraft_analysis::extract_strings(&mut session, min_len, 200_000)?;
     recraft_analysis::persist_strings(&mut session, &strings)?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 

@@ -6,7 +6,7 @@ void sub_140023c00_l1(void) {
     eax = 0xADDR;
     var_e0 = ax;
     sub_140023b80(&var_e2, 0xADDR);
-    sub_1400082b0(&var_e0, 0xADDR, "\"");
+    sub_1400082b0(&var_e0, 0xADDR, "\" ");
     sub_1400082b0(&var_e0, 0xADDR, rbx);
     edx = 0;
     sub_1400029dc(&var_74, 0, (rdx + 0xADDR));

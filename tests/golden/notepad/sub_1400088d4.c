@@ -20,7 +20,7 @@ void sub_1400088d4_l1(void) {
     rax = (rdx - 2);
     rax = ((r9 != 0) ? rdx : rax);
     *(u16*)(rax) = 0xADDR;
-    sub_1400082b0(&var_30, rsi, "_");
+    sub_1400082b0(&var_30, rsi, "_p0");
     OpenSemaphoreW(0xADDR, 0, &var_30);
     rbx = rax;
     if (rax != 0) {

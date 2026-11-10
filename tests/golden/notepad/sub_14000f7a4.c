@@ -12,13 +12,13 @@ void sub_14000f7a4_l1(void) {
     if (eax >= 0 /* signed */) {
         rax = *(u64*)(rdi);
         rax = *(u64*)((rax + 0xADDR));
-        sub_140028010(rdi, "t");
+        sub_140028010(rdi, "txt");
         ebx = eax;
         if (eax >= 0 /* signed */) {
             var_28 = qword_ADDR;
             var_30 = "*.txt";
             var_38 = qword_ADDR;
-            var_40 = "*";
+            var_40 = "*.*";
             rax = *(u64*)(rdi);
             rax = *(u64*)((rax + 0xADDR));
             sub_140028010(rdi, 2, &var_28);

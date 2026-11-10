@@ -26,7 +26,7 @@ void sub_140004acc_l1(void) {
     rdx = r15;
     rax = ((rdx != 0) ? rcx : rax);
     *(u16*)(rax) = 0xADDR;
-    sub_1400082b0(&var_30, r15, "_");
+    sub_1400082b0(&var_30, r15, "_p0");
     rsi = rbx;
     var_28 = 0xADDR;
     r8d = edi;

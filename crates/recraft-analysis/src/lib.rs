@@ -33,8 +33,10 @@ pub use boundaries::merge_pdata_functions;
 pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
 pub use golang::{GoFunction, parse_pclntab};
 pub use strings::{
-    ExtractedString, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC, StringScanOptions,
-    extract_strings, extract_strings_with, persist_strings,
+    DEFAULT_MIN_STRING_LEN, ExtractedString, MIN_STRING_LEN_CEILING, MIN_STRING_LEN_FLOOR,
+    MIN_STRING_LEN_META_KEY, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC,
+    StringScanOptions, clamp_min_string_len, extract_strings, extract_strings_with,
+    persist_strings, set_string_min_len, string_min_len,
 };
 
 /// `xref.type` for a direct call.

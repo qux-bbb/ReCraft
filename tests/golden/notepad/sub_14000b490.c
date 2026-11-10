@@ -25,7 +25,7 @@ void sub_14000b490_l1(void) {
         if (eax >= 0 /* signed */) {
             var_38 = 0;
             hstring = rsi;
-            WindowsCreateStringReference("W", 0xADDR, &hstringHeader, &hstring);
+            WindowsCreateStringReference("Windows.Foundation.Uri", 0xADDR, &hstringHeader, &hstring);
             if (eax < 0 /* signed */) {
                 ecx = eax;
                 sub_14000b320(eax);

@@ -45,7 +45,7 @@ void sub_14000d078_l1(void) {
         var_20 = r15;
         sub_1400083f8(rbp, 0xADDR, "%s%c*.txt%c%s%c*.*%c", qword_ADDR, r15, r15, qword_ADDR, r15, r15);
         var_c0 = 0xADDR;
-        rax = "t";
+        rax = "txt";
         var_8c = 1;
         var_c8 = rax;
         rcx = rbp;

@@ -17,7 +17,7 @@ void sub_14001eee0_l1(void) {
     SetThreadDpiAwarenessContext(rdi);
     if (ebx == 0) {
         if (dword_ADDR != esi) {
-            RegCreateKeyW(0xADDR, "S", &hKey);
+            RegCreateKeyW(0xADDR, "Software\\Microsoft\\Notepad", &hKey);
             if (eax == 0) {
                 if (dword_ADDR != eax) {
                     r8d = dword_ADDR;
@@ -120,7 +120,7 @@ void sub_14001eee0_l1(void) {
         rax = qword_ADDR;
         if (rax != var_44) {
             esi = 1;
-            RegCreateKeyW(0xADDR, "S", &hKey);
+            RegCreateKeyW(0xADDR, "Software\\Microsoft\\Notepad", &hKey);
             if (eax == 0) {
                 if (dword_ADDR != eax) {
                     r8d = dword_ADDR;

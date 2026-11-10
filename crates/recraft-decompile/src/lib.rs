@@ -1319,11 +1319,19 @@ fn literal_references(literals: &HashMap<u64, String>) -> Vec<(String, Address)>
     references
 }
 
-/// Read a NUL-terminated printable ASCII literal for short data not in the string table.
+/// Read a NUL-terminated printable literal for short data not in the string table.
+///
+/// Both narrow and UTF-16LE text are recovered: the string table's minimum length is
+/// configurable, so a literal such as `L"Edit"` (four wide characters) must still render
+/// when it is not listed. The wide form is detected by its interleaved NULs before the
+/// narrow scan, which would otherwise stop after the first character.
 fn read_c_literal(session: &dyn SessionView, addr: Address) -> Option<String> {
     let mut bytes = [0u8; 64];
     let read = session.read_at(addr, &mut bytes).ok()?;
     let bytes = &bytes[..read];
+    if let Some(text) = wide_literal(bytes) {
+        return Some(text);
+    }
     let end = bytes.iter().position(|byte| *byte == 0)?;
     if end == 0 {
         return None;
@@ -1333,6 +1341,30 @@ fn read_c_literal(session: &dyn SessionView, addr: Address) -> Option<String> {
         .iter()
         .all(|byte| matches!(byte, b'\r' | b'\n' | b'\t' | 0x20..=0x7e));
     printable.then(|| String::from_utf8_lossy(text).into_owned())
+}
+
+/// Decode a UTF-16LE literal of printable ASCII: every high byte is NUL, and a
+/// two-byte NUL terminates the text. Returns `None` unless at least one character
+/// decodes, so a one-character narrow literal (`"E\0"`) stays on the narrow path.
+fn wide_literal(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 4 || bytes[1] != 0 || bytes[0] == 0 || bytes[2] == 0 || bytes[3] != 0 {
+        return None;
+    }
+    let mut text = String::new();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        let low = bytes[index];
+        let high = bytes[index + 1];
+        if low == 0 && high == 0 {
+            return (!text.is_empty()).then_some(text);
+        }
+        if high != 0 || !matches!(low, b'\r' | b'\n' | b'\t' | 0x20..=0x7e) {
+            return None;
+        }
+        text.push(char::from(low));
+        index += 2;
+    }
+    None
 }
 
 struct Printer<'a> {

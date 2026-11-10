@@ -646,17 +646,14 @@ fn data_xref_comment(session: &Session, addr: Address) -> Option<String> {
     Some(format!("; DATA XREF: {}", from.join(", ")))
 }
 
-/// Header/section-name strings that IDA's default list does not surface.
-fn is_string_noise(segment: &str, text: &str) -> bool {
-    const SECTION_NAMES: [&str; 14] = [
-        ".text", ".rdata", ".data", ".pdata", ".rsrc", ".reloc", ".idata", ".edata", ".tls",
-        ".didat", ".bss", ".debug", ".gfids", ".00cfg",
-    ];
-    segment.is_empty()
-        || segment.eq_ignore_ascii_case("HEADER")
-        || text.is_empty()
-        || SECTION_NAMES.contains(&text.trim())
-        || (text.starts_with('.') && !text.contains(char::is_whitespace))
+/// Strings in the PE `HEADER` segment.
+///
+/// IDA does not map the file header (`is_loaded(IMAGE_BASE) == 0`), so its string list can
+/// never contain the DOS stub or the section table; ReCraft maps the header to address the
+/// whole file. Hiding this segment keeps the panel comparable with IDA while everything in
+/// a real section — including IDA-visible names such as `.text$mn` — is listed.
+fn is_header_string(segment: &str) -> bool {
+    segment.eq_ignore_ascii_case("HEADER")
 }
 
 /// Result of the background analysis worker.
@@ -676,6 +673,22 @@ struct AnalysisJob {
     receiver: mpsc::Receiver<AnalysisMessage>,
     cancel: Arc<AtomicBool>,
     started: Instant,
+}
+
+/// Result of a background strings rebuild (IDA's *Setup…* → *Rebuild*).
+enum StringsMessage {
+    Done {
+        strings: usize,
+        min_len: usize,
+        elapsed_ms: f64,
+    },
+    Failed(String),
+}
+
+/// A running strings rebuild: re-extracts the table with a new minimum length and
+/// persists it, so the list (and the pseudocode literals that read it) refresh.
+struct StringsJob {
+    receiver: mpsc::Receiver<StringsMessage>,
 }
 
 /// Background LLM request; HTTP calls never run on the UI thread.
@@ -1230,7 +1243,15 @@ pub struct ReCraftApp {
     functions_dirty: bool,
     function_filter: String,
     strings: Vec<StringRow>,
-    strings_hide_noise: bool,
+    /// Hide strings in the `HEADER` segment (IDA never sees them: it does not map headers,
+    /// so its list cannot contain the DOS stub or the section table).
+    strings_hide_header: bool,
+    /// Project setting (`strings.min_len`), i.e. IDA's *Minimal string length*.
+    strings_min_len: usize,
+    /// Draft value while the `Setup…` dialog is open.
+    strings_setup: Option<usize>,
+    /// Running strings rebuild (a new minimum length re-extracts and persists the table).
+    strings_job: Option<StringsJob>,
     strings_dirty: bool,
     string_filter: String,
     names: Vec<(Address, String)>,
@@ -1358,7 +1379,10 @@ impl Default for ReCraftApp {
             functions_dirty: false,
             function_filter: String::new(),
             strings: Vec::new(),
-            strings_hide_noise: true,
+            strings_hide_header: true,
+            strings_min_len: recraft_analysis::DEFAULT_MIN_STRING_LEN,
+            strings_setup: None,
+            strings_job: None,
             strings_dirty: false,
             string_filter: String::new(),
             names: Vec::new(),
@@ -1820,6 +1844,12 @@ impl ReCraftApp {
         self.literal_data.clear();
         self.functions_dirty = true;
         self.strings_dirty = true;
+        self.strings_min_len = self
+            .session
+            .as_ref()
+            .map(recraft_analysis::string_min_len)
+            .unwrap_or(recraft_analysis::DEFAULT_MIN_STRING_LEN);
+        self.strings_setup = None;
         self.imports_dirty = true;
         self.xref_dialog = None;
         self.cfg_dirty = true;
@@ -2376,6 +2406,7 @@ impl ReCraftApp {
 
     fn tick(&mut self) {
         self.poll_analysis();
+        self.poll_strings_job();
         self.poll_ai_job();
         if self.disasm_dirty {
             self.refresh_disasm();
@@ -2567,6 +2598,61 @@ impl ReCraftApp {
                 self.set_status(self.t("ui_analysis_cancelled").to_owned());
             }
             AnalysisMessage::Failed(error) => {
+                self.set_error(recraft_common::Error::internal(error));
+            }
+        }
+    }
+
+    /// Handle `Strings → Setup… → Rebuild`: re-extract the list with `min_len` in the
+    /// background, then refresh the panel (and any pseudocode that shows literals).
+    fn start_strings_job(&mut self, min_len: usize) {
+        if self.strings_job.is_some() {
+            return;
+        }
+        let Some(project) = self.project.clone() else {
+            self.set_status(self.t("ui_no_project_2").to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(run_strings_job(&project, min_len));
+        });
+        self.strings_job = Some(StringsJob { receiver });
+        self.set_status(self.t_args("ui_strings_rebuilding", &[("min", &min_len.to_string())]));
+    }
+
+    fn poll_strings_job(&mut self) {
+        let Some(job) = self.strings_job.as_ref() else {
+            return;
+        };
+        let message = match job.receiver.try_recv() {
+            Ok(message) => message,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                StringsMessage::Failed("strings worker stopped unexpectedly".to_owned())
+            }
+        };
+        self.strings_job = None;
+        match message {
+            StringsMessage::Done {
+                strings,
+                min_len,
+                elapsed_ms,
+            } => {
+                self.strings_min_len = min_len;
+                self.strings_dirty = true;
+                self.pseudo_dirty = true;
+                self.disasm_dirty = true;
+                self.set_status(self.t_args(
+                    "ui_strings_rebuilt",
+                    &[
+                        ("count", &strings.to_string()),
+                        ("min", &min_len.to_string()),
+                        ("ms", &format!("{elapsed_ms:.0}")),
+                    ],
+                ));
+            }
+            StringsMessage::Failed(error) => {
                 self.set_error(recraft_common::Error::internal(error));
             }
         }
@@ -4846,7 +4932,8 @@ impl ReCraftApp {
             ui.weak(self.t("ui_no_strings_yet_run_analyze_f5"));
         }
         let hint = self.t("ui_substring");
-        let hide_label = self.t("ui_hide_headers_section_names");
+        let hide_label = self.t("ui_hide_header_strings");
+        let setup_label = self.t("ui_setup");
         ui.horizontal(|ui| {
             ui.weak(self.t("ui_filter"));
             ui.add(
@@ -4854,11 +4941,15 @@ impl ReCraftApp {
                     .desired_width(260.0)
                     .hint_text(hint),
             );
-            ui.checkbox(&mut self.strings_hide_noise, hide_label);
+            ui.checkbox(&mut self.strings_hide_header, hide_label);
+            // IDA's *Setup…*: the minimum length is a project setting applied on rebuild.
+            if ui.button(setup_label).clicked() {
+                self.strings_setup = Some(self.strings_min_len);
+            }
             ui.weak(format!("{}", self.strings.len()));
         });
         let filter = self.string_filter.to_lowercase();
-        let hide_noise = self.strings_hide_noise;
+        let hide_header = self.strings_hide_header;
         let mono_size = self.mono_size();
         let row_h = self.row_height().max(16.0);
         let scale = mono_size / MONO_SIZE;
@@ -4900,7 +4991,7 @@ impl ReCraftApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (index, row) in self.strings.iter().enumerate() {
-                    if hide_noise && is_string_noise(&row.segment, &row.text) {
+                    if hide_header && is_header_string(&row.segment) {
                         continue;
                     }
                     if !filter.is_empty() && !row.text.to_lowercase().contains(&filter) {
@@ -7393,6 +7484,47 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA-style *Setup…* for the Strings window: the minimum length is the option that
+    /// controls the list, and `Rebuild` applies it (IDA likewise rebuilds on demand).
+    fn strings_setup_window(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.strings_setup else {
+            return;
+        };
+        let mut rebuild = false;
+        let mut open = true;
+        egui::Window::new(self.t("ui_strings_setup_title"))
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(self.t("ui_min_string_length"));
+                    ui.add(
+                        egui::DragValue::new(&mut draft)
+                            .range(
+                                recraft_analysis::MIN_STRING_LEN_FLOOR
+                                    ..=recraft_analysis::MIN_STRING_LEN_CEILING,
+                            )
+                            .speed(0.2),
+                    );
+                });
+                ui.weak(self.t("ui_min_string_length_hint"));
+                ui.horizontal(|ui| {
+                    if ui.button(self.t("ui_rebuild")).clicked() {
+                        rebuild = true;
+                    }
+                    if ui.button(self.t("ui_cancel")).clicked() {
+                        open = false;
+                    }
+                });
+            });
+        if rebuild {
+            self.start_strings_job(recraft_analysis::clamp_min_string_len(draft));
+            self.strings_setup = None;
+        } else {
+            self.strings_setup = open.then_some(draft);
+        }
+    }
+
     /// IDA's dialog title: `xrefs to <name>`, falling back to the bare address.
     fn xrefs_title(&self, target: Address) -> String {
         let name = self
@@ -8296,6 +8428,7 @@ impl ReCraftApp {
         self.ai_settings_window(&ctx);
         self.edit_window(&ctx, &mut action);
         self.goto_window(&ctx, &mut action);
+        self.strings_setup_window(&ctx);
         self.palette_window(&ctx, &mut action);
         self.xrefs_window(&ctx, &mut action);
         self.apply_action(&ctx, action);
@@ -9034,7 +9167,8 @@ fn run_analysis_job(project: &Path, cancel: &Arc<AtomicBool>) -> AnalysisMessage
         };
         let result = recraft_analysis::analyze_with_options(&mut session, &options)?;
         recraft_analysis::persist(&mut session, &result)?;
-        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000)?;
+        let min_len = recraft_analysis::string_min_len(&session);
+        let strings = recraft_analysis::extract_strings(&mut session, min_len, 200_000)?;
         recraft_analysis::persist_strings(&mut session, &strings)?;
         // Names learned elsewhere reach a new project without an extra command: match the
         // built-in CRT signatures once, right after the analysis that finds the functions.
@@ -9049,6 +9183,29 @@ fn run_analysis_job(project: &Path, cancel: &Arc<AtomicBool>) -> AnalysisMessage
         },
         Err(recraft_common::Error::Cancelled) => AnalysisMessage::Cancelled,
         Err(error) => AnalysisMessage::Failed(error.to_string()),
+    }
+}
+
+/// Background worker for `Strings → Setup… → Rebuild`: re-extract with the requested
+/// minimum length, persist both the table and the setting (so reopening the project keeps
+/// it), and report the new row count.
+fn run_strings_job(project: &Path, min_len: usize) -> StringsMessage {
+    let started = Instant::now();
+    let outcome = (|| -> recraft_common::Result<(usize, usize)> {
+        let mut session = Session::open(project)?;
+        let min_len = recraft_analysis::clamp_min_string_len(min_len);
+        let strings = recraft_analysis::extract_strings(&mut session, min_len, 200_000)?;
+        recraft_analysis::persist_strings(&mut session, &strings)?;
+        recraft_analysis::set_string_min_len(&mut session, min_len)?;
+        Ok((strings.len(), min_len))
+    })();
+    match outcome {
+        Ok((strings, min_len)) => StringsMessage::Done {
+            strings,
+            min_len,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        },
+        Err(error) => StringsMessage::Failed(error.to_string()),
     }
 }
 
@@ -10563,7 +10720,7 @@ mod tests {
         let row = app
             .strings
             .iter()
-            .find(|row| !is_string_noise(&row.segment, &row.text) && !row.text.is_empty())
+            .find(|row| !is_header_string(&row.segment) && !row.text.is_empty())
             .cloned()
             .expect("sample has at least one string");
         app.navigate(row.addr);
@@ -10631,7 +10788,7 @@ mod tests {
         let data = app
             .strings
             .iter()
-            .find(|row| !is_string_noise(&row.segment, &row.text) && !row.text.is_empty())
+            .find(|row| !is_header_string(&row.segment) && !row.text.is_empty())
             .map(|row| row.addr)
             .expect("sample has at least one string");
         app.navigate(data);
@@ -10836,7 +10993,7 @@ mod tests {
         let row = app
             .strings
             .iter()
-            .find(|row| !is_string_noise(&row.segment, &row.text))
+            .find(|row| !is_header_string(&row.segment))
             .cloned()
             .expect("notepad has a visible literal");
         let segment = app
@@ -10975,7 +11132,7 @@ mod tests {
             .strings
             .iter()
             .rev()
-            .find(|row| !is_string_noise(&row.segment, &row.text))
+            .find(|row| !is_header_string(&row.segment))
             .cloned()
             .expect("a last literal");
         app.navigate(last.addr);
@@ -12697,20 +12854,22 @@ mod tests {
     }
 
     #[test]
-    fn strings_decode_encodings_and_filter_noise() {
+    fn strings_decode_encodings_and_hide_only_header_rows() {
         assert_eq!(decode_string(b"hello\0", 1), "hello");
         assert_eq!(
             decode_string(&[b'h', 0, b'i', 0, 0, 0], 2),
             "hi",
             "UTF-16LE strings must decode to readable text"
         );
-        assert!(is_string_noise("", "!This program cannot run in DOS mode."));
-        assert!(is_string_noise(
-            "HEADER",
-            "!This program cannot run in DOS mode."
-        ));
-        assert!(is_string_noise(".rdata", ".rdata"));
-        assert!(!is_string_noise(".rdata", "flag{strings_are_not_enough}"));
+        // The list hides the DOS stub because IDA never maps the PE header as a segment,
+        // so its list cannot contain it.
+        assert!(is_header_string("HEADER"));
+        assert!(is_header_string("header"));
+        // Section names and compiler `$` names live in `.rdata` and IDA lists them, so they
+        // must stay visible here too.
+        assert!(!is_header_string(".rdata"));
+        assert!(!is_header_string(""));
+        assert!(!is_header_string(".text"));
     }
 
     #[test]
@@ -12759,6 +12918,58 @@ mod tests {
         );
         assert_eq!(c_literal_bytes(r"\x01\x7f").unwrap(), vec![1, 0x7f]);
         assert_eq!(c_literal_bytes("plain").unwrap(), b"plain".to_vec());
+    }
+
+    #[test]
+    fn rebuilding_strings_applies_the_minimum_length_setting() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("strings-setup.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project.clone()),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        // The default is IDA 8.x's five characters, so the corpus's four-character `.bss`
+        // is not listed until the minimum is lowered.
+        assert_eq!(
+            app.strings_min_len,
+            recraft_analysis::DEFAULT_MIN_STRING_LEN
+        );
+        assert!(
+            !app.strings.iter().any(|row| row.text == ".bss"),
+            "four-character strings are below the default minimum"
+        );
+
+        app.start_strings_job(4);
+        for _ in 0..500 {
+            app.tick();
+            if app.strings_job.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.strings_job.is_none(), "the rebuild did not finish");
+        assert_eq!(app.strings_min_len, 4);
+        assert!(
+            app.strings.iter().any(|row| row.text == ".bss"),
+            "the rebuild at 4 characters must list `.bss` again"
+        );
+
+        // The setting is project state, not a transient UI toggle.
+        let session = Session::open(&project).unwrap();
+        assert_eq!(recraft_analysis::string_min_len(&session), 4);
     }
 
     #[test]
@@ -13500,7 +13711,7 @@ mod tests {
         let row = app
             .strings
             .iter()
-            .find(|row| !is_string_noise(&row.segment, &row.text))
+            .find(|row| !is_header_string(&row.segment))
             .cloned()
             .expect("notepad has a visible literal");
         app.apply_action(&ctx, Action::NavigateToDisasm(row.addr));

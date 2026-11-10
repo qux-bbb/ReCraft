@@ -79,7 +79,22 @@
   `corpus/linux/functions.cpp`（命名空间、类方法、重载、模板）与 CI 的 C++ 语料门禁
   （`tests/golden/elf-cpp`）。
 
+- **字符串视图向 IDA 对齐，最短长度可配置。** `隐藏头部/节名` 收窄为 `隐藏头部字符串`：只隐藏
+  `HEADER` 段里的 DOS stub 与节表字节（IDA 不把 PE 头部装进任何段，`is_loaded(IMAGE_BASE)
+  == 0`，这类字符串在 IDA 的列表里根本不存在），`.rdata` 里的 `.text$mn`/`.CRT$XCA`/`.xdata`
+  等节名不再隐藏——IDA 8.3 的列表照列它们，而点前缀通配还会误伤 `.tar`/`.exe`/`.gitignore`/
+  `../action.c` 与 ELF 正则里的 `.^$?*+|[({`（实测 134 462 条字符串里点前缀规则隐藏 384 条，
+  其中 272 条被代码引用）。`Strings → 设置…`（对应 IDA 的 *Setup…*）新增 `最短长度` 与 `重建`：
+  长度按字符计、不含终止符，存进项目 `meta`（`strings.min_len`），重建在后台线程重新抽取并写回，
+  列表与伪代码里的字面量一起刷新；`analyze --min-string-len N` 使用同一设置。
+
 ### 修复
+
+- **宽字符串字面量不再丢掉首字符。** 反编译器的字面量兜底只认窄串：不在字符串表里的短宽字面量
+  会被读成 `"S"`、`"%"`、`"E"`（notepad 的 `RegSetKeyValueW(..., "Software\\Microsoft\\Notepad", …)`
+  此前显示成 `"S"`）。`read_c_literal` 现在先识别 UTF-16LE（高字节为 NUL、双字节 NUL 结尾），
+  再退回窄串；notepad 的 17 份 golden 快照随之更新，恢复出 `Software\\Microsoft\\Notepad`、
+  `Windows.Foundation.Uri`、`%d`、`"\r\n"`、`"*.*"` 等完整字面量。
 
 - **ELF 的 API 标签现在落在调用点上。** 普通 ELF 通过 PLT 桩（`jmp [rip+got]`）调用导入
   函数，而桩本身不在函数列表里，所以此前只有少数 `-fno-plt` 风格的直接 GOT 引用能产生
@@ -108,6 +123,13 @@
   并补了单元测试。
 
 ### 变更
+
+- **最短字符串长度默认 4 → 5。** 与 IDA 8.3 的 *Minimal string length* 默认值一致（实测：把
+  `strwinsetup_t.minlen` 设成 4 会多出 `.bss` 这类 4 字符串，设成 8 只剩 28 条；IDA 的 Length
+  列含终止符，但最小长度不含）。该值现在是项目设置 `strings.min_len`，`analyze` 时读取、GUI
+  的 `设置… → 重建` 时写回；代码里 `4` 的硬编码全部换成该设置或
+  `DEFAULT_MIN_STRING_LEN`。notepad 的 golden 快照因此更新 17 份（同时包含上一条宽字面量修复），
+  crackme/corpus/corpus86/go 与 `lint`、`metrics` 不变（notepad 仍是 494/506 结构化、覆盖 99.6%）。
 
 - **`recraft-ai` 依赖 `recraft-analysis`。** triage 要与 `analyze` 共用同一份 API 与
   `/proc` 分类规则，不再复制一份；依赖方向仍单向（`recraft-analysis` 不反向依赖

@@ -44,7 +44,7 @@ void sub_14000d2e8_l1(void) {
         var_e0 = 0xADDR;
         sub_1400083f8(rbp, 0xADDR, "%s%c*.txt%c%s%c*.*%c", qword_ADDR, r12, r12, qword_ADDR, r12, r12);
         var_8c = 1;
-        rax = "t";
+        rax = "txt";
         rcx = rbp;
         var_c8 = rax;
         rcx = ((eax < 0 /* signed */) ? var_78 : rcx);

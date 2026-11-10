@@ -4,10 +4,10 @@ void sub_14001e5ac_l1(void) {
     rbx = rcx;
     rdx = rcx;
     edi = 1;
-    sub_14001f57c("/", rcx);
+    sub_14001f57c("/PT", rcx);
     r14d = 0;
     if (eax != 0) {
-        sub_14001f57c("/", rbx);
+        sub_14001f57c("/P", rbx);
         if (eax != 0) {
             eax = 0;
             return;

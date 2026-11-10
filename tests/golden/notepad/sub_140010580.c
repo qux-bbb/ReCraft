@@ -38,13 +38,13 @@ void sub_140010580_l1(void) {
     GetTimeFormatW(0xADDR, (r9 + 2), &var_38, 0, &var_50, 0xADDR);
     ebx = 0xADDR;
     if (edi != 0) {
-        sub_1400082b0(&var_190, ebx, "\r");
+        sub_1400082b0(&var_190, ebx, "\r\n");
     }
     sub_1400082b0(&var_190, rbx, &var_50);
     sub_1400082b0(&var_190, rbx, " ");
     sub_1400082b0(&var_190, rbx, &var_f0);
     if (edi != 0) {
-        sub_1400082b0(&var_190, rbx, "\r");
+        sub_1400082b0(&var_190, rbx, "\r\n");
     }
     SendMessageW(qword_ADDR, 0xADDR, 1, &var_190);
     sub_1400239c8(edi);

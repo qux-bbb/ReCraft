@@ -9,8 +9,8 @@
 //! - a literal is **NUL-terminated** (IDA's `STRTYPE_C` / `STRTYPE_C_16`); a printable run
 //!   that ends at another non-printable byte, at a segment boundary or at EOF is not a
 //!   string, which keeps x86 opcode bytes such as `D$pH` out of the list;
-//! - at least `min_len` characters (4 by default, i.e. IDA's *minimal string length* of 5
-//!   once its terminator is counted);
+//! - at least `min_len` characters (5 by default, matching IDA 8.x's *minimal string
+//!   length*; the terminator is not counted, see [`string_min_len`]);
 //! - the control characters `ida.cfg`'s default `StrlitChars` accepts (`\a\b\t\n\v\f\r`,
 //!   `ESC`) may appear *inside* a literal, so a CRLF-separated message stays one string
 //!   instead of becoming two;
@@ -414,6 +414,47 @@ pub fn persist_strings(session: &mut Session, strings: &[ExtractedString]) -> Re
     session.replace_auto_strings(&rows)
 }
 
+/// Project `meta` key holding the minimum string length (IDA's *Minimal string length*,
+/// which lives in the database and is applied on **Rebuild**).
+pub const MIN_STRING_LEN_META_KEY: &str = "strings.min_len";
+
+/// Default minimum length: five characters, as IDA 8.x ships it. IDA's Length column
+/// counts the terminator, its minimum does not (`".bss"` is listed at 4, dropped at 5).
+pub const DEFAULT_MIN_STRING_LEN: usize = 5;
+
+/// Smallest accepted value: two characters keeps `".o"`-style text but stops single
+/// printable bytes from turning opcode noise into "strings".
+pub const MIN_STRING_LEN_FLOOR: usize = 2;
+
+/// Largest accepted value: longer literals are rare, and the ceiling keeps a typo from
+/// silently emptying the list.
+pub const MIN_STRING_LEN_CEILING: usize = 64;
+
+/// Clamp a user-supplied minimum length into the supported range.
+pub fn clamp_min_string_len(value: usize) -> usize {
+    value.clamp(MIN_STRING_LEN_FLOOR, MIN_STRING_LEN_CEILING)
+}
+
+/// The project's configured minimum string length, or [`DEFAULT_MIN_STRING_LEN`].
+pub fn string_min_len(session: &Session) -> usize {
+    session
+        .project()
+        .meta_string(MIN_STRING_LEN_META_KEY)
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map(clamp_min_string_len)
+        .unwrap_or(DEFAULT_MIN_STRING_LEN)
+}
+
+/// Store the minimum string length in the project (`strings.min_len`).
+pub fn set_string_min_len(session: &mut Session, value: usize) -> Result<()> {
+    session.project_mut().set_meta_string(
+        MIN_STRING_LEN_META_KEY,
+        &clamp_min_string_len(value).to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +573,41 @@ mod tests {
         let strings = drop_overlaps(scanner.out);
         let texts: Vec<&str> = strings.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(texts, vec!["flags", "Wide"]);
+    }
+
+    #[test]
+    fn minimum_length_matches_ida_and_is_stored_in_the_project() {
+        let Some(path) = corpus_path() else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("min-len.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+
+        // IDA 8.x defaults to five characters: a four-character string (".bss") is listed at
+        // four and dropped at five.
+        assert_eq!(string_min_len(&session), DEFAULT_MIN_STRING_LEN);
+        let four = extract_strings(&mut session, 4, 10_000).unwrap();
+        assert!(
+            four.iter().any(|string| string.text == ".bss"),
+            "four-character strings must be listed at length 4"
+        );
+        let five = extract_strings(&mut session, 5, 10_000).unwrap();
+        assert!(
+            !five.iter().any(|string| string.text == ".bss"),
+            "four-character strings must be dropped at length 5"
+        );
+
+        // The setting is project state (IDA keeps its Strings setup in the database too).
+        set_string_min_len(&mut session, 8).unwrap();
+        assert_eq!(string_min_len(&session), 8);
+        drop(session);
+        let session = Session::open(&project).unwrap();
+        assert_eq!(string_min_len(&session), 8);
+
+        assert_eq!(clamp_min_string_len(0), MIN_STRING_LEN_FLOOR);
+        assert_eq!(clamp_min_string_len(usize::MAX), MIN_STRING_LEN_CEILING);
     }
 
     #[test]

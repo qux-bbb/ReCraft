@@ -259,9 +259,9 @@ void sub_140013154_l1(void) {
             if (*(u16*)(rsi) != 9) break;
         }
         dword_ADDR = r14d;
-        sub_14001f57c("/", rsi);
+        sub_14001f57c("/A", rsi);
         if (eax != 0) {
-            sub_14001f57c("/", rsi);
+            sub_14001f57c("/W", rsi);
             if (eax != 0) {
                 eax = dword_ADDR;
             } else {
