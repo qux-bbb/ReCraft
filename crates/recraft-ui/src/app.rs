@@ -37,6 +37,11 @@ const DATA_ROW_BYTES: u64 = 8;
 /// Cap on row-boundary steps when a data window is paged backwards, so a huge segment
 /// cannot stall the UI.
 const DATA_WALK_LIMIT: usize = 200_000;
+/// Column starts of the disassembly listing, in monospace cells. They mirror the field widths
+/// [`ReCraftApp::disasm_columns`] formats (14 address + 46 bytes + 9 mnemonic + 36 operands), so
+/// the pinned header can be painted cell by cell instead of padded with `{:<14}` — a CJK label is
+/// wider than one cell and would shift every later column.
+const DISASM_COLUMN_CELLS: [usize; 5] = [0, 14, 60, 69, 105];
 const MONO_SIZE: f32 = 12.5;
 /// Fraction of the font size by which the monospace CJK fallback is lifted so its
 /// baseline lines up with Consolas (see [`ui_fonts`]). The gap is proportional to the
@@ -306,6 +311,21 @@ fn remap_selection(
 fn galley_char_at(galley: &egui::Galley, origin: egui::Pos2, pos: egui::Pos2) -> usize {
     let local = pos - origin;
     usize::from(galley.cursor_from_pos(local).index)
+}
+
+/// Advance of one monospace cell, i.e. the width every character of a listing row takes.
+///
+/// Measured from the shaped glyph rather than from the font size so the pinned header lands on
+/// the same x as the row text (the advance is fractional and does not round to `size * 0.5`).
+fn monospace_cell_width(ui: &egui::Ui, font: &FontId, color: Color32) -> f32 {
+    let galley = ui
+        .painter()
+        .layout_no_wrap("0".to_owned(), font.clone(), color);
+    galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .map_or(font.size * 0.6, |glyph| glyph.advance_width)
 }
 
 /// Paint the highlight of a text selection behind a row's text. `range` is the
@@ -6681,16 +6701,28 @@ impl ReCraftApp {
         // Column header, reserved above the listing instead of being the first row *inside* it:
         // as a scroll-area item the wheel carried it off the top with the instructions. IDA pins
         // its column header, and the Strings list here already reserves its header the same way.
-        let header = format!(
-            "{:<14}{:<46}{:<9}{:<36}{}",
+        let headers = [
             self.t("ui_address"),
             self.t("ui_bytes"),
             self.t("ui_mnemonic"),
             self.t("ui_operands"),
             self.t("ui_comment_2"),
-        );
+        ];
+        // The CJK fallback makes a header line taller than a listing row (`row_height()` is 15 px
+        // at 100 %), so the strip is sized to the text. Clipping the text to a row-high strip cut
+        // the top of the glyphs.
+        let head_line = headers
+            .iter()
+            .map(|label| {
+                ui.painter()
+                    .layout_no_wrap(label.clone(), mono.clone(), pal.text)
+                    .size()
+                    .y
+            })
+            .fold(0.0f32, f32::max);
+        let header_height = self.row_height().max(head_line + 2.0);
         let (header_rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), self.row_height()),
+            egui::vec2(ui.available_width(), header_height),
             Sense::hover(),
         );
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
@@ -6873,18 +6905,25 @@ impl ReCraftApp {
             }
         });
         // Pinned header: painted over the reserved strip after the list so it can follow this
-        // frame's horizontal offset and keep its columns lined up with the rows. Clipping to the
-        // strip truncates it at the pane edge, as the old in-list label did.
-        ui.painter_at(header_rect).text(
-            egui::pos2(
-                header_rect.left() + 4.0 - scroll.state.offset.x,
-                header_rect.center().y,
-            ),
-            egui::Align2::LEFT_CENTER,
-            &header,
-            mono.clone(),
-            pal.text,
-        );
+        // frame's horizontal offset and keep its columns lined up with the rows.
+        //
+        // One label per column instead of one padded string: a CJK label is wider than one
+        // monospace cell, so `{:<14}` padding would push every later column to the right. Only the
+        // horizontal edge is clipped (the pane's), so a tall glyph box is never cut vertically.
+        let cell = monospace_cell_width(ui, &mono, pal.text);
+        let clip = egui::Rect::from_x_y_ranges(header_rect.x_range(), ui.clip_rect().y_range());
+        let painter = ui.painter().with_clip_rect(clip);
+        let left = header_rect.left() + 4.0 - scroll.state.offset.x;
+        let top = header_rect.top() + ((header_height - head_line) * 0.5).max(1.0);
+        for (cells, label) in DISASM_COLUMN_CELLS.iter().zip(&headers) {
+            painter.text(
+                egui::pos2(left + *cells as f32 * cell, top),
+                egui::Align2::LEFT_TOP,
+                label,
+                mono.clone(),
+                pal.text,
+            );
+        }
         self.follow_disasm_scroll(ui, &scroll);
         // Dragging above or below the window keeps selecting to that edge.
         if dragging
@@ -14171,13 +14210,64 @@ mod tests {
         let before = header_pos(&output).expect("the column header is painted");
         let first_row = app.disasm_rows[0].addr.get();
         let row_pos = pos_of(&output, first_row).expect("first row is painted");
-        let (row_before, row_before_y) = (row_pos.x, row_pos.y);
-        // The header columns must line up with the row text (both are inset by the same 4 px).
+        let row_before_y = row_pos.y;
+        // Every header column must start on the x of its row glyph. A CJK label is wider than
+        // one monospace cell, so painting the header as one `{:<14}` padded string pushed
+        // 助记符/操作数 to the right of their columns.
+        let row_galley = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text
+                        .galley
+                        .text()
+                        .starts_with(&format!("{first_row:#012x}")) =>
+                {
+                    Some(text.galley.clone())
+                }
+                _ => None,
+            })
+            .expect("first row galley");
+        let glyph_x = |cell: usize| row_galley.rows[0].glyphs[cell].pos.x;
+        for (cell, label) in [
+            (0usize, app.t("ui_address")),
+            (14, app.t("ui_bytes")),
+            (60, app.t("ui_mnemonic")),
+            (69, app.t("ui_operands")),
+        ] {
+            let x = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos.x),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the {label} column header is not painted"));
+            let expected = row_pos.x + glyph_x(cell);
+            assert!(
+                (x - expected).abs() < 1.0,
+                "the {label} header starts at {x} but cell {cell} of the row starts at {expected}"
+            );
+        }
+        // The header line is taller than its 15 px strip (CJK fallback line height), which is why
+        // it is painted without a vertical clip; it must still stop before the first row's text.
+        let (head_pos, head_height) = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == address_head.as_str() => {
+                    Some((text.pos, text.galley.size().y))
+                }
+                _ => None,
+            })
+            .expect("the address header galley");
         assert!(
-            (before.x - row_before).abs() < 0.5,
-            "header starts at {} but rows at {}",
-            before.x,
-            row_before
+            head_pos.y + head_height <= row_pos.y,
+            "the header text ({}..{}) runs into the first row at {}",
+            head_pos.y,
+            head_pos.y + head_height,
+            row_pos.y
         );
         // Turn the wheel down over the listing: the rows move up, the header must not.
         input
