@@ -29,9 +29,9 @@ CLI 不带 `--llm` 的 `ai explain`/`ai suggest` 与 `ai query`/`ai triage` 全�
 
 ## 5. 支持哪些格式？
 
-PE32+（x64）、PE32（x86），以及 ELF64（x86-64，0.2.0 起）。ELF32/ARM64/固件/内存 dump 在路线图上（见
-[docs/ROADMAP.md](ROADMAP.md)）。Go/Rust/C++ 运行时符号恢复已支持（pclntab、legacy hash、
-MSVC demangle）。
+PE32+（x64）、PE32（x86），以及 ELF32（i386）与 ELF64（x86-64）。ARM64/固件/内存 dump 在
+路线图上（见 [docs/ROADMAP.md](ROADMAP.md)）。Go/Rust/C++ 运行时符号恢复已支持（pclntab、
+legacy hash、MSVC demangle）。
 
 ## 6. 1 GB 样本能打开吗？
 

@@ -81,6 +81,9 @@ jobs:
       # which is also what the ELF work needs (Linux-built corpus samples).
       - name: build ELF corpus (gcc)
         run: bash corpus/build-linux.sh
+      - name: install 32-bit glibc headers (ELF32 corpus)
+        # `corpus/build-linux.sh` skips libcorpus32.so without them; the gate below needs it.
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - name: build real crackme fixture as ELF (feeds the fixture tests)
         run: bash corpus/real/crackme/build-linux.sh
       - name: ELF corpus quality gate
@@ -122,6 +125,19 @@ jobs:
             cargo run --quiet -p recraft-cli -- golden "$project" --dir tests/golden/elf --check
           fi
 
+          # ELF32: the same corpus built with `-m32`, exercising the i386 loader path
+          # (`SHT_REL` imports, PLT stubs, stack arguments). The snapshots are pinned to
+          # this image's gcc like the ELF64 set; regenerate with RECRAFT_REGEN_ELF_SNAPSHOTS=1.
+          project32="$RUNNER_TEMP/elf32-corpus.rcraft"
+          cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus32.so -o "$project32"
+          cargo run --quiet -p recraft-cli -- analyze "$project32"
+          cargo run --quiet -p recraft-cli -- metrics "$project32" --min-structured 0.6 --min-coverage 0.9
+          cargo run --quiet -p recraft-cli -- lint "$project32"
+          if [ "$regen" = "1" ]; then
+            cargo run --quiet -p recraft-cli -- golden "$project32" --dir tests/golden/elf32
+          fi
+          cargo run --quiet -p recraft-cli -- golden "$project32" --dir tests/golden/elf32 --check
+
           # C++ object: Itanium-mangled names must arrive demangled.
           cpp_project="$RUNNER_TEMP/elf-cpp.rcraft"
           cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus-cpp.so -o "$cpp_project"
@@ -151,6 +167,7 @@ jobs:
           path: |
             tests/golden/elf
             tests/golden/elf-cpp
+            tests/golden/elf32
           if-no-files-found: ignore
 
   package:

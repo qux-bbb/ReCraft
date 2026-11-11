@@ -481,10 +481,15 @@ pub fn analyze_with_options(
     for function in &mut functions {
         let mut end = function.end;
         while end.get() > function.start.get() + 1 {
-            let Ok(byte) = session.read_bytes(Address::new(end.get() - 1), 1) else {
+            let Ok(bytes) = session.read_bytes(Address::new(end.get() - 1), 1) else {
                 break;
             };
-            match byte[0] {
+            // A symbol can end just past the last mapped byte of its section; there is
+            // nothing to trim when the probe address is unmapped.
+            let Some(&byte) = bytes.first() else {
+                break;
+            };
+            match byte {
                 0xCC | 0x90 => end = Address::new(end.get() - 1),
                 _ => break,
             }

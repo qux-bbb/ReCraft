@@ -13,7 +13,7 @@
 | 1 | 项目定位 | 开源产品，单人开发，约 3 天/周 |
 | 2 | 核心场景 | 恶意样本静态分析、CTF；固件/补丁分析后置 |
 | 3 | v1 目标平台 | Windows 首发；core 跨平台；后续至少 Ubuntu |
-| 4 | v1 目标文件 | PE（x64 + Win32 x86）；ELF/ARM64/固件后置 |
+| 4 | v1 目标文件 | PE（x64 + Win32 x86）与 ELF（i386 + x86-64）；ARM64/固件后置 |
 | 5 | 架构 | headless core + 命令总线 + MCP + UI 客户端 |
 | 6 | UI | egui 原生（无 webview），现代观感，形态像 IDA |
 | 7 | 反编译 | **自研 L1**，不集成 Ghidra / RetDec |

@@ -48,14 +48,17 @@ struct CmpState {
     source: CmpSource,
 }
 
-/// x64 calling convention that decides which registers carry call arguments.
+/// Calling convention that decides which registers carry call arguments.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CallAbi {
     /// Microsoft x64: `rcx`, `rdx`, `r8`, `r9`.
     #[default]
     Win64,
-    /// System V AMD64 (ELF): `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`.
+    /// System V AMD64 (ELF64): `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`.
     SysV64,
+    /// System V i386 (ELF32): every integer argument is pushed on the stack, so there
+    /// are no argument registers; the pushed values are the call arguments.
+    SysV32,
 }
 
 impl CallAbi {
@@ -64,6 +67,7 @@ impl CallAbi {
         match self {
             CallAbi::Win64 => &[Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9],
             CallAbi::SysV64 => &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9],
+            CallAbi::SysV32 => &[],
         }
     }
 
@@ -90,6 +94,7 @@ impl CallAbi {
                 Reg::R10,
                 Reg::R11,
             ],
+            CallAbi::SysV32 => &[Reg::Rax, Reg::Rcx, Reg::Rdx],
         }
     }
 }

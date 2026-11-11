@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! ELF64 loader.
+//! ELF32/ELF64 loader.
 //!
-//! Scope: little-endian, 64-bit, x86-64 executables and shared objects (`ET_EXEC` /
-//! `ET_DYN`). ARM64 images parse but are rejected for now, because the decoder is
-//! still iced-x86; `aarch64` support lands with the ARM64 lifter.
+//! Scope: little-endian executables and shared objects (`ET_EXEC` / `ET_DYN`) for
+//! i386 (`EM_386`, ELF32) and x86-64 (`EM_X86_64`, ELF64). ARM64 images parse but are
+//! rejected for now, because the decoder is still iced-x86; `aarch64` support lands
+//! with the ARM64 lifter.
 //!
 //! What a project needs from the container is the same vocabulary the PE loader
-//! produces: sections, imports (here: `R_X86_64_JUMP_SLOT`/`GLOB_DAT` relocations
-//! against the GOT), exports (defined `STT_FUNC` symbols), function ranges (symbol
-//! sizes plus `.eh_frame` FDEs) and the entry point. Everything is bounds-checked
-//! and non-fatal problems become [`Image::warnings`], like the PE loader.
+//! produces: sections, imports (relocations against the GOT: `JUMP_SLOT`/`GLOB_DAT`
+//! plus the absolute word types), exports (defined `STT_FUNC` symbols), function
+//! ranges (symbol sizes plus `.eh_frame` FDEs) and the entry point. i386 linkers
+//! emit `SHT_REL` (no addend) where x86-64 uses `SHT_RELA`, so both relocation
+//! layouts are read. Everything is bounds-checked and non-fatal problems become
+//! [`Image::warnings`], like the PE loader.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -23,6 +26,7 @@ use crate::{
 };
 
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
+const ELFCLASS32: u8 = 1;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const EV_CURRENT: u8 = 1;
@@ -30,6 +34,7 @@ const EV_CURRENT: u8 = 1;
 const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
 
+const EM_386: u16 = 3;
 const EM_X86_64: u16 = 0x3e;
 const EM_AARCH64: u16 = 0xb7;
 
@@ -41,6 +46,7 @@ const SHT_SYMTAB: u32 = 2;
 const SHT_STRTAB: u32 = 3;
 const SHT_RELA: u32 = 4;
 const SHT_NOBITS: u32 = 8;
+const SHT_REL: u32 = 9;
 const SHT_DYNSYM: u32 = 11;
 const SHT_DYNAMIC: u32 = 6;
 
@@ -58,9 +64,11 @@ const DT_STRTAB: u64 = 5;
 const DT_STRSZ: u64 = 10;
 const DT_SONAME: u64 = 14;
 
-const R_X86_64_64: u32 = 1;
-const R_X86_64_GLOB_DAT: u32 = 6;
-const R_X86_64_JUMP_SLOT: u32 = 7;
+// i386 and x86-64 agree on these numbers: `R_386_32`/`R_X86_64_64` = 1,
+// `R_386_GLOB_DAT`/`R_X86_64_GLOB_DAT` = 6, `R_386_JMP_SLOT`/`R_X86_64_JUMP_SLOT` = 7.
+const RELOC_ABSOLUTE: u32 = 1;
+const RELOC_GLOB_DAT: u32 = 6;
+const RELOC_JUMP_SLOT: u32 = 7;
 
 /// Synthetic PE section flags, so the rest of the pipeline can keep asking
 /// `Section::is_executable()`/`is_writable()` for any container.
@@ -76,8 +84,82 @@ const MAX_EH_FRAME_RECORDS: usize = 200_000;
 const MAX_FUNCTION_BYTES: u64 = 16 << 20;
 const MAX_NAME_LEN: usize = 512;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Elf32,
+    Elf64,
+}
+
+impl Class {
+    /// Width of an address / pointer in bytes (also the DWARF address size).
+    fn address_size(self) -> usize {
+        match self {
+            Self::Elf32 => 4,
+            Self::Elf64 => 8,
+        }
+    }
+
+    fn header_size(self) -> u64 {
+        match self {
+            Self::Elf32 => 52,
+            Self::Elf64 => 64,
+        }
+    }
+
+    fn program_header_size(self) -> u64 {
+        match self {
+            Self::Elf32 => 32,
+            Self::Elf64 => 56,
+        }
+    }
+
+    fn section_header_size(self) -> u64 {
+        match self {
+            Self::Elf32 => 40,
+            Self::Elf64 => 64,
+        }
+    }
+
+    fn symbol_size(self) -> u64 {
+        match self {
+            Self::Elf32 => 16,
+            Self::Elf64 => 24,
+        }
+    }
+
+    fn dynamic_entry_size(self) -> u64 {
+        match self {
+            Self::Elf32 => 8,
+            Self::Elf64 => 16,
+        }
+    }
+
+    fn relocation_size(self, rela: bool) -> u64 {
+        match (self, rela) {
+            (Self::Elf32, false) => 8,
+            (Self::Elf32, true) => 12,
+            (Self::Elf64, false) => 16,
+            (Self::Elf64, true) => 24,
+        }
+    }
+
+    /// Read one address-sized field (`Elf32_Addr` / `Elf64_Addr`).
+    fn read_address(self, bytes: &[u8], offset: u64) -> Result<u64> {
+        match self {
+            Self::Elf32 => read_u32(bytes, offset).map(u64::from),
+            Self::Elf64 => read_u64(bytes, offset),
+        }
+    }
+
+    /// Read one `Elf32_Word` / `Elf64_Xword` (section flags, dynamic values).
+    fn read_word(self, bytes: &[u8], offset: u64) -> Result<u64> {
+        self.read_address(bytes, offset)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Header {
+    class: Class,
     e_type: u16,
     e_machine: u16,
     e_entry: u64,
@@ -135,15 +217,15 @@ impl Loader for ElfLoader {
     }
 }
 
-/// Return `true` if `bytes` looks like a 64-bit little-endian ELF image.
+/// Return `true` if `bytes` looks like an ELF32 or ELF64 little-endian image.
 pub fn detect(bytes: &[u8]) -> bool {
-    bytes.len() >= 64
+    bytes.len() >= Class::Elf32.header_size() as usize
         && bytes[..4] == ELF_MAGIC
-        && bytes[4] == ELFCLASS64
+        && matches!(bytes[4], ELFCLASS32 | ELFCLASS64)
         && bytes[5] == ELFDATA2LSB
 }
 
-/// Parse an ELF64 image.
+/// Parse an ELF32 or ELF64 image.
 pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
     let header = parse_header(bytes)?;
     if header.e_type != ET_EXEC && header.e_type != ET_DYN {
@@ -152,20 +234,30 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
             header.e_type
         )));
     }
-    let (arch, is_64) = match header.e_machine {
-        EM_X86_64 => (Arch::X64, true),
-        EM_AARCH64 => (Arch::Aarch64, true),
+    let arch = match header.e_machine {
+        EM_386 => Arch::X86,
+        EM_X86_64 => Arch::X64,
+        EM_AARCH64 => Arch::Aarch64,
         other => {
             return Err(Error::format(format!(
-                "unsupported ELF machine {other:#x} (x86-64 today; arm64 with the ARM64 lifter)"
+                "unsupported ELF machine {other:#x} (i386 and x86-64 today; arm64 with the ARM64 lifter)"
             )));
         }
     };
-    if arch != Arch::X64 {
+    // The class and the machine must agree; a mismatch means a corrupt header, and
+    // guessing either one would decode the file with the wrong word size.
+    if arch.is_64() != (header.class == Class::Elf64) {
+        return Err(Error::format(format!(
+            "ELF class and machine disagree (machine {:#x} in a {:?} header)",
+            header.e_machine, header.class
+        )));
+    }
+    if arch != Arch::X64 && arch != Arch::X86 {
         return Err(Error::format(
             "ELF arm64 images parse, but the decoder is x86-only until the ARM64 lifter lands",
         ));
     }
+    let is_64 = arch.is_64();
 
     let program_headers = parse_program_headers(bytes, &header)?;
     let section_headers = parse_section_headers(bytes, &header)?;
@@ -236,6 +328,7 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
         &section_headers,
         &names,
         SHT_DYNSYM,
+        header.class,
         &mut image.warnings,
     );
     let symtab = symbol_table(
@@ -243,10 +336,19 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
         &section_headers,
         &names,
         SHT_SYMTAB,
+        header.class,
         &mut image.warnings,
     );
 
-    image.imports = imports(bytes, &section_headers, &names, &dynsyms, &dynstr, &dynamic);
+    image.imports = imports(
+        bytes,
+        &section_headers,
+        &names,
+        &dynsyms,
+        &dynstr,
+        &dynamic,
+        header.class,
+    );
     image.exports = exports(&dynsyms);
 
     let mut ranges: BTreeMap<u64, u64> = BTreeMap::new();
@@ -276,7 +378,7 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
             )
         })
         .collect();
-    for (start, end) in eh_frame_functions(bytes, &section_headers, &names) {
+    for (start, end) in eh_frame_functions(bytes, &section_headers, &names, header.class) {
         if exec_sections
             .iter()
             .any(|(low, high)| start >= *low && start < *high)
@@ -300,7 +402,7 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
             debug_line_str: section_data(bytes, &section_headers, &names, ".debug_line_str"),
             debug_str: section_data(bytes, &section_headers, &names, ".debug_str"),
         },
-        8,
+        header.class.address_size(),
     );
 
     if image.entry_point.get() == 0 {
@@ -363,16 +465,23 @@ fn read_string(bytes: &[u8], offset: u64) -> Option<String> {
 // ------------------------------------------------------------------- header --
 
 fn parse_header(bytes: &[u8]) -> Result<Header> {
-    if bytes.len() < 64 {
+    if bytes.len() < Class::Elf32.header_size() as usize {
         return Err(Error::format("ELF header is truncated"));
     }
     if bytes[..4] != ELF_MAGIC {
         return Err(Error::format("not an ELF image"));
     }
-    if bytes[4] != ELFCLASS64 {
-        return Err(Error::format(
-            "only ELF64 is supported (ELF32 is a later format)",
-        ));
+    let class = match bytes[4] {
+        ELFCLASS32 => Class::Elf32,
+        ELFCLASS64 => Class::Elf64,
+        other => {
+            return Err(Error::format(format!(
+                "unsupported ELF class {other} (ELF32 and ELF64 are supported)"
+            )));
+        }
+    };
+    if (bytes.len() as u64) < class.header_size() {
+        return Err(Error::format("ELF header is truncated"));
     }
     if bytes[5] != ELFDATA2LSB {
         return Err(Error::format("only little-endian ELF is supported"));
@@ -380,17 +489,43 @@ fn parse_header(bytes: &[u8]) -> Result<Header> {
     if bytes[6] != EV_CURRENT {
         return Err(Error::format("unsupported ELF version"));
     }
+    // The program/section header table location and stride sit at different offsets in
+    // the two classes; the ELF32 header is 52 bytes, the ELF64 one 64.
+    let (e_entry, e_phoff, e_shoff, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx) =
+        match class {
+            Class::Elf32 => (
+                u64::from(read_u32(bytes, 24)?),
+                u64::from(read_u32(bytes, 28)?),
+                u64::from(read_u32(bytes, 32)?),
+                read_u16(bytes, 42)?,
+                read_u16(bytes, 44)?,
+                read_u16(bytes, 46)?,
+                read_u16(bytes, 48)?,
+                read_u16(bytes, 50)?,
+            ),
+            Class::Elf64 => (
+                read_u64(bytes, 24)?,
+                read_u64(bytes, 32)?,
+                read_u64(bytes, 40)?,
+                read_u16(bytes, 54)?,
+                read_u16(bytes, 56)?,
+                read_u16(bytes, 58)?,
+                read_u16(bytes, 60)?,
+                read_u16(bytes, 62)?,
+            ),
+        };
     Ok(Header {
+        class,
         e_type: read_u16(bytes, 16)?,
         e_machine: read_u16(bytes, 18)?,
-        e_entry: read_u64(bytes, 24)?,
-        e_phoff: read_u64(bytes, 32)?,
-        e_shoff: read_u64(bytes, 40)?,
-        e_phentsize: read_u16(bytes, 54)?,
-        e_phnum: read_u16(bytes, 56)?,
-        e_shentsize: read_u16(bytes, 58)?,
-        e_shnum: read_u16(bytes, 60)?,
-        e_shstrndx: read_u16(bytes, 62)?,
+        e_entry,
+        e_phoff,
+        e_shoff,
+        e_phentsize,
+        e_phnum,
+        e_shentsize,
+        e_shnum,
+        e_shstrndx,
     })
 }
 
@@ -400,18 +535,27 @@ fn parse_program_headers(bytes: &[u8], header: &Header) -> Result<Vec<ProgramHea
     if count == 0 {
         return Ok(Vec::new());
     }
-    if size < 56 {
+    if size < header.class.program_header_size() {
         return Err(Error::format("ELF program header entry is too small"));
     }
     let mut headers = Vec::with_capacity(count);
     for index in 0..count {
         let base = header.e_phoff + (index as u64) * size;
-        headers.push(ProgramHeader {
-            p_type: read_u32(bytes, base)?,
-            p_offset: read_u64(bytes, base + 8)?,
-            p_vaddr: read_u64(bytes, base + 16)?,
-            p_filesz: read_u64(bytes, base + 32)?,
-            p_memsz: read_u64(bytes, base + 40)?,
+        headers.push(match header.class {
+            Class::Elf32 => ProgramHeader {
+                p_type: read_u32(bytes, base)?,
+                p_offset: u64::from(read_u32(bytes, base + 4)?),
+                p_vaddr: u64::from(read_u32(bytes, base + 8)?),
+                p_filesz: u64::from(read_u32(bytes, base + 16)?),
+                p_memsz: u64::from(read_u32(bytes, base + 20)?),
+            },
+            Class::Elf64 => ProgramHeader {
+                p_type: read_u32(bytes, base)?,
+                p_offset: read_u64(bytes, base + 8)?,
+                p_vaddr: read_u64(bytes, base + 16)?,
+                p_filesz: read_u64(bytes, base + 32)?,
+                p_memsz: read_u64(bytes, base + 40)?,
+            },
         });
     }
     Ok(headers)
@@ -423,20 +567,31 @@ fn parse_section_headers(bytes: &[u8], header: &Header) -> Result<Vec<SectionHea
     if count == 0 {
         return Ok(Vec::new());
     }
-    if size < 64 {
+    if size < header.class.section_header_size() {
         return Err(Error::format("ELF section header entry is too small"));
     }
     let mut headers = Vec::with_capacity(count);
     for index in 0..count {
         let base = header.e_shoff + (index as u64) * size;
-        headers.push(SectionHeader {
-            name_offset: read_u32(bytes, base)?,
-            sh_type: read_u32(bytes, base + 4)?,
-            sh_flags: read_u64(bytes, base + 8)?,
-            sh_addr: read_u64(bytes, base + 16)?,
-            sh_offset: read_u64(bytes, base + 24)?,
-            sh_size: read_u64(bytes, base + 32)?,
-            sh_link: read_u32(bytes, base + 40)?,
+        headers.push(match header.class {
+            Class::Elf32 => SectionHeader {
+                name_offset: read_u32(bytes, base)?,
+                sh_type: read_u32(bytes, base + 4)?,
+                sh_flags: u64::from(read_u32(bytes, base + 8)?),
+                sh_addr: u64::from(read_u32(bytes, base + 12)?),
+                sh_offset: u64::from(read_u32(bytes, base + 16)?),
+                sh_size: u64::from(read_u32(bytes, base + 20)?),
+                sh_link: read_u32(bytes, base + 24)?,
+            },
+            Class::Elf64 => SectionHeader {
+                name_offset: read_u32(bytes, base)?,
+                sh_type: read_u32(bytes, base + 4)?,
+                sh_flags: read_u64(bytes, base + 8)?,
+                sh_addr: read_u64(bytes, base + 16)?,
+                sh_offset: read_u64(bytes, base + 24)?,
+                sh_size: read_u64(bytes, base + 32)?,
+                sh_link: read_u32(bytes, base + 40)?,
+            },
         });
     }
     Ok(headers)
@@ -482,7 +637,7 @@ struct DynamicEntry {
 
 fn dynamic_entries(
     bytes: &[u8],
-    _header: &Header,
+    header: &Header,
     sections: &[SectionHeader],
     program_headers: &[ProgramHeader],
 ) -> Vec<DynamicEntry> {
@@ -493,14 +648,15 @@ fn dynamic_entries(
     } else {
         return Vec::new();
     };
+    let entry_size = header.class.dynamic_entry_size();
     let mut entries = Vec::new();
     let mut cursor = offset;
     let end = offset.saturating_add(size);
-    while cursor + 16 <= end {
-        let Ok(tag) = read_u64(bytes, cursor) else {
+    while cursor + entry_size <= end {
+        let Ok(tag) = header.class.read_word(bytes, cursor) else {
             break;
         };
-        let Ok(value) = read_u64(bytes, cursor + 8) else {
+        let Ok(value) = header.class.read_address(bytes, cursor + entry_size / 2) else {
             break;
         };
         if tag == DT_NULL {
@@ -510,7 +666,7 @@ fn dynamic_entries(
             break;
         }
         entries.push(DynamicEntry { tag, value });
-        cursor += 16;
+        cursor += entry_size;
     }
     entries
 }
@@ -580,6 +736,7 @@ fn symbol_table(
     sections: &[SectionHeader],
     names: &[String],
     table_type: u32,
+    class: Class,
     warnings: &mut Vec<String>,
 ) -> Vec<Symbol> {
     let Some((table, name)) = sections
@@ -605,25 +762,49 @@ fn symbol_table(
         return Vec::new();
     };
 
-    let entry_size = 24u64;
+    let entry_size = class.symbol_size();
     let count = (table.sh_size / entry_size).min(MAX_SYMBOLS as u64) as usize;
     let mut symbols = Vec::with_capacity(count);
     for index in 0..count {
         let base = table.sh_offset + (index as u64) * entry_size;
-        let Ok(name_offset) = read_u32(bytes, base) else {
-            break;
-        };
-        let Ok(info) = read_u8(bytes, base + 4) else {
-            break;
-        };
-        let Ok(shndx) = read_u16(bytes, base + 6) else {
-            break;
-        };
-        let Ok(value) = read_u64(bytes, base + 8) else {
-            break;
-        };
-        let Ok(size) = read_u64(bytes, base + 16) else {
-            break;
+        // `Elf32_Sym` is 16 bytes (`value`/`size` are 4-byte words), `Elf64_Sym` 24.
+        let (name_offset, info, shndx, value, size) = match class {
+            Class::Elf32 => {
+                let Ok(name_offset) = read_u32(bytes, base) else {
+                    break;
+                };
+                let Ok(value) = read_u32(bytes, base + 4) else {
+                    break;
+                };
+                let Ok(size) = read_u32(bytes, base + 8) else {
+                    break;
+                };
+                let Ok(info) = read_u8(bytes, base + 12) else {
+                    break;
+                };
+                let Ok(shndx) = read_u16(bytes, base + 14) else {
+                    break;
+                };
+                (name_offset, info, shndx, u64::from(value), u64::from(size))
+            }
+            Class::Elf64 => {
+                let Ok(name_offset) = read_u32(bytes, base) else {
+                    break;
+                };
+                let Ok(info) = read_u8(bytes, base + 4) else {
+                    break;
+                };
+                let Ok(shndx) = read_u16(bytes, base + 6) else {
+                    break;
+                };
+                let Ok(value) = read_u64(bytes, base + 8) else {
+                    break;
+                };
+                let Ok(size) = read_u64(bytes, base + 16) else {
+                    break;
+                };
+                (name_offset, info, shndx, value, size)
+            }
         };
         let name = read_string(stringbytes, u64::from(name_offset)).unwrap_or_default();
         symbols.push(Symbol {
@@ -646,13 +827,18 @@ fn imports(
     symbols: &[Symbol],
     dynstr: &[u8],
     dynamic: &[DynamicEntry],
+    class: Class,
 ) -> Vec<ImportModule> {
     let mut slots: BTreeMap<u64, String> = BTreeMap::new();
     for (section, name) in sections.iter().zip(names.iter()) {
-        if section.sh_type != SHT_RELA {
-            continue;
-        }
-        if !name.contains("rela") {
+        // i386 linkers emit `SHT_REL` (`.rel.dyn` / `.rel.plt`) with the addend stored
+        // in the slot itself; x86-64 uses `SHT_RELA` (`.rela.*`) with an explicit addend.
+        let rela = match section.sh_type {
+            SHT_RELA => true,
+            SHT_REL => false,
+            _ => continue,
+        };
+        if !name.starts_with(".rel") {
             continue;
         }
         let Ok(offset) = usize::try_from(section.sh_offset) else {
@@ -661,24 +847,39 @@ fn imports(
         let Ok(size) = usize::try_from(section.sh_size) else {
             continue;
         };
-        if section.sh_size % 24 != 0 {
+        let entry_size = class.relocation_size(rela) as usize;
+        if entry_size == 0 || section.sh_size % entry_size as u64 != 0 {
             continue;
         }
-        let count = (size / 24).min(MAX_RELATIONS);
+        let count = (size / entry_size).min(MAX_RELATIONS);
         for index in 0..count {
-            let entry = match bytes.get(offset + index * 24..offset + index * 24 + 24) {
-                Some(entry) => entry,
-                None => break,
+            let base = offset + index * entry_size;
+            let Some(entry) = bytes.get(base..base + entry_size) else {
+                break;
             };
-            let mut offsetbytes = [0u8; 8];
-            offsetbytes.copy_from_slice(&entry[0..8]);
-            let mut infobytes = [0u8; 8];
-            infobytes.copy_from_slice(&entry[8..16]);
-            let r_offset = u64::from_le_bytes(offsetbytes);
-            let r_info = u64::from_le_bytes(infobytes);
-            let kind = (r_info & 0xffff_ffff) as u32;
-            let symbol_index = (r_info >> 32) as usize;
-            if !matches!(kind, R_X86_64_JUMP_SLOT | R_X86_64_GLOB_DAT | R_X86_64_64) {
+            let (r_offset, r_info) = match class {
+                Class::Elf32 => (
+                    u64::from(u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]])),
+                    u64::from(u32::from_le_bytes([entry[4], entry[5], entry[6], entry[7]])),
+                ),
+                Class::Elf64 => {
+                    let mut offset_bytes = [0u8; 8];
+                    offset_bytes.copy_from_slice(&entry[0..8]);
+                    let mut info_bytes = [0u8; 8];
+                    info_bytes.copy_from_slice(&entry[8..16]);
+                    (
+                        u64::from_le_bytes(offset_bytes),
+                        u64::from_le_bytes(info_bytes),
+                    )
+                }
+            };
+            // `Elf32_R_SYM` is 24 bits, `Elf32_R_TYPE` 8; `Elf64_R_SYM` is the high 32
+            // bits and `Elf64_R_TYPE` the low 32.
+            let (kind, symbol_index) = match class {
+                Class::Elf32 => ((r_info & 0xff) as u32, (r_info >> 8) as usize),
+                Class::Elf64 => ((r_info & 0xffff_ffff) as u32, (r_info >> 32) as usize),
+            };
+            if !matches!(kind, RELOC_JUMP_SLOT | RELOC_GLOB_DAT | RELOC_ABSOLUTE) {
                 continue;
             }
             let Some(symbol) = symbols.get(symbol_index) else {
@@ -790,6 +991,7 @@ fn eh_frame_functions(
     bytes: &[u8],
     sections: &[SectionHeader],
     names: &[String],
+    class: Class,
 ) -> Vec<(u64, u64)> {
     let Some((section, _)) = sections
         .iter()
@@ -807,7 +1009,7 @@ fn eh_frame_functions(
     let Some(data) = bytes.get(start..start.saturating_add(size).min(bytes.len())) else {
         return Vec::new();
     };
-    parse_eh_frame(data, section.sh_addr)
+    parse_eh_frame(data, section.sh_addr, class.address_size())
 }
 
 /// Raw bytes of a named section, or an empty slice when it is absent or truncated.
@@ -836,7 +1038,7 @@ fn section_data<'a>(
         .unwrap_or(&[])
 }
 
-fn parse_eh_frame(data: &[u8], section_va: u64) -> Vec<(u64, u64)> {
+fn parse_eh_frame(data: &[u8], section_va: u64, address_size: usize) -> Vec<(u64, u64)> {
     let mut cies: HashMap<usize, Cie> = HashMap::new();
     let mut ranges = Vec::new();
     let mut position = 0usize;
@@ -860,7 +1062,7 @@ fn parse_eh_frame(data: &[u8], section_va: u64) -> Vec<(u64, u64)> {
         }
         let id = u32::from_le_bytes([data[body], data[body + 1], data[body + 2], data[body + 3]]);
         if id == 0 {
-            if let Some(cie) = parse_cie(&data[body + 4..end]) {
+            if let Some(cie) = parse_cie(&data[body + 4..end], address_size) {
                 cies.insert(position, cie);
             }
         } else {
@@ -869,7 +1071,13 @@ fn parse_eh_frame(data: &[u8], section_va: u64) -> Vec<(u64, u64)> {
                 position = end;
                 continue;
             };
-            if let Some(range) = parse_fde(&data[body + 4..end], section_va, body + 4, &cie) {
+            if let Some(range) = parse_fde(
+                &data[body + 4..end],
+                section_va,
+                body + 4,
+                &cie,
+                address_size,
+            ) {
                 ranges.push(range);
                 if ranges.len() >= MAX_EH_FRAME_RECORDS {
                     break;
@@ -887,13 +1095,13 @@ struct Cie {
     has_z: bool,
 }
 
-fn parse_cie(mut data: &[u8]) -> Option<Cie> {
+fn parse_cie(mut data: &[u8], address_size: usize) -> Option<Cie> {
     let _version = data.first().copied()?;
     data = &data[1..];
     let nul = data.iter().position(|byte| *byte == 0)?;
     let augmentation = std::str::from_utf8(&data[..nul]).ok()?;
     data = &data[nul + 1..];
-    let mut cursor = Cursor::new(data);
+    let mut cursor = Cursor::new(data, address_size);
     cursor.uleb()?; // code alignment
     cursor.sleb()?; // data alignment
     cursor.uleb()?; // return address register
@@ -912,7 +1120,7 @@ fn parse_cie(mut data: &[u8]) -> Option<Cie> {
                 'P' => {
                     let encoding = body.first().copied()?;
                     body = body.get(1..)?;
-                    let size = encoded_size(encoding)?;
+                    let size = encoded_size(encoding, address_size)?;
                     body = body.get(size..)?;
                 }
                 'S' => {}
@@ -926,8 +1134,14 @@ fn parse_cie(mut data: &[u8]) -> Option<Cie> {
     })
 }
 
-fn parse_fde(data: &[u8], section_va: u64, field_offset: usize, cie: &Cie) -> Option<(u64, u64)> {
-    let mut cursor = Cursor::new(data);
+fn parse_fde(
+    data: &[u8],
+    section_va: u64,
+    field_offset: usize,
+    cie: &Cie,
+    address_size: usize,
+) -> Option<(u64, u64)> {
+    let mut cursor = Cursor::new(data, address_size);
     let field_va = section_va.checked_add(field_offset as u64)?;
     let begin = cursor.encoded(cie.fde_encoding, field_va)?;
     let range = cursor.encoded(cie.fde_encoding & 0x0f, 0)?;
@@ -942,10 +1156,10 @@ fn parse_fde(data: &[u8], section_va: u64, field_offset: usize, cie: &Cie) -> Op
 }
 
 /// Number of bytes an encoded value occupies, for skipping (only the fixed-width
-/// encodings appear in personality pointers).
-fn encoded_size(encoding: u8) -> Option<usize> {
+/// encodings appear in personality pointers). `DW_EH_PE_absptr` is pointer-sized.
+fn encoded_size(encoding: u8, address_size: usize) -> Option<usize> {
     match encoding & 0x0f {
-        0x00 => Some(8),
+        0x00 => Some(address_size),
         0x02 | 0x0a => Some(2),
         0x03 | 0x0b => Some(4),
         0x04 | 0x0c => Some(8),
@@ -956,11 +1170,16 @@ fn encoded_size(encoding: u8) -> Option<usize> {
 struct Cursor<'a> {
     data: &'a [u8],
     position: usize,
+    address_size: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, position: 0 }
+    fn new(data: &'a [u8], address_size: usize) -> Self {
+        Self {
+            data,
+            position: 0,
+            address_size,
+        }
     }
 
     fn take(&mut self, count: usize) -> Option<&'a [u8]> {
@@ -989,6 +1208,15 @@ impl<'a> Cursor<'a> {
         let mut buffer = [0u8; 8];
         buffer.copy_from_slice(slice);
         Some(u64::from_le_bytes(buffer))
+    }
+
+    /// One pointer-sized value, for `DW_EH_PE_absptr`.
+    fn address(&mut self) -> Option<u64> {
+        if self.address_size == 4 {
+            Some(u64::from(self.u32()?))
+        } else {
+            self.u64()
+        }
     }
 
     fn uleb(&mut self) -> Option<u64> {
@@ -1041,7 +1269,7 @@ impl<'a> Cursor<'a> {
             return None;
         }
         let mut value = match format {
-            0x00 => self.u64()?,
+            0x00 => self.address()?,
             0x01 => self.uleb()?,
             0x02 => u64::from(self.u16()?),
             0x03 => u64::from(self.u32()?),
@@ -1066,14 +1294,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detect_needs_a_64_bit_little_endian_header() {
+    fn detect_accepts_either_class_and_requires_little_endian() {
         let mut bytes = vec![0u8; 64];
         bytes[..4].copy_from_slice(&ELF_MAGIC);
         bytes[4] = ELFCLASS64;
         bytes[5] = ELFDATA2LSB;
         assert!(detect(&bytes));
 
-        bytes[4] = 1; // ELFCLASS32
+        bytes[4] = ELFCLASS32;
+        assert!(detect(&bytes));
+        bytes[4] = 0; // ELFCLASSNONE
+        assert!(!detect(&bytes));
+        bytes[4] = 3; // reserved
         assert!(!detect(&bytes));
         bytes[4] = ELFCLASS64;
         bytes[5] = 2; // big endian

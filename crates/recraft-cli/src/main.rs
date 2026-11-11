@@ -28,7 +28,7 @@ enum XrefDirection {
     name = "recraft-cli",
     version,
     about = "ReCraft — AI-native reverse engineering (pre-alpha)",
-    long_about = "ReCraft — AI-native reverse engineering (pre-alpha)\n\nA project is a `.rcraft` file that `import` creates from a PE image. A typical session is\n`import <exe> -o <project>`, `analyze <project>`, then `decompile <project> --l2 --addr <addr>`\n(`--addr` accepts `0x…`, a symbol name or `entry`). `metrics`, `lint` and `golden` judge the\noutput without opening the GUI."
+    long_about = "ReCraft — AI-native reverse engineering (pre-alpha)\n\nA project is a `.rcraft` file that `import` creates from an executable (PE32/PE32+, ELF32/ELF64). A typical session is\n`import <exe> -o <project>`, `analyze <project>`, then `decompile <project> --l2 --addr <addr>`\n(`--addr` accepts `0x…`, a symbol name or `entry`). `metrics`, `lint` and `golden` judge the\noutput without opening the GUI."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -154,7 +154,7 @@ enum AiCommand {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show headers, sections, imports and exports of a PE file (no project needed).
+    /// Show headers, sections, imports and exports of a PE or ELF file (no project needed).
     Info {
         file: PathBuf,
         /// Print machine-readable JSON.
@@ -202,7 +202,7 @@ enum Commands {
         #[command(subcommand)]
         command: AiCommand,
     },
-    /// Import a PE file into a new project.
+    /// Import a PE or ELF file into a new project.
     Import {
         file: PathBuf,
         #[arg(long, short = 'o')]
@@ -1111,6 +1111,7 @@ fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
         match (format, arch) {
             (recraft_format::Format::Pe, recraft_format::Arch::X64) => "PE32+",
             (recraft_format::Format::Pe, _) => "PE32",
+            (recraft_format::Format::Elf, recraft_format::Arch::X86) => "ELF32",
             (recraft_format::Format::Elf, _) => "ELF64",
         },
         arch.name()

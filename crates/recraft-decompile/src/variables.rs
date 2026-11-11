@@ -1196,6 +1196,11 @@ fn scan_tokens(text: &str) -> Vec<Token> {
                 while i < bytes.len() && is_ident_char(bytes[i]) {
                     i += 1;
                 }
+                // A word after a dot is the suffix of a symbol name (`__x86.get_pc_thunk.bx`,
+                // `main.Type.Method`), not a register spelling.
+                if start > 0 && bytes[start - 1] == b'.' {
+                    continue;
+                }
                 if let Some((reg, width, offset)) = register_token(&text[start..i]) {
                     out.push(Token {
                         start,
@@ -3209,6 +3214,14 @@ mod tests {
                 token.reg.name_width(token.width)
             );
         }
+    }
+
+    #[test]
+    fn dotted_symbol_suffixes_are_not_registers() {
+        // i386 PIC calls the thunk by its full symbol name; the trailing `bx` must not be
+        // renamed to a 16-bit view of the register.
+        assert!(scan_tokens("__x86.get_pc_thunk.bx();").is_empty());
+        assert_eq!(scan_tokens("ebx = 4;").len(), 1);
     }
 
     #[test]

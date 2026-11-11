@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! Executable format loaders: PE32/PE32+ and ELF64, both behind [`Loader`].
+//! Executable format loaders: PE32/PE32+ and ELF32/ELF64, both behind [`Loader`].
 //!
 //! Part of ReCraft. See `docs/DESIGN.md` for the architecture.
 //!
@@ -79,6 +79,7 @@ impl Format {
         match (self, arch) {
             (Self::Pe, Arch::X64) => "pe32+",
             (Self::Pe, _) => "pe32",
+            (Self::Elf, Arch::X86) => "elf32",
             (Self::Elf, _) => "elf64",
         }
     }
@@ -87,7 +88,7 @@ impl Format {
     pub fn from_meta(value: &str) -> Option<Self> {
         match value {
             "pe32" | "pe32+" => Some(Self::Pe),
-            "elf64" => Some(Self::Elf),
+            "elf32" | "elf64" => Some(Self::Elf),
             _ => None,
         }
     }
@@ -345,7 +346,7 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
         return ElfLoader::load(bytes);
     }
     Err(Error::format(
-        "unrecognised executable format (PE32/PE32+ and ELF64 are supported)",
+        "unrecognised executable format (PE32/PE32+ and ELF32/ELF64 are supported)",
     ))
 }
 
@@ -1127,6 +1128,8 @@ mod tests {
     fn format_meta_names_round_trip() {
         assert_eq!(Format::Pe.meta_name(Arch::X64), "pe32+");
         assert_eq!(Format::Pe.meta_name(Arch::X86), "pe32");
+        assert_eq!(Format::Elf.meta_name(Arch::X86), "elf32");
+        assert_eq!(Format::Elf.meta_name(Arch::X64), "elf64");
         assert_eq!(Format::Elf.meta_name(Arch::Aarch64), "elf64");
         assert_eq!(Format::Pe.name(), "PE");
         assert_eq!(Format::Elf.name(), "ELF");
@@ -1134,6 +1137,8 @@ mod tests {
         for (format, arch) in [
             (Format::Pe, Arch::X64),
             (Format::Pe, Arch::X86),
+            (Format::Elf, Arch::X86),
+            (Format::Elf, Arch::X64),
             (Format::Elf, Arch::Aarch64),
         ] {
             assert_eq!(Format::from_meta(format.meta_name(arch)), Some(format));

@@ -13,6 +13,21 @@
 
 ### 新增
 
+- **ELF32（i386）支持。** `recraft-format` 的 ELF 加载器现在同时接受 `ELFCLASS32` 与
+  `ELFCLASS64`：32 位的 ELF 头/程序头/节头/符号表/动态表按各自的字段偏移与宽度读取，导入
+  同时识别 x86-64 的 `SHT_RELA`（`.rela.plt`/`.rela.dyn`）与 i386 的 `SHT_REL`
+  （`.rel.plt`/`.rel.dyn`，`r_info` 低 8 位是类型、高 24 位是符号），重定位类型沿用两者
+  同号的 `JUMP_SLOT`/`GLOB_DAT`/绝对字。`.eh_frame` 的 `DW_EH_PE_absptr` 与 DWARF 行表按
+  4 字节地址解析；`meta.format` 记为 `elf32`，`info` 显示 `ELF32 (x86)`。反编译复用既有
+  x86 路径（栈参数 `[esp+N]`、`__cdecl`/`__stdcall`、32 位常量折叠），新增
+  `CallAbi::SysV32`（无寄存器实参）与 i386 PLT 桩识别（PIC 的 `jmp [ebx+disp]`、非 PIE 的
+  绝对 `jmp [disp]`，`ebx` 取 `.got.plt`/`.got`），`call puts@plt` 现在渲染成 `puts(...)`。
+  语料：`corpus/build-linux.sh` 在有 32 位 libc 时增编 `libcorpus32.so`（含剥离版），
+  `tests/golden/elf32/` 55 张快照；Linux CI 增加 ELF32 门禁。真实样例（gcc 13 `-m32` 的
+  PIE / 非 PIE / 共享库 / 剥离二进制、Go 386 静态二进制）实测 lint 全绿、结构化 98%。
+  顺手修掉三处缺陷：符号范围探到未映射字节时的越界读、`.plt.got` 桩区间越过节尾并吞掉
+  下一节开头、`__x86.get_pc_thunk.bx` 这类带点符号的后缀被当成寄存器改名。
+
 - **真实 crackme 夹具现在也能编成 ELF。** `corpus/real/crackme/build-linux.sh` 用宿主 gcc
   `-O2` 把同一份 `src/crackme.c` 编成动态 PIE（不 strip，`.symtab` 仍命名 `main`；`-O2` 下
   GCC 会把 `verify` 内联进 `main`），`--snapshots` 可生成仅在本机使用的

@@ -163,7 +163,7 @@ fn structure(
             // SysV x64 builds omit the frame pointer: GCC/Clang keep the frame in `rsp` and
             // use a callee-saved register as its alias (`mov rbx, rsp`). Treat that alias
             // as the frame base too; PE keeps the historical rbp-only behaviour.
-            if session.format() == recraft_core::Format::Elf {
+            if crate::sysv_frames(session) {
                 rbp.or_else(|| pointers.iter().find(|(reg, _)| *reg != Reg::Rsp).copied())
             } else {
                 rbp
@@ -651,7 +651,7 @@ fn structure(
         crate::variables::recover_variables(
             &mut lines,
             session.image().is_64,
-            session.format() == recraft_core::Format::Elf,
+            crate::sysv_frames(session),
         );
     }
     // A function that still has jumps says so in the header: a reader can tell at a glance that

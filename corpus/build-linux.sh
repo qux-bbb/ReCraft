@@ -54,3 +54,18 @@ fi
 "$cc" --version | head -n 1
 ls -l "$out"/libcorpus*.so 2>/dev/null || true
 echo "[linux] built $out/libcorpus.so"
+
+# 32-bit variants: the same sources with `-m32`, so the ELF32 loader and the i386
+# decompiler path have a real-toolchain corpus. Skipped when the multilib headers are
+# missing (`sudo apt-get install gcc-multilib` on Debian/Ubuntu).
+if "$cc" -m32 -O2 -fPIC -shared -o "$out/libcorpus32.so" "$repo/corpus/linux/functions.c" 2>/dev/null; then
+    cp "$out/libcorpus32.so" "$out/libcorpus32-stripped.so"
+    if command -v strip >/dev/null 2>&1; then
+        strip --strip-all "$out/libcorpus32-stripped.so"
+    else
+        rm -f "$out/libcorpus32-stripped.so"
+    fi
+    echo "[linux] built $out/libcorpus32.so"
+else
+    echo "[linux] skipping libcorpus32.so (no 32-bit libc; install gcc-multilib)"
+fi

@@ -11,7 +11,7 @@
 | M2 | IR/lifter 语义覆盖、L1 结构化、L2 签名/ABI/类型、MCP 只读工具 | ✅ 完成（M2 验收时：corpus 覆盖 97.4%、结构化 100%；notepad 覆盖 99.4%、结构化 86.1%） |
 | M3 | 质量门禁/golden、AI（解释/命名/摘要/UI propose-apply/http(s) provider/prompt 评测/缓存审计）、1 GiB 性能门禁、打包 | ✅ 完成 |
 | M4 | 覆盖率冲刺、安装包验证、文档/演示、公开技术预览 | ✅ 完成并已发布 **0.1.0**（zip + MSI + SHA256SUMS 在 GitHub Releases，结构与载荷脚本化验证）；代码签名与干净 VM 复验为发布后待补项 |
-| M5+（预览后） | 动态调试、ELF/ARM64、插件/脚本 API、团队协作 | 规划中 |
+| M5+（预览后） | 动态调试、ARM64、插件/脚本 API、团队协作 | 规划中 |
 
 ## DESIGN 差距清单（v0.1 预览前）
 
@@ -49,7 +49,7 @@
 ## 后续优先项（预览后）
 
 1. 动态调试与断点/跟踪（M5）。
-2. ELF / ARM64 支持，插件/脚本 API（自有 API，不做 IDAPython 兼容）。
+2. ARM64 支持，插件/脚本 API（自有 API，不做 IDAPython 兼容）。
 3. SSA/phi 与更强的类型推断，提升真实样本结构化率与可读性（评估：全 SSA + phi 成本高、
    对 preview 收益有限；当前先以 SSA-lite + 可见噪声清理为主，列为预览后增强）。
 4. 自动更新、MSIX 打包与签名流水线。

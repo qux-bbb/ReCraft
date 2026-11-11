@@ -326,7 +326,7 @@ pub(crate) fn lift_block(
         imports,
         stubs,
         arg_regs: abi_arg_regs(session),
-        sysv: session.format() == recraft_core::Format::Elf,
+        sysv: sysv_frames(session),
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
@@ -1278,7 +1278,7 @@ pub fn pseudocode_l0(
         imports: &imports,
         stubs: &stubs,
         arg_regs: abi_arg_regs(session),
-        sysv: session.format() == recraft_core::Format::Elf,
+        sysv: sysv_frames(session),
         written: HashSet::new(),
         frame_reg: None,
         arg_values: [None, None, None, None],
@@ -1316,12 +1316,21 @@ pub(crate) struct StubTarget {
     slot: u64,
 }
 
-/// The x64 calling convention of the image (SysV on ELF, Microsoft x64 on PE).
+/// The x86/x64 calling convention of the image (SysV on ELF, Microsoft on PE). ELF32
+/// passes every argument on the stack, so its register list is empty.
 fn call_abi(session: &dyn SessionView) -> CallAbi {
-    match session.format() {
-        recraft_core::Format::Elf => CallAbi::SysV64,
+    match (session.format(), session.image().is_64) {
+        (recraft_core::Format::Elf, false) => CallAbi::SysV32,
+        (recraft_core::Format::Elf, true) => CallAbi::SysV64,
         _ => CallAbi::Win64,
     }
+}
+
+/// Whether the x64 SysV frame heuristics apply: optimized x64 ELF builds omit the frame
+/// pointer and keep the frame in `rsp` (or a callee-saved alias). i386 ELF and PE keep
+/// the plain `ebp`/`esp` handling of the x86 path.
+pub(crate) fn sysv_frames(session: &dyn SessionView) -> bool {
+    session.format() == recraft_core::Format::Elf && session.image().is_64
 }
 
 /// The x64 argument registers of the image's calling convention.
@@ -2336,8 +2345,18 @@ impl Printer<'_> {
             Stmt::Call { target, args } => {
                 if let Some(stub) = self.stubs.get(&target.get()) {
                     // ELF calls an import through its PLT stub; print the API name and
-                    // the SysV arguments instead of `sub_10b0()`.
-                    let rendered = self.indirect_args(stub.arity);
+                    // the ABI arguments instead of `sub_10b0()`. A stack ABI (ELF32)
+                    // carries them in the pushes the lifter captured, not in registers.
+                    let rendered = if self.arg_regs.is_empty() {
+                        let count = stub.arity.map_or(args.len(), |arity| arity.min(args.len()));
+                        args.iter()
+                            .take(count)
+                            .map(|arg| self.arg_expr(*arg))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    } else {
+                        self.indirect_args(stub.arity)
+                    };
                     if rendered.is_empty() {
                         format!("{}()", stub.name)
                     } else {
@@ -2496,6 +2515,11 @@ impl Printer<'_> {
     /// resolve; without one, only a setup that starts at the first argument is printed and
     /// trailing untouched slots are dropped.
     fn indirect_args(&self, arity: Option<usize>) -> String {
+        // A stack ABI (ELF32) has no argument registers; its arguments are the pushes
+        // the lifter captured on `Stmt::Call`, so there is nothing to place here.
+        if self.arg_regs.is_empty() {
+            return String::new();
+        }
         let known = self.arg_values.iter().rposition(Option::is_some);
         match arity {
             Some(arity) => {

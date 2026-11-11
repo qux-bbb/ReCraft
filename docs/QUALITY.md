@@ -301,9 +301,10 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 
 ## golden 快照
 
-- 目录（合计 **864** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
+- 目录（合计 **919** 个函数）：`tests/golden/corpus/`（x64 语料，31）、`tests/golden/corpus86/`
   （32 位语料，32）、`tests/golden/elf/`（Linux ELF 语料，**52**，gcc `-O2` 编出的
-  `libcorpus.so`）、`tests/golden/elf-cpp/`（Itanium C++ 名字与重载，**23**，g++ 编出的
+  `libcorpus.so`）、`tests/golden/elf32/`（同一语料的 `-m32` 构建，**55**，覆盖 ELF32 加载与
+  i386 PLT/栈参数路径）、`tests/golden/elf-cpp/`（Itanium C++ 名字与重载，**23**，g++ 编出的
   `libcorpus-cpp.so`）、`tests/golden/notepad/`（notepad **全部 506 个函数**，含 45 KB 的多入口循环参考函数）、
   `tests/golden/crackme/`（前 160，`--limit 160`）、`tests/golden/go/`（Go 前 60，`--limit 60`，含 `internal/abi.Name.ReadVarint` 这一参考例；
   Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数
