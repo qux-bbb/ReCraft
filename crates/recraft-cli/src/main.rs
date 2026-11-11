@@ -1618,6 +1618,14 @@ fn cmd_analyze(
             .filter(|f| f.source == recraft_analysis::FunctionSource::DataPointer)
             .count()
     );
+    println!(
+        "  from PLT stubs:     {}",
+        result
+            .functions
+            .iter()
+            .filter(|f| f.source == recraft_analysis::FunctionSource::Plt)
+            .count()
+    );
     println!("instructions decoded: {}", result.instructions);
     println!("direct call edges:    {}", result.calls.len());
     println!("branch edges:         {}", result.jumps.len());
@@ -3181,6 +3189,7 @@ fn cmd_eval(file: &Path, map: Option<&Path>, as_json: bool) -> Result<()> {
                     recraft_analysis::FunctionSource::Entry => "entry",
                     recraft_analysis::FunctionSource::Export => "export",
                     recraft_analysis::FunctionSource::Pdata => "pdata",
+                    recraft_analysis::FunctionSource::Plt => "plt",
                     recraft_analysis::FunctionSource::Tls => "tls",
                     recraft_analysis::FunctionSource::CallTarget => "call",
                     recraft_analysis::FunctionSource::GoPclntab => "go",

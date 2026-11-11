@@ -2,8 +2,7 @@
 void cpp_entry_l1(void) {
     ebx = edi;
     sub_10b0();
-    rdi = rax;
-    sub_1090();
+    puts(rax);
     edi = ebx;
     sub_10a0();
     edi = ebx;

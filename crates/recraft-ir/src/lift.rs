@@ -48,6 +48,52 @@ struct CmpState {
     source: CmpSource,
 }
 
+/// x64 calling convention that decides which registers carry call arguments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CallAbi {
+    /// Microsoft x64: `rcx`, `rdx`, `r8`, `r9`.
+    #[default]
+    Win64,
+    /// System V AMD64 (ELF): `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`.
+    SysV64,
+}
+
+impl CallAbi {
+    /// Integer argument registers in ABI order.
+    pub fn arg_registers(self) -> &'static [Reg] {
+        match self {
+            CallAbi::Win64 => &[Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9],
+            CallAbi::SysV64 => &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9],
+        }
+    }
+
+    /// Registers a call may clobber (caller-saved).
+    pub fn caller_saved(self) -> &'static [Reg] {
+        match self {
+            CallAbi::Win64 => &[
+                Reg::Rcx,
+                Reg::Rdx,
+                Reg::R8,
+                Reg::R9,
+                Reg::Rax,
+                Reg::R10,
+                Reg::R11,
+            ],
+            CallAbi::SysV64 => &[
+                Reg::Rax,
+                Reg::Rcx,
+                Reg::Rdx,
+                Reg::Rsi,
+                Reg::Rdi,
+                Reg::R8,
+                Reg::R9,
+                Reg::R10,
+                Reg::R11,
+            ],
+        }
+    }
+}
+
 /// Lifts instructions into [`LiftedInsn`]s, owning the expression arena.
 pub struct Lifter {
     exprs: Vec<Expr>,
@@ -57,6 +103,8 @@ pub struct Lifter {
     /// Recent `push` values (oldest first); the newest pushes are the call arguments
     /// on x86 (and arguments 5+ on x64).
     stack_args: Vec<ExprId>,
+    /// Calling convention used to recover call arguments.
+    abi: CallAbi,
 }
 
 impl Default for Lifter {
@@ -67,11 +115,17 @@ impl Default for Lifter {
 
 impl Lifter {
     pub fn new() -> Self {
+        Self::with_abi(CallAbi::Win64)
+    }
+
+    /// A lifter for an image whose x64 calls use `abi` (ELF binaries use SysV).
+    pub fn with_abi(abi: CallAbi) -> Self {
         Self {
             exprs: Vec::new(),
             last_cmp: None,
             reg_env: BTreeMap::new(),
             stack_args: Vec::new(),
+            abi,
         }
     }
 
@@ -220,8 +274,8 @@ impl Lifter {
                 recraft_decode::FlowKind::Call => match insn.branch_target() {
                     Some(target) => {
                         let mut args: Vec<ExprId> = if insn.mode().is_64() {
-                            const ARG_REGS: [Reg; 4] = [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9];
-                            ARG_REGS
+                            self.abi
+                                .arg_registers()
                                 .iter()
                                 .map(|reg| match self.reg_env.get(reg).copied() {
                                     // A self-referential value (`dec ecx` -> `ecx - 1`) was
@@ -246,16 +300,8 @@ impl Lifter {
                         }
                         stmts.push(Stmt::Call { target, args });
                         // Caller-saved registers are clobbered by the call.
-                        for reg in [
-                            Reg::Rcx,
-                            Reg::Rdx,
-                            Reg::R8,
-                            Reg::R9,
-                            Reg::Rax,
-                            Reg::R10,
-                            Reg::R11,
-                        ] {
-                            self.reg_env.remove(&reg);
+                        for reg in self.abi.caller_saved() {
+                            self.reg_env.remove(reg);
                         }
                         Flow::Fallthrough
                     }

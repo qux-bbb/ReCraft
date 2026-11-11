@@ -4,7 +4,7 @@ void __do_global_dtors_aux_l1(void) {
         return;
     }
     if (*(u64*)(0xADDR) != 0) {
-        sub_1080();
+        __cxa_finalize(*(u64*)(0xADDR));
     }
     deregister_tm_clones();
     *(u8*)(0xADDR) = 1;

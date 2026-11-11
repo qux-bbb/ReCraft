@@ -46,10 +46,10 @@ const NONE: usize = usize::MAX;
 /// recovered exactly (the emitter printed a shape the parser does not prove, or the text is
 /// not valid C), a straight-line fallback still names values whose definition and use sit in
 /// the same basic run; the text is never left worse than the emitter's.
-pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
+pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool, sysv: bool) -> bool {
     normalize_inline_cases(lines);
     let original = lines.clone();
-    if !recover_structured(lines, is_64) {
+    if !recover_structured(lines, is_64, sysv) {
         *lines = original;
         if recover_linear(lines, is_64) {
             strip_parameter_registers(lines);
@@ -60,7 +60,7 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool) -> boo
     let before = register_line_count(lines);
     let mut candidate = original;
     materialize_asm_outputs(&mut candidate);
-    if recover_structured(&mut candidate, is_64) && register_line_count(&candidate) < before {
+    if recover_structured(&mut candidate, is_64, sysv) && register_line_count(&candidate) < before {
         *lines = candidate;
     }
     strip_parameter_registers(lines);
@@ -469,7 +469,7 @@ fn strip_parameter_registers(lines: &mut [PseudoLine]) {
     }
 }
 
-fn recover_structured(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
+fn recover_structured(lines: &mut Vec<PseudoLine>, is_64: bool, sysv: bool) -> bool {
     let Some(signature) = lines.iter().position(|line| signature_line(&line.text)) else {
         return false;
     };
@@ -510,7 +510,7 @@ fn recover_structured(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
     {
         return false;
     }
-    let Some(program) = Program::analyze(builder.nodes, entry, is_64, lines) else {
+    let Some(program) = Program::analyze(builder.nodes, entry, is_64, sysv, lines) else {
         return false;
     };
     let Some(body) = program.render(lines) else {
@@ -2390,7 +2390,13 @@ struct Program {
 }
 
 impl Program {
-    fn analyze(nodes: Vec<Node>, _entry: usize, is_64: bool, lines: &[PseudoLine]) -> Option<Self> {
+    fn analyze(
+        nodes: Vec<Node>,
+        _entry: usize,
+        is_64: bool,
+        sysv: bool,
+        lines: &[PseudoLine],
+    ) -> Option<Self> {
         let count = nodes.len();
         if count == 0 {
             return None;
@@ -2466,7 +2472,14 @@ impl Program {
             if let Some(write) = &node.write
                 && write.compound.is_none()
             {
-                node.write_var = vars.new_var(write.width);
+                // `rsp` is bookkeeping, not a source variable: its writes are often
+                // hidden by the printer, so naming it would leave a read without a
+                // definition.
+                node.write_var = if sysv && write.reg == Reg::Rsp {
+                    vars.new_raw_var(write.width)
+                } else {
+                    vars.new_var(write.width)
+                };
             }
             if node.call {
                 node.call_var = vars.new_var(0);
@@ -2485,8 +2498,27 @@ impl Program {
         }
 
         let mut entry_map = [NONE; REGS];
+        // A register the body never writes still holds the value it had on entry. That is a
+        // machine value, not a local: naming it `vN` would print a read of an undefined
+        // variable. Keep its register spelling instead (argument registers are already
+        // replaced by `argN` in the text, so they do not reach this path).
+        let mut defined = [false; REGS];
+        for node in &nodes {
+            if let Some(write) = &node.write
+                && !write.partial
+            {
+                defined[write.reg as usize] = true;
+            }
+            for reg in &node.asm_writes {
+                defined[*reg as usize] = true;
+            }
+        }
         for (reg, slot) in entry_map.iter_mut().enumerate() {
-            *slot = vars.new_var(0);
+            *slot = if !sysv || (defined[reg] && reg != Reg::Rsp as usize) {
+                vars.new_var(0)
+            } else {
+                vars.new_raw_var(full_width(reg_from_index(reg), is_64))
+            };
             vars.entry[reg] = *slot;
         }
         let mut ins = vec![[NONE; REGS]; count];
@@ -3154,7 +3186,7 @@ mod tests {
             lines.push(line(0x1001 + index as u64, text));
         }
         lines.push(line(0x2000, "}"));
-        if !recover_variables(&mut lines, true) {
+        if !recover_variables(&mut lines, true, false) {
             return None;
         }
         Some(
@@ -3479,7 +3511,7 @@ mod tests {
             line(0x1003, "    return rax;"),
             line(0x1004, "}"),
         ];
-        assert!(recover_variables(&mut lines, true));
+        assert!(recover_variables(&mut lines, true, false));
         assert_eq!(lines[0].text, "// L2 params: arg1, arg2");
     }
 }

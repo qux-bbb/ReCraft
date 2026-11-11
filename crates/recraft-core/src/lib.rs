@@ -10,6 +10,7 @@
 
 mod command;
 mod flags;
+pub mod plt;
 mod script;
 mod segments;
 mod session;
@@ -23,6 +24,7 @@ pub use command::{
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
 // Loaders live in `recraft-format`; front ends and the decompiler read them through
 // the session, so the vocabulary is re-exported here.
+pub use plt::PltStub;
 pub use recraft_format::{Arch, Format, Image, LoadedImage};
 pub use script::{COMMAND_TYPES, parse_command, resolve_address};
 pub use segments::{Perm, Segment, SegmentKind};

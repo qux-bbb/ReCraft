@@ -26,6 +26,10 @@ pub trait SessionView {
 
     fn arch(&self) -> Arch;
 
+    /// Container format the project was imported from (PE, ELF, ...). Rendering needs it
+    /// to pick the x64 calling convention (SysV on ELF, Microsoft x64 on PE).
+    fn format(&self) -> recraft_format::Format;
+
     fn entry_point(&self) -> Address;
 
     /// All defined functions, ordered by start address.

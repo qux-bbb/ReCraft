@@ -14,7 +14,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use recraft_common::{Address, Result};
 use recraft_decode::{Insn, Mode, decode};
-use recraft_format::{Arch, Image};
+use recraft_format::{Arch, Format, Image};
 
 use crate::command::{StructDef, db_err};
 use crate::segments::Segment;
@@ -33,6 +33,7 @@ pub struct SessionSnapshot {
     bytes: Vec<Vec<u8>>,
     mode: Mode,
     arch: Arch,
+    format: Format,
     functions: Vec<FunctionInfo>,
     names: HashMap<u64, String>,
     prototypes: HashMap<u64, String>,
@@ -133,6 +134,7 @@ impl SessionSnapshot {
             bytes,
             mode: session.mode(),
             arch: session.arch(),
+            format: session.format(),
             functions,
             names,
             prototypes,
@@ -172,6 +174,10 @@ impl SessionView for SessionSnapshot {
 
     fn arch(&self) -> Arch {
         self.arch
+    }
+
+    fn format(&self) -> Format {
+        self.format
     }
 
     fn entry_point(&self) -> Address {

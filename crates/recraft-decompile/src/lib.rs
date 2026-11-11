@@ -23,7 +23,7 @@ use recraft_core::Session;
 use recraft_core::{SessionView, StructDef};
 use recraft_decode::iced_x86;
 use recraft_ir::{
-    BinOp, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, RegView, Stmt, UnOp, cond_name,
+    BinOp, CallAbi, Expr, ExprId, Flow, LiftedInsn, Lifter, Reg, RegView, Stmt, UnOp, cond_name,
 };
 
 mod l2;
@@ -140,6 +140,8 @@ pub(crate) fn lift_block(
     flag_source: Option<Address>,
     // IAT slot -> API name, built once per function instead of once per block.
     imports: &HashMap<u64, String>,
+    // PLT stub entry -> imported name, built once per function.
+    stubs: &HashMap<u64, StubTarget>,
     // Frame pointer established by the function prologue, so blocks that do not re-load it
     // still name `[rbp + disp]` against the same frame base as the prologue.
     frame_pointer: Option<(Reg, i64)>,
@@ -168,7 +170,7 @@ pub(crate) fn lift_block(
             literals: Vec::new(),
         });
     }
-    let mut lifter = Lifter::new();
+    let mut lifter = Lifter::with_abi(call_abi(session));
     // Re-establish the comparison the preceding block left in the flags: a conditional
     // branch does not modify them, so a second branch at the start of this block tests the
     // same values. Lifting the pure `cmp`/`test`/`bt` again builds the condition in this
@@ -302,6 +304,7 @@ pub(crate) fn lift_block(
         }
     }
     let mut calls = BTreeSet::new();
+    let arg_regs = abi_arg_regs(session);
     for item in &lifted {
         for stmt in &item.stmts {
             if let Stmt::Call { target, .. } = stmt {
@@ -321,6 +324,9 @@ pub(crate) fn lift_block(
         call_protos: &call_protos,
         call_arg_counts,
         imports,
+        stubs,
+        arg_regs: abi_arg_regs(session),
+        sysv: session.format() == recraft_core::Format::Elf,
         written: seed
             .map(|seed| seed.iter().copied().collect())
             .unwrap_or_default(),
@@ -360,22 +366,28 @@ pub(crate) fn lift_block(
             let Stmt::Call { target, args } = &lifted[call_item].stmts[call_stmt] else {
                 continue;
             };
-            for (slot, arg) in args.iter().enumerate().take(crate::l2::X64_ARG_REGS.len()) {
+            for (slot, arg) in args.iter().enumerate().take(arg_regs.len().min(4)) {
                 let arg_reg = match exprs[*arg as usize] {
                     Expr::Reg(view) => Some(view.base),
                     _ => None,
                 };
-                if arg_reg == Some(crate::l2::X64_ARG_REGS[slot]) {
+                if arg_reg == arg_regs.get(slot).copied() {
                     // The call renders the register itself; its writer cannot be
                     // removed without changing the value read by the call.
                     continue;
                 }
-                let limit =
-                    call_arg_limit(target.get(), args, &exprs, &call_protos, call_arg_counts);
+                let limit = call_arg_limit(
+                    target.get(),
+                    args,
+                    &exprs,
+                    &call_protos,
+                    call_arg_counts,
+                    stubs,
+                );
                 if slot >= limit {
                     continue;
                 }
-                let reg = crate::l2::X64_ARG_REGS[slot];
+                let reg = arg_regs[slot];
                 for previous in (0..position).rev() {
                     let (item_index, stmt_index) = flat[previous];
                     let stmt = &lifted[item_index].stmts[stmt_index];
@@ -412,7 +424,7 @@ pub(crate) fn lift_block(
             if !is_import_call(&exprs, *target, imports) {
                 continue;
             }
-            for reg in crate::l2::X64_ARG_REGS {
+            for &reg in arg_regs {
                 for previous in (0..position).rev() {
                     let (item_index, stmt_index) = flat[previous];
                     let stmt = &lifted[item_index].stmts[stmt_index];
@@ -510,7 +522,7 @@ pub(crate) fn lift_block(
             printer.note_value(stmt);
             printer.note_stack_arg(stmt);
             if let Stmt::WriteReg { reg, value } = stmt
-                && let Some(slot) = arg_slot(reg.base)
+                && let Some(slot) = arg_slot(reg.base, arg_regs)
             {
                 let rendered = if reg.width >= 4 {
                     printer.arg_expr(*value)
@@ -738,7 +750,16 @@ fn call_arg_limit(
     exprs: &[Expr],
     protos: &HashMap<u64, crate::l2::ProtoSig>,
     counts: &HashMap<u64, usize>,
+    stubs: &HashMap<u64, StubTarget>,
 ) -> usize {
+    // A PLT stub stands for an imported API: its known arity is the truth, and without one
+    // only the leading computed arguments are printed.
+    if let Some(stub) = stubs.get(&target) {
+        return match stub.arity {
+            Some(arity) => arity.min(args.len()),
+            None => rendered_arg_count(args, exprs),
+        };
+    }
     if let Some(proto) = protos.get(&target) {
         proto.params.len().min(args.len())
     } else if let Some(count) = counts.get(&target) {
@@ -909,9 +930,74 @@ const IMPORT_ARITY: &[(&str, usize)] = &[
     ("WindowsDeleteString", 1),
 ];
 
+/// Parameter counts of common libc functions called through ELF PLT stubs. Variadic
+/// functions list only their fixed arguments (the format string and its leading flags).
+const LIBC_ARITY: &[(&str, usize)] = &[
+    ("__printf_chk", 2),
+    ("abort", 0),
+    ("atoi", 1),
+    ("calloc", 2),
+    ("close", 1),
+    ("connect", 3),
+    ("dlopen", 2),
+    ("dlsym", 2),
+    ("exit", 1),
+    ("fclose", 1),
+    ("fflush", 1),
+    ("fgets", 3),
+    ("fopen", 2),
+    ("fprintf", 2),
+    ("fputs", 2),
+    ("fread", 4),
+    ("free", 1),
+    ("fwrite", 4),
+    ("getenv", 1),
+    ("malloc", 1),
+    ("memcmp", 3),
+    ("memcpy", 3),
+    ("memmove", 3),
+    ("memset", 3),
+    ("open", 2),
+    ("perror", 1),
+    ("printf", 1),
+    ("ptrace", 4),
+    ("pthread_create", 4),
+    ("puts", 1),
+    ("rand", 0),
+    ("read", 3),
+    ("realloc", 2),
+    ("recv", 4),
+    ("send", 4),
+    ("snprintf", 3),
+    ("socket", 3),
+    ("sprintf", 2),
+    ("srand", 1),
+    ("strcat", 2),
+    ("strchr", 2),
+    ("strcmp", 2),
+    ("strcpy", 2),
+    ("strlen", 1),
+    ("strncmp", 3),
+    ("strncpy", 3),
+    ("strpbrk", 2),
+    ("strrchr", 2),
+    ("strstr", 2),
+    ("strtol", 3),
+    ("time", 1),
+    ("write", 3),
+];
+
 /// Parameter count of a well-known import, if it is in the table.
 fn import_arity(name: &str) -> Option<usize> {
     IMPORT_ARITY
+        .iter()
+        .find(|(api, _)| *api == name)
+        .map(|(_, arity)| *arity)
+}
+
+/// Parameter count of a libc function reached through a PLT stub (ELF only).
+fn libc_arity(name: &str) -> Option<usize> {
+    LIBC_ARITY
         .iter()
         .find(|(api, _)| *api == name)
         .map(|(_, arity)| *arity)
@@ -1066,7 +1152,7 @@ pub fn pseudocode_l0(
     start: Address,
     max_insns: usize,
 ) -> Result<Pseudocode> {
-    let mut lifter = Lifter::new();
+    let mut lifter = Lifter::with_abi(call_abi(session));
     let mut lifted: Vec<LiftedInsn> = Vec::new();
     let mut targets: BTreeSet<u64> = BTreeSet::new();
     let mut calls: BTreeSet<u64> = BTreeSet::new();
@@ -1176,6 +1262,7 @@ pub fn pseudocode_l0(
     let no_structs: BTreeMap<Reg, StructDef> = BTreeMap::new();
     let no_protos: HashMap<u64, crate::l2::ProtoSig> = HashMap::new();
     let no_counts: HashMap<u64, usize> = HashMap::new();
+    let stubs = import_stubs(session);
     let layout = stack_layout(&exprs, &lifted);
     let mut printer = Printer {
         exprs: &exprs,
@@ -1189,6 +1276,9 @@ pub fn pseudocode_l0(
         call_protos: &no_protos,
         call_arg_counts: &no_counts,
         imports: &imports,
+        stubs: &stubs,
+        arg_regs: abi_arg_regs(session),
+        sysv: session.format() == recraft_core::Format::Elf,
         written: HashSet::new(),
         frame_reg: None,
         arg_values: [None, None, None, None],
@@ -1215,10 +1305,76 @@ fn resolve_name(session: &dyn SessionView, addr: Address) -> Result<String> {
     Ok(format!("sub_{:x}", addr.get()))
 }
 
-/// Position of a register in the x64 integer-argument order (`rcx`, `rdx`, `r8`, `r9`).
-fn arg_slot(reg: Reg) -> Option<usize> {
-    crate::l2::X64_ARG_REGS
+/// A direct-call target that is really an imported function (ELF PLT stub).
+#[derive(Debug, Clone)]
+pub(crate) struct StubTarget {
+    /// Imported API name, sanitised for C (`puts`, `__printf_chk`).
+    name: String,
+    /// Known parameter count, so the call prints the right number of arguments.
+    arity: Option<usize>,
+    /// GOT/IAT slot the stub jumps through, for the stub's own body listing.
+    slot: u64,
+}
+
+/// The x64 calling convention of the image (SysV on ELF, Microsoft x64 on PE).
+fn call_abi(session: &dyn SessionView) -> CallAbi {
+    match session.format() {
+        recraft_core::Format::Elf => CallAbi::SysV64,
+        _ => CallAbi::Win64,
+    }
+}
+
+/// The x64 argument registers of the image's calling convention.
+fn abi_arg_regs(session: &dyn SessionView) -> &'static [Reg] {
+    call_abi(session).arg_registers()
+}
+
+/// PLT stubs of the image keyed by entry address, with the name and arity a call to the
+/// stub should print.
+pub(crate) fn import_stubs(session: &dyn SessionView) -> HashMap<u64, StubTarget> {
+    let mut stubs = HashMap::new();
+    // Only ELF calls through PLT stubs. On PE an import is `call [IAT]`, already resolved
+    // by the indirect-call path; a `jmp [IAT]` there is a real function, not compiler glue.
+    if session.format() != recraft_core::Format::Elf {
+        return stubs;
+    }
+    let Ok(found) = recraft_core::plt::stubs(session) else {
+        return stubs;
+    };
+    for stub in found {
+        if stub.name.is_empty() {
+            continue;
+        }
+        let name: String = stub
+            .name
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let arity = libc_arity(&name);
+        stubs.insert(
+            stub.start.get(),
+            StubTarget {
+                name,
+                arity,
+                slot: stub.slot.get(),
+            },
+        );
+    }
+    stubs
+}
+
+/// Position of a register in the x64 integer-argument order (`rcx`, `rdx`, `r8`, `r9`
+/// on PE; `rdi`, `rsi`, `rdx`, `rcx` on SysV, first four slots kept for rendering).
+fn arg_slot(reg: Reg, arg_regs: &[Reg]) -> Option<usize> {
+    arg_regs
         .iter()
+        .take(4)
         .position(|candidate| *candidate == reg)
 }
 
@@ -1287,7 +1443,14 @@ fn collect_literals(session: &dyn SessionView, exprs: &[Expr]) -> Result<HashMap
             _ => None,
         })
         .collect();
-    values.retain(|value| *value > 0x10000);
+    values.retain(|value| {
+        // Address constants that can name a stored string: the program defines data at
+        // absolute addresses on PE (image base + RVA), while ELF images start at 0 and
+        // strings sit in the low `0x2000` range, so both have to pass the filter.
+        let base = session.image().image_base.get();
+        let end = base.saturating_add(session.image().size_of_image);
+        *value >= base && *value < end && *value > 0x1000
+    });
     for value in values {
         let addr = Address::new(value);
         if let Some(text) = session.string_at(addr)? {
@@ -1297,11 +1460,13 @@ fn collect_literals(session: &dyn SessionView, exprs: &[Expr]) -> Result<HashMap
             continue;
         }
         // Short literals such as `"\r\n"` are not always in the string table; read them
-        // directly when the address lies in read-only data.
-        let in_rdata = session
-            .segment_containing(addr)
-            .is_some_and(|segment| segment.name == ".rdata");
-        if in_rdata && let Some(text) = read_c_literal(session, addr) {
+        // directly when the address lies in read-only data (PE `.rdata`, ELF `.rodata`).
+        let in_read_only = session.segment_containing(addr).is_some_and(|segment| {
+            !segment.perm.is_writable()
+                && !segment.perm.is_executable()
+                && matches!(segment.name.as_str(), ".rdata" | ".rodata")
+        });
+        if in_read_only && let Some(text) = read_c_literal(session, addr) {
             literals.insert(value, quote_c_string(&text));
         }
     }
@@ -1384,6 +1549,14 @@ struct Printer<'a> {
     literals: &'a HashMap<u64, String>,
     /// Imported function names keyed by the address of their IAT slot.
     imports: &'a HashMap<u64, String>,
+    /// PLT import stubs keyed by stub entry (ELF): a direct call to one of them is a call
+    /// to the imported API.
+    stubs: &'a HashMap<u64, StubTarget>,
+    /// Integer argument registers of the image's x64 calling convention.
+    arg_regs: &'static [Reg],
+    /// True for SysV x64 (ELF): stack frames have no frame pointer, so registers that
+    /// alias `rsp` have to name frame slots too.
+    sysv: bool,
     /// Registers written so far (for argument-register naming).
     written: HashSet<Reg>,
     /// Register that aliases `rsp` for frame-relative locals (e.g. `mov r11, rsp`).
@@ -1459,7 +1632,7 @@ impl Printer<'_> {
                 self.note_value(stmt);
                 self.note_stack_arg(stmt);
                 if let Stmt::WriteReg { reg, value } = stmt
-                    && let Some(slot) = arg_slot(reg.base)
+                    && let Some(slot) = arg_slot(reg.base, self.arg_regs)
                 {
                     let rendered = if reg.width >= 4 {
                         self.arg_expr(*value)
@@ -1826,7 +1999,8 @@ impl Printer<'_> {
             // A bare `[rsp]` / `[rbp]` write is the frame slot at offset 0 (`push`).
             Expr::Reg(view)
                 if matches!(view.base, Reg::Rsp | Reg::Rbp)
-                    || self.frame_reg == Some(view.base) =>
+                    || self.frame_reg == Some(view.base)
+                    || (self.sysv && self.pointer_offsets.contains_key(&view.base)) =>
             {
                 return Some((view.base, 0));
             }
@@ -1835,7 +2009,8 @@ impl Printer<'_> {
         let base_of = |id: ExprId, exprs: &[Expr]| match &exprs[id as usize] {
             Expr::Reg(view)
                 if matches!(view.base, Reg::Rsp | Reg::Rbp)
-                    || self.frame_reg == Some(view.base) =>
+                    || self.frame_reg == Some(view.base)
+                    || (self.sysv && self.pointer_offsets.contains_key(&view.base)) =>
             {
                 Some(view.base)
             }
@@ -1987,10 +2162,14 @@ impl Printer<'_> {
         else {
             return None;
         };
-        // `(base + index) + disp`, with the constant on either side.
+        // `(base + index) + disp`, with the constant on either side. A bare
+        // `base + index` (a frame slot indexed by a runtime value, `buf[i]`) has no
+        // displacement and is handled the same way with `disp = 0`.
         let (sum, disp) = match (&self.exprs[*lhs as usize], &self.exprs[*rhs as usize]) {
             (Expr::Bin { op: BinOp::Add, .. }, Expr::Const(value)) => (*lhs, *value as i64),
             (Expr::Const(value), Expr::Bin { op: BinOp::Add, .. }) => (*rhs, *value as i64),
+            (Expr::Const(_), _) | (_, Expr::Const(_)) => return None,
+            _ if self.sysv => (addr, 0),
             _ => return None,
         };
         let Expr::Bin {
@@ -2155,56 +2334,68 @@ impl Printer<'_> {
                 }
             }
             Stmt::Call { target, args } => {
-                let name = self.name(*target);
-                match self.call_protos.get(&target.get()) {
-                    Some(proto) => {
-                        let count = proto.params.len().min(args.len());
-                        let mut rendered: Vec<String> = args
-                            .iter()
-                            .take(count)
-                            .enumerate()
-                            .map(|(index, arg)| {
-                                let value = self.arg_expr(*arg);
-                                match proto.params.get(index) {
-                                    // Pointer parameters make the argument's intended
-                                    // type visible; scalars stay uncast for readability.
-                                    Some(param) if param.ty.is_pointer() => {
-                                        format!("({}){value}", param.ty.c_name())
-                                    }
-                                    _ => value,
-                                }
-                            })
-                            .collect();
-                        // Parameters beyond the fourth travel on the stack.
-                        if rendered.len() >= 4 {
-                            rendered.extend(self.stack_arguments());
-                        }
-                        format!("{name}({})", rendered.join(", "))
+                if let Some(stub) = self.stubs.get(&target.get()) {
+                    // ELF calls an import through its PLT stub; print the API name and
+                    // the SysV arguments instead of `sub_10b0()`.
+                    let rendered = self.indirect_args(stub.arity);
+                    if rendered.is_empty() {
+                        format!("{}()", stub.name)
+                    } else {
+                        format!("{}({rendered})", stub.name)
                     }
-                    None => {
-                        let count = call_arg_limit(
-                            target.get(),
-                            args,
-                            self.exprs,
-                            self.call_protos,
-                            self.call_arg_counts,
-                        );
-                        if count == 0 {
-                            format!("{name}()")
-                        } else {
+                } else {
+                    let name = self.name(*target);
+                    match self.call_protos.get(&target.get()) {
+                        Some(proto) => {
+                            let count = proto.params.len().min(args.len());
                             let mut rendered: Vec<String> = args
                                 .iter()
                                 .take(count)
                                 .enumerate()
-                                .map(|(slot, arg)| self.call_argument(slot, *arg))
+                                .map(|(index, arg)| {
+                                    let value = self.arg_expr(*arg);
+                                    match proto.params.get(index) {
+                                        // Pointer parameters make the argument's intended
+                                        // type visible; scalars stay uncast for readability.
+                                        Some(param) if param.ty.is_pointer() => {
+                                            format!("({}){value}", param.ty.c_name())
+                                        }
+                                        _ => value,
+                                    }
+                                })
                                 .collect();
-                            // Only extend a call that already shows all four register
-                            // arguments: with fewer, the first stack slot's position among
-                            // the printed arguments would be unknown.
+                            // Parameters beyond the fourth travel on the stack.
                             if rendered.len() >= 4 {
                                 rendered.extend(self.stack_arguments());
                             }
                             format!("{name}({})", rendered.join(", "))
+                        }
+                        None => {
+                            let count = call_arg_limit(
+                                target.get(),
+                                args,
+                                self.exprs,
+                                self.call_protos,
+                                self.call_arg_counts,
+                                self.stubs,
+                            );
+                            if count == 0 {
+                                format!("{name}()")
+                            } else {
+                                let mut rendered: Vec<String> = args
+                                    .iter()
+                                    .take(count)
+                                    .enumerate()
+                                    .map(|(slot, arg)| self.call_argument(slot, *arg))
+                                    .collect();
+                                // Only extend a call that already shows all four register
+                                // arguments: with fewer, the first stack slot's position among
+                                // the printed arguments would be unknown.
+                                if rendered.len() >= 4 {
+                                    rendered.extend(self.stack_arguments());
+                                }
+                                format!("{name}({})", rendered.join(", "))
+                            }
                         }
                     }
                 }
@@ -2263,6 +2454,15 @@ impl Printer<'_> {
     /// how the source would pass a local by pointer. A bare register is the value it holds
     /// (`helper(rbp)`), not the address of the slot at offset zero.
     fn arg_expr(&self, id: ExprId) -> String {
+        // A register that holds a stack address (`rbp = rsp - 8`) passes the address of
+        // the slot, which is how the source spells a local passed by pointer.
+        if let Expr::Reg(view) = &self.exprs[id as usize]
+            && self.sysv
+            && self.pointer_offsets.contains_key(&view.base)
+            && let Some(name) = self.stack_reference(view.base, 0)
+        {
+            return format!("&{name}");
+        }
         if !matches!(self.exprs[id as usize], Expr::Reg(_))
             && let Some((base, offset)) = self.stack_slot(id)
             && let Some(name) = self.stack_reference(base, offset)
@@ -2277,7 +2477,7 @@ impl Printer<'_> {
     /// the register name, and it is exactly what the callee receives.
     fn call_argument(&self, slot: usize, arg: ExprId) -> String {
         if let Expr::Reg(view) = &self.exprs[arg as usize]
-            && crate::l2::X64_ARG_REGS.get(slot) == Some(&view.base)
+            && self.arg_regs.get(slot) == Some(&view.base)
             && let Some(value) = &self.arg_values[slot]
             // Only a plain value: repeating a memory load in the argument list would read
             // the location twice and read worse than the register name.
@@ -2306,9 +2506,7 @@ impl Printer<'_> {
                     .map(
                         |slot| match self.arg_values.get(slot).and_then(Option::as_ref) {
                             Some(value) => value.clone(),
-                            None => RegView::full(crate::l2::X64_ARG_REGS[slot])
-                                .name()
-                                .to_owned(),
+                            None => RegView::full(self.arg_regs[slot]).name().to_owned(),
                         },
                     )
                     .collect::<Vec<_>>()
@@ -2326,9 +2524,7 @@ impl Printer<'_> {
                 (0..=last)
                     .map(|slot| match &self.arg_values[slot] {
                         Some(value) => value.clone(),
-                        None => RegView::full(crate::l2::X64_ARG_REGS[slot])
-                            .name()
-                            .to_owned(),
+                        None => RegView::full(self.arg_regs[slot]).name().to_owned(),
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -2523,6 +2719,9 @@ mod tests {
             call_arg_counts: &call_arg_counts,
             literals: &literals,
             imports: &imports,
+            stubs: &HashMap::new(),
+            arg_regs: CallAbi::Win64.arg_registers(),
+            sysv: false,
             written: HashSet::new(),
             frame_reg: None,
             arg_values: [None, None, None, None],

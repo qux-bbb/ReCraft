@@ -1693,6 +1693,10 @@ impl SessionView for Session {
         self.arch
     }
 
+    fn format(&self) -> Format {
+        self.format
+    }
+
     fn entry_point(&self) -> Address {
         self.image.entry_point
     }

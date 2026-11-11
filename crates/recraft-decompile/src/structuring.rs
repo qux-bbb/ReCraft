@@ -113,6 +113,8 @@ fn structure(
     mark("cfg");
     // The IAT slot map is the same for every block; build it once per function.
     let imports = crate::import_names(session);
+    // PLT stubs are likewise function-wide: a direct call to one is an import call.
+    let stubs = crate::import_stubs(session);
     for block in &cfg.blocks {
         bodies.push(lift_block(
             session,
@@ -125,6 +127,7 @@ fn structure(
             None,
             None,
             &imports,
+            &stubs,
             None,
             None,
             None,
@@ -149,16 +152,22 @@ fn structure(
                 Some((0, 0)),
                 None,
                 &imports,
+                &stubs,
                 None,
                 None,
                 None,
                 false,
             )?;
-            probe
-                .stack_pointers
-                .iter()
-                .find(|(reg, _)| *reg == Reg::Rbp)
-                .copied()
+            let pointers = &probe.stack_pointers;
+            let rbp = pointers.iter().find(|(reg, _)| *reg == Reg::Rbp).copied();
+            // SysV x64 builds omit the frame pointer: GCC/Clang keep the frame in `rsp` and
+            // use a callee-saved register as its alias (`mov rbx, rsp`). Treat that alias
+            // as the frame base too; PE keeps the historical rbp-only behaviour.
+            if session.format() == recraft_core::Format::Elf {
+                rbp.or_else(|| pointers.iter().find(|(reg, _)| *reg != Reg::Rsp).copied())
+            } else {
+                rbp
+            }
         }
         None => None,
     };
@@ -282,6 +291,7 @@ fn structure(
             entry_stack[index].map(|entry| (entry, frame_base)),
             flag_sources[index],
             &imports,
+            &stubs,
             frame_pointer,
             Some(&entry_aliases[index]),
             Some(&entry_arg_values[index]),
@@ -331,6 +341,42 @@ fn structure(
         .unwrap_or_else(|| format!("sub_{:x}", start.get()));
     if let Some(parsed_name) = parsed_proto.as_ref().and_then(|parsed| parsed.name.clone()) {
         name = parsed_name;
+    }
+    // A PLT stub is compiler glue: its incoming registers are forwarded unchanged to the
+    // imported function, so rendering it as C would invent uninitialised locals. Show the
+    // jump itself, like a disassembler does, and let call sites print the imported name.
+    if let Some(stub) = crate::import_stubs(session).get(&start.get()) {
+        let mut lines = Vec::with_capacity(4);
+        lines.push(PseudoLine {
+            addr: start,
+            text: format!("// PLT stub for {}", stub.name),
+        });
+        lines.push(PseudoLine {
+            addr: start,
+            text: match &info {
+                Some(info) => format!(
+                    "{} {}{}({}) {{",
+                    info.ret.c_name(),
+                    info.abi.keyword(),
+                    name,
+                    info.args.signature()
+                ),
+                None => format!("void {name}_l1(void) {{"),
+            },
+        });
+        lines.push(PseudoLine {
+            addr: start,
+            text: format!("    __asm(\"jmp qword ptr [{:#x}]\");", stub.slot),
+        });
+        lines.push(PseudoLine {
+            addr: start,
+            text: "}".to_owned(),
+        });
+        return Ok(Pseudocode {
+            func_start: start,
+            lines,
+            literals: Vec::new(),
+        });
     }
     let mut lines = Vec::with_capacity(64);
     lines.push(PseudoLine {
@@ -602,7 +648,11 @@ fn structure(
     if info.is_some() {
         // The typed view is what a reader compares to source: replace machine registers by
         // recovered locals. L1 stays register-level (it is the golden snapshot form).
-        crate::variables::recover_variables(&mut lines, session.image().is_64);
+        crate::variables::recover_variables(
+            &mut lines,
+            session.image().is_64,
+            session.format() == recraft_core::Format::Elf,
+        );
     }
     // A function that still has jumps says so in the header: a reader can tell at a glance that
     // this body could not be reduced to structured control flow.

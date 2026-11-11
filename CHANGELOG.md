@@ -13,6 +13,30 @@
 
 ### 新增
 
+- **ELF 的 PLT 调用按导入名渲染，并按 SysV 恢复实参。** 新增 `recraft-core::plt`：扫描
+  `.plt`/`.plt.got`/`.plt.sec` 里的 `jmp [rip+got]` 桩，得到「桩地址 → 导入函数」表。
+  反编译时直接调用桩的 `call` 现在打印成 `puts("…")`、`fgets(&var_0, 0x100, stdin)`、
+  `__printf_chk(2, "Enter flag: ")` 这样的形式，而不是 `sub_10b0()`；x64 的实参寄存器
+  按格式切换（ELF 用 SysV 的 `rdi/rsi/rdx/rcx/r8/r9`，PE 仍是 `rcx/rdx/r8/r9`），
+  调用前的寄存器准备行也随之并入实参。`.plt.sec` 的每个桩各自成为 16 字节函数并命名为
+  `<导入名>_plt`（如 `puts_plt`），不再把整段 `.plt.sec` 并成一个函数。PE 的
+  `call [IAT]` 路径不变，789 张 PE 快照零 diff。已知限制：`.rela.plt` 指向本文件
+  已定义符号的 canonical PLT（`-fPIC` C++ 常见）还没有按本地符号命名，仍显示为
+  `sub_<addr>`；这类桩本身已拆成 16 字节函数。
+
+- **无帧指针的 ELF 栈帧可以还原了。** GCC/Clang 的 x64 默认省略帧指针（`rbp` 被当通用
+  寄存器用，如循环计数器），此前 L2 会把 `buf`/`buf[i]` 这类 `rsp` 相对访问留成裸 `rsp`，
+  变量重建再把它变成未赋值的 `vN`。现在把 `mov reg, rsp` 的别名寄存器也当作帧基址
+  （优先 `rbp`，没有则取第一个非 `rsp` 别名），`rsp + index` 的无位移寻址渲染成
+  `*(u8*)(&var_0 + i)`，局部数组按栈槽命名；`rsp` 与只在入口读取的寄存器保持寄存器名，
+  不再凭空生成本地变量。Linux 版 crackme 现在读作 `fgets(&var_0, 0x100, stdin)`、
+  `strpbrk(&var_0, "\r\n")`、`strlen(&var_0)`。
+
+- **低地址字符串与 `.rodata` 短字面量。** 字面量识别不再假设 PE 的 `> 0x10000` 绝对地址：
+  地址常量按镜像基址 + 镜像大小过滤，ELF（基址 0）的 `0x2008` 这类字符串也能映射；
+  不在字符串表里的短字面量从 PE `.rdata` / ELF `.rodata` 直接读取，因此 `"\r\n"`、
+  `"C_CR4CK_ME_2024!"` 都能显示。
+
 - **MCP 多实例：不再绑定单个项目。** `serve-mcp` 的项目参数现在可选（省略即空注册表，
   由客户端调用 `open_program`），并新增一组注册表工具：`open_program`（导入 PE/ELF 二进制
   或打开已有 `.rcraft`，默认把数据库放到用户目录 `%LOCALAPPDATA%\ReCraft\projects`，按二进制
