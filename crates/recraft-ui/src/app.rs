@@ -313,6 +313,37 @@ fn galley_char_at(galley: &egui::Galley, origin: egui::Pos2, pos: egui::Pos2) ->
     usize::from(galley.cursor_from_pos(local).index)
 }
 
+/// Character range of the word at `char`, as IDA's double-click selection picks it: a run of
+/// identifier characters, or the run of punctuation next to it. Whitespace selects nothing.
+fn word_range_at(text: &str, char: usize) -> (usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return (0, 0);
+    }
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let index = char.min(chars.len() - 1);
+    if chars[index].is_whitespace() {
+        return (index, index);
+    }
+    let word = is_word(chars[index]);
+    let matches = |c: char| {
+        if word {
+            is_word(c)
+        } else {
+            !is_word(c) && !c.is_whitespace()
+        }
+    };
+    let mut start = index;
+    while start > 0 && matches(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while end < chars.len() && matches(chars[end]) {
+        end += 1;
+    }
+    (start, end)
+}
+
 /// Advance of one monospace cell, i.e. the width every character of a listing row takes.
 ///
 /// Measured from the shaped glyph rather than from the font size so the pinned header lands on
@@ -363,6 +394,51 @@ fn paint_text_selection(
     );
 }
 
+/// Paint the highlight of a text selection behind a galley, across every wrapped row the
+/// character range covers. [`paint_text_selection`] assumes one screen row; the Output
+/// window's log lines wrap at the pane width, so the range can span several layout rows.
+fn paint_wrapped_text_selection(
+    painter: &egui::Painter,
+    color: Color32,
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    (from, to): (usize, usize),
+) {
+    let count = galley.text().chars().count();
+    let from = from.min(count);
+    let to = to.min(count);
+    if from >= to {
+        return;
+    }
+    let start = galley.layout_from_cursor(egui::text::CCursor::new(from));
+    let end = galley.layout_from_cursor(egui::text::CCursor::new(to));
+    for index in start.row..=end.row {
+        let Some(placed) = galley.rows.get(index) else {
+            break;
+        };
+        let left = if index == start.row {
+            placed.x_offset(start.column)
+        } else {
+            0.0
+        };
+        let right = if index == end.row {
+            placed.x_offset(end.column)
+        } else {
+            placed.size.x
+        };
+        let row_left = origin.x + placed.pos.x;
+        let top = origin.y + placed.pos.y;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(row_left + left, top),
+                egui::pos2(row_left + right.max(left + 1.0), top + placed.size.y),
+            ),
+            0.0,
+            color,
+        );
+    }
+}
+
 /// Inclusive byte range picked in the Hex view.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct HexSelection {
@@ -401,6 +477,8 @@ enum CopyFocus {
     Hex,
     /// A dock list (Strings, Imports, Exports, Functions, Names, Segments).
     List(Pane),
+    /// The Output window's log.
+    Output,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1280,6 +1358,10 @@ pub struct ReCraftApp {
     applied_theme: Option<ThemeMode>,
     /// Output-window log (analysis/eval/status messages), oldest first.
     log: Vec<String>,
+    /// Dragged text selection in the output window (indices into `log`).
+    log_sel: Option<TextSelection>,
+    /// `true` while the pointer is still down on an output-window text selection.
+    log_drag: bool,
     status: String,
     is_error: bool,
     disasm_start: Address,
@@ -1440,6 +1522,8 @@ impl Default for ReCraftApp {
             theme: ThemeMode::Light,
             applied_theme: None,
             log: Vec::new(),
+            log_sel: None,
+            log_drag: false,
             status: String::new(),
             is_error: false,
             disasm_start: Address::ZERO,
@@ -1589,6 +1673,9 @@ impl ReCraftApp {
         self.log.push(message.to_owned());
         if self.log.len() > 500 {
             self.log.drain(..100);
+            // The rows moved up: an output-window selection would point at other lines now.
+            self.log_sel = None;
+            self.log_drag = false;
         }
     }
 
@@ -2217,6 +2304,16 @@ impl ReCraftApp {
                 let (_, key) = self.list_sel.filter(|(selected, _)| *selected == pane)?;
                 Some((self.list_row_text(pane, key)?, 1))
             }
+            CopyFocus::Output => {
+                let selection = self.log_sel.filter(|selection| !selection.is_empty())?;
+                let text = selected_text(selection, &self.log)?;
+                if text.is_empty() {
+                    return None;
+                }
+                let (from, to) = selection.ordered();
+                let rows = to.row.saturating_sub(from.row) + 1;
+                Some((text, rows))
+            }
             CopyFocus::None => None,
         }
     }
@@ -2244,13 +2341,45 @@ impl ReCraftApp {
             self.set_status(self.t("ui_nothing_to_copy").to_owned());
             return;
         };
-        let message = if self.copy_focus == CopyFocus::Hex {
-            self.t_args("ui_copied_bytes", &[("count", &count.to_string())])
-        } else {
-            self.t_args("ui_copied_lines", &[("count", &count.to_string())])
+        let message = match self.copy_focus {
+            CopyFocus::Hex => self.t_args("ui_copied_bytes", &[("count", &count.to_string())]),
+            CopyFocus::Output => self.output_copy_message(&text),
+            _ => self.t_args("ui_copied_lines", &[("count", &count.to_string())]),
         };
         ctx.copy_text(text);
         self.set_status(message);
+    }
+
+    /// Is the Output-window selection a whole run of log rows? A fragment (a word, part of a
+    /// line, or a drag that stops at the start of the next row) reports characters instead of
+    /// lines: calling a piece of a line "已复制 1 行" reads as if the whole line was copied.
+    fn output_selection_is_whole_lines(&self) -> bool {
+        let Some(selection) = self.log_sel else {
+            return false;
+        };
+        let (from, to) = selection.ordered();
+        if from.char != 0 || from.row >= self.log.len() {
+            return false;
+        }
+        let last = to.row.min(self.log.len().saturating_sub(1));
+        to.char >= self.log[last].chars().count()
+    }
+
+    /// Status line for a copy out of the Output window (IDA copies silently; this app's
+    /// status bar reports what landed on the clipboard).
+    fn output_copy_message(&self, text: &str) -> String {
+        if self.output_selection_is_whole_lines() {
+            let rows = self
+                .log_sel
+                .map(|selection| {
+                    let (from, to) = selection.ordered();
+                    to.row.saturating_sub(from.row) + 1
+                })
+                .unwrap_or(1);
+            return self.t_args("ui_copied_lines", &[("count", &rows.to_string())]);
+        }
+        let chars = text.chars().filter(|character| *character != '\n').count();
+        self.t_args("ui_copied_chars", &[("count", &chars.to_string())])
     }
 
     /// Ctrl+A: select everything the focused pane can copy.
@@ -2297,6 +2426,20 @@ impl ReCraftApp {
                         focus: Address::new(start.get() + count as u64 - 1),
                     });
                 }
+            }
+            CopyFocus::Output => {
+                // IDA's Ctrl+A in the Output window selects the whole log, not one line.
+                let Some(last) = self.log.len().checked_sub(1) else {
+                    return;
+                };
+                let end = self.log[last].chars().count();
+                self.log_sel = Some(TextSelection {
+                    anchor: TextPoint { row: 0, char: 0 },
+                    focus: TextPoint {
+                        row: last,
+                        char: end,
+                    },
+                });
             }
             _ => {}
         }
@@ -4899,9 +5042,15 @@ impl ReCraftApp {
     /// descenders sat directly on the next line's ascenders: at 100 % zoom the first rows of
     /// a line have very little ink and were visually swallowed by the line above (the
     /// report's "已加载 那行顶部被挡住了"; the pixels were all there — a flat-top glyph such as
-    /// 口 renders its top stroke — the rows just had no air between them). The window now uses
-    /// the listing's monospace size laid out row by row with a real gap and a small top inset.
-    fn output_pane(&mut self, ui: &mut egui::Ui, _action: &mut Action) {
+    /// 口 renders its top stroke — the rows just had no air between them). The window uses
+    /// the listing's monospace size and a real gap between rows.
+    ///
+    /// Like IDA's Output window the log is selectable text: a press anchors a caret, a drag
+    /// extends it across rows (also past the window edges), Shift+click extends, and Ctrl+A
+    /// selects the whole log — not just the clicked line. Ctrl+C copies the selection with
+    /// one line per log row. The selection is app-owned (`log_sel`) rather than egui's label
+    /// selection because egui's Ctrl+A only reaches the label under the cursor.
+    fn output_pane(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         if self.log.is_empty() {
             ui.weak(self.t("ui_no_messages_yet"));
@@ -4909,13 +5058,24 @@ impl ReCraftApp {
         }
         let font = FontId::monospace(self.mono_size());
         let row_gap = (self.row_height() * 0.25).max(4.0);
+        let copy_menu = self.t("ui_copy");
+        let select_all_menu = self.t("ui_select_all");
+        let mut text_sel = self.log_sel;
+        let mut dragging = self.log_drag;
+        let mut took_focus = false;
+        let pointer = ui.input(|input| input.pointer.latest_pos());
+        let primary_down = ui.input(|input| input.pointer.primary_down());
+        let extend_selection = ui.input(|input| input.modifiers.shift);
+        let mut first_top: Option<f32> = None;
+        let mut last_bottom: Option<f32> = None;
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(3.0);
+                ui.spacing_mut().item_spacing.y = row_gap;
                 let width = ui.available_width().max(200.0);
-                for line in &self.log {
+                for (index, line) in self.log.iter().enumerate() {
                     let color = if line.starts_with("error:") {
                         Color32::from_rgb(0xe0, 0x6a, 0x6a)
                     } else {
@@ -4924,13 +5084,139 @@ impl ReCraftApp {
                     let galley = ui
                         .painter()
                         .layout(line.clone(), font.clone(), color, width);
-                    let (rect, _) = ui.allocate_exact_size(
+                    // The hit area is the whole row width (plus the gap) so a drag that
+                    // starts or ends in the empty space right of a line still lands on it.
+                    let (rect, response) = ui.allocate_exact_size(
                         egui::vec2(width, galley.size().y + row_gap),
-                        Sense::hover(),
+                        Sense::click_and_drag(),
                     );
-                    ui.painter().galley(rect.left_top(), galley, color);
+                    first_top.get_or_insert(rect.top());
+                    last_bottom = Some(rect.bottom());
+                    let text_origin = rect.left_top();
+                    if let Some(selection) = text_sel
+                        && let Some(range) =
+                            selection.row_range(index, galley.text().chars().count())
+                    {
+                        paint_wrapped_text_selection(
+                            ui.painter(),
+                            pal.text_selection,
+                            &galley,
+                            text_origin,
+                            range,
+                        );
+                    }
+                    ui.painter().galley(text_origin, galley.clone(), color);
+                    // Text selection: a press anchors it, a drag extends it across rows, and
+                    // a plain click collapses it to a caret where it landed (Shift extends).
+                    if response.drag_started()
+                        && let Some(pos) = ui.input(|input| input.pointer.press_origin())
+                    {
+                        let point = TextPoint {
+                            row: index,
+                            char: galley_char_at(&galley, text_origin, pos),
+                        };
+                        text_sel = Some(TextSelection {
+                            anchor: point,
+                            focus: point,
+                        });
+                        dragging = true;
+                        took_focus = true;
+                    }
+                    if dragging
+                        && primary_down
+                        && let Some(pos) = pointer
+                        && pos.y >= rect.top()
+                        && pos.y <= rect.bottom()
+                    {
+                        let point = TextPoint {
+                            row: index,
+                            char: galley_char_at(&galley, text_origin, pos),
+                        };
+                        if let Some(selection) = text_sel.as_mut() {
+                            selection.focus = point;
+                        }
+                    }
+                    if response.clicked()
+                        && !response.double_clicked()
+                        && let Some(pos) = response.interact_pointer_pos()
+                    {
+                        let point = TextPoint {
+                            row: index,
+                            char: galley_char_at(&galley, text_origin, pos),
+                        };
+                        text_sel = Some(match text_sel {
+                            Some(selection) if extend_selection => TextSelection {
+                                focus: point,
+                                ..selection
+                            },
+                            _ => TextSelection::collapsed(point),
+                        });
+                    }
+                    // IDA's double click selects the word under the cursor (a run of
+                    // identifier characters, or the punctuation run it sits in).
+                    if response.double_clicked()
+                        && let Some(pos) = response.interact_pointer_pos()
+                    {
+                        let hit = galley_char_at(&galley, text_origin, pos);
+                        let (from, to) = word_range_at(galley.text(), hit);
+                        text_sel = Some(TextSelection {
+                            anchor: TextPoint {
+                                row: index,
+                                char: from,
+                            },
+                            focus: TextPoint {
+                                row: index,
+                                char: to,
+                            },
+                        });
+                    }
+                    if response.clicked()
+                        || response.secondary_clicked()
+                        || response.double_clicked()
+                    {
+                        took_focus = true;
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button(copy_menu.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
+                        }
+                        if ui.button(select_all_menu.as_str()).clicked() {
+                            *action = Action::SelectAll;
+                            ui.close();
+                        }
+                    });
                 }
             });
+        // Dragging above or below the window keeps selecting to that edge, like the listing.
+        if dragging
+            && primary_down
+            && let Some(pos) = pointer
+        {
+            if first_top.is_some_and(|top| pos.y < top) {
+                if let Some(selection) = text_sel.as_mut() {
+                    selection.focus = TextPoint { row: 0, char: 0 };
+                }
+            } else if last_bottom.is_some_and(|bottom| pos.y > bottom)
+                && let Some(last) = self.log.len().checked_sub(1)
+            {
+                let end = self.log[last].chars().count();
+                if let Some(selection) = text_sel.as_mut() {
+                    selection.focus = TextPoint {
+                        row: last,
+                        char: end,
+                    };
+                }
+            }
+        }
+        if !primary_down {
+            dragging = false;
+        }
+        self.log_sel = text_sel;
+        self.log_drag = dragging;
+        if took_focus {
+            self.copy_focus = CopyFocus::Output;
+        }
     }
 
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -8041,8 +8327,8 @@ impl ReCraftApp {
             return Action::None;
         }
         // The desktop integration turns Ctrl+C into `Event::Copy`. A selected label (the AI
-        // panel, the Output log, the hint lines) owns it through egui's own copy, so the code
-        // views only claim the event when no label text is selected.
+        // panel, the hint lines) owns it through egui's own copy, so the panes only claim the
+        // event when no label text is selected.
         let label_selection = ctx
             .plugin_opt::<egui::text_selection::LabelSelectionState>()
             .is_some_and(|plugin| plugin.lock().has_selection());
@@ -13300,6 +13586,325 @@ mod tests {
         );
     }
 
+    /// The Output window's log is selectable text, like IDA's: drag across two rows, then
+    /// Ctrl+C copies exactly those rows onto the clipboard. The rows used to be painted as
+    /// plain galleys, so the mouse could not select anything in the window at all.
+    #[test]
+    fn headless_output_log_copies_a_dragged_selection() {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut app = ReCraftApp {
+            log: vec![
+                "analysis: 第一条日志行".to_owned(),
+                "analysis: second line".to_owned(),
+                "analysis: not selected".to_owned(),
+            ],
+            ..ReCraftApp::default()
+        };
+        let mut action = Action::None;
+        let mut frame = 0.0f64;
+        let mut step = |events: Vec<egui::Event>| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                time: Some(frame / 60.0),
+                events,
+                ..test_input()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.output_pane(ui, &mut action));
+            output.textures_delta.clear();
+            output
+        };
+
+        let output = step(vec![]);
+        let first_line = "analysis: 第一条日志行";
+        let second_line = "analysis: second line";
+        let find = |needle: &str, index: usize| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| char_click_pos(&clipped.shape, needle, index))
+        };
+        let start = find(first_line, 0).expect("the first row is on screen");
+        let end = find(second_line, 9).expect("the second row is on screen");
+        step(vec![egui::Event::PointerMoved(start)]);
+        step(vec![press(start)]);
+        step(vec![egui::Event::PointerMoved(end)]);
+        step(vec![release(end)]);
+
+        let selection = app.log_sel.expect("the drag must select log text");
+        let (from, to) = selection.ordered();
+        assert_eq!((from.row, to.row), (0, 1), "the drag spans both rows");
+        assert_eq!(
+            app.copy_focus,
+            CopyFocus::Output,
+            "dragging in the log gives it the clipboard"
+        );
+
+        // Ctrl+C now goes through the app's copy path, like the other panes.
+        app.apply_action(&ctx, Action::Copy);
+        let copied = copied_text(&ctx).expect("Ctrl+C must copy the dragged log rows");
+        assert_eq!(
+            copied.lines().count(),
+            2,
+            "the drag covers the first two rows only, got {copied:?}"
+        );
+        assert!(
+            copied.contains("第一条日志行") && copied.contains("analysis:"),
+            "both dragged rows are on the clipboard, got {copied:?}"
+        );
+        assert!(
+            !copied.contains("second line"),
+            "rows below the drag stay out of the copy, got {copied:?}"
+        );
+        // A drag that stops in the middle of a row copies a fragment: reporting characters
+        // keeps "已复制 1 行" from claiming a whole line was copied.
+        let chars = copied
+            .chars()
+            .filter(|character| *character != '\n')
+            .count();
+        assert_eq!(
+            app.status,
+            app.t_args("ui_copied_chars", &[("count", &chars.to_string())]),
+            "a partial selection is reported as characters"
+        );
+    }
+
+    /// End to end through the dock: select three whole log rows in the real Output pane,
+    /// press Ctrl+C, and the clipboard must hold them with the status reporting three lines.
+    #[test]
+    fn headless_output_copy_through_the_dock_reports_every_row() {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut app = ReCraftApp {
+            log: (1..=4)
+                .map(|line| format!("analysis: line {line}"))
+                .collect(),
+            ..ReCraftApp::default()
+        };
+        let mut frame = 0.0f64;
+        let mut run = |app: &mut ReCraftApp, events: Vec<egui::Event>| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                time: Some(frame / 60.0),
+                events,
+                ..test_input()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            output
+        };
+        let mut output = run(&mut app, vec![]);
+        // `stick_to_bottom` animates the scroll offset for the first few frames; press only
+        // once the rows have stopped moving.
+        for _ in 0..8 {
+            output = run(&mut app, vec![]);
+        }
+        let find = |needle: &str, index: usize| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| char_click_pos(&clipped.shape, needle, index))
+        };
+        let start = find("analysis: line 1", 0).expect("the first log row is in the dock");
+        // Past the end of line 3's text but still inside its row: the caret goes to its end.
+        let end = find("analysis: line 3", 0).expect("the third log row is in the dock")
+            + egui::vec2(400.0, 4.0);
+        run(&mut app, vec![egui::Event::PointerMoved(start)]);
+        run(&mut app, vec![press(start)]);
+        run(&mut app, vec![egui::Event::PointerMoved(end)]);
+        run(&mut app, vec![release(end)]);
+
+        let output = run(&mut app, vec![egui::Event::Copy]);
+        let selection = app.log_sel.expect("the drag must select log text");
+        let (from, to) = selection.ordered();
+        assert_eq!((from.row, to.row), (0, 2), "the drag spans three rows");
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .expect("Ctrl+C must reach the app's copy command");
+        assert_eq!(copied.lines().count(), 3, "got {copied:?}");
+        assert!(
+            copied.contains("line 1") && copied.contains("line 2") && copied.contains("line 3"),
+            "got {copied:?}"
+        );
+        assert!(
+            !copied.contains("line 4"),
+            "rows below the drag stay out of the copy, got {copied:?}"
+        );
+        assert_eq!(
+            app.status,
+            app.t_args("ui_copied_lines", &[("count", "3")]),
+            "the status must report the three copied rows"
+        );
+    }
+
+    /// IDA selects the whole Output window with Ctrl+A, not just the line under the cursor.
+    #[test]
+    fn ctrl_a_selects_the_whole_output_log() {
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp {
+            log: vec![
+                "analysis: one".to_owned(),
+                "error: two".to_owned(),
+                "analysis: three".to_owned(),
+            ],
+            copy_focus: CopyFocus::Output,
+            ..ReCraftApp::default()
+        };
+        app.apply_action(&ctx, Action::SelectAll);
+        let selection = app.log_sel.expect("Ctrl+A must select every log row");
+        assert_eq!(
+            selection.ordered(),
+            (
+                TextPoint { row: 0, char: 0 },
+                TextPoint {
+                    row: 2,
+                    char: "analysis: three".chars().count(),
+                }
+            )
+        );
+        app.apply_action(&ctx, Action::Copy);
+        assert_eq!(
+            copied_text(&ctx).as_deref(),
+            Some("analysis: one\nerror: two\nanalysis: three"),
+            "the clipboard holds the whole log, one line per row"
+        );
+        assert_eq!(
+            app.status,
+            app.t_args("ui_copied_lines", &[("count", "3")]),
+            "the whole log is reported as three rows"
+        );
+    }
+
+    /// A log line longer than the pane wraps; selecting all of it must highlight every
+    /// layout row it occupies, not just the first screen row.
+    #[test]
+    fn headless_output_selection_highlights_wrapped_rows() {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let long = format!("analysis: {}", "0123456789".repeat(12));
+        let mut app = ReCraftApp {
+            log: vec![long.clone()],
+            ..ReCraftApp::default()
+        };
+        let mut action = Action::None;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(260.0, 240.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input.clone(), |ui| app.output_pane(ui, &mut action));
+        output.textures_delta.clear();
+        let rows = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("analysis:") => {
+                    Some(text.galley.rows.len())
+                }
+                _ => None,
+            })
+            .expect("the log row is painted");
+        assert!(rows > 1, "the narrow pane must wrap the long line");
+
+        app.log_sel = Some(TextSelection {
+            anchor: TextPoint { row: 0, char: 0 },
+            focus: TextPoint {
+                row: 0,
+                char: long.chars().count(),
+            },
+        });
+        let mut output = ctx.run_ui(input, |ui| app.output_pane(ui, &mut action));
+        output.textures_delta.clear();
+        let highlights: Vec<egui::Rect> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == app.palette().text_selection => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            highlights.len(),
+            rows,
+            "every wrapped row needs its own selection rect, got {highlights:?}"
+        );
+        for pair in highlights.windows(2) {
+            assert!(
+                pair[0].bottom() <= pair[1].top() + 0.5,
+                "the highlights must stack down the wrapped rows, got {highlights:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn word_ranges_cover_identifier_and_punctuation_runs() {
+        let text = "call sub_1400010a0();";
+        assert_eq!(word_range_at(text, 6), (5, 18), "the whole symbol");
+        assert_eq!(word_range_at(text, 18), (18, 21), "the punctuation run");
+        assert_eq!(word_range_at(text, 4), (4, 4), "whitespace selects nothing");
+        assert_eq!(word_range_at("", 0), (0, 0));
+    }
+
+    /// IDA's double click selects the word under the cursor in the Output window too.
+    #[test]
+    fn headless_output_double_click_selects_a_word() {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let line = "analysis: entered sub_1400010a0";
+        let mut app = ReCraftApp {
+            log: vec![line.to_owned()],
+            ..ReCraftApp::default()
+        };
+        let mut action = Action::None;
+        let mut frame = 0.0f64;
+        let mut step = |events: Vec<egui::Event>| {
+            frame += 1.0;
+            let input = egui::RawInput {
+                time: Some(frame / 60.0),
+                events,
+                ..test_input()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.output_pane(ui, &mut action));
+            output.textures_delta.clear();
+            output
+        };
+        let output = step(vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, line, 20))
+            .expect("the log row is on screen");
+        step(vec![egui::Event::PointerMoved(pos)]);
+        for _ in 0..2 {
+            step(vec![press(pos)]);
+            step(vec![release(pos)]);
+        }
+        let selection = app.log_sel.expect("the double click must select a word");
+        let (from, to) = selection.ordered();
+        assert_eq!(
+            (from.row, from.char, to.char),
+            (0, 18, 31),
+            "only the symbol is selected"
+        );
+        app.apply_action(&ctx, Action::Copy);
+        assert_eq!(copied_text(&ctx).as_deref(), Some("sub_1400010a0"));
+        assert_eq!(
+            app.status,
+            app.t_args("ui_copied_chars", &[("count", "13")]),
+            "a selected word is reported as characters, not as a whole line"
+        );
+    }
+
     #[test]
     fn string_row_at_finds_interior_addresses() {
         fn row(addr: u64, len: u32, text: &str) -> StringRow {
@@ -14986,8 +15591,9 @@ mod tests {
         );
     }
 
-    /// A text selection inside a plain label (the AI panel, the Output log) keeps Ctrl+C:
-    /// the code views must not hijack it with their own, older selection.
+    /// A text selection inside a plain label (the AI panel and the status/hint lines) keeps
+    /// Ctrl+C: the code views and the Output log must not hijack it with their own, older
+    /// selection.
     #[test]
     fn ctrl_c_leaves_a_selected_label_to_egui() {
         let ctx = egui::Context::default();
