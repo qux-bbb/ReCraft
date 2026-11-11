@@ -52,6 +52,12 @@ const ROW_HEIGHT: f32 = 15.0;
 /// Rows the Strings window paints per frame; a full string table would otherwise cost the
 /// whole frame. IDA caps its list the same way and reports the truncation in the status bar.
 const STRING_LIST_ROWS: usize = 2000;
+/// Extensions File → Import offers besides the all-files fallback. PE binaries are
+/// `.exe`/`.dll`/`.sys`; ELF binaries are commonly `.elf`/`.so`/`.bin`/`.out` and very often
+/// carry no extension at all (`a.out`, `busybox`), so the dialog must also list every file:
+/// a filter-only dialog silently hides ELF samples even though the importer detects them by
+/// their magic bytes.
+const IMPORT_EXTENSIONS: &[&str] = &["exe", "dll", "sys", "elf", "so", "bin", "out"];
 const ZOOM_MIN: f32 = 0.75;
 const ZOOM_MAX: f32 = 2.0;
 const ZOOM_STEP: f32 = 0.1;
@@ -1243,7 +1249,7 @@ struct PaletteState {
 const PALETTE_COMMANDS: &[(&str, Action)] = &[
     ("ui_open_project", Action::Open),
     ("ui_close_project", Action::CloseProject),
-    ("palette_import_pe_file", Action::Import),
+    ("palette_import_binary_file", Action::Import),
     ("palette_analyze", Action::Analyze),
     ("palette_decompile", Action::Decompile),
     ("palette_undo", Action::Undo),
@@ -1679,8 +1685,8 @@ impl ReCraftApp {
         }
     }
 
-    /// Open a project or PE file dropped onto the window, and show a drop target
-    /// overlay while a file is hovering over the app.
+    /// Open a project or executable (PE/ELF) dropped onto the window, and show a drop
+    /// target overlay while a file is hovering over the app.
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let (dropped, hovering) = ctx.input(|input| {
             (
@@ -1751,7 +1757,7 @@ impl ReCraftApp {
             if project.exists() {
                 self.open_path(&project);
             } else {
-                self.import_pe(path, &project);
+                self.import_binary(path, &project);
             }
         }
         // A failed open leaves the app without a project: keep the welcome page (and the
@@ -1760,7 +1766,9 @@ impl ReCraftApp {
         self.show_welcome_tab();
     }
 
-    fn import_pe(&mut self, source: &Path, project: &Path) {
+    /// Import a PE or ELF executable into a new project. `Session::create` dispatches on
+    /// the file's magic bytes, so the format is not decided here.
+    fn import_binary(&mut self, source: &Path, project: &Path) {
         let Ok(bytes) = std::fs::read(source) else {
             self.set_error(self.t_args(
                 "ui_cannot_read_path",
@@ -3993,7 +4001,7 @@ impl ReCraftApp {
 
     fn top_bar(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let open_label = self.t("ui_open_project");
-        let import_label = self.t("ui_import_pe");
+        let import_label = self.t("ui_import_binary");
         let close_label = self.t("ui_close_project");
         let close_shortcut_label = self.t("ui_close_project_ctrl_w");
         let has_project = self.project.is_some();
@@ -6887,7 +6895,7 @@ impl ReCraftApp {
             if ui.button(self.t("ui_open_project")).clicked() {
                 *action = Action::Open;
             }
-            if ui.button(self.t("ui_import_pe")).clicked() {
+            if ui.button(self.t("ui_import_binary")).clicked() {
                 *action = Action::Import;
             }
         });
@@ -8482,10 +8490,15 @@ impl ReCraftApp {
             }
             Action::CloseProject => self.close_project(),
             Action::Import => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Windows executable", &["exe", "dll", "sys"])
-                    .pick_file()
-                {
+                // PE and ELF share one entry point: the loader picks the format from the
+                // magic bytes, so the dialog only has to stop hiding ELF samples.
+                let executables = self.t("ui_filter_executables");
+                let all_files = self.t("ui_filter_all_files");
+                let picked = rfd::FileDialog::new()
+                    .add_filter(executables.as_str(), IMPORT_EXTENSIONS)
+                    .add_filter(all_files.as_str(), &["*"])
+                    .pick_file();
+                if let Some(path) = picked {
                     self.open_path(&path);
                 }
             }
@@ -9790,6 +9803,66 @@ mod tests {
             }
         }
         None
+    }
+
+    fn put_u16(file: &mut [u8], offset: usize, value: u16) {
+        file[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(file: &mut [u8], offset: usize, value: u32) {
+        file[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u64(file: &mut [u8], offset: usize, value: u64) {
+        file[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// Minimal ELF64 x86-64 executable: one `PT_LOAD` plus the matching `.text` section
+    /// (`mov eax, 1; ret` at the entry point). The loader takes the address space from
+    /// `SHF_ALLOC` sections, so the section is not optional even though the program header
+    /// alone would describe the mapping. Built here like the PE fixture so the importer test
+    /// needs no Linux toolchain.
+    fn sample_elf() -> Vec<u8> {
+        const TEXT_OFFSET: usize = 0x1000;
+        const TEXT_VA: u64 = 0x401_000;
+        const SHOFF: usize = 0x100;
+        let mut file = vec![0u8; TEXT_OFFSET + 0x20];
+
+        file[..4].copy_from_slice(b"\x7fELF");
+        file[4] = 2; // ELFCLASS64
+        file[5] = 1; // ELFDATA2LSB
+        file[6] = 1; // EV_CURRENT
+        put_u16(&mut file, 16, 2); // ET_EXEC
+        put_u16(&mut file, 18, 0x3e); // EM_X86_64
+        put_u32(&mut file, 20, 1);
+        put_u64(&mut file, 24, TEXT_VA); // e_entry
+        put_u64(&mut file, 32, 0x40); // e_phoff
+        put_u64(&mut file, 40, SHOFF as u64); // e_shoff
+        put_u16(&mut file, 52, 64); // e_ehsize
+        put_u16(&mut file, 54, 56); // e_phentsize
+        put_u16(&mut file, 56, 1); // e_phnum
+        put_u16(&mut file, 58, 64); // e_shentsize
+        put_u16(&mut file, 60, 2); // e_shnum (null + .text)
+        put_u16(&mut file, 62, 0); // e_shstrndx: no section names
+
+        put_u32(&mut file, 0x40, 1); // PT_LOAD
+        put_u32(&mut file, 0x44, 5); // PF_R | PF_X
+        put_u64(&mut file, 0x48, TEXT_OFFSET as u64);
+        put_u64(&mut file, 0x50, TEXT_VA);
+        put_u64(&mut file, 0x58, TEXT_VA);
+        put_u64(&mut file, 0x60, 0x10);
+        put_u64(&mut file, 0x68, 0x10);
+        put_u64(&mut file, 0x70, 0x1000);
+
+        put_u32(&mut file, SHOFF + 64, 0); // sh_name
+        put_u32(&mut file, SHOFF + 68, 1); // SHT_PROGBITS
+        put_u64(&mut file, SHOFF + 72, 0x6); // SHF_ALLOC | SHF_EXECINSTR
+        put_u64(&mut file, SHOFF + 80, TEXT_VA); // sh_addr
+        put_u64(&mut file, SHOFF + 88, TEXT_OFFSET as u64); // sh_offset
+        put_u64(&mut file, SHOFF + 96, 0x10); // sh_size
+
+        file[TEXT_OFFSET..TEXT_OFFSET + 6].copy_from_slice(&[0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3]);
+        file
     }
 
     /// Guardrail for the CJK fallback tweak: epaint centres a fallback face inside the
@@ -11161,6 +11234,58 @@ mod tests {
             app.functions_dirty,
             "a finished analysis must refresh the derived lists"
         );
+    }
+
+    /// The Import dialog used to filter on PE extensions only (`exe`/`dll`/`sys`), so an ELF
+    /// binary — usually extensionless — could not be picked at all. Import itself is
+    /// format-agnostic: `Session::create` sniffs the magic bytes.
+    #[test]
+    fn importing_an_elf_binary_starts_analysis() {
+        let dir = tempfile::tempdir().unwrap();
+        // ELF binaries commonly carry no extension (`a.out`, `busybox`).
+        let source = dir.path().join("sample");
+        std::fs::write(&source, sample_elf()).unwrap();
+        let mut app = ReCraftApp::default();
+        app.open_path(&source);
+        let session = app
+            .session
+            .as_ref()
+            .expect("an ELF import must open a session");
+        assert_eq!(session.format(), recraft_core::Format::Elf);
+        assert_eq!(session.arch(), recraft_core::Arch::X64);
+        assert!(app.project.is_some());
+        assert!(
+            app.analysis.is_some(),
+            "importing must start analysis, like IDA's auto-analysis"
+        );
+        let deadline = Instant::now() + std::time::Duration::from_secs(120);
+        while app.analysis.is_some() && Instant::now() < deadline {
+            app.poll_analysis();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(app.analysis.is_none(), "analysis must finish in time");
+        assert!(
+            app.functions_dirty,
+            "a finished analysis must refresh the derived lists"
+        );
+    }
+
+    /// Guardrail against the Import dialog drifting back to PE-only filters. The all-files
+    /// fallback lives in [`ReCraftApp::apply_action`] and cannot be inspected headlessly.
+    #[test]
+    fn import_dialog_offers_elf_files_alongside_pe_ones() {
+        for extension in ["exe", "dll", "sys"] {
+            assert!(
+                IMPORT_EXTENSIONS.contains(&extension),
+                "the import filter lost the PE extension .{extension}"
+            );
+        }
+        for extension in ["elf", "so"] {
+            assert!(
+                IMPORT_EXTENSIONS.contains(&extension),
+                "the import filter must offer ELF .{extension} files"
+            );
+        }
     }
 
     #[test]
