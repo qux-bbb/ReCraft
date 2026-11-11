@@ -176,9 +176,17 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
-The real-world CTF crackme lives in `corpus\real\crackme\` as source plus a build script:
+The real-world CTF crackme lives in `corpus\real\crackme\` as source plus build scripts:
 `build.ps1` reproduces the case binary (same SHA-256 as `docs\cases\crackme_win_x64.md`) with
-MSVC. Binaries, maps and `.rcraft` projects stay build products and are never committed.
+MSVC, and `build-linux.sh` compiles the same source into a Linux ELF PIE for the ELF front
+end. Binaries, maps and `.rcraft` projects stay build products and are never committed.
+
+The fixture's tests are `cargo test -p recraft-decompile --lib real_crackme`: the PE build
+gets the 160-function lint (L1+L2) plus its snapshots, the ELF build the full lint and
+structured/coverage floors (plus local `tests/golden/crackme-elf/` snapshots when present).
+Both **skip when the build product is missing** — a clean checkout, and Windows CI, skip
+them silently; add `-- --nocapture` to see the `skipping: … not found` hint and the build
+command that would run it.
 
 ### Packaging
 

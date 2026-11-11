@@ -3,7 +3,9 @@
 End-to-end walkthrough of the feature requested for the CTF sample. The binary is not
 vendored in this repository; the script takes its path. A frozen copy of the source plus a
 reproducible MSVC build script live in `corpus/real/crackme/` (same SHA-256 below), so the
-case can be rebuilt without the CTF project.
+case can be rebuilt without the CTF project. The same source also builds as a Linux ELF
+(`corpus/real/crackme/build-linux.sh`) for the ELF front end; the addresses and snapshots
+below describe the PE.
 
 | | |
 |---|---|

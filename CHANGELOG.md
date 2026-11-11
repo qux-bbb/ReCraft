@@ -13,6 +13,14 @@
 
 ### 新增
 
+- **真实 crackme 夹具现在也能编成 ELF。** `corpus/real/crackme/build-linux.sh` 用宿主 gcc
+  `-O2` 把同一份 `src/crackme.c` 编成动态 PIE（不 strip，`.symtab` 仍命名 `main`；`-O2` 下
+  GCC 会把 `verify` 内联进 `main`），`--snapshots` 可生成仅在本机使用的
+  `tests/golden/crackme-elf/`。`cargo test -p recraft-decompile --lib real_crackme` 新增两个
+  ELF 用例：全量 lint（L1+L2）、结构化率 >80% 与覆盖率 >90% 的下限、存在本地快照时做对比；
+  Linux CI 任务会先构建再跑。构建产物缺失时测试打印 `skipping:` 提示后跳过
+  （`-- --nocapture` 可见），PE 侧原有的静默跳过也一并补上了提示。
+
 - **ELF 的 PLT 调用按导入名渲染，并按 SysV 恢复实参。** 新增 `recraft-core::plt`：扫描
   `.plt`/`.plt.got`/`.plt.sec` 里的 `jmp [rip+got]` 桩，得到「桩地址 → 导入函数」表。
   反编译时直接调用桩的 `call` 现在打印成 `puts("…")`、`fgets(&var_0, 0x100, stdin)`、

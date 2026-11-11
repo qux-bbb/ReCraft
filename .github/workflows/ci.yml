@@ -81,6 +81,8 @@ jobs:
       # which is also what the ELF work needs (Linux-built corpus samples).
       - name: build ELF corpus (gcc)
         run: bash corpus/build-linux.sh
+      - name: build real crackme fixture as ELF (feeds the fixture tests)
+        run: bash corpus/real/crackme/build-linux.sh
       - name: ELF corpus quality gate
         env:
           # Set to 1 only when the corpus or its expectations changed on purpose: the

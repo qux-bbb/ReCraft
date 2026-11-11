@@ -172,8 +172,15 @@ cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
 真实样本（CTF crackme）的源码镜像与重建脚本在 `corpus\real\crackme\`：只提交 `src\crackme.c`，
-`build.ps1` 用 MSVC 重建出与 `docs\cases\crackme_win_x64.md` 相同 SHA-256 的镜像；二进制、map
-与 `.rcraft` 都是构建产物，不入库。
+`build.ps1` 用 MSVC 重建出与 `docs\cases\crackme_win_x64.md` 相同 SHA-256 的镜像，`build-linux.sh`
+把同一份源码编成 Linux ELF（gcc `-O2` 的动态 PIE，保留 `.symtab`），用来覆盖 ELF 反编译路径。
+二进制、map 与 `.rcraft` 都是构建产物，不入库。
+
+对应的门禁是 `cargo test -p recraft-decompile --lib real_crackme`：PE 版跑前 160 个函数的
+lint（L1+L2）与 160 份 golden，ELF 版跑全量 lint、结构化率与覆盖率下限，本地存在
+`tests/golden/crackme-elf/` 时再做快照对比。两个版本都**只在构建产物存在时执行**，干净检出
+（以及 Windows CI）会静默跳过；加 `-- --nocapture` 能看到 `skipping: … not found` 与
+需要运行的构建命令。
 
 ### 打包
 

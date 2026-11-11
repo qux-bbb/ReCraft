@@ -910,7 +910,18 @@ mod tests {
     fn real_crackme() -> Option<(Session, tempfile::TempDir)> {
         let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../corpus/build/real/crackme/crackme.exe");
-        let bytes = std::fs::read(exe).ok()?;
+        let bytes = match std::fs::read(&exe) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                // A skip is intentional (the binary is a build product), but it must not be
+                // invisible: `cargo test -- --nocapture` names the command that would run it.
+                eprintln!(
+                    "skipping: {} not found; run corpus/real/crackme/build.ps1",
+                    exe.display()
+                );
+                return None;
+            }
+        };
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("real-crackme.rcraft");
         let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
@@ -968,6 +979,86 @@ mod tests {
             report.mismatched.len(),
             dir.display()
         );
+    }
+
+    /// The Linux build of the same fixture, from `corpus/real/crackme/build-linux.sh`: a
+    /// dynamically linked PIE with glibc, `.symtab` names and PLT stubs. It has neither
+    /// `.pdata` nor an export table, so it covers the discovery path the Windows sample cannot.
+    fn real_crackme_elf() -> Option<(Session, tempfile::TempDir)> {
+        let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/real/crackme-linux/crackme.elf");
+        let bytes = match std::fs::read(&exe) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                eprintln!(
+                    "skipping: {} not found; run corpus/real/crackme/build-linux.sh on Linux",
+                    exe.display()
+                );
+                return None;
+            }
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("real-crackme-elf.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        Some((session, dir))
+    }
+
+    /// The same C source through the ELF front end: `main` comes from `.symtab`, imports from
+    /// the PLT, and the output still has to satisfy every invariant at both levels.
+    #[test]
+    fn the_real_crackme_elf_passes_every_output_invariant() {
+        let Some((mut session, _dir)) = real_crackme_elf() else {
+            return;
+        };
+        let report = lint(&mut session, usize::MAX, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.affected(), 0);
+        assert!(
+            report.functions >= 10,
+            "only {} functions",
+            report.functions
+        );
+        let names: Vec<String> = session
+            .functions()
+            .unwrap()
+            .iter()
+            .filter_map(|function| session.name_at(function.start).unwrap())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == "main"),
+            "the ELF build lost its `main` symbol: {names:?}"
+        );
+        let quality = measure(&mut session, 0).unwrap();
+        assert!(
+            quality.structured_rate() > 0.8,
+            "structured {:.3}",
+            quality.structured_rate()
+        );
+        assert!(
+            quality.coverage() > 0.9,
+            "coverage {:.3}",
+            quality.coverage()
+        );
+    }
+
+    /// Snapshots are optional here: the ELF image embeds the host gcc/glibc startup code, so a
+    /// committed set would drift with every toolchain update. `build-linux.sh --snapshots`
+    /// writes `tests/golden/crackme-elf`; when it exists, it is checked like any other set.
+    #[test]
+    fn the_real_crackme_elf_keeps_optional_snapshots() {
+        let Some((mut session, _dir)) = real_crackme_elf() else {
+            return;
+        };
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/crackme-elf");
+        if !dir.exists() {
+            eprintln!("skipping: no local ELF crackme snapshots; run build-linux.sh --snapshots");
+            return;
+        }
+        let report = check_golden(&mut session, &dir).unwrap();
+        assert!(report.mismatched.is_empty(), "{:?}", report.mismatched);
+        assert!(report.missing.is_empty(), "{:?}", report.missing);
     }
 
     #[test]

@@ -311,13 +311,18 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
   32 位快照的 L1 文本按设计保留原始形态（`eax = var_4;`，对应 x64 的
   `eax = (rcx + rdx);`），参数名与 ABI 类型属于 L2。
 
-- 真实样本：`corpus/real/crackme/` 只提交 `src/crackme.c` + `build.ps1`，MSVC 重建出的二进制与
-  `docs/cases/crackme_win_x64.md` 记录的 SHA-256 一致（`/Brepro`，逐字节相同），并产出
-  `crackme.map` 供 `eval --map` 使用。快照沿用 `tests/golden/crackme/`（160，`--limit 160`）；
+- 真实样本：`corpus/real/crackme/` 只提交 `src/crackme.c` 与两个构建脚本。`build.ps1` 用 MSVC
+  重建出与 `docs/cases/crackme_win_x64.md` 记录的 SHA-256 一致的 PE（`/Brepro`，逐字节相同），
+  并产出 `crackme.map` 供 `eval --map` 使用；快照沿用 `tests/golden/crackme/`（160，`--limit 160`），
   只有工具链漂移、重建产物与钉住的二进制不同时，才用 `build.ps1 -Snapshots` 写入
-  `tests/golden/crackme-real/`，测试随之改用它。门禁为
-  `cargo test -p recraft-decompile --lib real_crackme`（前 160 个函数的 lint + golden），
-  未接入 CI：windows-latest 的 MSVC 版本会让快照抖动。
+  `tests/golden/crackme-real/`，测试随之改用它。`build-linux.sh` 把同一份源码编成 gcc `-O2`
+  的动态 PIE（保留 `.symtab`，ELF CI 任务会先构建它）；ELF 镜像含宿主 `crt1.o`/glibc 启动代码，
+  所以不提交快照，`--snapshots` 生成的 `tests/golden/crackme-elf/` 只作本地校验。
+  两个门禁都叫 `cargo test -p recraft-decompile --lib real_crackme`：PE 版 lint 前 160 个函数
+  （L1+L2）并对比 160 份 golden，ELF 版全量 lint 并断言结构化率 >80%、覆盖率 >90%。
+  PE 部分未接入 CI（windows-latest 的 MSVC 版本会让快照抖动），ELF 部分在 Linux 任务里随构建
+  自动执行。两者在构建产物缺失时都用提前 `return` 跳过，测试仍显示 `ok`；`--nocapture`
+  会打印 `skipping:` 与需要运行的构建命令。
 
 - 内容：**归一化后的 L1 文本**——`0x...` 地址与 `loc_...` 标签替换为 `0xADDR` /
   `loc_ADDR`，因此重建/换基址不会误报；语句与结构形状仍参与 diff。

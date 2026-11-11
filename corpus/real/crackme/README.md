@@ -36,6 +36,29 @@ one. That is MSVC drift, not a build failure: the code is the same, the machine 
 `crackme.map` (linker `/MAP`) lists every function symbol, including static ones, and is the
 ground truth for `recraft-cli eval <exe> --map <map>`.
 
+## Linux / ELF build
+
+The same source also builds as a Linux ELF executable, which is what the ELF front end is
+exercised against:
+
+```bash
+bash corpus/real/crackme/build-linux.sh              # corpus/build/real/crackme-linux/crackme.elf
+CC=clang bash corpus/real/crackme/build-linux.sh     # any host compiler
+bash corpus/real/crackme/build-linux.sh --snapshots  # + tests/golden/crackme-elf/
+```
+
+It is a dynamically linked PIE with glibc: `-O2` like the Windows build, unstripped so
+`.symtab` still names `main` (at `-O2` GCC inlines `verify` into `main`, unlike MSVC). The
+image embeds the host `crt1.o`/glibc startup code, so it is reproducible per toolchain, not
+across them: the script prints its SHA-256, nothing is pinned, and no snapshot set is
+committed. `--snapshots` writes `tests/golden/crackme-elf/` with the local `recraft-cli`
+(`target/debug`, or `$RECRAFT_CLI`); the test checks that directory when it exists.
+
+On Windows the script needs WSL or an Ubuntu VM; the test only looks for
+`corpus/build/real/crackme-linux/crackme.elf`, so copy the file back when the VM does not
+share this checkout. Ubuntu 24.04's gcc 13.3 yields 24 functions, 95.8% structured and 97.5%
+coverage, which is what the test floors are set against.
+
 ## Snapshots and the gate
 
 The committed snapshot set is `tests/golden/crackme/` — 160 files, written with
@@ -63,6 +86,20 @@ This is intentionally **not** wired into CI: the windows-latest MSVC version can
 the pinned one, which would make committed snapshots flaky — the same reason the other
 `tests/golden/*` sets are checked by scripts rather than by CI.
 
+The same filter also runs the ELF fixture tests (`the_real_crackme_elf_*`): full `lint` at
+both levels on `crackme.elf`, a structured-rate/coverage floor, and the optional local
+`tests/golden/crackme-elf/` check. The ELF build is wired into the Linux CI job, so this half
+does run on every push; the PE half stays local.
+
+A skip is a silent `ok`: both helpers `return` early when their binary is missing (clean
+checkout, or the Windows CI job for the ELF case), so `cargo test` still reports success.
+Run it with output to see which side ran:
+
+```powershell
+cargo test -p recraft-decompile --lib real_crackme -- --nocapture
+# skipping: …\crackme.elf not found; run corpus/real/crackme/build-linux.sh on Linux
+```
+
 ## Why not `corpus/`
 
 - The synthetic corpus has complete ground truth (exports, `.pdata`, map) and is small enough
@@ -75,6 +112,8 @@ the pinned one, which would make committed snapshots flaky — the same reason t
 
 ## Keeping it current
 
-`src/crackme.c` is frozen. If the upstream source changes, copy it over, rebuild, and update
-both SHA-256 pins in this file and `docs/cases/crackme_win_x64.md`; then regenerate the 160
-snapshots (`golden ... --dir tests/golden/crackme --limit 160`) and review the diff.
+`src/crackme.c` is frozen. If the upstream source changes, copy it over, rebuild both images
+(`build.ps1` and, on Linux, `build-linux.sh`), and update both SHA-256 pins in this file and
+`docs/cases/crackme_win_x64.md`; then regenerate the 160 PE snapshots
+(`golden ... --dir tests/golden/crackme --limit 160`), drop any stale
+`tests/golden/crackme-elf/`, and review the diff.
