@@ -4,9 +4,10 @@
 #
 # Build the Linux ELF corpus: a shared object with every function exported, plus a
 # stripped copy (no `.symtab`) that keeps only `.dynsym` and `.eh_frame`, a C++
-# object whose Itanium-mangled names exercise demangling, and a behaviour sample
-# (open/write, socket/connect, ptrace, dlopen, `/proc` reads) for the Linux API
-# classification table.
+# object whose Itanium-mangled names exercise demangling, a Rust `cdylib` with the
+# shapes only a Rust binary has (panic/unwind machinery, vtables, closures, `fmt!`),
+# and a behaviour sample (open/write, socket/connect, ptrace, dlopen, `/proc` reads)
+# for the Linux API classification table.
 #
 #   bash corpus/build-linux.sh                # host compilers
 #   CC=clang CXX=clang++ bash corpus/build-linux.sh
@@ -15,6 +16,7 @@
 #   corpus/build/linux/libcorpus.so
 #   corpus/build/linux/libcorpus-stripped.so
 #   corpus/build/linux/libcorpus-cpp.so
+#   corpus/build/linux/libcorpus-rust.so
 #   corpus/build/linux/libcorpus-behaviors.so
 
 set -euo pipefail
@@ -44,6 +46,19 @@ if command -v "$cxx" >/dev/null 2>&1; then
     "$cxx" -O2 -fPIC -shared -o "$out/libcorpus-cpp.so" "$repo/corpus/linux/functions.cpp"
 else
     rm -f "$out/libcorpus-cpp.so"
+fi
+
+# Rust cdylib: the same shapes as `corpus/rust/lib.rs` documents (panic/unwind,
+# vtables, closures, `format!`, monomorphizations) plus `.symtab`, so `corpus_rust::…`
+# names reach the legacy Itanium demangler. CI installs a toolchain; a bare machine
+# skips the sample instead of failing the whole corpus build.
+if command -v rustc >/dev/null 2>&1; then
+    rustc --edition 2021 --crate-name corpus_rust --crate-type cdylib \
+        -C opt-level=2 -C debuginfo=0 \
+        -o "$out/libcorpus-rust.so" "$repo/corpus/rust/lib.rs"
+    echo "[linux] built $out/libcorpus-rust.so"
+else
+    echo "[linux] skipping libcorpus-rust.so (rustc not installed)"
 fi
 
 # The behaviour sample exercises the Linux API/path classification table. `-ldl` keeps

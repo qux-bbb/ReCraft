@@ -171,6 +171,20 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
+Rust 样本用于验证只有 Rust 二进制才有的形制（panic/unwind、vtable 动态派发、闭包环境、
+`format!` 背后的 `core::fmt` 单态化、同一泛型的两个实例）与 legacy 名称 demangle：
+
+```powershell
+.\corpus\build-rust.ps1
+cargo run -p recraft-cli -- import .\corpus\build\rust\corpus-rust.dll -o rust.rcraft
+cargo run -p recraft-cli -- analyze rust.rcraft
+cargo run -p recraft-cli -- funcs rust.rcraft   # rust_add_leaf, rust_entry, rust_shapes, ...
+```
+
+Windows 构建是 `cdylib`（PE 只能从导出表取名）；`bash corpus/build-linux.sh` 会另出
+`libcorpus-rust.so`，它保留 `.symtab`，所以 `corpus_rust::…` 这类 legacy 名称会走
+`rustc_demangle`（哈希后缀被去掉），由测试 `the_rust_elf_corpus_demangles_legacy_names` 守着。
+
 真实样本（CTF crackme）的源码镜像与重建脚本在 `corpus\real\crackme\`：只提交 `src\crackme.c`，
 `build.ps1` 用 MSVC 重建出与 `docs\cases\crackme_win_x64.md` 相同 SHA-256 的镜像，`build-linux.sh`
 把同一份源码编成 Linux ELF（gcc `-O2` 的动态 PIE，保留 `.symtab`），用来覆盖 ELF 反编译路径。

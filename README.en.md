@@ -176,6 +176,22 @@ cargo run -p recraft-cli -- funcs cpp.rcraft   # recraft::DemoTarget::get(void) 
 cargo run -p recraft-cli -- demangle "?overloaded@recraft@@YAHH@Z"
 ```
 
+A Rust sample covers the shapes only a Rust binary has (panic/unwind, vtable dispatch,
+closure environments, the `core::fmt` monomorphizations behind `format!`, one generic
+instantiated twice) and legacy-name demangling:
+
+```powershell
+.\corpus\build-rust.ps1
+cargo run -p recraft-cli -- import .\corpus\build\rust\corpus-rust.dll -o rust.rcraft
+cargo run -p recraft-cli -- analyze rust.rcraft
+cargo run -p recraft-cli -- funcs rust.rcraft   # rust_add_leaf, rust_entry, rust_shapes, ...
+```
+
+The Windows build is a `cdylib` (a PE image can only take names from its export table);
+`bash corpus/build-linux.sh` additionally emits `libcorpus-rust.so` with `.symtab`, so
+legacy `corpus_rust::…` names go through `rustc_demangle` (hash suffix dropped), guarded
+by `the_rust_elf_corpus_demangles_legacy_names`.
+
 The real-world CTF crackme lives in `corpus\real\crackme\` as source plus build scripts:
 `build.ps1` reproduces the case binary (same SHA-256 as `docs\cases\crackme_win_x64.md`) with
 MSVC, and `build-linux.sh` compiles the same source into a Linux ELF PIE for the ELF front

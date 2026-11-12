@@ -50,6 +50,19 @@ runtime/编译器产物）在三条路径上均为 **0 报错**；字符串字�
 `goto` 全部有标签。Go 样本同时是覆盖率观察点：结构化 88.9%（1779/2000 可达函数）、
 指令覆盖率 98.7%。
 
+**Rust 样本（2026-11-12，`corpus/rust/lib.rs`）**：`cdylib`，覆盖 C/Go 语料造不出的形制——
+panic/unwind 机制、trait object 的 vtable 动态派发、捕获环境闭包、`format!` 背后的
+`core::fmt` 单态化、同一泛型的两个实例（`max_of::<i64>` / `max_of::<u32>`）。PE 版
+（rustc `-C opt-level=2`，109 KB）实测 **346 个函数 / 结构化 298（86.1%）/ 覆盖率 97.4%**
+（`loc_` 标签 410、`__asm` 543），lint **0 findings**；命名来自 `cdylib` 的导出表（`rust_entry`
+等 5 个 `rust_*` wrapper）。ELF 版（`corpus/build-linux.sh` 产出的 `libcorpus-rust.so`，保留
+`.symtab`）**618 个函数 / 结构化 519（84.0%）/ 覆盖率 98.0%**（标签 1000、`__asm` 840，
+lint 0 findings），其中 **22 个** `corpus_rust::…` 名字由 legacy Itanium demangle 还原，且
+`::h<16 位十六进制>` 哈希后缀已去掉。两版都**不提交 golden 快照**——rustc 版本在 CI 镜像上
+会漂，字节级 diff 只会变成噪声；门禁是「metrics 下限 + lint 0 findings + 导出名/demangle 名
+断言」，Windows 与 Linux 的 CI 任务各有一段（`the_rust_elf_corpus_demangles_legacy_names`、
+`rust_corpus_exports_are_named` 是两个对应的单测）。
+
 ## 当前基线（2026-10-31，三个样本）
 
 ```
@@ -310,7 +323,8 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
   Go 的符号名带 `/`、`:`、`(` 等字符，文件名会做清洗并把过长的名字截到 80 字符）。每个函数
   一个 `.c` 文件，**按符号名命名**（插入新函数不会重排已有文件；重名函数追加地址后缀）。
   32 位快照的 L1 文本按设计保留原始形态（`eax = var_4;`，对应 x64 的
-  `eax = (rcx + rdx);`），参数名与 ABI 类型属于 L2。
+  `eax = (rcx + rdx);`），参数名与 ABI 类型属于 L2。Rust 语料（`libcorpus-rust.so`）刻意
+  **不设快照**：rustc 版本漂移会让文本快照失去可比性，改用 metrics/lint 与名称断言（见上）。
 
 - 真实样本：`corpus/real/crackme/` 只提交 `src/crackme.c` 与两个构建脚本。`build.ps1` 用 MSVC
   重建出与 `docs/cases/crackme_win_x64.md` 记录的 SHA-256 一致的 PE（`/Brepro`，逐字节相同），

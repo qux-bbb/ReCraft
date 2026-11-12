@@ -1311,6 +1311,40 @@ mod tests {
         assert!(report.findings.is_empty(), "{:?}", report.findings);
     }
 
+    /// The Rust `cdylib` keeps `.symtab`, so its legacy `_ZN…` names must arrive as
+    /// `corpus_rust::…` with the per-crate hash suffix dropped, and the std-heavy
+    /// image must still satisfy every output invariant.
+    #[test]
+    fn the_rust_elf_corpus_demangles_legacy_names() {
+        let Some((mut session, _dir)) = linux_corpus_file("libcorpus-rust.so") else {
+            return;
+        };
+        let functions = session.functions().unwrap();
+        let mut demangled = 0;
+        for function in &functions {
+            let Some(name) = session.name_at(function.start).unwrap() else {
+                continue;
+            };
+            if !name.contains("corpus_rust::") {
+                continue;
+            }
+            demangled += 1;
+            if let Some((_, hash)) = name.rsplit_once("::h") {
+                assert!(
+                    !(hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit())),
+                    "the legacy hash suffix survived demangling: {name}"
+                );
+            }
+        }
+        assert!(
+            demangled >= 5,
+            "expected demangled Rust names, got {demangled} of {} functions",
+            functions.len()
+        );
+        let report = lint(&mut session, usize::MAX, LintLevel::Both).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+    }
+
     #[test]
     fn the_cpp_elf_corpus_keeps_its_snapshots() {
         let Some((mut session, _dir)) = linux_corpus_file("libcorpus-cpp.so") else {

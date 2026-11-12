@@ -13,6 +13,17 @@
 
 ### 新增
 
+- **Rust 语料样本与门禁。** 新增 `corpus/rust/lib.rs`（`cdylib`）与 `corpus/build-rust.ps1`；
+  `corpus/build-linux.sh` 在装了 rustc 时另出 `libcorpus-rust.so`。样本补齐只有 Rust 二进制
+  才有的形制：panic/unwind 机制、trait object 的 vtable 动态派发、捕获环境闭包、`format!`
+  背后的 `core::fmt` 单态化、同一泛型的两个实例。PE 版靠 `#[no_mangle]` 导出表命名
+  （346 个函数、结构化 86.1%、覆盖率 97.4%、lint 0 findings）；ELF 版保留 `.symtab`
+  （618 个函数、结构化 84.0%、覆盖率 98.0%），`corpus_rust::…` 这类 legacy 名称走
+  demangle（哈希后缀被去掉），由
+  `the_rust_elf_corpus_demangles_legacy_names` 与 Linux CI 的名称断言守着。Windows/Linux
+  两个 CI 任务各加一段语料门禁（metrics 下限 + lint）；两版都**不提交 golden 快照**——
+  rustc 版本在 CI 镜像上会漂，字节级快照会变成噪声。
+
 - **ELF32（i386）支持。** `recraft-format` 的 ELF 加载器现在同时接受 `ELFCLASS32` 与
   `ELFCLASS64`：32 位的 ELF 头/程序头/节头/符号表/动态表按各自的字段偏移与宽度读取，导入
   同时识别 x86-64 的 `SHT_RELA`（`.rela.plt`/`.rela.dyn`）与 i386 的 `SHT_REL`

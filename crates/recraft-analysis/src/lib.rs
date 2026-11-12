@@ -1131,6 +1131,49 @@ mod tests {
             Some(main_start)
         );
     }
+    /// The Rust `cdylib`'s export table is the PE-side ground truth: every
+    /// `#[no_mangle]` wrapper in `corpus/rust/lib.rs` must be named after analysis,
+    /// and the std-backed image has to clear the function-count floor.
+    #[test]
+    fn rust_corpus_exports_are_named() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/rust/corpus-rust.dll");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("rust-analyze.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        for function in session.functions().unwrap() {
+            if let Some(name) = session.name_at(function.start).unwrap()
+                && name.starts_with("rust_")
+            {
+                named.insert(name);
+            }
+        }
+        for expected in [
+            "rust_add_leaf",
+            "rust_banner",
+            "rust_describe",
+            "rust_entry",
+            "rust_shapes",
+        ] {
+            assert!(
+                named.contains(expected),
+                "export {expected} was not named: {named:?}"
+            );
+        }
+        assert!(
+            result.functions.len() >= 200,
+            "only {} functions found in the Rust corpus",
+            result.functions.len()
+        );
+    }
+
     /// `call qword ptr [IAT]` returns to the next instruction, so the walk must continue:
     /// before this, every function stopped at its first imported API and the tag table
     /// only ever held one API per function (starving naming/triage evidence).

@@ -24,6 +24,9 @@ jobs:
       - name: build C++ analysis corpus (MSVC, CRT-free)
         shell: pwsh
         run: pwsh -NoProfile -File corpus/build-cpp.ps1
+      - name: build Rust analysis corpus (cdylib, toolchain from the setup step)
+        shell: pwsh
+        run: pwsh -NoProfile -File corpus/build-rust.ps1
       - name: build Go analysis corpus (skipped when Go is unavailable)
         shell: pwsh
         run: |
@@ -54,6 +57,24 @@ jobs:
           $golden = Join-Path $env:RUNNER_TEMP 'golden-corpus'
           Invoke-Recraft @('golden', $project, '--dir', $golden)
           Invoke-Recraft @('golden', $project, '--dir', $golden, '--check')
+      - name: Rust corpus gate (PE export names + quality floor)
+        shell: pwsh
+        run: |
+          function Invoke-Recraft([string[]]$Arguments) {
+            & cargo run --quiet -p recraft-cli -- @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "recraft failed: $($Arguments -join ' ')" }
+          }
+          $project = Join-Path $env:RUNNER_TEMP 'corpus-rust.rcraft'
+          Invoke-Recraft @('import', 'corpus/build/rust/corpus-rust.dll', '-o', $project)
+          Invoke-Recraft @('analyze', $project)
+          Invoke-Recraft @('metrics', $project, '--min-structured', '0.6', '--min-coverage', '0.9')
+          Invoke-Recraft @('lint', $project)
+          $names = (Invoke-Recraft @('funcs', $project)) -join "`n"
+          foreach ($expected in 'rust_add_leaf', 'rust_banner', 'rust_describe', 'rust_entry', 'rust_shapes') {
+            if ($names -notmatch "\b$expected\b") {
+              throw "export $expected is missing from the analyzed Rust corpus"
+            }
+          }
       - name: docs link check
         shell: pwsh
         run: pwsh -NoProfile -File scripts/check-docs.ps1
@@ -137,6 +158,26 @@ jobs:
             cargo run --quiet -p recraft-cli -- golden "$project32" --dir tests/golden/elf32
           fi
           cargo run --quiet -p recraft-cli -- golden "$project32" --dir tests/golden/elf32 --check
+
+          # Rust cdylib: no committed snapshots on purpose — rustc is not pinned the way
+          # gcc is, so assert invariants (quality floor, lint, demangled legacy names)
+          # instead of byte-identical text.
+          rust_project="$RUNNER_TEMP/elf-rust.rcraft"
+          cargo run --quiet -p recraft-cli -- import corpus/build/linux/libcorpus-rust.so -o "$rust_project"
+          cargo run --quiet -p recraft-cli -- analyze "$rust_project"
+          cargo run --quiet -p recraft-cli -- metrics "$rust_project" --min-structured 0.6 --min-coverage 0.9
+          cargo run --quiet -p recraft-cli -- lint "$rust_project"
+          cargo run --quiet -p recraft-cli -- funcs "$rust_project" > "$RUNNER_TEMP/rust-funcs.txt"
+          rust_names=$(grep -c 'corpus_rust::' "$RUNNER_TEMP/rust-funcs.txt" || true)
+          echo "demangled Rust names: $rust_names"
+          if [ "$rust_names" -lt 5 ]; then
+            echo "expected the demangled corpus_rust:: names from .symtab"
+            exit 1
+          fi
+          if grep -Eq 'corpus_rust::[^ ]*::h[0-9a-f]{16}$' "$RUNNER_TEMP/rust-funcs.txt"; then
+            echo "the legacy Rust hash suffix was not dropped"
+            exit 1
+          fi
 
           # C++ object: Itanium-mangled names must arrive demangled.
           cpp_project="$RUNNER_TEMP/elf-cpp.rcraft"
