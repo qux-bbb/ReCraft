@@ -444,12 +444,18 @@ enum Commands {
         addr: String,
         #[arg(long)]
         text: String,
+        /// Comment slot (default: the disassembly line comment).
+        #[arg(long, value_enum, default_value_t = CommentSlot::Regular)]
+        kind: CommentSlot,
     },
     /// Delete the comment at an address.
     Uncomment {
         project: PathBuf,
         #[arg(long)]
         addr: String,
+        /// Comment slot (default: the disassembly line comment).
+        #[arg(long, value_enum, default_value_t = CommentSlot::Regular)]
+        kind: CommentSlot,
     },
     /// Mark a range as code, data or unknown.
     Mark {
@@ -538,6 +544,27 @@ impl MarkKind {
             MarkKind::Code => CodeData::Code,
             MarkKind::Data => CodeData::Data,
             MarkKind::Unknown => CodeData::Unknown,
+        }
+    }
+}
+
+/// Comment slots `comment`/`uncomment` can address. `pseudo` is the Decompile view's
+/// indented comment, which IDA stores separately from the disassembly slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum CommentSlot {
+    Regular,
+    Repeatable,
+    Anterior,
+    Pseudo,
+}
+
+impl CommentSlot {
+    fn to_kind(self) -> CommentKind {
+        match self {
+            CommentSlot::Regular => CommentKind::Regular,
+            CommentSlot::Repeatable => CommentKind::Repeatable,
+            CommentSlot::Anterior => CommentKind::Anterior,
+            CommentSlot::Pseudo => CommentKind::Pseudo,
         }
     }
 }
@@ -854,8 +881,13 @@ fn run(cli: Cli) -> Result<()> {
             project,
             addr,
             text,
-        } => cmd_comment(&project, &addr, &text),
-        Commands::Uncomment { project, addr } => cmd_comment(&project, &addr, ""),
+            kind,
+        } => cmd_comment(&project, &addr, &text, kind),
+        Commands::Uncomment {
+            project,
+            addr,
+            kind,
+        } => cmd_comment(&project, &addr, "", kind),
         Commands::Mark {
             project,
             addr,
@@ -3523,7 +3555,7 @@ fn cmd_rename(project: &Path, addr: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_comment(project: &Path, addr: &str, text: &str) -> Result<()> {
+fn cmd_comment(project: &Path, addr: &str, text: &str, slot: CommentSlot) -> Result<()> {
     let mut session = Session::open(project)?;
     let addr = resolve_address(&session, addr)?;
     let text = if text.is_empty() {
@@ -3533,7 +3565,7 @@ fn cmd_comment(project: &Path, addr: &str, text: &str) -> Result<()> {
     };
     session.execute(Command::SetComment {
         addr,
-        kind: CommentKind::Regular,
+        kind: slot.to_kind(),
         text: text.clone(),
     })?;
     match text {

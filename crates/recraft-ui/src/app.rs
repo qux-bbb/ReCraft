@@ -8,7 +8,7 @@
 //! commands, so undo/redo behave exactly like the CLI.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -912,6 +912,8 @@ struct AiJob {
 enum EditKind {
     Rename,
     Comment,
+    /// The Decompile view's indented comment (IDA's `/`).
+    PseudoComment,
     Prototype,
 }
 
@@ -1258,6 +1260,10 @@ const PALETTE_COMMANDS: &[(&str, Action)] = &[
     ("palette_goto_address", Action::GotoDialog),
     ("palette_rename", Action::EditName),
     ("palette_comment", Action::EditComment),
+    (
+        "palette_pseudo_comment",
+        Action::EditPseudoComment { addr: None },
+    ),
     ("palette_cross_references", Action::ShowXrefs),
     ("palette_ai_suggest", Action::AiSuggest),
     ("palette_toggle_language", Action::ToggleLang),
@@ -1283,6 +1289,11 @@ enum Action {
     GotoDialog,
     EditName,
     EditComment,
+    /// IDA's `/`: edit the indented comment of the Decompile line under the cursor.
+    /// `addr` names the row a context menu was opened on; `None` follows the cursor.
+    EditPseudoComment {
+        addr: Option<Address>,
+    },
     ShowXrefs,
     MoveSelection(i32),
     Page(i32),
@@ -1384,6 +1395,10 @@ pub struct ReCraftApp {
     key_pass: Option<u64>,
     pseudo_start: Address,
     pseudo: Option<Vec<PseudoLine>>,
+    /// Indented (pseudocode) comments of the rendered function, keyed by the address of
+    /// the line they annotate. `pseudo` already carries them as `// …` rows; this map is
+    /// what the edit dialog pre-fills and what undo/refresh rebuild the rows from.
+    pseudo_comments: BTreeMap<Address, String>,
     /// Quoted string literals of the current listing, with the data address each names.
     /// A double-click on one follows the literal instead of its instruction.
     pseudo_literals: Vec<(String, Address)>,
@@ -1541,6 +1556,7 @@ impl Default for ReCraftApp {
             key_pass: None,
             pseudo_start: Address::ZERO,
             pseudo: None,
+            pseudo_comments: BTreeMap::new(),
             pseudo_literals: Vec::new(),
             literal_data: Vec::new(),
             pseudo_selected_line: None,
@@ -1830,6 +1846,7 @@ impl ReCraftApp {
         self.disasm_drag = false;
         self.pseudo_start = Address::ZERO;
         self.pseudo = None;
+        self.pseudo_comments.clear();
         self.pseudo_literals.clear();
         self.literal_data.clear();
         self.pseudo_selected_line = None;
@@ -2211,6 +2228,11 @@ impl ReCraftApp {
             EditKind::Comment => session.execute(Command::SetComment {
                 addr: edit.addr,
                 kind: CommentKind::Regular,
+                text: if text.is_empty() { None } else { Some(text) },
+            }),
+            EditKind::PseudoComment => session.execute(Command::SetComment {
+                addr: edit.addr,
+                kind: CommentKind::Pseudo,
                 text: if text.is_empty() { None } else { Some(text) },
             }),
             EditKind::Prototype => session.execute(Command::SetPrototype {
@@ -3706,42 +3728,91 @@ impl ReCraftApp {
         self.pseudo_drag = false;
         let Some(session) = self.session.as_mut() else {
             self.pseudo = None;
+            self.pseudo_comments.clear();
             self.pseudo_literals.clear();
             self.pseudo_dirty = false;
             return;
         };
-        let code = {
-            // The Decompile view always shows the structured pseudo-C with the recovered
-            // signature and argument names; `pseudocode_l2` itself falls back to the raw
-            // listing when the function is not in the analysed set.
-            let function_start = session
-                .functions()
-                .ok()
-                .and_then(|functions| {
-                    functions
-                        .iter()
-                        .find(|function| {
-                            self.pseudo_start >= function.start && self.pseudo_start < function.end
-                        })
-                        .map(|function| function.start)
-                })
-                .unwrap_or(self.pseudo_start);
-            recraft_decompile::pseudocode_l2(session, function_start)
-        };
+        // The Decompile view always shows the structured pseudo-C with the recovered
+        // signature and argument names; `pseudocode_l2` itself falls back to the raw
+        // listing when the function is not in the analysed set.
+        let function = session.functions().ok().and_then(|functions| {
+            functions.into_iter().find(|function| {
+                self.pseudo_start >= function.start && self.pseudo_start < function.end
+            })
+        });
+        let function_start = function
+            .map(|function| function.start)
+            .unwrap_or(self.pseudo_start);
+        let code = recraft_decompile::pseudocode_l2(session, function_start);
         match code {
             Ok(code) => {
-                self.pseudo = Some(code.lines);
+                // Reading the whole function catches comments whose line is no longer
+                // emitted (IDA's orphan comments); a fallback listing has no function
+                // record, so it reads the span its own rows cover.
+                let range = function
+                    .map(|function| AddressRange::new(function.start, function.end))
+                    .or_else(|| {
+                        let first = code.lines.first()?.addr;
+                        let last = code.lines.last()?.addr;
+                        Some(AddressRange::new(first, Address::new(last.get() + 1)))
+                    });
+                self.pseudo_comments = range
+                    .and_then(|range| session.comments_in(range, CommentKind::Pseudo).ok())
+                    .map(|comments| comments.into_iter().collect())
+                    .unwrap_or_default();
+                self.pseudo = Some(Self::with_pseudo_comments(
+                    code.lines,
+                    &self.pseudo_comments,
+                ));
                 self.pseudo_literals = code.literals;
                 self.pseudo_dirty = false;
             }
             Err(error) => {
                 self.pseudo = None;
+                self.pseudo_comments.clear();
                 self.pseudo_literals.clear();
                 self.pseudo_dirty = false;
                 self.set_status(
                     self.t_args("ui_decompile_error", &[("error", &error.to_string())]),
                 );
             }
+        }
+    }
+
+    /// Insert the stored Decompile-view comments above the first row carrying their
+    /// address, like IDA's indented comments. A comment whose address no longer appears in
+    /// the output keeps its rows at the end (IDA calls those "orphan comments").
+    fn with_pseudo_comments(
+        lines: Vec<PseudoLine>,
+        comments: &BTreeMap<Address, String>,
+    ) -> Vec<PseudoLine> {
+        if comments.is_empty() {
+            return lines;
+        }
+        let mut remaining = comments.clone();
+        let mut output = Vec::with_capacity(lines.len() + comments.len());
+        for line in lines {
+            if let Some(text) = remaining.remove(&line.addr) {
+                Self::push_pseudo_comment(&mut output, line.addr, &line.text, &text);
+            }
+            output.push(line);
+        }
+        for (addr, text) in remaining {
+            Self::push_pseudo_comment(&mut output, addr, "", &text);
+        }
+        output
+    }
+
+    /// Push one `// …` row per line of `text`, aligned with the indentation of the row the
+    /// comment annotates (`like`).
+    fn push_pseudo_comment(output: &mut Vec<PseudoLine>, addr: Address, like: &str, text: &str) {
+        let indent = &like[..like.len() - like.trim_start().len()];
+        for raw in text.lines() {
+            output.push(PseudoLine {
+                addr,
+                text: format!("{indent}// {}", raw.trim_end()),
+            });
         }
     }
 
@@ -7567,6 +7638,7 @@ impl ReCraftApp {
         let mut double_clicked = None;
         let mut took_focus = false;
         let copy_menu = self.t("ui_copy");
+        let comment_menu = self.t("ui_edit_pseudo_comment");
         // Editor-style text selection over the pseudo-C rows (the gutter stays out of it).
         let mut text_sel = self.pseudo_sel;
         let mut dragging = self.pseudo_drag;
@@ -7700,7 +7772,10 @@ impl ReCraftApp {
                     let in_literal = char_index.is_some_and(|char_index| {
                         pseudo_string_literal_at(&line.text, char_index).is_some()
                     });
-                    let symbol = if in_literal {
+                    // An indented comment is annotation, not C: a name or a quoted string
+                    // inside it must not become a jump target.
+                    let in_comment = line.text.trim_start().starts_with("//");
+                    let symbol = if in_literal || in_comment {
                         None
                     } else {
                         char_index.and_then(|char_index| pseudo_symbol_at(&line.text, char_index))
@@ -7730,16 +7805,26 @@ impl ReCraftApp {
                         took_focus = true;
                     }
                     if response.double_clicked() {
-                        double_clicked = Some(match char_index {
-                            Some(char_index) => {
-                                self.pseudo_double_click(&line.text, char_index, line.addr)
+                        double_clicked = Some(if in_comment {
+                            Action::NavigateToDisasm(line.addr)
+                        } else {
+                            match char_index {
+                                Some(char_index) => {
+                                    self.pseudo_double_click(&line.text, char_index, line.addr)
+                                }
+                                None => Action::NavigateToDisasm(line.addr),
                             }
-                            None => Action::NavigateToDisasm(line.addr),
                         });
                     }
                     let _ = response.context_menu(|ui| {
                         if ui.button(copy_menu.as_str()).clicked() {
                             *action = Action::Copy;
+                            ui.close();
+                        }
+                        if ui.button(comment_menu.as_str()).clicked() {
+                            *action = Action::EditPseudoComment {
+                                addr: Some(line.addr),
+                            };
                             ui.close();
                         }
                     });
@@ -7798,6 +7883,7 @@ impl ReCraftApp {
         let title = match edit.kind {
             EditKind::Rename => self.t("ui_rename_2").to_owned(),
             EditKind::Comment => self.t("ui_comment_2").to_owned(),
+            EditKind::PseudoComment => self.t("ui_pseudo_comment").to_owned(),
             EditKind::Prototype => self.t("ui_prototype").to_owned(),
         };
         egui::Window::new(title)
@@ -7805,11 +7891,15 @@ impl ReCraftApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label(format!("{:#x}", edit.addr.get()));
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut edit.text)
-                        .desired_width(360.0)
-                        .hint_text(self.t("ui_empty_deletes")),
-                );
+                // An indented comment may span several lines, like IDA's; the disassembly
+                // comment stays single-line because it is painted on one listing row.
+                let text_edit = match edit.kind {
+                    EditKind::PseudoComment => egui::TextEdit::multiline(&mut edit.text)
+                        .desired_width(420.0)
+                        .desired_rows(3),
+                    _ => egui::TextEdit::singleline(&mut edit.text).desired_width(360.0),
+                };
+                let response = ui.add(text_edit.hint_text(self.t("ui_empty_deletes")));
                 if edit.just_opened {
                     response.request_focus();
                     edit.just_opened = false;
@@ -7822,7 +7912,14 @@ impl ReCraftApp {
                         cancel = true;
                     }
                 });
-                if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
+                // A multi-line field consumes Enter, so it commits with Ctrl+Enter instead.
+                let submit = match edit.kind {
+                    EditKind::PseudoComment => {
+                        ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter))
+                    }
+                    _ => response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)),
+                };
+                if submit {
                     commit = true;
                 }
             });
@@ -8430,8 +8527,16 @@ impl ReCraftApp {
                 action = Action::GotoDialog;
             } else if input.key_pressed(Key::N) {
                 action = Action::EditName;
+            } else if input.key_pressed(Key::Slash) && self.tab == Tab::Pseudo {
+                // IDA's `/` edits the indented (pseudocode) comment; `;` is offered as an
+                // alias because it is the comment shortcut everywhere else in the app.
+                action = Action::EditPseudoComment { addr: None };
             } else if input.key_pressed(Key::Semicolon) {
-                action = Action::EditComment;
+                action = if self.tab == Tab::Pseudo {
+                    Action::EditPseudoComment { addr: None }
+                } else {
+                    Action::EditComment
+                };
             } else if self.tab == Tab::Disasm && input.key_pressed(Key::Space) {
                 // IDA binds Space to the disassembly view, so the Decompile pane (and the
                 // side lists) leave it alone; the toolbar button and the palette entry can
@@ -8827,6 +8932,22 @@ impl ReCraftApp {
                     },
                     addr,
                     text: existing,
+                    just_opened: true,
+                });
+            }
+            Action::EditPseudoComment { addr } => {
+                if self.pseudo.is_none() {
+                    return;
+                }
+                // A context menu names its row; the shortcut follows the cursor's row and
+                // finally the function anchor, so the dialog always targets a rendered row.
+                let addr = addr
+                    .or_else(|| self.pseudo_cursor_address())
+                    .unwrap_or(self.pseudo_start);
+                self.edit = Some(EditState {
+                    kind: EditKind::PseudoComment,
+                    addr,
+                    text: self.pseudo_comments.get(&addr).cloned().unwrap_or_default(),
                     just_opened: true,
                 });
             }
@@ -10986,6 +11107,26 @@ mod tests {
             Action::None,
             "Space belongs to the disassembly view, not to the pseudo-C view"
         );
+        // IDA edits pseudocode comments with `/`; `;` is accepted as an alias because it is
+        // the comment key everywhere else in the app. The disassembly keeps `;` for its own
+        // (separately stored) comment slot.
+        assert_eq!(
+            run(&mut app, Key::Slash),
+            Action::EditPseudoComment { addr: None },
+            "/ edits the pseudocode comment"
+        );
+        assert_eq!(
+            run(&mut app, Key::Semicolon),
+            Action::EditPseudoComment { addr: None },
+            "; is an alias inside the Decompile view"
+        );
+        app.tab = Tab::Disasm;
+        assert_eq!(run(&mut app, Key::Semicolon), Action::EditComment);
+        assert_eq!(
+            run(&mut app, Key::Slash),
+            Action::None,
+            "/ is not a disassembly shortcut"
+        );
     }
 
     /// `scroll_to_rect(Align::Center)` centres both axes, so centring a row wider than the
@@ -12941,6 +13082,208 @@ mod tests {
             colours.contains(&pal.text),
             "punctuation must stay plain, got {colours:?}"
         );
+    }
+
+    /// The Decompile view renders stored comments as `// …` rows above the first row that
+    /// carries their address (IDA's indented comments). A comment whose address is no longer
+    /// emitted survives at the end, where IDA prints its orphan comments.
+    #[test]
+    fn pseudo_comments_are_inserted_above_their_row() {
+        let start = Address::new(0x140001000);
+        let body = Address::new(0x140001010);
+        let gone = Address::new(0x140001020);
+        let lines = vec![
+            PseudoLine {
+                addr: start,
+                text: "void sub_140001000(void)".to_owned(),
+            },
+            PseudoLine {
+                addr: start,
+                text: "{".to_owned(),
+            },
+            PseudoLine {
+                addr: body,
+                text: "    v1 = 1;".to_owned(),
+            },
+        ];
+        let comments = BTreeMap::from([
+            (body, "setup".to_owned()),
+            (gone, "orphan\nnote".to_owned()),
+        ]);
+        let rows = ReCraftApp::with_pseudo_comments(lines, &comments);
+        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "void sub_140001000(void)",
+                "{",
+                "    // setup",
+                "    v1 = 1;",
+                "// orphan",
+                "// note",
+            ]
+        );
+        // The inserted row inherits its statement's address, so clicking it still syncs the
+        // listing and re-editing it targets the same comment.
+        assert_eq!(rows[2].addr, body);
+        assert_eq!(rows[4].addr, gone);
+        // Only one comment exists per address: the two rows at the function start do not
+        // both carry it.
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| text.contains("// setup"))
+                .count(),
+            1
+        );
+    }
+
+    /// `/` (or `;`) in the Decompile view edits the indented comment of the row under the
+    /// cursor: the text lands in the `Pseudo` slot, shows above that row, and an empty text
+    /// deletes it again. The disassembly's own comment slot is left alone.
+    #[test]
+    fn decompile_view_edits_and_renders_indented_comments() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("pseudo-comment.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_functions();
+        app.tick();
+        if app.functions.is_empty() {
+            return;
+        }
+        app.pseudo_start = app.functions[0].start;
+        app.pseudo_dirty = true;
+        app.tick();
+        let lines = app.pseudo.as_ref().expect("the entry function decompiles");
+        let mut per_address = BTreeMap::new();
+        for line in lines {
+            *per_address.entry(line.addr).or_insert(0usize) += 1;
+        }
+        let index = lines
+            .iter()
+            .position(|line| {
+                per_address[&line.addr] == 1
+                    && !line.text.trim().is_empty()
+                    && !line.text.trim_start().starts_with("//")
+            })
+            .expect("a row with its own address");
+        let target = lines[index].addr;
+        let indent = lines[index].text.len() - lines[index].text.trim_start().len();
+
+        let ctx = egui::Context::default();
+        app.apply_action(&ctx, Action::EditPseudoComment { addr: Some(target) });
+        let mut edit = app.edit.take().expect("the comment dialog must open");
+        assert!(matches!(edit.kind, EditKind::PseudoComment));
+        assert_eq!(edit.addr, target);
+        edit.text = "first note\nsecond line".to_owned();
+        app.run_edit(edit);
+        app.tick();
+
+        let rows = app.pseudo.as_ref().expect("the listing is re-rendered");
+        let position = rows
+            .iter()
+            .position(|row| row.text.ends_with("// first note"))
+            .expect("the comment row is rendered");
+        assert_eq!(
+            rows[position].text,
+            format!("{}// first note", " ".repeat(indent)),
+            "the comment is indented like the row it annotates"
+        );
+        assert_eq!(rows[position].addr, target);
+        assert_eq!(
+            rows[position + 1].text,
+            format!("{}// second line", " ".repeat(indent)),
+            "every line of the comment keeps the row's indentation"
+        );
+        assert_eq!(
+            rows[position + 2].addr,
+            target,
+            "the comment sits above its code row"
+        );
+        assert_eq!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .comment_at(target, CommentKind::Pseudo)
+                .unwrap()
+                .as_deref(),
+            Some("first note\nsecond line")
+        );
+        assert_eq!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .comment_at(target, CommentKind::Regular)
+                .unwrap(),
+            None,
+            "the Decompile comment must not leak into the disassembly slot"
+        );
+
+        // The extra row lays out and paints with the rest of the listing, coloured as a
+        // comment (the view's syntax job treats `//` as one comment section).
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(input, |ui| app.pseudo_view(ui, &mut action));
+        output.textures_delta.clear();
+        let comment_text = format!("{}// first note", " ".repeat(indent));
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|clipped| find_text_galley(&clipped.shape, &comment_text).is_some()),
+            "the comment row must be painted with the listing: {comment_text:?}"
+        );
+
+        // Re-opening the dialog pre-fills the stored text; an empty one deletes it.
+        app.apply_action(&ctx, Action::EditPseudoComment { addr: Some(target) });
+        let mut edit = app.edit.take().expect("the second dialog must open");
+        assert_eq!(
+            edit.text, "first note\nsecond line",
+            "the dialog pre-fills the comment"
+        );
+        edit.text = String::new();
+        app.run_edit(edit);
+        app.tick();
+        assert!(
+            !app.pseudo.as_ref().unwrap().iter().any(|row| {
+                row.text.contains("// first note") || row.text.contains("// second line")
+            }),
+            "an empty comment must remove all of its rows"
+        );
+        assert_eq!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .comment_at(target, CommentKind::Pseudo)
+                .unwrap(),
+            None
+        );
+
+        // The keyboard path (`addr: None`) follows the cursor: with the listing synced to
+        // the row, `/` targets that address (the comment is gone, so the dialog is empty).
+        app.navigate(target);
+        app.tick();
+        app.apply_action(&ctx, Action::EditPseudoComment { addr: None });
+        let edit = app.edit.take().expect("the cursor path opens the dialog");
+        assert_eq!(edit.addr, target);
+        assert_eq!(edit.text, "");
     }
 
     #[test]

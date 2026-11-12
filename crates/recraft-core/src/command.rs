@@ -186,6 +186,10 @@ pub enum CommentKind {
     Repeatable = 1,
     /// Shown above the instruction.
     Anterior = 2,
+    /// Shown above its line in the Decompile view (IDA's indented pseudocode comment).
+    /// Stored apart from the disassembly slots, exactly like IDA keeps its two comment
+    /// stores separate.
+    Pseudo = 3,
 }
 
 impl CommentKind {
@@ -199,6 +203,7 @@ impl CommentKind {
         match value {
             1 => CommentKind::Repeatable,
             2 => CommentKind::Anterior,
+            3 => CommentKind::Pseudo,
             _ => CommentKind::Regular,
         }
     }

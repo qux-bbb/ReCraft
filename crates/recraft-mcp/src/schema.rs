@@ -122,7 +122,7 @@ fn write_tools() -> Vec<Value> {
                 "properties": {
                     "addr": {"type": ["integer", "string"]},
                     "text": {"type": ["string", "null"]},
-                    "kind": {"type": "string", "enum": ["regular", "repeatable", "anterior"], "description": "Comment slot; default regular."},
+                    "kind": {"type": "string", "enum": ["regular", "repeatable", "anterior", "pseudo"], "description": "Comment slot; default regular. `pseudo` is the Decompile view's indented comment (shown above the line, kept apart from the disassembly comment)."},
                 },
                 "required": ["addr", "text"],
             },

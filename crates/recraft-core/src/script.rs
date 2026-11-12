@@ -110,9 +110,10 @@ pub fn parse_command(
                 None | Some("regular") => CommentKind::Regular,
                 Some("repeatable") => CommentKind::Repeatable,
                 Some("anterior") => CommentKind::Anterior,
+                Some("pseudo") => CommentKind::Pseudo,
                 Some(other) => {
                     return Err(Error::unsupported(format!(
-                        "unknown comment kind {other:?} (regular/repeatable/anterior)"
+                        "unknown comment kind {other:?} (regular/repeatable/anterior/pseudo)"
                     )));
                 }
             };
@@ -297,6 +298,17 @@ mod tests {
             .name(),
             "comment"
         );
+        // `pseudo` is the Decompile view's indented-comment slot.
+        match parse(
+            &session,
+            json!({"type": "comment", "addr": "entry", "text": "note", "kind": "pseudo"}),
+            &empty,
+        )
+        .unwrap()
+        {
+            Command::SetComment { kind, .. } => assert_eq!(kind, CommentKind::Pseudo),
+            other => panic!("unexpected comment command: {other:?}"),
+        }
         assert_eq!(
             parse(
                 &session,

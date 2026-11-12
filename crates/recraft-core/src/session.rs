@@ -537,6 +537,42 @@ impl Session {
             .map_err(command::db_err)
     }
 
+    /// Comments of one slot whose address falls inside `range`, ordered by address.
+    ///
+    /// The Decompile view reads every indented comment of the function it renders in one
+    /// query: the largest listings have thousands of rows, and one `comment_at` per row
+    /// would turn opening the pane into thousands of round trips.
+    pub fn comments_in(
+        &self,
+        range: AddressRange,
+        kind: CommentKind,
+    ) -> Result<Vec<(Address, String)>> {
+        let mut statement = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT addr, text FROM comment
+                 WHERE kind = ?1 AND addr >= ?2 AND addr < ?3
+                 ORDER BY addr",
+            )
+            .map_err(command::db_err)?;
+        let rows = statement
+            .query_map(
+                params![
+                    kind.as_i64(),
+                    range.start.get() as i64,
+                    range.end.get() as i64
+                ],
+                |row| {
+                    let addr: i64 = row.get(0)?;
+                    let text: String = row.get(1)?;
+                    Ok((Address::new(addr as u64), text))
+                },
+            )
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
     /// End address of the function defined at `start`, if any.
     pub fn func_at(&self, start: Address) -> Result<Option<Address>> {
         let end: Option<i64> = self
@@ -2065,6 +2101,96 @@ mod tests {
             })
             .unwrap();
         assert!(!reopened.can_redo().unwrap());
+    }
+
+    /// The Decompile view keeps its indented comments in their own slot: editing one must
+    /// not touch the disassembly comment at the same address, and a range query returns
+    /// exactly the pseudo comments the listing will render.
+    #[test]
+    fn pseudo_comments_live_in_their_own_slot_and_are_listed_by_range() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let next = session
+            .disasm(entry, 2)
+            .unwrap()
+            .get(1)
+            .map(|line| line.addr)
+            .unwrap_or(Address::new(entry.get() + 1));
+
+        for (addr, kind, text) in [
+            (entry, CommentKind::Regular, "disassembly note"),
+            (entry, CommentKind::Pseudo, "pseudo note"),
+            (next, CommentKind::Pseudo, "second line"),
+        ] {
+            session
+                .execute(Command::SetComment {
+                    addr,
+                    kind,
+                    text: Some(text.to_owned()),
+                })
+                .unwrap();
+        }
+
+        assert_eq!(
+            session
+                .comment_at(entry, CommentKind::Regular)
+                .unwrap()
+                .as_deref(),
+            Some("disassembly note")
+        );
+        assert_eq!(
+            session
+                .comment_at(entry, CommentKind::Pseudo)
+                .unwrap()
+                .as_deref(),
+            Some("pseudo note")
+        );
+        assert_eq!(CommentKind::from_i64(3), CommentKind::Pseudo);
+
+        let listed = session
+            .comments_in(
+                AddressRange::new(entry, Address::new(next.get() + 1)),
+                CommentKind::Pseudo,
+            )
+            .unwrap();
+        assert_eq!(
+            listed,
+            vec![
+                (entry, "pseudo note".to_owned()),
+                (next, "second line".to_owned())
+            ]
+        );
+        // A range that excludes both addresses sees nothing.
+        assert!(
+            session
+                .comments_in(
+                    AddressRange::new(
+                        Address::new(next.get() + 1),
+                        Address::new(next.get() + 0x100)
+                    ),
+                    CommentKind::Pseudo,
+                )
+                .unwrap()
+                .is_empty()
+        );
+
+        // Undo restores only the pseudo slot; the disassembly comment stays.
+        session.undo().unwrap();
+        session.undo().unwrap();
+        assert_eq!(
+            session.comment_at(entry, CommentKind::Pseudo).unwrap(),
+            None
+        );
+        assert_eq!(
+            session
+                .comment_at(entry, CommentKind::Regular)
+                .unwrap()
+                .as_deref(),
+            Some("disassembly note")
+        );
     }
 
     /// A rename must be emittable C and must not make two addresses share one symbol:
