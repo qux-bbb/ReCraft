@@ -18,6 +18,8 @@ pwsh -File scripts/package.ps1 -NoMsi          # 仅 zip（无 dotnet/WiX 的机
 pwsh -File scripts/package.ps1 -RequireMsi     # WiX 5 缺失则失败（CI msi job）
 pwsh -File scripts/verify-package.ps1          # zip + MSI 的哈希/条目/包内二进制
 pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸载（需提权提示符）
+pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
+                                               # 干净机：安装→CLI→GUI→卸载→清理（需提权提示符）
 ```
 
 版本来自 workspace `Cargo.toml` 的 `version`；可用 `-Version` 覆盖。`dist` 里上一次运行的
@@ -74,6 +76,88 @@ pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸�
 - `msi` job（windows-latest，runner 自身已提权）：release 构建 → `scripts/package.ps1
   -RequireMsi`（`dotnet tool restore` 还原 WiX 5.0.2）→ `verify-package.ps1` →
   `verify-msi.ps1`（结构/载荷 + 安装→CLI→卸载）→ 上传 `recraft-windows-x64-msi`。
+
+## 干净机复验（2026-11-12，0.2.0 发布前）
+
+本节关闭待办「干净 VM 安装/卸载复验（Win10/Win11）」：用当前 HEAD 重新打包的 MSI
+（`scripts/package.ps1`；版本号仍为 0.1.0，SHA-256 `D30F45C5DB24F554177F0BEE3F830B8AF4CA49CAE0DAAEA974F28286FDF6D12D`）
+在**干净 Win10 22H2 虚机**与**Win11 本机**各跑一遍完整流程：
+
+安装（默认选项：PATH 开、桌面快捷方式关）→ 文件与开始菜单/注册项 → 装好的 CLI
+（`--version` / `info` / `import` / `analyze` / `metrics`）→ 启动 GUI（窗口出现、截图、
+`WM_CLOSE` 正常退出）→ 卸载 → 目录/快捷方式/PATH/“应用和功能”/App Paths/
+Capabilities/RegisteredApplications 清理。
+
+两段日志都来自 `scripts/verify-install.ps1`（本次新增：干净机「安装→CLI→GUI→卸载→清理」一体化
+检查，含窗口枚举与截图；`verify-msi.ps1` 仍负责静默安装与表/载荷断言，两者互补）。
+
+Win10 22H2 虚机（Microsoft Windows 10 专业版 10.0.19045.6466，VMware，4 vCPU/8 GiB）：
+
+```
+[08:43:33] user      DESKTOP-SKPNJND\alice
+[08:43:33] admin     True
+[08:43:33] msi sha   D30F45C5DB24F554177F0BEE3F830B8AF4CA49CAE0DAAEA974F28286FDF6D12D
+[08:43:33] ok   no previous install at C:\Program Files\ReCraft
+[08:43:34] ok   msiexec /i exit code (0)
+[08:43:34] ok   installed payload complete (10 files; missing: )
+[08:43:34] ok   Start-menu shortcuts present (ReCraft 命令行.lnk, ReCraft.lnk)
+[08:43:34] ok   install folder added to the machine PATH
+[08:43:34] ok   Apps & Features entry created
+[08:43:34] ok   App Paths\recraft-cli.exe points at the installed CLI
+[08:43:36] ok   recraft-cli analyze/metrics (functions=487, coverage=99.7%)
+[08:43:36] ok   main window appeared (title: 'ReCraft')
+[08:43:38] ok   window screenshot saved (...\gui-20261112-084332.png, 93.8 KiB)
+[08:43:38] ok   GUI closed cleanly on WM_CLOSE
+[08:43:39] ok   msiexec /x exit code (0)
+[08:43:39] ok   install directory removed
+[08:43:39] ok   Start-menu shortcuts removed
+[08:43:39] ok   install folder removed from the machine PATH
+[08:43:39] ok   Apps & Features entry removed
+[08:43:39] ok   Software\ReCraft values removed
+[08:43:39] ok   machine PATH restored to its pre-install value
+[08:43:39] RESULT PASS
+```
+
+Win11 25H2 本机（Microsoft Windows 11 家庭版 10.0.26200）：
+
+```
+[08:46:56] admin     True
+[08:46:56] ok   no previous install at C:\Program Files\ReCraft
+[08:47:00] ok   msiexec /i exit code (0)
+[08:47:00] ok   installed payload complete (10 files; missing: )
+[08:47:00] ok   Start-menu shortcuts present (ReCraft 命令行.lnk, ReCraft.lnk)
+[08:47:01] ok   recraft-cli import created a project
+[08:47:02] ok   recraft-cli analyze/metrics (functions=506, coverage=99.6%)
+[08:47:03] ok   main window appeared (title: 'ReCraft')
+[08:47:04] ok   window screenshot saved (...\gui-20261112-084656.png, 68.7 KiB)
+[08:47:05] ok   GUI closed cleanly on WM_CLOSE
+[08:47:07] ok   msiexec /x exit code (0)
+[08:47:07] ok   install directory removed
+[08:47:07] ok   Start-menu shortcuts removed
+[08:47:07] ok   Apps & Features entry removed
+[08:47:07] ok   App Paths value removed
+[08:47:07] ok   Capabilities values removed
+[08:47:07] ok   RegisteredApplications\ReCraft removed
+[08:47:07] ok   machine PATH restored to its pre-install value
+[08:47:07] RESULT PASS
+```
+
+（Win10 上是 487 个函数，因为该系统的 `notepad.exe` 是老版本；本机 506 与既有基线一致。）
+
+两个需要记住的结论：
+
+1. **同版本号重装不会触发 `MajorUpgrade`**。本机原本装着一份 2026-11-09 的 0.1.0（en-US 包，
+   装在 `D:\sec_tools\ReCraft`），本次又装了同版本的 0.1.0：两份产品并存、共享组件 GUID，
+   卸载新装的那份后旧产品的 ARP 项、开始菜单快捷方式与 `HKLM\Software\ReCraft` 仍在
+   （首轮 8 项失败全是这个原因，不是安装器缺陷；清掉旧产品后重跑全绿）。**发版必须 bump
+   版本号**，否则 0.1.0→0.1.0 的升级路径未定义——`MajorUpgrade` 表检查通过但从不触发。
+   Win10 虚机里也有一份 2026-11-08 的 0.1.0，先用 `msiexec /x {F82F758C-…}` 清掉，那次卸载
+   同样 exit 0 且目录/ARP 项全消失，可算一次额外的卸载验证。
+2. **自动化方式**：Win10 虚机用 VMware VIX（`vmrun runProgramInGuest`）驱动；为拿到管理员
+   令牌临时关闭 guest 的 UAC（`EnableLUA=0`）并临时启用自动登录，验证后已恢复
+   （`EnableLUA=1`、`ConsentPromptBehaviorAdmin=5`、`AutoAdminLogon=0`、删除 `DefaultPassword`，
+   测试文件也已删除）。安装本身是 `msiexec /qn` 以管理员权限执行，与用户点一次 UAC 等价。
+   本机由 `Start-Process -Verb RunAs` 发起提权，用户批准 UAC。
 
 ## 本机验证（2026-11-09，安装选项 / 中文向导）
 
@@ -162,7 +246,8 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 4. `scripts/verify-package.ps1` + 提权提示符下的 `scripts/verify-msi.ps1` 全过；
    校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
 5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
-6. 代码签名后，在干净 Win10/Win11 虚拟机各复跑一次安装→启动 UI→卸载。
+6. 干净机的安装→启动 UI→卸载已复验（见上节 2026-11-12：Win10 22H2 虚机 + Win11 25H2 本机）；
+   代码签名上线后需重打产物再复验一次。
 7. 打附注标签并推送：`git tag -a v0.1.0 -m "ReCraft 0.1.0"` +
    `git push origin main v0.1.0`；用 CHANGELOG 的 0.1.0 节作为 Release notes
    （`gh release create v0.1.0 --notes-file <utf8 临时文件> <zip> <msi> SHA256SUMS.txt`）。
