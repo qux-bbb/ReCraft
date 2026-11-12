@@ -1620,6 +1620,14 @@ fn cmd_analyze(
             .count()
     );
     println!(
+        "  from prologues:     {}",
+        result
+            .functions
+            .iter()
+            .filter(|f| f.source == recraft_analysis::FunctionSource::Prologue)
+            .count()
+    );
+    println!(
         "  from PLT stubs:     {}",
         result
             .functions
@@ -3195,6 +3203,7 @@ fn cmd_eval(file: &Path, map: Option<&Path>, as_json: bool) -> Result<()> {
                     recraft_analysis::FunctionSource::CallTarget => "call",
                     recraft_analysis::FunctionSource::GoPclntab => "go",
                     recraft_analysis::FunctionSource::DataPointer => "data",
+                    recraft_analysis::FunctionSource::Prologue => "prologue",
                     recraft_analysis::FunctionSource::UserRange => "range",
                 };
                 (function.start.get(), source)

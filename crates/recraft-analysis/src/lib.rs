@@ -6,6 +6,8 @@
 //! - **Function discovery**: seeds from `.pdata`, exports, the entry point and TLS
 //!   callbacks; recursive descent follows direct branches, direct calls become new
 //!   function seeds, and calls/jumps leaving the function are treated as tail calls.
+//!   When the image carries no exact function table (PE32 has no `.pdata`), a
+//!   prologue scan of the code ranges no seed covered recovers the remaining starts.
 //! - **Cross-references**: direct call edges, branch edges and data references from
 //!   absolute/RIP-relative memory operands.
 //! - **Strings**: ASCII and UTF-16LE extraction with IDA-compatible defaults (see
@@ -20,6 +22,7 @@ mod api;
 mod boundaries;
 mod cfg;
 mod golang;
+mod prologue;
 mod strings;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -60,6 +63,8 @@ pub enum FunctionSource {
     GoPclntab,
     /// Function pointer found in a readable data segment (dispatch tables, callbacks).
     DataPointer,
+    /// Start recovered by the prologue fallback scan (no exact function table).
+    Prologue,
     /// Seed for an incremental re-analysis of a user-edited code range.
     UserRange,
 }
@@ -108,6 +113,11 @@ struct ScanOutput {
     data_refs: Vec<(Address, Address)>,
     api_refs: Vec<(Address, String, String)>,
     leaving: Vec<Address>,
+    /// Instructions decoded while walking the body.
+    instructions: usize,
+    /// `ret`-family instructions reached while walking the body. The prologue
+    /// fallback uses this to reject candidates that never form a complete function.
+    returns: usize,
 }
 
 const MAX_INSTRUCTIONS_PER_FUNCTION: usize = 20_000;
@@ -374,76 +384,111 @@ pub fn analyze_with_options(
     let mut instruction_total: u64 = 0;
     let mut discovered_by_call: u64 = 0;
 
-    while let Some(start) = queue.pop_front() {
-        if options.cancelled() {
-            return Err(recraft_common::Error::Cancelled);
-        }
-        let Some(record) = known.get(&start.get()) else {
-            continue;
-        };
-        if record.scanned {
-            continue;
-        }
-        let limit = record.end;
-        if let Some(record) = known.get_mut(&start.get()) {
-            record.scanned = true;
-        }
+    // Fallback: when the image has no exact function table (PE32 has no `.pdata`; a
+    // stripped image may have neither symbols nor unwind data), scan the code ranges no
+    // seed covered for prologues. The pass runs after recursive descent has settled and
+    // repeats until it stops adding starts: a recovered function only ever covers bytes
+    // that previously looked like a gap, never the other way around.
+    let prologue_fallback =
+        options.seed_range.is_none() && pdata_ranges.is_empty() && go_functions == 0;
 
-        let output = scan_function(
-            session,
-            start,
-            limit,
-            &segments,
-            &ImportTags {
-                iat: &iat,
-                plt: &plt,
-            },
-            &mut instruction_total,
-            options,
-        )?;
-
-        calls.extend(output.calls);
-        jumps.extend(output.jumps);
-        data_refs.extend(output.data_refs);
-        api_refs.extend(output.api_refs);
-
-        if let Some(record) = known.get_mut(&start.get())
-            && record.end.is_none()
-            && output.max_end > start
-        {
-            record.end = Some(output.max_end);
-        }
-
-        for target in output.leaving {
-            if target <= start || known.contains_key(&target.get()) {
+    loop {
+        while let Some(start) = queue.pop_front() {
+            if options.cancelled() {
+                return Err(recraft_common::Error::Cancelled);
+            }
+            let Some(record) = known.get(&start.get()) else {
+                continue;
+            };
+            if record.scanned {
                 continue;
             }
-            if !is_code(&segments, target) {
-                continue;
+            let limit = record.end;
+            if let Some(record) = known.get_mut(&start.get()) {
+                record.scanned = true;
             }
-            // Never invent a function in the middle of an already known one.
-            let inside_known = known.iter().any(|(&other_start, record)| {
-                other_start != target.get()
-                    && record
-                        .end
-                        .is_some_and(|end| target >= Address::new(other_start) && target < end)
-            });
-            if inside_known {
+
+            let output = scan_function(
+                session,
+                start,
+                limit,
+                &segments,
+                &ImportTags {
+                    iat: &iat,
+                    plt: &plt,
+                },
+                &mut instruction_total,
+                options,
+                MAX_INSTRUCTIONS_PER_FUNCTION,
+            )?;
+
+            calls.extend(output.calls);
+            jumps.extend(output.jumps);
+            data_refs.extend(output.data_refs);
+            api_refs.extend(output.api_refs);
+
+            if let Some(record) = known.get_mut(&start.get())
+                && record.end.is_none()
+                && output.max_end > start
+            {
+                record.end = Some(output.max_end);
+            }
+
+            for target in output.leaving {
+                if target <= start || known.contains_key(&target.get()) {
+                    continue;
+                }
+                if !is_code(&segments, target) {
+                    continue;
+                }
+                // Never invent a function in the middle of an already known one.
+                let inside_known = known.iter().any(|(&other_start, record)| {
+                    other_start != target.get()
+                        && record
+                            .end
+                            .is_some_and(|end| target >= Address::new(other_start) && target < end)
+                });
+                if inside_known {
+                    continue;
+                }
+                known.insert(
+                    target.get(),
+                    Known {
+                        end: None,
+                        source: FunctionSource::CallTarget,
+                        scanned: false,
+                    },
+                );
+                discovered_by_call += 1;
+                queue.push_back(target);
+            }
+
+            if instruction_total > MAX_TOTAL_INSTRUCTIONS {
+                break;
+            }
+        }
+
+        if !prologue_fallback || instruction_total > MAX_TOTAL_INSTRUCTIONS {
+            break;
+        }
+        let candidates = prologue::discover_prologue_starts(session, &segments, &known)?;
+        let mut added = 0usize;
+        for candidate in candidates {
+            if known.contains_key(&candidate.start.get()) {
                 continue;
             }
             known.insert(
-                target.get(),
+                candidate.start.get(),
                 Known {
-                    end: None,
-                    source: FunctionSource::CallTarget,
+                    end: Some(candidate.end),
+                    source: FunctionSource::Prologue,
                     scanned: false,
                 },
             );
-            discovered_by_call += 1;
-            queue.push_back(target);
+            queue.push_back(candidate.start);
+            added += 1;
         }
-
-        if instruction_total > MAX_TOTAL_INSTRUCTIONS {
+        if added == 0 {
             break;
         }
     }
@@ -574,6 +619,7 @@ fn source_rank(source: FunctionSource) -> u8 {
         FunctionSource::Tls => 1,
         FunctionSource::DataPointer => 1,
         FunctionSource::CallTarget => 0,
+        FunctionSource::Prologue => 0,
         FunctionSource::UserRange => 3,
     }
 }
@@ -596,6 +642,7 @@ struct ImportTags<'a> {
 }
 
 /// Walk one function's basic blocks.
+#[allow(clippy::too_many_arguments)]
 fn scan_function(
     session: &mut Session,
     start: Address,
@@ -604,6 +651,7 @@ fn scan_function(
     tags: &ImportTags<'_>,
     instruction_total: &mut u64,
     options: &AnalysisOptions,
+    max_instructions: usize,
 ) -> Result<ScanOutput> {
     let mut visited: BTreeSet<u64> = BTreeSet::new();
     let mut stack: Vec<Address> = vec![start];
@@ -614,6 +662,7 @@ fn scan_function(
     let mut api_refs = Vec::new();
     let mut leaving: BTreeSet<u64> = BTreeSet::new();
     let mut local_instructions = 0usize;
+    let mut returns = 0usize;
 
     while let Some(addr) = stack.pop() {
         if !visited.insert(addr.get()) {
@@ -627,7 +676,7 @@ fn scan_function(
             leaving.insert(addr.get());
             continue;
         }
-        if local_instructions >= MAX_INSTRUCTIONS_PER_FUNCTION {
+        if local_instructions >= max_instructions {
             break;
         }
         let Some(insn) = session.insn_at(addr)? else {
@@ -698,11 +747,9 @@ fn scan_function(
                 // the blocks after them) were missing from the database.
                 stack.push(next);
             }
-            FlowKind::IndirectBranch
-            | FlowKind::Return
-            | FlowKind::Interrupt
-            | FlowKind::Trap
-            | FlowKind::Invalid => {}
+            FlowKind::Return => returns += 1,
+            FlowKind::IndirectBranch | FlowKind::Interrupt | FlowKind::Trap | FlowKind::Invalid => {
+            }
         }
     }
 
@@ -713,6 +760,8 @@ fn scan_function(
         data_refs,
         api_refs,
         leaving: leaving.into_iter().map(Address::new).collect(),
+        instructions: local_instructions,
+        returns,
     })
 }
 
@@ -1205,5 +1254,132 @@ mod tests {
                 "{api} missing from {tags:?}"
             );
         }
+    }
+
+    fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// A PE32 image with one `.text` section and no exports, imports, TLS or
+    /// `.pdata`: `entry_rva` is the only seed the loader hands to analysis.
+    fn pe32_text(text: &[u8], entry_rva: u32) -> Vec<u8> {
+        const DOS_STUB: usize = 0x80;
+        const OPTIONAL_SIZE: usize = 224;
+        const TEXT_RAW: usize = 0x400;
+        const TEXT_RVA: u32 = 0x1000;
+        let mut bytes = vec![0u8; TEXT_RAW + text.len()];
+        bytes[..2].copy_from_slice(b"MZ");
+        put_u32(&mut bytes, 0x3c, DOS_STUB as u32);
+
+        bytes[DOS_STUB..DOS_STUB + 4].copy_from_slice(b"PE\0\0");
+        let coff = DOS_STUB + 4;
+        put_u16(&mut bytes, coff, 0x014c); // i386
+        put_u16(&mut bytes, coff + 2, 1); // one section
+        put_u16(&mut bytes, coff + 16, OPTIONAL_SIZE as u16);
+        put_u16(&mut bytes, coff + 18, 0x0102); // executable | 32-bit
+
+        let optional = coff + 20;
+        put_u16(&mut bytes, optional, 0x10b); // PE32
+        put_u32(&mut bytes, optional + 16, entry_rva);
+        put_u32(&mut bytes, optional + 20, TEXT_RVA); // BaseOfCode
+        put_u32(&mut bytes, optional + 24, TEXT_RVA); // BaseOfData
+        put_u32(&mut bytes, optional + 28, 0x0040_0000); // ImageBase
+        put_u32(&mut bytes, optional + 32, 0x1000); // SectionAlignment
+        put_u32(&mut bytes, optional + 36, 0x200); // FileAlignment
+        put_u32(&mut bytes, optional + 56, 0x2000); // SizeOfImage
+        put_u32(&mut bytes, optional + 60, TEXT_RAW as u32); // SizeOfHeaders
+        put_u16(&mut bytes, optional + 68, 3); // console subsystem
+        put_u32(&mut bytes, optional + 92, 16); // NumberOfRvaAndSizes
+
+        let section = optional + OPTIONAL_SIZE;
+        bytes[section..section + 5].copy_from_slice(b".text");
+        put_u32(&mut bytes, section + 8, text.len() as u32);
+        put_u32(&mut bytes, section + 12, TEXT_RVA);
+        put_u32(&mut bytes, section + 16, text.len() as u32);
+        put_u32(&mut bytes, section + 20, TEXT_RAW as u32);
+        put_u32(&mut bytes, section + 36, 0x6000_0020); // code | execute | read
+
+        bytes[TEXT_RAW..TEXT_RAW + text.len()].copy_from_slice(text);
+        bytes
+    }
+
+    fn decode_one(bytes: &[u8]) -> recraft_decode::Insn {
+        recraft_decode::decode(bytes, Address::new(0x1000), recraft_decode::Mode::X86)
+            .expect("fixture bytes decode")
+    }
+
+    #[test]
+    fn prologue_scan_recognises_padding_and_prologue_shapes() {
+        use prologue::{is_padding, looks_like_prologue};
+
+        for nop in [
+            &[0x90][..],
+            &[0xcc],
+            &[0x66, 0x90],
+            &[0x0f, 0x1f, 0x40, 0x00],
+            &[0x8d, 0x76, 0x00],
+            &[0x2e, 0x8d, 0xb4, 0x26, 0x00, 0x00, 0x00, 0x00],
+        ] {
+            assert!(is_padding(&decode_one(nop)), "{nop:02x?} is not padding");
+        }
+        for prologue in [
+            &[0x55][..],
+            &[0x53],
+            &[0x57],
+            &[0x83, 0xec, 0x28],
+            &[0x8b, 0xff],
+        ] {
+            assert!(
+                looks_like_prologue(&decode_one(prologue)),
+                "{prologue:02x?} is not a prologue"
+            );
+        }
+        for other in [
+            &[0x8b, 0xc0][..],
+            &[0x31, 0xc0],
+            &[0xe8, 0, 0, 0, 0],
+            &[0xc3],
+        ] {
+            assert!(
+                !looks_like_prologue(&decode_one(other)),
+                "{other:02x?} accepted as a prologue"
+            );
+        }
+    }
+
+    /// PE32 has no `.pdata`, so a function nothing calls and no pointer names is only
+    /// visible through its prologue. `bin_150.exe`/`bin_158.exe` in the DecBench kit are
+    /// exactly this shape.
+    #[test]
+    fn prologue_fallback_recovers_an_unreferenced_function() {
+        let mut text = vec![0xCCu8; 0x40];
+        // Entry: push ebp; mov ebp, esp; xor eax, eax; pop ebp; ret.
+        text[0..7].copy_from_slice(&[0x55, 0x8b, 0xec, 0x33, 0xc0, 0x5d, 0xc3]);
+        // Unreferenced function behind `int3` padding:
+        // push ebp; mov ebp, esp; mov eax, 0x2a; pop ebp; ret.
+        text[0x10..0x1a]
+            .copy_from_slice(&[0x55, 0x8b, 0xec, 0xb8, 0x2a, 0x00, 0x00, 0x00, 0x5d, 0xc3]);
+
+        let bytes = pe32_text(&text, 0x1000);
+        let (result, _session, _dir) = analyze_bytes(&bytes);
+
+        assert!(
+            result
+                .functions
+                .iter()
+                .any(|function| function.start == Address::new(0x401000)),
+            "the entry function is missing: {:?}",
+            result.functions
+        );
+        let recovered = result
+            .functions
+            .iter()
+            .find(|function| function.start == Address::new(0x401010))
+            .expect("the prologue-only function was not recovered");
+        assert_eq!(recovered.source, FunctionSource::Prologue);
     }
 }

@@ -13,6 +13,19 @@
 
 ### 新增
 
+- **没有精确函数表时的序言回退。** PE32 没有 `.pdata`，此前只靠导出、入口、调用目标和数据
+  指针播种，于是 DecBench 里 5 个 PE32 目标（`bin_150/158/198/213/222.exe`）漏掉了那些不被
+  直接调用、也没有任何指针指向的函数（`0x4033b0` 是作为立即数传给线程创建 API 的线程例程，
+  `0x4013d1` 是链接器留下的无引用代码）。`recraft-analysis` 现在在递归下降收敛后扫描仍未
+  覆盖的可执行区间，只在「`ret`/`jmp` 或对齐填充之后」接受 `push` 被调用者保存寄存器、
+  无帧 `sub esp, imm`、`lea esp, [esp-…]`、热补丁 `mov edi, edi` 这类序言，并用一次试探性
+  CFG 遍历确认它确实解出一段指令（到达 `ret`，或长到不像数据巧合）；多字节 NOP
+  （`lea esi, [esi]`、`xchg ax, ax`）按填充处理。回退只在镜像没有精确函数表时启用（PE32、
+  剥离符号的 ELF），`.pdata`/`.pclntab`/`.symtab` 存在时不跑，因此 notepad/crackme/corpus/
+  corpus86/go 的 789 张 golden 零 diff、lint 0 findings。`analyze` 新增
+  `from prologues: N` 统计。DecBench sample-set 的 PE32 产出从 3/8 升到 **8/8**，合计
+  **166/166**（不做 ARM32 时的上限）。
+
 - **Rust 语料样本与门禁。** 新增 `corpus/rust/lib.rs`（`cdylib`）与 `corpus/build-rust.ps1`；
   `corpus/build-linux.sh` 在装了 rustc 时另出 `libcorpus-rust.so`。样本补齐只有 Rust 二进制
   才有的形制：panic/unwind 机制、trait object 的 vtable 动态派发、捕获环境闭包、`format!`
