@@ -186,9 +186,9 @@ pub enum CommentKind {
     Repeatable = 1,
     /// Shown above the instruction.
     Anterior = 2,
-    /// Shown above its line in the Decompile view (IDA's indented pseudocode comment).
-    /// Stored apart from the disassembly slots, exactly like IDA keeps its two comment
-    /// stores separate.
+    /// Shown at the end of its line in the Decompile view. The pseudocode comment slot is
+    /// kept apart from the disassembly comments, exactly like IDA keeps its two stores
+    /// separate.
     Pseudo = 3,
 }
 

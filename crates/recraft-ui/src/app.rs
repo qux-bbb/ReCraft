@@ -912,7 +912,7 @@ struct AiJob {
 enum EditKind {
     Rename,
     Comment,
-    /// The Decompile view's indented comment (IDA's `/`).
+    /// The Decompile view's trailing comment (IDA's `/`).
     PseudoComment,
     Prototype,
 }
@@ -1289,7 +1289,7 @@ enum Action {
     GotoDialog,
     EditName,
     EditComment,
-    /// IDA's `/`: edit the indented comment of the Decompile line under the cursor.
+    /// IDA's `/`: edit the trailing comment of the Decompile line under the cursor.
     /// `addr` names the row a context menu was opened on; `None` follows the cursor.
     EditPseudoComment {
         addr: Option<Address>,
@@ -1395,10 +1395,14 @@ pub struct ReCraftApp {
     key_pass: Option<u64>,
     pseudo_start: Address,
     pseudo: Option<Vec<PseudoLine>>,
-    /// Indented (pseudocode) comments of the rendered function, keyed by the address of
-    /// the line they annotate. `pseudo` already carries them as `// …` rows; this map is
-    /// what the edit dialog pre-fills and what undo/refresh rebuild the rows from.
+    /// Trailing (pseudocode) comments of the rendered function, keyed by the address of
+    /// the line they annotate. `pseudo` already carries them at the end of that row; this
+    /// map is what the edit dialog pre-fills and what undo/refresh rebuild the rows from.
     pseudo_comments: BTreeMap<Address, String>,
+    /// Per row of `pseudo`, the character index where its trailing comment starts (`None`
+    /// when the row has no comment). Names and quoted strings inside the comment must not
+    /// become jump targets, so the view needs the boundary.
+    pseudo_comment_cols: Vec<Option<usize>>,
     /// Quoted string literals of the current listing, with the data address each names.
     /// A double-click on one follows the literal instead of its instruction.
     pseudo_literals: Vec<(String, Address)>,
@@ -1557,6 +1561,7 @@ impl Default for ReCraftApp {
             pseudo_start: Address::ZERO,
             pseudo: None,
             pseudo_comments: BTreeMap::new(),
+            pseudo_comment_cols: Vec::new(),
             pseudo_literals: Vec::new(),
             literal_data: Vec::new(),
             pseudo_selected_line: None,
@@ -1847,6 +1852,7 @@ impl ReCraftApp {
         self.pseudo_start = Address::ZERO;
         self.pseudo = None;
         self.pseudo_comments.clear();
+        self.pseudo_comment_cols.clear();
         self.pseudo_literals.clear();
         self.literal_data.clear();
         self.pseudo_selected_line = None;
@@ -3761,16 +3767,16 @@ impl ReCraftApp {
                     .and_then(|range| session.comments_in(range, CommentKind::Pseudo).ok())
                     .map(|comments| comments.into_iter().collect())
                     .unwrap_or_default();
-                self.pseudo = Some(Self::with_pseudo_comments(
-                    code.lines,
-                    &self.pseudo_comments,
-                ));
+                let (rows, cols) = Self::with_pseudo_comments(code.lines, &self.pseudo_comments);
+                self.pseudo = Some(rows);
+                self.pseudo_comment_cols = cols;
                 self.pseudo_literals = code.literals;
                 self.pseudo_dirty = false;
             }
             Err(error) => {
                 self.pseudo = None;
                 self.pseudo_comments.clear();
+                self.pseudo_comment_cols.clear();
                 self.pseudo_literals.clear();
                 self.pseudo_dirty = false;
                 self.set_status(
@@ -3780,40 +3786,66 @@ impl ReCraftApp {
         }
     }
 
-    /// Insert the stored Decompile-view comments above the first row carrying their
-    /// address, like IDA's indented comments. A comment whose address no longer appears in
-    /// the output keeps its rows at the end (IDA calls those "orphan comments").
+    /// Append the stored Decompile-view comment to the first row carrying its address, at
+    /// the end of that line (`code  // note`) like a disassembly comment. Additional comment
+    /// lines follow on their own rows aligned under the marker, so a multi-line note keeps
+    /// its shape without moving the annotated line. A comment whose address no longer
+    /// appears in the output keeps its rows at the end (IDA's orphan comments).
+    ///
+    /// Returns the rows plus, per row, the character index where its trailing comment
+    /// starts (`None` for uncommented rows): the view uses that boundary to keep names and
+    /// quoted strings inside a comment from becoming jump targets.
     fn with_pseudo_comments(
         lines: Vec<PseudoLine>,
         comments: &BTreeMap<Address, String>,
-    ) -> Vec<PseudoLine> {
+    ) -> (Vec<PseudoLine>, Vec<Option<usize>>) {
         if comments.is_empty() {
-            return lines;
+            let cols = vec![None; lines.len()];
+            return (lines, cols);
         }
         let mut remaining = comments.clone();
-        let mut output = Vec::with_capacity(lines.len() + comments.len());
-        for line in lines {
-            if let Some(text) = remaining.remove(&line.addr) {
-                Self::push_pseudo_comment(&mut output, line.addr, &line.text, &text);
+        let mut rows = Vec::with_capacity(lines.len() + comments.len());
+        let mut cols = Vec::with_capacity(lines.len() + comments.len());
+        for mut line in lines {
+            let Some(text) = remaining.remove(&line.addr) else {
+                cols.push(None);
+                rows.push(line);
+                continue;
+            };
+            let mut parts = Self::comment_lines(&text);
+            let first = parts.next().unwrap_or_default().trim_end_matches('\r');
+            let addr = line.addr;
+            let code_chars = line.text.chars().count();
+            // Two spaces then the C comment marker, like the disassembly's comment column.
+            line.text.push_str("  // ");
+            line.text.push_str(first);
+            let column = code_chars + 2;
+            rows.push(line);
+            cols.push(Some(column));
+            for extra in parts {
+                let mut row = " ".repeat(column);
+                row.push_str("// ");
+                row.push_str(extra.trim_end_matches('\r'));
+                rows.push(PseudoLine { addr, text: row });
+                cols.push(Some(column));
             }
-            output.push(line);
         }
+        // Orphan comments have no statement to trail: they become comment-only rows.
         for (addr, text) in remaining {
-            Self::push_pseudo_comment(&mut output, addr, "", &text);
+            for extra in Self::comment_lines(&text) {
+                let mut row = String::from("// ");
+                row.push_str(extra.trim_end_matches('\r'));
+                rows.push(PseudoLine { addr, text: row });
+                cols.push(Some(0));
+            }
         }
-        output
+        (rows, cols)
     }
 
-    /// Push one `// …` row per line of `text`, aligned with the indentation of the row the
-    /// comment annotates (`like`).
-    fn push_pseudo_comment(output: &mut Vec<PseudoLine>, addr: Address, like: &str, text: &str) {
-        let indent = &like[..like.len() - like.trim_start().len()];
-        for raw in text.lines() {
-            output.push(PseudoLine {
-                addr,
-                text: format!("{indent}// {}", raw.trim_end()),
-            });
-        }
+    /// Lines of a stored comment, ignoring one trailing newline so a CLI-authored note does
+    /// not render a stray empty continuation row.
+    fn comment_lines(text: &str) -> std::str::Split<'_, char> {
+        text.strip_suffix('\n').unwrap_or(text).split('\n')
     }
 
     fn refresh_functions(&mut self) {
@@ -7772,9 +7804,15 @@ impl ReCraftApp {
                     let in_literal = char_index.is_some_and(|char_index| {
                         pseudo_string_literal_at(&line.text, char_index).is_some()
                     });
-                    // An indented comment is annotation, not C: a name or a quoted string
-                    // inside it must not become a jump target.
-                    let in_comment = line.text.trim_start().starts_with("//");
+                    // A trailing comment is annotation, not C: a name or a quoted string
+                    // inside it must not become a jump target. Comment-only rows (orphan
+                    // comments, decompiler-emitted `//` lines) are covered by the prefix
+                    // check; a trailing comment starts at the recorded column.
+                    let comment_start = self.pseudo_comment_cols.get(index).copied().flatten();
+                    let in_comment = line.text.trim_start().starts_with("//")
+                        || comment_start.is_some_and(|start| {
+                            char_index.is_some_and(|char_index| char_index >= start)
+                        });
                     let symbol = if in_literal || in_comment {
                         None
                     } else {
@@ -7891,8 +7929,8 @@ impl ReCraftApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label(format!("{:#x}", edit.addr.get()));
-                // An indented comment may span several lines, like IDA's; the disassembly
-                // comment stays single-line because it is painted on one listing row.
+                // A pseudocode comment may span several lines; the disassembly comment
+                // stays single-line because it is painted on one listing row.
                 let text_edit = match edit.kind {
                     EditKind::PseudoComment => egui::TextEdit::multiline(&mut edit.text)
                         .desired_width(420.0)
@@ -8528,8 +8566,8 @@ impl ReCraftApp {
             } else if input.key_pressed(Key::N) {
                 action = Action::EditName;
             } else if input.key_pressed(Key::Slash) && self.tab == Tab::Pseudo {
-                // IDA's `/` edits the indented (pseudocode) comment; `;` is offered as an
-                // alias because it is the comment shortcut everywhere else in the app.
+                // IDA's `/` edits the pseudocode comment; `;` is offered as an alias
+                // because it is the comment shortcut everywhere else in the app.
                 action = Action::EditPseudoComment { addr: None };
             } else if input.key_pressed(Key::Semicolon) {
                 action = if self.tab == Tab::Pseudo {
@@ -13084,11 +13122,12 @@ mod tests {
         );
     }
 
-    /// The Decompile view renders stored comments as `// …` rows above the first row that
-    /// carries their address (IDA's indented comments). A comment whose address is no longer
-    /// emitted survives at the end, where IDA prints its orphan comments.
+    /// The Decompile view appends a stored comment to the end of the row that carries its
+    /// address (`code  // note`), like the disassembly's comment column; extra comment lines
+    /// follow aligned under the marker. A comment whose address is no longer emitted keeps
+    /// its rows at the end as comment-only rows (IDA's orphan comments).
     #[test]
-    fn pseudo_comments_are_inserted_above_their_row() {
+    fn pseudo_comments_trail_their_row() {
         let start = Address::new(0x140001000);
         let body = Address::new(0x140001010);
         let gone = Address::new(0x140001020);
@@ -13110,23 +13149,26 @@ mod tests {
             (body, "setup".to_owned()),
             (gone, "orphan\nnote".to_owned()),
         ]);
-        let rows = ReCraftApp::with_pseudo_comments(lines, &comments);
+        let (rows, cols) = ReCraftApp::with_pseudo_comments(lines, &comments);
         let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
         assert_eq!(
             texts,
             vec![
                 "void sub_140001000(void)",
                 "{",
-                "    // setup",
-                "    v1 = 1;",
+                "    v1 = 1;  // setup",
                 "// orphan",
                 "// note",
             ]
         );
-        // The inserted row inherits its statement's address, so clicking it still syncs the
-        // listing and re-editing it targets the same comment.
+        // The comment starts after the code; the view uses that boundary to keep names
+        // inside it from becoming jump targets.
+        let column = "    v1 = 1;".chars().count() + 2;
+        assert_eq!(cols, vec![None, None, Some(column), Some(0), Some(0)]);
+        // The annotated row keeps its own address, so clicking it still syncs the listing
+        // and re-editing targets the same comment.
         assert_eq!(rows[2].addr, body);
-        assert_eq!(rows[4].addr, gone);
+        assert_eq!(rows[3].addr, gone);
         // Only one comment exists per address: the two rows at the function start do not
         // both carry it.
         assert_eq!(
@@ -13138,11 +13180,11 @@ mod tests {
         );
     }
 
-    /// `/` (or `;`) in the Decompile view edits the indented comment of the row under the
-    /// cursor: the text lands in the `Pseudo` slot, shows above that row, and an empty text
+    /// `/` (or `;`) in the Decompile view edits the trailing comment of the row under the
+    /// cursor: the text lands in the `Pseudo` slot, trails that row, and an empty text
     /// deletes it again. The disassembly's own comment slot is left alone.
     #[test]
-    fn decompile_view_edits_and_renders_indented_comments() {
+    fn decompile_view_edits_and_renders_trailing_comments() {
         let Some(bytes) = sample_pe() else {
             return;
         };
@@ -13179,7 +13221,8 @@ mod tests {
             })
             .expect("a row with its own address");
         let target = lines[index].addr;
-        let indent = lines[index].text.len() - lines[index].text.trim_start().len();
+        let code_text = lines[index].text.clone();
+        let column = code_text.chars().count() + 2;
 
         let ctx = egui::Context::default();
         app.apply_action(&ctx, Action::EditPseudoComment { addr: Some(target) });
@@ -13194,22 +13237,22 @@ mod tests {
         let position = rows
             .iter()
             .position(|row| row.text.ends_with("// first note"))
-            .expect("the comment row is rendered");
+            .expect("the comment is rendered");
         assert_eq!(
             rows[position].text,
-            format!("{}// first note", " ".repeat(indent)),
-            "the comment is indented like the row it annotates"
+            format!("{code_text}  // first note"),
+            "the comment trails the annotated row"
         );
         assert_eq!(rows[position].addr, target);
         assert_eq!(
             rows[position + 1].text,
-            format!("{}// second line", " ".repeat(indent)),
-            "every line of the comment keeps the row's indentation"
+            format!("{}// second line", " ".repeat(column)),
+            "continuation lines align under the comment marker"
         );
         assert_eq!(
-            rows[position + 2].addr,
-            target,
-            "the comment sits above its code row"
+            app.pseudo_comment_cols[position],
+            Some(column),
+            "the view knows where the trailing comment starts"
         );
         assert_eq!(
             app.session
@@ -13242,13 +13285,13 @@ mod tests {
         let mut action = Action::None;
         let mut output = ctx.run_ui(input, |ui| app.pseudo_view(ui, &mut action));
         output.textures_delta.clear();
-        let comment_text = format!("{}// first note", " ".repeat(indent));
+        let comment_text = format!("{code_text}  // first note");
         assert!(
             output
                 .shapes
                 .iter()
                 .any(|clipped| find_text_galley(&clipped.shape, &comment_text).is_some()),
-            "the comment row must be painted with the listing: {comment_text:?}"
+            "the commented row must be painted with the listing: {comment_text:?}"
         );
 
         // Re-opening the dialog pre-fills the stored text; an empty one deletes it.
@@ -13261,11 +13304,17 @@ mod tests {
         edit.text = String::new();
         app.run_edit(edit);
         app.tick();
+        let rows = app.pseudo.as_ref().unwrap();
         assert!(
-            !app.pseudo.as_ref().unwrap().iter().any(|row| {
+            !rows.iter().any(|row| {
                 row.text.contains("// first note") || row.text.contains("// second line")
             }),
-            "an empty comment must remove all of its rows"
+            "an empty comment must remove every row of it"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.addr == target && row.text == code_text),
+            "deleting the comment restores the plain code row"
         );
         assert_eq!(
             app.session

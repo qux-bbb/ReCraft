@@ -549,7 +549,7 @@ impl MarkKind {
 }
 
 /// Comment slots `comment`/`uncomment` can address. `pseudo` is the Decompile view's
-/// indented comment, which IDA stores separately from the disassembly slots.
+/// comment, which IDA stores separately from the disassembly slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum CommentSlot {
     Regular,

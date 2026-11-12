@@ -187,7 +187,7 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 | 工具 | 参数 | 说明 |
 |---|---|---|
 | `rename` | `addr`, `name`（`null` 清除） | 重命名函数/数据/导入；重名或保留名会被拒绝 |
-| `set_comment` | `addr`, `text`（`null` 清除）, `kind?`=`regular/repeatable/anterior/pseudo` | 行内/引用/前置注释；`pseudo` 是反编译视图的缩进注释（与反汇编注释分开保存） |
+| `set_comment` | `addr`, `text`（`null` 清除）, `kind?`=`regular/repeatable/anterior/pseudo` | 行内/引用/前置注释；`pseudo` 是反编译视图的注释（显示在行尾，与反汇编注释分开保存） |
 | `set_prototype` | `addr`, `text`（`null` 清除） | 函数 C 原型 |
 | `apply_type` | `func`, `slot`（0 = 第一个参数）, `struct`（`null` 清除） | 把已定义的结构体绑定到参数槽 |
 | `define_function` | `start`, `end`（不含端点） | 定义函数或调整范围 |
