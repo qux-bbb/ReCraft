@@ -117,9 +117,9 @@
   类型信息（`.debug_info`）未做——行表只给位置，不给类型。
 - **DecBench 对照可用。** 新增 `recraft-cli decbench <kit> -o <dir>`：读 DecBench 评测套件的
   `functions.json`，逐二进制 import/analyze 后按目标地址渲染 L2 伪 C，写成套件要求的
-  `results/<bin>.c` + `results.json`。sample-set（223 个二进制、250 个函数）实测 147 个
-  二进制产出、`package.py` 校验通过，耗时约 65 秒；指标含义、实测数字与差距见
-  `docs/DECBENCH.md`。
+  `results/<bin>.c` + `results.json`。sample-set（223 个二进制、250 个函数）实测 161 个
+  二进制/函数产出（11-09 首跑为 147，ELF64 现为 158/158 全覆盖）、`package.py` 校验通过，
+  耗时约 168 秒（debug 构建）；指标含义、实测数字与差距见 `docs/DECBENCH.md`。
 - **Itanium C++ 名字可读了。** `recraft-common::demangle` 在 MSVC 与 Rust 之后新增 Itanium
   ABI 分支（`cpp_demangle`，MIT/Apache）：ELF 上的 `_Z…`、Mach-O 的 `__Z…` 现在显示为
   `recraft::square(int)` 这样的名字，并随符号名进入名字表。配套加了
@@ -136,6 +136,14 @@
   列表与伪代码里的字面量一起刷新；`analyze --min-string-len N` 使用同一设置。
 
 ### 修复
+
+- **ELF 调用第 5、6 个寄存器实参不再让整次导出 panic。** SysV 的整数实参寄存器有六个
+  （`rdi/rsi/rdx/rcx/r8/r9`），但记录「实参寄存器最近写入值」的 `arg_values` 只有四个槽
+  （`arg_slot()` 也只认前四个）。直接调用带五个以上实参、且第五个正好是 `r8` 时，
+  `call_argument()` 用 `slot` 索引该数组越界 panic，`recraft-cli decbench` 因此在中途
+  （写出 64 个 `.c` 后）中止。读路径改为 `.get(slot)`，缺失时退回按表达式渲染寄存器名，
+  与未被跟踪的槽行为一致。顺带把「不支持的 ELF 机器」报错写清楚：`EM_ARM`（0x28）现在
+  明确提示需要 ARM32 lifter，不再误写成「arm64 with the ARM64 lifter」。
 
 - **GUI 的「导入」也能选 ELF 了。** 文件对话框此前只挂 PE 扩展名（`exe`/`dll`/`sys`），而 ELF
   样本多半没有扩展名（`a.out`、`busybox`），在过滤后的对话框里根本不显示，看起来就像「只能导入

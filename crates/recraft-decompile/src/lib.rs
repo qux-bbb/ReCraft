@@ -2497,7 +2497,9 @@ impl Printer<'_> {
     fn call_argument(&self, slot: usize, arg: ExprId) -> String {
         if let Expr::Reg(view) = &self.exprs[arg as usize]
             && self.arg_regs.get(slot) == Some(&view.base)
-            && let Some(value) = &self.arg_values[slot]
+            // Only the first four argument registers are tracked (`arg_slot`), so a SysV
+            // call with five or six register arguments has no entry here.
+            && let Some(Some(value)) = self.arg_values.get(slot)
             // Only a plain value: repeating a memory load in the argument list would read
             // the location twice and read worse than the register name.
             && plain_argument_value(value)

@@ -35,6 +35,7 @@ const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
 
 const EM_386: u16 = 3;
+const EM_ARM: u16 = 0x28;
 const EM_X86_64: u16 = 0x3e;
 const EM_AARCH64: u16 = 0xb7;
 
@@ -239,8 +240,13 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
         EM_X86_64 => Arch::X64,
         EM_AARCH64 => Arch::Aarch64,
         other => {
+            let hint = if other == EM_ARM {
+                "ARM32 (EM_ARM) needs the ARM32 lifter"
+            } else {
+                "this build decodes i386 and x86-64"
+            };
             return Err(Error::format(format!(
-                "unsupported ELF machine {other:#x} (i386 and x86-64 today; arm64 with the ARM64 lifter)"
+                "unsupported ELF machine {other:#x}: {hint}"
             )));
         }
     };
