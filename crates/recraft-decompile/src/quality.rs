@@ -951,6 +951,62 @@ mod tests {
     /// Committed snapshots for the fixture: `tests/golden/crackme-real` once a rebuild has
     /// diverged from the pinned case binary, `tests/golden/crackme` while it is byte-identical
     /// (see `corpus/real/crackme/README.md`).
+    /// AArch64 golden set: a 6 KB ELF fixture (scripts/make-aarch64-fixture.py) with 32 tiny
+    /// functions, snapshotted through the neutral decoder + A64 lifter + shared renderer.
+    fn aarch64_fixture() -> Option<(Session, tempfile::TempDir)> {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/aarch64/tiny.elf");
+        let bytes = std::fs::read(path).ok()?;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("aarch64.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        persist(&mut session, &result).unwrap();
+        Some((session, dir))
+    }
+
+    #[test]
+    fn the_aarch64_fixture_matches_its_snapshots() {
+        let Some((session, _dir)) = aarch64_fixture() else {
+            eprintln!("skipping: tests/fixtures/aarch64/tiny.elf is missing");
+            return;
+        };
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/aarch64");
+        let update = std::env::var_os("RECRAFT_UPDATE_GOLDEN").is_some();
+        if update {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        let mut checked = 0usize;
+        let mut stale = Vec::new();
+        for function in session.functions().unwrap() {
+            let text = crate::pseudocode_l0(&session, function.start, 4096)
+                .unwrap()
+                .text();
+            let name = session
+                .name_at(function.start)
+                .unwrap()
+                .unwrap_or_else(|| format!("sub_{:x}", function.start.get()));
+            let path = dir.join(format!("{name}.c"));
+            if update {
+                std::fs::write(&path, &text).unwrap();
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(expected) if expected == text => checked += 1,
+                _ => stale.push(name),
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "{checked} snapshots ok, {} missing or stale in {}: {stale:?}",
+            stale.len(),
+            dir.display()
+        );
+        assert!(
+            checked >= 30,
+            "expected at least 30 snapshots, got {checked}"
+        );
+    }
+
     #[test]
     fn the_real_crackme_fixture_matches_its_snapshots() {
         let Some((mut session, _dir)) = real_crackme() else {

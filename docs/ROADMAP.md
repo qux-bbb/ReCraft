@@ -104,6 +104,10 @@
   `[xN, xM, lsl #s]` 索引寻址此前丢掉了索引寄存器（把 `strb w7, [x1, x3]` 渲染成
   `*(u8*)(xzr)`），`mov xD, xzr, #imm` 的 orr 别名此前取错操作数。新增 1 条索引寻址单测，
   IR 41 项全绿。
+  2026-11-14 第五轮：**A64 golden 落地**——`scripts/make-aarch64-fixture.py` 生成 6 KB 的
+  ELF64-AArch64 夹具（32 个带符号的小函数），`tests/golden/aarch64/` 存 32 份快照，测试
+  `the_aarch64_fixture_matches_its_snapshots` 走「导入 → 分析 → 反编译 → 快照比对」全链路，
+  `RECRAFT_UPDATE_GOLDEN=1` 可重新生成。W5 验收的「golden ≥30 函数」达成。
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
 - 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。
