@@ -14,6 +14,8 @@ pub mod expr;
 pub mod lift;
 pub mod reg;
 
-pub use expr::{BinOp, CondKind, Expr, ExprId, Flow, Lifted, LiftedInsn, Stmt, UnOp, cond_name};
+pub use expr::{
+    BinOp, Builtin, CondKind, Expr, ExprId, Flow, Lifted, LiftedInsn, Stmt, UnOp, cond_name,
+};
 pub use lift::{CallAbi, Lifter};
 pub use reg::{Reg, RegView, from_iced};

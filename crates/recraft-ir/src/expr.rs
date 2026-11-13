@@ -163,6 +163,30 @@ pub enum Expr {
         then: ExprId,
         otherwise: ExprId,
     },
+    /// Builtin pseudo-function (`__rdtsc()`, `__readgsqword(0x30)`): instructions whose
+    /// result has no C expression of its own but a well-known name.
+    Builtin {
+        kind: Builtin,
+        arg: Option<ExprId>,
+    },
+}
+
+/// Builtin pseudo-function names (kept `Copy` so [`Expr`] stays `Copy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Builtin {
+    /// `rdtsc`: the timestamp counter (low 64 bits).
+    Rdtsc,
+    /// `mov r64, gs:[disp]`: read the thread environment block at `disp`.
+    ReadGsqword,
+}
+
+impl Builtin {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Builtin::Rdtsc => "__rdtsc",
+            Builtin::ReadGsqword => "__readgsqword",
+        }
+    }
 }
 
 /// One straight-line statement.

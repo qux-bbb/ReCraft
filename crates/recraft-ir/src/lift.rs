@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use recraft_decode::{Insn, iced_x86};
 
-use crate::expr::{BinOp, CondKind, Expr, ExprId, Flow, LiftedInsn, Stmt, UnOp};
+use crate::expr::{BinOp, Builtin, CondKind, Expr, ExprId, Flow, LiftedInsn, Stmt, UnOp};
 use crate::reg::{Reg, RegView, from_iced};
 
 /// Register view of the instruction's destination, when that destination is a register.
@@ -166,6 +166,11 @@ impl Lifter {
         let mut stmts = Vec::new();
         let addr = insn.addr();
         let flow = match insn.mnemonic() {
+            // `mov r64, gs:[disp]` reads the TEB; `rdtsc` reads the timestamp counter.
+            M::Mov if insn.instruction().segment_prefix() == iced_x86::Register::GS => {
+                self.lift_gs_load(insn, &mut stmts)
+            }
+            M::Rdtsc => self.lift_rdtsc(insn, &mut stmts),
             M::Mov | M::Movd | M::Movq | M::Movdqa | M::Movdqu | M::Movaps | M::Movups => {
                 self.lift_mov(insn, &mut stmts)
             }
@@ -1330,6 +1335,53 @@ impl Lifter {
         Flow::Fallthrough
     }
 
+    /// `rdtsc`: the timestamp counter into `edx:eax`.
+    fn lift_rdtsc(&mut self, _insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Register;
+        let tsc = self.push(Expr::Builtin {
+            kind: Builtin::Rdtsc,
+            arg: None,
+        });
+        if let Some(view) = from_iced(Register::RAX) {
+            self.write_view(view, tsc, stmts);
+        }
+        // The high half is the same counter shifted right by 32, so the printed `rax`
+        // read refers to the value just written.
+        let shift = self.constant(32);
+        let Some(tsc) = from_iced(Register::RAX).map(|view| self.reg(view)) else {
+            return Flow::Fallthrough;
+        };
+        let high = self.push(Expr::Bin {
+            op: BinOp::Shr,
+            lhs: tsc,
+            rhs: shift,
+        });
+        if let Some(view) = from_iced(Register::RDX) {
+            self.write_view(view, high, stmts);
+        }
+        Flow::Fallthrough
+    }
+
+    /// `mov r64, gs:[disp]`: a read of the thread environment block at `disp`.
+    fn lift_gs_load(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Register;
+        let Some(view) = from_iced(insn.op_register(0)) else {
+            return self.intrinsic(insn, stmts);
+        };
+        if view.width != 8 {
+            return self.intrinsic(insn, stmts);
+        }
+        let error = insn.instruction().memory_displacement64();
+        let arg = self.constant(error);
+        let value = self.push(Expr::Builtin {
+            kind: Builtin::ReadGsqword,
+            arg: Some(arg),
+        });
+        self.write_view(view, value, stmts);
+        let _ = Register::GS;
+        Flow::Fallthrough
+    }
+
     /// `int 0x29` (Windows fast-fail): the code is in `ecx`, and the instruction does not
     /// return, so only the call itself is rendered.
     fn lift_fast_fail(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
@@ -1561,6 +1613,7 @@ fn expr_reads_reg(exprs: &[Expr], expr: ExprId, reg: Reg) -> bool {
                 || expr_reads_reg(exprs, *then, reg)
                 || expr_reads_reg(exprs, *otherwise, reg)
         }
+        Expr::Builtin { arg, .. } => arg.is_some_and(|arg| expr_reads_reg(exprs, arg, reg)),
         Expr::Const(_) | Expr::Temp(_) => false,
     }
 }

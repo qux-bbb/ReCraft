@@ -4,7 +4,7 @@ void sub_140001438_l1(void) {
     if (eax == 0) {
         al = 0;
     } else {
-        __asm("mov rax, gs:[0xADDR]");
+        rax = __readgsqword(0xADDR);
         rcx = *(u64*)((rax + 8));
         while (1) {
             eax = 0;

@@ -778,6 +778,7 @@ fn expr_reads_reg(exprs: &[Expr], expr: ExprId, reg: Reg) -> bool {
             expr_reads_reg(exprs, *lhs, reg) || expr_reads_reg(exprs, *rhs, reg)
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_reads_reg(exprs, *arg, reg),
+        Expr::Builtin { arg, .. } => arg.is_some_and(|arg| expr_reads_reg(exprs, arg, reg)),
         Expr::Select {
             cond,
             then,
@@ -833,6 +834,11 @@ fn expr_live_regs(exprs: &[Expr], expr: ExprId, out: &mut BTreeSet<Reg>) {
             expr_live_regs(exprs, *addr, out);
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_live_regs(exprs, *arg, out),
+        Expr::Builtin { arg, .. } => {
+            if let Some(arg) = arg {
+                expr_live_regs(exprs, *arg, out);
+            }
+        }
         Expr::Select {
             cond,
             then,
@@ -1029,6 +1035,7 @@ fn expr_has_load(exprs: &[Expr], expr: ExprId) -> bool {
             expr_has_load(exprs, *lhs) || expr_has_load(exprs, *rhs)
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => expr_has_load(exprs, *arg),
+        Expr::Builtin { arg, .. } => arg.is_some_and(|arg| expr_has_load(exprs, arg)),
         Expr::Select {
             cond,
             then,
@@ -1101,6 +1108,7 @@ fn is_stack_address(exprs: &[Expr], address: ExprId) -> bool {
             is_stack_address(exprs, *lhs) || is_stack_address(exprs, *rhs)
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => is_stack_address(exprs, *arg),
+        Expr::Builtin { arg, .. } => arg.is_some_and(|arg| is_stack_address(exprs, arg)),
         Expr::Select {
             cond,
             then,
@@ -2682,6 +2690,10 @@ impl Printer<'_> {
                 let kind = if *signed { "int" } else { "uint" };
                 format!("({kind}{})({})", u16::from(*width) * 8, self.expr(*arg))
             }
+            Expr::Builtin { kind, arg } => match arg {
+                Some(arg) => format!("{}({})", kind.name(), self.expr(*arg)),
+                None => format!("{}()", kind.name()),
+            },
             Expr::Cmp { kind, lhs, rhs } => match kind.comparison_symbol() {
                 Some(symbol) => {
                     let lhs = self.expr(*lhs);

@@ -826,6 +826,11 @@ fn walk_float_sizes(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(u8)) {
             walk_float_sizes(exprs, *then, visit);
             walk_float_sizes(exprs, *otherwise, visit);
         }
+        Expr::Builtin { arg, .. } => {
+            if let Some(arg) = arg {
+                walk_float_sizes(exprs, *arg, visit);
+            }
+        }
     }
 }
 
@@ -864,6 +869,11 @@ fn walk_live_reads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(&RegView))
             walk_live_reads(exprs, *cond, visit);
             walk_live_reads(exprs, *then, visit);
             walk_live_reads(exprs, *otherwise, visit);
+        }
+        Expr::Builtin { arg, .. } => {
+            if let Some(arg) = arg {
+                walk_live_reads(exprs, *arg, visit);
+            }
         }
     }
 }
@@ -1111,6 +1121,11 @@ fn visit_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId, u8)) {
             visit_loads(exprs, *then, visit);
             visit_loads(exprs, *otherwise, visit);
         }
+        Expr::Builtin { arg, .. } => {
+            if let Some(arg) = arg {
+                visit_loads(exprs, *arg, visit);
+            }
+        }
         Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
     }
 }
@@ -1279,6 +1294,11 @@ fn record_through(
             record_through(exprs, *then, registers, widths);
             record_through(exprs, *otherwise, registers, widths);
         }
+        Expr::Builtin { arg, .. } => {
+            if let Some(arg) = arg {
+                record_through(exprs, *arg, registers, widths);
+            }
+        }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => {
             record_through(exprs, *arg, registers, widths);
         }
@@ -1386,6 +1406,11 @@ fn walk_expr_loads(exprs: &[Expr], id: ExprId, visit: &mut impl FnMut(ExprId)) {
             walk_expr_loads(exprs, *otherwise, visit);
         }
         Expr::Un { arg, .. } | Expr::Cast { arg, .. } => walk_expr_loads(exprs, *arg, visit),
+        Expr::Builtin { arg, .. } => {
+            if let Some(arg) = arg {
+                walk_expr_loads(exprs, *arg, visit);
+            }
+        }
         Expr::Reg(_) | Expr::Const(_) | Expr::Temp(_) => {}
     }
 }

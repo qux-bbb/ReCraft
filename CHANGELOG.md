@@ -13,6 +13,16 @@
 
 ### 修复
 
+- **`__asm` 收敛：系统指令与内存填充改用带类型的名字。** IR 新增
+  `Stmt::PseudoCall`（名字 + 带类型实参）与 `Expr::Builtin`（`__rdtsc`、`__readgsqword`），
+  lifter 现在把 `int 0x29` 渲染成 `__fastfail(ecx)`、`prefetch*` 渲染成
+  `prefetch*(&x)`、`rep stosb` 渲染成 `memset(dst, byte, count)` 并写回 `rdi += rcx;
+  rcx = 0;`、`rdtsc` 渲染成 `rax = __rdtsc(); rdx = rax >> 32;`、`mov r64, gs:[disp]`
+  渲染成 `__readgsqword(disp)`。notepad 的 `__asm` **104 → 84**（intrinsic 覆盖率
+  99.6% → 99.7%），lint 两套 0 findings，golden 只改 4 张（都是同一类替换，语义等价）。
+  双输出的 `div`/`mul` 与原子 `xchg` 未动：它们需要 IR 临时量，32 位 `div` 的尝试已作为
+  负结果记录在 W3 待办里。
+
 - **共享尾声不再让冷路径跨着 `return` 跳回去。** 有些函数的冷路径算完结果后跳回函数中段
   的共享尾声（`xor eax,eax` + 收尾 + `ret`），旧输出会在主路径的 `return;` 之后再写一段
   `goto loc_…`。发射层新增 `copy_return_tail`：向后的无条件/条件跳转若指向已发射的短尾声
