@@ -2842,6 +2842,14 @@ impl ReCraftApp {
         widgets.active.weak_bg_fill = pal.accent.gamma_multiply(0.12);
         widgets.active.bg_stroke = egui::Stroke::new(1.0, pal.accent);
         widgets.open.bg_stroke = egui::Stroke::new(1.0, pal.border_strong);
+        // Hairline borders do the layering; only floating things get a soft shadow.
+        visuals.popup_shadow = egui::epaint::Shadow {
+            offset: [0, 8],
+            blur: 24,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(90),
+        };
+        visuals.window_shadow = visuals.popup_shadow;
         ctx.set_theme(match self.theme {
             ThemeMode::Dark => egui::Theme::Dark,
             ThemeMode::Light => egui::Theme::Light,
@@ -7565,40 +7573,95 @@ impl ReCraftApp {
 
     /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
     fn welcome(&mut self, ui: &mut egui::Ui, action: &mut Action) {
-        ui.add_space(24.0);
-        ui.heading(self.t("ui_recraft_reassembly_decompilation_workbench"));
-        ui.add_space(4.0);
-        ui.label(self.t("ui_drop_a_rcraft_project_or_a_pe_file_anywhere_in_this_window_or"));
-        ui.add_space(8.0);
+        let pal = self.palette();
+        ui.add_space(28.0);
+        ui.label(
+            RichText::new(self.t("ui_recraft_reassembly_decompilation_workbench"))
+                .size(24.0)
+                .strong()
+                .color(pal.text),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(self.t("ui_drop_a_rcraft_project_or_a_pe_file_anywhere_in_this_window_or"))
+                .size(13.0)
+                .color(pal.muted),
+        );
+        ui.add_space(16.0);
         ui.horizontal(|ui| {
-            if ui.button(self.t("ui_open_project")).clicked() {
-                *action = Action::Open;
-            }
-            if ui.button(self.t("ui_import_binary")).clicked() {
+            // One accent action (import) next to the secondary one, per docs/UI.md §3.
+            let import = ui.add(
+                egui::Button::new(
+                    RichText::new(self.t("ui_import_binary"))
+                        .size(13.0)
+                        .color(egui::Color32::from_rgb(0x0b, 0x12, 0x14)),
+                )
+                .fill(pal.accent)
+                .stroke(egui::Stroke::NONE)
+                .corner_radius(egui::CornerRadius::same(6))
+                .min_size(egui::vec2(120.0, 28.0)),
+            );
+            if import.clicked() {
                 *action = Action::Import;
+            }
+            let open = ui.add(
+                egui::Button::new(RichText::new(self.t("ui_open_project")).size(13.0))
+                    .fill(pal.surface_2)
+                    .stroke(egui::Stroke::new(1.0, pal.border_strong))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .min_size(egui::vec2(120.0, 28.0)),
+            );
+            if open.clicked() {
+                *action = Action::Open;
             }
         });
         if !self.recent.is_empty() {
-            ui.add_space(16.0);
-            ui.separator();
-            ui.label(self.t("ui_recent_projects"));
+            ui.add_space(20.0);
+            ui.label(
+                RichText::new(self.t("ui_recent_projects"))
+                    .size(11.0)
+                    .strong()
+                    .color(pal.muted),
+            );
+            ui.add_space(6.0);
             let recent = self.recent.clone();
             for (index, path) in recent.iter().enumerate() {
-                let label = path
+                let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
-                let response = ui
-                    .selectable_label(false, label)
-                    .on_hover_text(path.display().to_string());
-                if response.clicked() {
-                    *action = Action::OpenRecent(index);
-                }
+                let card = card_frame(pal)
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width().clamp(240.0, 520.0));
+                        let response = ui
+                            .horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(name).size(13.0).strong());
+                                    ui.label(
+                                        RichText::new(path.display().to_string())
+                                            .size(11.0)
+                                            .color(pal.muted),
+                                    );
+                                });
+                            })
+                            .response;
+                        if response.interact(egui::Sense::click()).clicked() {
+                            *action = Action::OpenRecent(index);
+                        }
+                    });
+                card.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.add_space(6.0);
             }
         }
-        ui.add_space(16.0);
-        ui.separator();
-        ui.weak(self.t("ui_shortcuts_ctrl_p_palette_g_goto_n_rename_comment_x_xrefs_spac"));
+        ui.add_space(20.0);
+        ui.label(
+            RichText::new(self.t(
+                "ui_shortcuts_ctrl_p_palette_g_goto_n_rename_comment_x_xrefs_spac",
+            ))
+            .size(11.0)
+            .color(pal.muted),
+        );
     }
 
     /// Column text of one disassembly row exactly as the listing paints it. Text selection
