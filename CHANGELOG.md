@@ -11,7 +11,28 @@
 
 ## [未发布]
 
+### 界面
+
+- **（0.4.0 进行中）主题令牌与现代化外观第一步。** `docs/UI.md` 定下设计基线（三层近黑
+  表面、1px 发丝边框、单一青色强调 `#40CDE0`、间距 4/8/12/16、圆角 6/10/12）；`Palette`
+  扩展 surface/border/muted/accent，`apply_theme` 把它们写进 egui Visuals（分层、选择色、
+  超链接、焦点、弹层阴影），欢迎页改为大标题 + 青色主操作 + 最近项目卡片，顶栏与状态栏
+  改为带发丝边框的 surface_1 条，标签页并入表面阶梯。渲染回归由
+  `the_modern_theme_lands_the_documented_tokens` 钉住。命令区收敛与侧栏卡片化留到 0.4.0。
+
+## [0.3.0] - 2026-11-14
+
+0.3.0 收 W3（质量时间盒）、W4（解码抽象）、W5（ARM64）；0.2.0 之后的其余变更一并在此。
+
 ### 新增
+
+- **中立解码抽象（ADR-015）：`DecodedInsn` 边界。** `recraft-decode` 新增与后端无关的
+  `DecodedInsn`/`DecodedOperand` 与 `Insn::neutral()`：地址、长度、助记符、操作数
+  （寄存器名/立即数/`base + index*scale + disp`/直接分支目标）与**隐式**读写寄存器
+  （`InstructionInfoFactory`，`div rcx` 会如实报告读写 rax/rdx）。x86 lifter 仍用 iced 的
+  类型化 API，输出逐字节不变；ADR-015 同时定下 ARM64 用 yaxpeax-arm（0BSD、纯 Rust）、
+  capstone 作为可回退备选（FFI 边界只在适配层）、bad64 不选。附带 6 条单测与 DESIGN §5
+  的边界说明。
 
 - **ARM64（AArch64）支持（0.3.0 主线）。** 解码走 yaxpeax-arm（0BSD，纯 Rust），
   产出中立的 `DecodedInsn`；导入、反汇编、函数发现（ELF 符号表 / PE `.pdata` 的 8 字节
