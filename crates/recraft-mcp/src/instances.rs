@@ -67,7 +67,6 @@ impl McpServer {
     /// Repeating the call for a project that is already open returns that instance instead of
     /// opening a second handle: a client can retry `open_program` safely.
     fn tool_open_program(&mut self, arguments: &Value) -> ToolResult {
-        self.require_stateful("open_program")?;
         let Some(raw) = arguments.get("path").and_then(Value::as_str) else {
             return Err(
                 "open_program needs a `path`: a PE/ELF binary or a .rcraft project".to_owned(),
@@ -182,7 +181,6 @@ impl McpServer {
     }
 
     fn tool_close_instance(&mut self, arguments: &Value) -> ToolResult {
-        self.require_stateful("close_instance")?;
         let index = match arguments
             .get("id")
             .or_else(|| arguments.get("instance"))
@@ -214,19 +212,6 @@ impl McpServer {
     }
 
     // ----------------------------------------------------------- helpers ----
-
-    /// Registry tools that keep state cannot work on the stateless HTTP transport: every
-    /// request there builds a fresh server, so an opened instance would vanish immediately.
-    fn require_stateful(&self, tool: &str) -> std::result::Result<(), String> {
-        if self.subscribe {
-            Ok(())
-        } else {
-            Err(format!(
-                "{tool} needs the stateful stdio transport; serve-mcp --http serves one project \
-                 per request (pass the project on the command line)"
-            ))
-        }
-    }
 
     /// One instance as clients see it in `list_instances` / `open_program` results.
     fn instance_payload(&self, index: usize, extra: Value) -> Value {

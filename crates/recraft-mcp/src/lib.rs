@@ -10,11 +10,12 @@
 //! also makes that instance active for later calls.
 //!
 //! Transport: newline-delimited JSON-RPC 2.0 over stdio (MCP stdio transport), plus the
-//! optional HTTP mode (one project per request: the stateless transport cannot keep
-//! instances). The server is **read-only by default**: `--write` opts into the journaled
-//! write tools (`rename`, `set_comment`, `set_prototype`, `apply_type`, `define_function`)
-//! and `undo`, so a plain `serve-mcp` never mutates user data. The only thing read-only mode
-//! writes is the derived `pseudocode` cache, which is rebuildable and dropped on every edit.
+//! optional HTTP mode. Both keep a per-connection/session registry of open projects, so one
+//! server configuration can open any number of programs at runtime with `open_program`.
+//! The server is **read-only by default**: `--write` opts into the journaled write tools
+//! (`rename`, `set_comment`, `set_prototype`, `apply_type`, `define_function`) and `undo`,
+//! so a plain `serve-mcp` never mutates user data. The only thing read-only mode writes is
+//! the derived `pseudocode` cache, which is rebuildable and dropped on every edit.
 //!
 //! Read tools: `list_functions`, `get_disassembly`, `get_pseudocode`, `xrefs_to`,
 //! `xrefs_from`, `list_strings`, `list_imports`, `callgraph`, `search_bytes`,
@@ -110,8 +111,8 @@ pub struct McpServer {
     active: Option<usize>,
     /// `true` when `--write` enabled the journaled write tools.
     write: bool,
-    /// Whether this transport can deliver `notifications/resources/updated` (stdio can,
-    /// stateless HTTP cannot, so the capability is advertised per transport).
+    /// Whether this transport can deliver `notifications/resources/updated` (stdio can;
+    /// HTTP sessions have no push channel and advertise `false`).
     subscribe: bool,
     /// URIs the client subscribed to.
     subscriptions: BTreeSet<String>,
@@ -133,9 +134,19 @@ impl McpServer {
         Self::open_mode(path, true, true)
     }
 
-    /// Open for the HTTP transport: no session state, so no resource subscriptions.
+    /// Open for an HTTP session: the registry is stateful, but there is no server-push
+    /// channel, so resource subscriptions are not advertised.
     pub(crate) fn open_http(path: &Path, write: bool) -> Result<Self> {
         Self::open_mode(path, write, false)
+    }
+
+    /// Empty HTTP session: the client opens projects with `open_program`.
+    pub(crate) fn empty_http(write: bool) -> Self {
+        let mut server = Self::empty(write);
+        // HTTP has no server-push channel in this transport, so do not advertise
+        // `resources/subscribe` (a subscription would silently never deliver).
+        server.subscribe = false;
+        server
     }
 
     /// Start with no project open: the client calls `open_program` to add one.
@@ -508,16 +519,18 @@ mod tests {
         token: Option<&str>,
         body: &str,
     ) -> (u16, String) {
-        http_request_with(addr, path, token, &[], body)
+        let (status, body, _) = http_request_with(addr, path, token, &[], body);
+        (status, body)
     }
 
+    /// Returns `(status, body, response head)`; the head carries `Mcp-Session-Id`.
     fn http_request_with(
         addr: std::net::SocketAddr,
         path: &str,
         token: Option<&str>,
         extra_headers: &[(&str, &str)],
         body: &str,
-    ) -> (u16, String) {
+    ) -> (u16, String, String) {
         use std::io::{Read, Write};
         let mut stream = std::net::TcpStream::connect(addr).unwrap();
         let auth = token
@@ -541,7 +554,17 @@ mod tests {
             .and_then(|line| line.split_whitespace().nth(1))
             .and_then(|code| code.parse().ok())
             .unwrap_or(0);
-        (status, response_body.to_owned())
+        (status, response_body.to_owned(), head.to_owned())
+    }
+
+    /// `Mcp-Session-Id` from a response head.
+    fn session_id(head: &str) -> Option<String> {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("mcp-session-id")
+                .then(|| value.trim().to_owned())
+        })
     }
 
     #[test]
@@ -553,7 +576,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let token = "secret-token";
         std::thread::spawn(move || {
-            let _ = serve_http_listener_mode(listener, project, token.to_owned(), false);
+            let _ = serve_http_listener_mode(listener, Some(project), token.to_owned(), false);
         });
 
         let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
@@ -639,6 +662,118 @@ mod tests {
         );
     }
 
+    /// Start a stateful HTTP server with no seed project and return `(addr, token)`.
+    fn stateful_http_server() -> (std::net::SocketAddr, &'static str) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _ = serve_http_listener_mode(listener, None, "stateful".to_owned(), false);
+        });
+        (addr, "stateful")
+    }
+
+    fn http_delete(addr: std::net::SocketAddr, token: &str, session: &str) -> (u16, String) {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(addr).unwrap();
+        let request = format!(
+            "DELETE /mcp HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nMcp-Session-Id: {session}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).unwrap();
+        let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+        let status = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        (status, body.to_owned())
+    }
+
+    #[test]
+    fn http_sessions_open_any_program_independently() {
+        let Some(project) = notepad_project_path() else {
+            return;
+        };
+        let (addr, token) = stateful_http_server();
+        let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+
+        let (status, body, head) = http_request_with(addr, "/mcp", Some(token), &[], initialize);
+        assert_eq!(status, 200, "{body}");
+        let first = session_id(&head).expect("initialize must return Mcp-Session-Id");
+
+        // The session starts empty, so open_program is what adds the sample.
+        let open = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "open_program", "arguments": {"path": project.to_string_lossy()}}
+        })
+        .to_string();
+        let (status, body, _) = http_request_with(
+            addr,
+            "/mcp",
+            Some(token),
+            &[("Mcp-Session-Id", first.as_str())],
+            &open,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(!body.contains("\"isError\":true"), "{body}");
+
+        let list = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":2}}}"#;
+        let (status, body, _) = http_request_with(
+            addr,
+            "/mcp",
+            Some(token),
+            &[("Mcp-Session-Id", first.as_str())],
+            list,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("functions"), "{body}");
+
+        // A client that ignores `Mcp-Session-Id` keeps working: no header means the
+        // default session, which is the one `initialize` created above.
+        let (status, body) = http_request(addr, "/mcp", Some(token), list);
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("functions"), "{body}");
+
+        // A second, explicitly named session has its own registry: the first session's
+        // project is invisible.
+        let (_, _, head) = http_request_with(
+            addr,
+            "/mcp",
+            Some(token),
+            &[("Mcp-Session-Id", "second")],
+            initialize,
+        );
+        let second = session_id(&head).expect("second session id");
+        assert_ne!(first, second);
+        let (status, body, _) = http_request_with(
+            addr,
+            "/mcp",
+            Some(token),
+            &[("Mcp-Session-Id", second.as_str())],
+            list,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("no project is open"), "{body}");
+
+        // DELETE closes only that session; a later request with the stale id is a 404.
+        assert_eq!(http_delete(addr, token, &first).0, 200);
+        assert_eq!(
+            http_request_with(
+                addr,
+                "/mcp",
+                Some(token),
+                &[("Mcp-Session-Id", first.as_str())],
+                list
+            )
+            .0,
+            404
+        );
+    }
+
     #[test]
     fn an_idle_connection_does_not_block_the_next_request() {
         let Some(project) = notepad_project_path() else {
@@ -647,7 +782,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            let _ = serve_http_listener_mode(listener, project, "idle".to_owned(), false);
+            let _ = serve_http_listener_mode(listener, Some(project), "idle".to_owned(), false);
         });
 
         // A connection that never sends anything used to stall the single-threaded loop for
@@ -1600,6 +1735,40 @@ mod tests {
         // Both the rename and its undo reached the project file.
         let session = Session::open(&project).unwrap();
         assert!(session.addr_of_name("mcp_renamed").unwrap().is_none());
+    }
+
+    #[test]
+    fn expected_previous_guards_writes_against_stale_state() {
+        let Some((mut server, _project)) = notepad_writable() else {
+            return;
+        };
+        let addr = first_function(&mut server);
+        let summary = tool_json(&mut server, "function_summary", json!({"addr": addr}));
+        let current = summary["name"].as_str().expect("function name").to_owned();
+
+        // A stale guard is refused before anything is written.
+        let error = tool_error(
+            &mut server,
+            "rename",
+            json!({"addr": addr, "name": "guarded", "expected_previous": "not_the_name"}),
+        );
+        assert!(error.contains("stale write"), "{error}");
+        let summary = tool_json(&mut server, "function_summary", json!({"addr": addr}));
+        assert_eq!(summary["name"], current.as_str(), "{summary}");
+
+        // The matching guard lands, and `null` now means "no name" — which is false.
+        let applied = tool_json(
+            &mut server,
+            "rename",
+            json!({"addr": addr, "name": "guarded", "expected_previous": current}),
+        );
+        assert_eq!(applied["value"], "guarded", "{applied}");
+        let error = tool_error(
+            &mut server,
+            "rename",
+            json!({"addr": addr, "name": "other", "expected_previous": null}),
+        );
+        assert!(error.contains("stale write"), "{error}");
     }
 
     #[test]

@@ -90,9 +90,9 @@ impl McpServer {
 
     /// `resources/subscribe` / `resources/unsubscribe`.
     ///
-    /// Only stdio can deliver `notifications/resources/updated`; the HTTP transport is
-    /// stateless (one `Session` per request), so it advertises `subscribe: false` and
-    /// rejects the call instead of pretending.
+    /// Only stdio can deliver `notifications/resources/updated`; HTTP sessions answer each
+    /// POST directly and have no push channel, so they advertise `subscribe: false` and
+    /// reject the call instead of pretending.
     pub(crate) fn subscribe_resource(
         &mut self,
         params: &Value,

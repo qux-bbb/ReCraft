@@ -168,10 +168,10 @@ enum Commands {
     /// adds the journaled write tools).
     ///
     /// PROJ is opened first; omit it to start with no project and let the client call the
-    /// open_program tool (stdio only, where the instance registry is kept).
+    /// open_program tool (stdio and HTTP both keep a per-session registry).
     ServeMcp {
         project: Option<PathBuf>,
-        /// Serve JSON-RPC over HTTP POST /mcp instead of stdio (needs a project).
+        /// Serve JSON-RPC over HTTP POST /mcp instead of stdio (stateful sessions).
         #[arg(long)]
         http: bool,
         /// HTTP bind address (with --http).
@@ -649,20 +649,17 @@ fn run(cli: Cli) -> Result<()> {
             write,
         } => {
             if http {
-                let Some(project) = project else {
-                    return Err(recraft_common::Error::invalid_argument(
-                        "serve-mcp --http needs a project; the instance registry is stdio-only",
-                    ));
-                };
+                // Without a project the server starts empty; each MCP session calls
+                // `open_program` to add the programs it wants.
                 let token = token.unwrap_or_else(generate_mcp_token);
                 if token.is_empty() {
                     return Err(recraft_common::Error::internal("empty MCP token"));
                 }
                 eprintln!("[mcp] token: {token}");
                 if write {
-                    recraft_mcp::serve_http_writable(&project, &bind, &token)
+                    recraft_mcp::serve_http_writable(project.as_deref(), &bind, &token)
                 } else {
-                    recraft_mcp::serve_http(&project, &bind, &token)
+                    recraft_mcp::serve_http(project.as_deref(), &bind, &token)
                 }
             } else {
                 // Without a project the client opens programs with the open_program tool.
