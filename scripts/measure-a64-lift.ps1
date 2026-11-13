@@ -13,8 +13,10 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$supported = @('mov', 'movz', 'movn', 'movk', 'add', 'sub', 'and', 'orr', 'eor', 'ldr', 'ldur',
-    'str', 'stur', 'cmp', 'cmn', 'tst', 'adr', 'adrp', 'b', 'bl', 'ret', 'cbz', 'cbnz')
+$supported = @('mov', 'movz', 'movn', 'movk', 'add', 'sub', 'and', 'orr', 'eor', 'neg',
+    'lsl', 'lsr', 'asr', 'ubfx', 'cset', 'csel', 'csinc', 'ldr', 'ldur', 'ldrb', 'ldrsb',
+    'ldrh', 'ldurh', 'ldrsh', 'ldrsw', 'str', 'stur', 'strb', 'strh', 'sturh', 'ldp', 'stp',
+    'cmp', 'cmn', 'tst', 'adr', 'adrp', 'b', 'bl', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz', 'nop')
 $total = 0
 $lifted = 0
 $perMnemonic = @{}

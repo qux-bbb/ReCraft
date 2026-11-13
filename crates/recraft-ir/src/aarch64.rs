@@ -162,9 +162,16 @@ impl A64Lifter {
                 Some(Flow::Fallthrough)
             }
             "cset" => {
+                // `cset xD, cond` is an alias of `csinc xD, xzr, xzr, !cond`, and the decoder
+                // reports the alias with the csinc operands (`xD, xzr, xzr, cond`), so the
+                // condition code is the last operand when the second one is a register.
                 let dest = Self::view(ops.first()?)?;
+                let code = match ops.get(1) {
+                    Some(DecodedOperand::Immediate(code)) => u8::try_from(*code).ok(),
+                    _ => Self::code(ops.get(3)?),
+                }?;
                 let (lhs, rhs) = self.cond?;
-                let kind = cond_kind_from_code(Self::code(ops.get(1)?)?)?;
+                let kind = cond_kind_from_code(code)?;
                 let cond = self.push(Expr::Cmp { kind, lhs, rhs });
                 let one = self.constant(1);
                 let zero = self.constant(0);
@@ -294,6 +301,91 @@ impl A64Lifter {
                     cond,
                     target: insn.branch_target?,
                 })
+            }
+            "tbz" | "tbnz" => {
+                // `tbnz xN, #bit, target`: branch when bit `bit` of the register is set.
+                let value = self.read(ops.first()?)?;
+                let Some(DecodedOperand::Immediate(bit)) = ops.get(1) else {
+                    return None;
+                };
+                let shift = self.constant(*bit as u64);
+                let shifted = self.push(Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: value,
+                    rhs: shift,
+                });
+                let one = self.constant(1);
+                let masked = self.push(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: shifted,
+                    rhs: one,
+                });
+                let zero = self.constant(0);
+                let kind = if insn.mnemonic == "tbz" {
+                    CondKind::Eq
+                } else {
+                    CondKind::Ne
+                };
+                let cond = self.push(Expr::Cmp {
+                    kind,
+                    lhs: masked,
+                    rhs: zero,
+                });
+                Some(Flow::CondGoto {
+                    cond,
+                    target: insn.branch_target?,
+                })
+            }
+            "ubfx" => {
+                // `ubfx xD, xN, #lsb, #width`: bits [lsb, lsb+width) of the source.
+                let dest = Self::view(ops.first()?)?;
+                let source = self.read(ops.get(1)?)?;
+                let (Some(DecodedOperand::Immediate(lsb)), Some(DecodedOperand::Immediate(width))) =
+                    (ops.get(2), ops.get(3))
+                else {
+                    return None;
+                };
+                let mask = if *width >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << width) - 1
+                };
+                let shift = self.constant(*lsb as u64);
+                let shifted = self.push(Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: source,
+                    rhs: shift,
+                });
+                let mask = self.constant(mask);
+                let value = self.push(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: shifted,
+                    rhs: mask,
+                });
+                self.write(dest, value, stmts);
+                Some(Flow::Fallthrough)
+            }
+            "csinc" => {
+                // `csinc xD, xA, xB, cond`: `cond ? xA : xB + 1`.
+                let dest = Self::view(ops.first()?)?;
+                let then = self.read(ops.get(1)?)?;
+                let otherwise = self.read(ops.get(2)?)?;
+                let (lhs, rhs) = self.cond?;
+                let kind = cond_kind_from_code(Self::code(ops.get(3)?)?)?;
+                let cond = self.push(Expr::Cmp { kind, lhs, rhs });
+                let one = self.constant(1);
+                let incremented = self.push(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: otherwise,
+                    rhs: one,
+                });
+                let value = self.push(Expr::Select {
+                    cond,
+                    then,
+                    otherwise: incremented,
+                });
+                self.write(dest, value, stmts);
+                Some(Flow::Fallthrough)
             }
             _ if insn.mnemonic.starts_with("b.") => {
                 let (lhs, rhs) = self.cond?;
@@ -511,6 +603,75 @@ mod tests {
 
     fn lift(words: &[u32]) -> (Lifted, usize) {
         A64Lifter::new().lift_region(&decode(words))
+    }
+
+    /// One synthetic instruction: encodings for `tbz`/`ubfx` are easy to get wrong, and this
+    /// exercises the lifter's operand handling directly.
+    fn synthetic(
+        mnemonic: &str,
+        operands: Vec<DecodedOperand>,
+        target: Option<Address>,
+    ) -> DecodedInsn {
+        DecodedInsn {
+            addr: Address::new(0x1000),
+            len: 4,
+            mnemonic: mnemonic.to_owned(),
+            flow: if target.is_some() {
+                recraft_decode::FlowKind::ConditionalBranch
+            } else {
+                recraft_decode::FlowKind::Next
+            },
+            branch_target: target,
+            operands,
+            reads: Vec::new(),
+            writes: Vec::new(),
+        }
+    }
+
+    fn x(number: u16) -> DecodedOperand {
+        DecodedOperand::Register {
+            name: format!("x{number}"),
+            size: 8,
+        }
+    }
+
+    #[test]
+    fn a_bit_test_branch_tests_the_requested_bit() {
+        let insn = synthetic(
+            "tbz",
+            vec![
+                x(0),
+                DecodedOperand::Immediate(3),
+                DecodedOperand::NearBranch(Address::new(0x1010)),
+            ],
+            Some(Address::new(0x1010)),
+        );
+        let (lifted, ok) = A64Lifter::new().lift_region(&[insn]);
+        assert_eq!(ok, 1);
+        match lifted.insns[0].flow {
+            Flow::CondGoto { target, .. } => assert_eq!(target, Address::new(0x1010)),
+            other => panic!("expected a conditional branch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ubfx_extracts_a_bit_field() {
+        let insn = synthetic(
+            "ubfx",
+            vec![
+                x(1),
+                x(0),
+                DecodedOperand::Immediate(8),
+                DecodedOperand::Immediate(4),
+            ],
+            None,
+        );
+        let (lifted, ok) = A64Lifter::new().lift_region(&[insn]);
+        assert_eq!(ok, 1);
+        let Stmt::WriteReg { reg, .. } = &lifted.insns[0].stmts[0] else {
+            panic!("expected a register write");
+        };
+        assert_eq!(reg.name(), "x1");
     }
 
     #[test]
