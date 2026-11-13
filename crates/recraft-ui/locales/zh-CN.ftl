@@ -333,4 +333,6 @@ ui_var_suggest_failed = 变量命名失败：{ $error }
 ui_var_suggest_unparsed = 模型回复里没有可用的变量名
 ui_var_applied = 已应用 { $count } 个变量名
 ui_auto_apply = 全部应用
+ui_agent_use_selection = 附带选中内容
+ui_agent_selection_hint = 选中的伪代码、指令或字节会随问题一起发送
 ui_prompt_vars = 变量

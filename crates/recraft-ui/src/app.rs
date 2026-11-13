@@ -699,6 +699,27 @@ struct XrefDialog {
 }
 
 /// Decode stored string bytes according to the analysis encoding id.
+/// The selected text of a pseudo-C listing: whole rows inside the selection, partial rows
+/// clipped to the selected characters. Rows are joined with newlines, in reading order.
+fn selection_text(lines: &[PseudoLine], selection: TextSelection) -> Option<String> {
+    let (from, to) = selection.ordered();
+    let mut rows = Vec::new();
+    for row in from.row..=to.row {
+        let line = lines.get(row)?;
+        let count = line.text.chars().count();
+        let (start, end) = selection.row_range(row, count)?;
+        rows.push(
+            line.text
+                .chars()
+                .skip(start)
+                .take(end.saturating_sub(start))
+                .collect::<String>(),
+        );
+    }
+    let text = rows.join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
 /// The first stack-slot token (`var_20`, `var_n8`) of a pseudo-C line, with its offset.
 ///
 /// The Decompile view's context menu offers "rename variable" only when the row actually
@@ -1547,6 +1568,9 @@ pub struct ReCraftApp {
     ai_answer: Option<recraft_ai::QueryAnswer>,
     /// Question typed into the agent box.
     ai_agent_question: String,
+    /// Send the current selection (pseudo-C text or the selected listing row) with the
+    /// question, so "what does this do" has something to point at.
+    ai_agent_use_selection: bool,
     /// Tool calls the running or last agent made (`name + arguments` per line).
     ai_agent_trace: Vec<String>,
     /// Conversation with the agent, kept so a follow-up question continues it.
@@ -1673,6 +1697,7 @@ impl Default for ReCraftApp {
             ai_query: String::new(),
             ai_answer: None,
             ai_agent_question: String::new(),
+            ai_agent_use_selection: true,
             ai_agent_trace: Vec::new(),
             ai_agent_history: Vec::new(),
             ai_agent_turn_mark: None,
@@ -3440,6 +3465,64 @@ impl ReCraftApp {
         applied > 0
     }
 
+    /// The user's current selection as agent context, if there is one.
+    ///
+    /// An explicit Decompile text selection wins (it is the narrowest thing the user pointed
+    /// at); otherwise the selected listing row is used, so "ask about this" always has a
+    /// target instead of silently asking a context-free question.
+    fn selection_context(&mut self) -> Option<String> {
+        let pane = self.focused_pane();
+        if (self.tab == Tab::Pseudo || pane == Some(Pane::Pseudo))
+            && let (Some(lines), Some(selection)) = (self.pseudo.as_ref(), self.pseudo_sel)
+            && !selection.is_empty()
+        {
+            let text = selection_text(lines, selection)?;
+            let (from, to) = selection.ordered();
+            let last = to.row.min(lines.len().saturating_sub(1));
+            let (Some(first_line), Some(last_line)) = (lines.get(from.row), lines.get(last)) else {
+                return None;
+            };
+            return Some(format!(
+                "selected pseudo-C lines {}-{} (0x{:x}..0x{:x}):\n```c\n{text}\n```",
+                from.row + 1,
+                last + 1,
+                first_line.addr.get(),
+                last_line.addr.get()
+            ));
+        }
+        if pane == Some(Pane::Hex)
+            && let Some(selection) = self.hex_sel
+        {
+            let (start, end) = selection.range();
+            let count = (end.get().saturating_sub(start.get()) + 1).min(256) as usize;
+            let bytes = self.hex_selection_bytes(start, count);
+            if !bytes.is_empty() {
+                return Some(format!(
+                    "selected {} bytes at 0x{:x}..0x{:x}:\n```\n{}\n```",
+                    bytes.len(),
+                    start.get(),
+                    end.get(),
+                    Self::hex_dump_text(&bytes, false)
+                ));
+            }
+        }
+        let line = self.disasm_rows.get(self.selected)?;
+        Some(format!(
+            "selected instruction at 0x{:x}: `{} {}`",
+            line.addr.get(),
+            line.mnemonic,
+            line.operands
+        ))
+    }
+
+    /// The docked pane currently under focus, if the dock is up.
+    fn focused_pane(&mut self) -> Option<Pane> {
+        self.dock
+            .as_mut()
+            .and_then(|state| state.find_active_focused())
+            .map(|(_, tab)| *tab)
+    }
+
     /// Question the "dig deeper" button asks about the function under the cursor.
     ///
     /// The agent already knows how to look things up, so the question only has to name the
@@ -3481,11 +3564,16 @@ impl ReCraftApp {
         if !self.require_ai_provider() {
             return;
         }
-        let question = self.ai_agent_question.trim().to_owned();
+        let mut question = self.ai_agent_question.trim().to_owned();
         if question.is_empty() {
             self.ai_status = self.t("ui_agent_question_empty").to_owned();
             self.set_status(self.ai_status.clone());
             return;
+        }
+        if self.ai_agent_use_selection
+            && let Some(context) = self.selection_context()
+        {
+            question = format!("{context}\n\nquestion: {question}");
         }
         let Some(path) = self.project.clone() else {
             self.ai_status = self.t("ui_open_a_project_first").to_owned();
@@ -6237,6 +6325,16 @@ impl ReCraftApp {
                     *action = Action::AiAgentReset;
                 }
             });
+            // The question can carry whatever the user pointed at: the pseudo-C selection or
+            // the selected listing row. The hint says which one would be sent.
+            if self.selection_context().is_some() {
+                let use_label = self.t("ui_agent_use_selection");
+                let hint = self.t("ui_agent_selection_hint");
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut self.ai_agent_use_selection, use_label);
+                    ui.weak(hint);
+                });
+            }
             // Tool calls are the evidence for the answer: without them a confident prose
             // answer is unverifiable.
             if !self.ai_agent_trace.is_empty() {
@@ -16617,6 +16715,35 @@ mod tests {
             Some("4D 5A 90 00"),
             "the clipboard must hold the selected bytes"
         );
+    }
+
+    #[test]
+    fn a_pseudo_selection_becomes_agent_context() {
+        let lines = vec![
+            PseudoLine {
+                addr: Address::new(0x1000),
+                text: "int main(void)".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1004),
+                text: "{".to_owned(),
+            },
+            PseudoLine {
+                addr: Address::new(0x1008),
+                text: "    return 0;".to_owned(),
+            },
+        ];
+        let selection = TextSelection {
+            anchor: TextPoint { row: 0, char: 4 },
+            focus: TextPoint { row: 2, char: 12 },
+        };
+        assert_eq!(
+            selection_text(&lines, selection).as_deref(),
+            Some("main(void)\n{\n    return 0")
+        );
+        // A caret selects nothing, so it cannot become context.
+        let caret = TextSelection::collapsed(TextPoint { row: 1, char: 0 });
+        assert!(selection_text(&lines, caret).is_none());
     }
 
     #[test]

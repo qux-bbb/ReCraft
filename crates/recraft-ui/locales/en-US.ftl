@@ -333,4 +333,6 @@ ui_var_suggest_failed = variable naming failed: { $error }
 ui_var_suggest_unparsed = the model reply had no usable variable names
 ui_var_applied = applied { $count } variable name(s)
 ui_auto_apply = Apply all
+ui_agent_use_selection = Include selection
+ui_agent_selection_hint = the selected pseudo-C, instruction or bytes are sent with the question
 ui_prompt_vars = Variables
