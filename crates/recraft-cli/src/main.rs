@@ -1138,7 +1138,10 @@ fn cmd_info(file: &Path, as_json: bool, verbose: bool) -> Result<()> {
     println!(
         "Format:  {} ({})",
         match (format, arch) {
-            (recraft_format::Format::Pe, recraft_format::Arch::X64) => "PE32+",
+            (
+                recraft_format::Format::Pe,
+                recraft_format::Arch::X64 | recraft_format::Arch::Aarch64,
+            ) => "PE32+",
             (recraft_format::Format::Pe, _) => "PE32",
             (recraft_format::Format::Elf, recraft_format::Arch::X86) => "ELF32",
             (recraft_format::Format::Elf, _) => "ELF64",

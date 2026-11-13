@@ -77,7 +77,7 @@ impl Format {
     /// 0.1.0 wrote, so old projects keep parsing.
     pub fn meta_name(self, arch: Arch) -> &'static str {
         match (self, arch) {
-            (Self::Pe, Arch::X64) => "pe32+",
+            (Self::Pe, Arch::X64 | Arch::Aarch64) => "pe32+",
             (Self::Pe, _) => "pe32",
             (Self::Elf, Arch::X86) => "elf32",
             (Self::Elf, _) => "elf64",
@@ -306,7 +306,16 @@ impl Loader for PeLoader {
 
     fn load(bytes: &[u8]) -> Result<LoadedImage> {
         let image = load_pe(bytes)?;
-        let arch = if image.is_64 { Arch::X64 } else { Arch::X86 };
+        // The COFF machine decides:  xAA64 is ARM64, which is also 64-bit but must not be
+        // labelled x64 (the decoder and the register namespace differ).
+        let machine = pe_offset(bytes)
+            .and_then(|offset| read_u16(bytes, offset + 4).ok())
+            .unwrap_or(if image.is_64 { 0x8664 } else { 0x014C });
+        let arch = match machine {
+            0xAA64 => Arch::Aarch64,
+            0x014C => Arch::X86,
+            _ => Arch::X64,
+        };
         Ok(LoadedImage {
             image,
             format: Format::Pe,
@@ -357,7 +366,7 @@ pub fn load_pe(bytes: &[u8]) -> Result<Image> {
 
     // COFF file header starts right after the PE signature.
     let coff = pe_offset + 4;
-    let _machine = read_u16(bytes, coff)?;
+    let machine = read_u16(bytes, coff)?;
     let number_of_sections = read_u16(bytes, coff + 2)?;
     let timestamp = read_u32(bytes, coff + 4)?;
     let size_of_optional_header = usize::from(read_u16(bytes, coff + 16)?);
@@ -471,10 +480,20 @@ pub fn load_pe(bytes: &[u8]) -> Result<Image> {
         });
     }
 
+    // `0xAA64` is ARM64; everything else keeps the x86/x64 split from the optional header.
+    let arch = match machine {
+        0xAA64 => Arch::Aarch64,
+        0x014C => Arch::X86,
+        0x8664 => Arch::X64,
+        _ if is_64 => Arch::X64,
+        _ => Arch::X86,
+    };
+
     let parser = ImageParser {
         bytes,
         image_base,
         is_64,
+        arch,
         size_of_headers,
         file_size,
         sections: &sections,
@@ -522,10 +541,46 @@ struct DataDirectory {
     size: u32,
 }
 
+/// ARM64 `.pdata`: 8-byte entries, `BeginAddress` plus packed unwind data whose bits
+/// 2..13 hold the function length in 4-byte instructions (flags 0 and 1). Flag 2 defers
+/// the length to a separate xdata record and flag 3 carries none, so both are skipped.
+fn arm64_pdata_ranges(bytes: &[u8], image_base: u64) -> Vec<FunctionRange> {
+    let mut functions = Vec::new();
+    let count = (bytes.len() / 8).min(MAX_PDATA_ENTRIES);
+    for index in 0..count {
+        let offset = index * 8;
+        let Ok(begin) = read_u32(bytes, offset) else {
+            break;
+        };
+        let Ok(unwind) = read_u32(bytes, offset + 4) else {
+            break;
+        };
+        if begin == 0 || unwind & 3 >= 2 {
+            continue;
+        }
+        let instructions = (unwind >> 2) & 0x7FF;
+        if instructions == 0 {
+            continue;
+        }
+        let Some(start) = image_base.checked_add(u64::from(begin)) else {
+            continue;
+        };
+        let Some(end) = start.checked_add(u64::from(instructions) * 4) else {
+            continue;
+        };
+        functions.push(FunctionRange {
+            start: Address(start),
+            end: Address(end),
+        });
+    }
+    functions
+}
 struct ImageParser<'a> {
     bytes: &'a [u8],
     image_base: u64,
     is_64: bool,
+    /// Machine reported by the COFF header ( xAA64 selects the ARM64 .pdata layout).
+    arch: Arch,
     size_of_headers: u64,
     file_size: u64,
     sections: &'a [Section],
@@ -972,8 +1027,18 @@ impl ImageParser<'_> {
     }
 
     fn parse_pdata(&self, directory: DataDirectory) -> Vec<FunctionRange> {
-        if !self.is_64 || directory.rva == 0 || directory.size < 12 {
+        if !self.is_64 || directory.rva == 0 || directory.size < 8 {
             return Vec::new();
+        }
+        if self.arch == Arch::Aarch64 {
+            let Some(offset) = self.rva_to_file_offset(directory.rva) else {
+                return Vec::new();
+            };
+            let start = offset as usize;
+            let end = start
+                .saturating_add(directory.size as usize)
+                .min(self.bytes.len());
+            return arm64_pdata_ranges(&self.bytes[start.min(end)..end], self.image_base);
         }
         let Some(offset) = self.rva_to_file_offset(directory.rva) else {
             return Vec::new();
@@ -1124,6 +1189,45 @@ mod tests {
         assert_eq!(Arch::from_name("mips"), None);
     }
 
+    #[test]
+    fn an_arm64_pe_loads_with_pdata_ranges() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/aarch64/tiny-arm64.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let loaded = load(&bytes).expect("arm64 PE parses");
+        assert_eq!(loaded.arch, Arch::Aarch64);
+        assert_eq!(loaded.image.pdata_functions.len(), 8);
+        assert_eq!(
+            loaded.image.pdata_functions[0].start,
+            Address::new(0x1_4000_1000)
+        );
+        assert_eq!(
+            loaded.image.pdata_functions[0].end,
+            Address::new(0x1_4000_100c)
+        );
+    }
+    #[test]
+    fn arm64_pdata_lengths_are_counted_in_instructions() {
+        // begin 0x1000, packed unwind flag 0 with a 6-instruction body (24 bytes)
+        let mut table = Vec::new();
+        table.extend_from_slice(&0x1000u32.to_le_bytes());
+        table.extend_from_slice(&(6u32 << 2).to_le_bytes());
+        // begin 0x2000, flag 2 (length lives in xdata): skipped
+        table.extend_from_slice(&0x2000u32.to_le_bytes());
+        table.extend_from_slice(&2u32.to_le_bytes());
+        let ranges = arm64_pdata_ranges(&table, 0x1_4000_0000);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, Address::new(0x1_4000_1000));
+        assert_eq!(ranges[0].end, Address::new(0x1_4000_1018));
+    }
+
+    #[test]
+    fn arm64_pe_reports_a_pe32_plus_meta_name() {
+        assert_eq!(Format::Pe.meta_name(Arch::Aarch64), "pe32+");
+        assert_eq!(Format::from_meta("pe32+"), Some(Format::Pe));
+    }
     #[test]
     fn format_meta_names_round_trip() {
         assert_eq!(Format::Pe.meta_name(Arch::X64), "pe32+");

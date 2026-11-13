@@ -165,6 +165,15 @@ fn analyze_aarch64(session: &mut Session) -> Result<AnalysisResult> {
             starts.entry(symbol.address.get()).or_insert(symbol.size);
         }
     }
+    // PE-ARM64 has no symbol table; .pdata carries the exception-unwind ranges, and its
+    // ARM64 encoding already gives the exact end of each function.
+    for range in &session.image().pdata_functions {
+        if is_code(&segments, range.start) && range.end > range.start {
+            starts
+                .entry(range.start.get())
+                .or_insert(range.end.get() - range.start.get());
+        }
+    }
 
     let ordered: Vec<u64> = starts.keys().copied().collect();
     let mut result = AnalysisResult::default();
@@ -993,6 +1002,29 @@ pub fn persist(session: &mut Session, result: &AnalysisResult) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// PE-ARM64: the image has no symbol table, so .pdata (8-byte ARM64 entries) is the
+    /// only source of function starts and ends.
+    #[test]
+    fn aarch64_pe_functions_come_from_pdata() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/aarch64/tiny-arm64.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("aarch64-pe.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = analyze(&mut session).unwrap();
+        assert_eq!(result.functions.len(), 8);
+        assert_eq!(result.functions[0].start, Address::new(0x1_4000_1000));
+        assert!(
+            result
+                .functions
+                .iter()
+                .all(|function| function.end > function.start)
+        );
+    }
 
     fn corpus_path() -> Option<PathBuf> {
         let path =

@@ -11,6 +11,21 @@
 
 ## [未发布]
 
+### 新增
+
+- **ARM64（AArch64）支持（0.3.0 主线）。** 解码走 yaxpeax-arm（0BSD，纯 Rust），
+  产出中立的 `DecodedInsn`；导入、反汇编、函数发现（ELF 符号表 / PE `.pdata` 的 8 字节
+  ARM64 条目）、调用图、字符串与 L0 伪 C 全部打通。A64 lifter 覆盖整数运算、访存
+  （含 `ldrb/strh/ldur` 等宽度变体与索引寻址）、移位/位域、条件选择（`cset/csel/csinc`）、
+  `stp/ldp`、分支（`b`/`b.cond`/`cbz`/`tbz`/`tbnz`/`bl`/`ret`），并按 AAPCS64 还原调用实参。
+  实测：Go 的 linux/arm64 样本 1904 函数 / 45417 指令 / 1954 调用边，前 100 个函数
+  100/100 出非空伪 C、`__asm` 只占输出行 3.3%；抽 100 个函数与 `go tool objdump`
+  逐指令比对 **100/100 一致**；`tests/golden/aarch64/` 32 份快照走「导入 → 分析 →
+  反编译」全链路。PE-ARM64 用 `.pdata` 恢复函数范围，`tests/fixtures/aarch64/` 下的
+  ELF/PE 夹具（6 KB / 1.5 KB）由 `scripts/make-aarch64-fixture.py` 与
+  `scripts/make-arm64-pe-fixture.py` 生成。SIMD 的 `stp/ldp v`、`mrs`、`smulh`、`br`
+  仍以 `__asm` 输出（约 3% 行）。
+
 ### 修复
 
 - **`__asm` 收敛：系统指令与内存填充改用带类型的名字。** IR 新增
