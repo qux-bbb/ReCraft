@@ -213,6 +213,12 @@ impl Lifter {
                 self.intrinsic(insn, &mut stmts)
             }
             M::Xadd => self.lift_xadd(insn, &mut stmts),
+            // `int 0x29` is Windows' fast-fail: a noreturn barrier whose code lives in ecx.
+            M::Int => self.lift_fast_fail(insn, &mut stmts),
+            // Prefetch is a pure hint: keep the address but drop the opaque mnemonic.
+            M::Prefetchw | M::Prefetchnta | M::Prefetcht0 | M::Prefetcht1 | M::Prefetcht2 => {
+                self.lift_prefetch(insn, &mut stmts)
+            }
             M::Imul => self.lift_imul(insn, &mut stmts),
             // Bit scans read one operand and write another; rendering them as builtin calls keeps
             // the result usable instead of leaving `__asm("bsf ...")` plus a move in the output.
@@ -1268,6 +1274,44 @@ impl Lifter {
     /// `xadd dst, src`: `src = dst; dst = dst + src`, with the add's flags. For a register
     /// destination the old value is recovered as `dst - src` after the write; for memory the
     /// same expression re-reads the updated slot. No temporary is needed.
+    /// `int 0x29` (Windows fast-fail): the code is in `ecx`, and the instruction does not
+    /// return, so only the call itself is rendered.
+    fn lift_fast_fail(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Register;
+        if insn.op_count() == 0 || insn.immediate8() != 0x29 {
+            return self.intrinsic(insn, stmts);
+        }
+        let Some(view) = from_iced(Register::ECX) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let code = self.reg(view);
+        stmts.push(Stmt::PseudoCall {
+            name: "__fastfail".to_owned(),
+            args: vec![code],
+        });
+        Flow::Fallthrough
+    }
+
+    /// `prefetch*` is a hint: keep the address, drop the opaque mnemonic.
+    fn lift_prefetch(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Mnemonic as M;
+        let Some(addr) = self.memory_address(insn) else {
+            return self.intrinsic(insn, stmts);
+        };
+        let name = match insn.mnemonic() {
+            M::Prefetchw => "prefetchw",
+            M::Prefetchnta => "prefetchnta",
+            M::Prefetcht0 => "prefetcht0",
+            M::Prefetcht1 => "prefetcht1",
+            _ => "prefetcht2",
+        };
+        stmts.push(Stmt::PseudoCall {
+            name: name.to_owned(),
+            args: vec![addr],
+        });
+        Flow::Fallthrough
+    }
+
     fn lift_xadd(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
         use iced_x86::OpKind;
         let (Some(destination), Some(source)) =

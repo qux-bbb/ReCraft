@@ -143,6 +143,11 @@ impl ArgNames {
                     Stmt::WriteReg { value, .. } => {
                         record_through(exprs, *value, &registers, &mut widths);
                     }
+                    Stmt::PseudoCall { args, .. } => {
+                        for arg in args {
+                            record_through(exprs, *arg, &registers, &mut widths);
+                        }
+                    }
                     Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
                 }
             }
@@ -713,6 +718,16 @@ fn scan_incoming_args(
                     });
                 }
                 Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
+                Stmt::PseudoCall { args, .. } => {
+                    for arg in args {
+                        walk_live_reads(&exprs, *arg, &mut |view| {
+                            reads.push((view.base, view.width));
+                        });
+                        walk_float_sizes(&exprs, *arg, &mut |size| {
+                            float_sizes.insert(size);
+                        });
+                    }
+                }
             }
             for (base, width) in reads {
                 if arg_registers.contains(&base) && !written.contains(&base) {
@@ -1025,7 +1040,7 @@ fn infer_pointer_types(
                         evidence.push((load, width))
                     });
                 }
-                Stmt::Call { args, .. } => {
+                Stmt::Call { args, .. } | Stmt::PseudoCall { args, .. } => {
                     for arg in args {
                         visit_loads(&exprs, *arg, &mut |load, width| {
                             evidence.push((load, width))
@@ -1342,6 +1357,11 @@ fn walk_stmt_loads(stmt: &Stmt, exprs: &[Expr], visit: &mut impl FnMut(ExprId)) 
             walk_expr_loads(exprs, *value, visit);
         }
         Stmt::Call { .. } | Stmt::CallIndirect { .. } | Stmt::Intrinsic { .. } => {}
+        Stmt::PseudoCall { args, .. } => {
+            for arg in args {
+                walk_expr_loads(exprs, *arg, visit);
+            }
+        }
     }
 }
 

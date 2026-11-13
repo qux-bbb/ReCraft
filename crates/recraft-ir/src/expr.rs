@@ -185,6 +185,11 @@ pub enum Stmt {
     Call { target: Address, args: Vec<ExprId> },
     /// Indirect call through a computed target (`call [IAT]`, `call rax`, virtual calls).
     CallIndirect { target: ExprId },
+    /// A named pseudo-call for an instruction whose effect is a well-known operation but
+    /// has no C expression of its own (`int 0x29` → `__fastfail(code)`,
+    /// `prefetchw` → `prefetchw(&x)`). Unlike [`Stmt::Intrinsic`] the name and the
+    /// arguments are typed, so the output reads as code instead of an assembly string.
+    PseudoCall { name: String, args: Vec<ExprId> },
     /// Instruction we do not model yet; the original assembly text is kept.
     Intrinsic { text: String },
 }

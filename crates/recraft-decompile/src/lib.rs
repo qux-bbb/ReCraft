@@ -797,6 +797,7 @@ fn stmt_reads_reg(stmt: &Stmt, exprs: &[Expr], reg: Reg) -> bool {
             expr_reads_reg(exprs, *addr, reg) || expr_reads_reg(exprs, *value, reg)
         }
         Stmt::Call { args, .. } => args.iter().any(|arg| expr_reads_reg(exprs, *arg, reg)),
+        Stmt::PseudoCall { args, .. } => args.iter().any(|arg| expr_reads_reg(exprs, *arg, reg)),
         Stmt::CallIndirect { target } => expr_reads_reg(exprs, *target, reg),
         Stmt::Intrinsic { .. } => false,
     }
@@ -2448,6 +2449,10 @@ impl Printer<'_> {
                 }
                 None => format!("(*{})()", self.expr(*target)),
             },
+            Stmt::PseudoCall { name, args } => {
+                let args: Vec<String> = args.iter().map(|arg| self.expr(*arg)).collect();
+                format!("{name}({})", args.join(", "))
+            }
             Stmt::Intrinsic { text } => {
                 // Unsupported instructions keep their assembly, but must stay inside
                 // a string literal so the pseudo-C does not break.

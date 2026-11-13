@@ -40,5 +40,5 @@ void __scrt_fastfail_l1(void) {
         return;
     }
     ecx = ebx;
-    __asm("int 0xADDR");
+    __fastfail(ecx);
 }

@@ -1046,6 +1046,20 @@ mod tests {
     /// Snapshots are optional here: the ELF image embeds the host gcc/glibc startup code, so a
     /// committed set would drift with every toolchain update. `build-linux.sh --snapshots`
     /// writes `tests/golden/crackme-elf`; when it exists, it is checked like any other set.
+    /// `int 0x29` is Windows' fast-fail; it reads as a call, not an opaque asm block.
+    #[test]
+    fn windows_fast_fail_is_rendered_as_a_call() {
+        let Some((session, _dir)) = real_crackme() else {
+            return;
+        };
+        let Some(start) = session.addr_of_name("__scrt_fastfail").unwrap() else {
+            return;
+        };
+        let text = pseudocode_l1(&session, start).unwrap().text();
+        assert!(text.contains("__fastfail("), "{text}");
+        assert!(!text.contains("int 0x"), "{text}");
+    }
+
     /// A cold path that jumps back into a short shared epilogue is copied instead of
     /// leaving a `goto` across the main `return;` (see `copy_return_tail`).
     #[test]
