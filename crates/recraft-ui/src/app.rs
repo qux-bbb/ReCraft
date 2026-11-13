@@ -140,12 +140,12 @@ struct Palette {
 
 impl Palette {
     const DARK: Self = Self {
-        panel: Color32::from_rgb(0x1e, 0x1e, 0x1e),
-        view: Color32::from_rgb(0x14, 0x14, 0x14),
-        text: Color32::from_rgb(0xd4, 0xd4, 0xd4),
+        panel: Color32::from_rgb(0x14, 0x17, 0x1b),
+        view: Color32::from_rgb(0x0e, 0x10, 0x13),
+        text: Color32::from_rgb(0xe4, 0xe7, 0xeb),
         addr: Color32::from_rgb(0xc9, 0xb4, 0x58),
-        line_number: Color32::from_rgb(0x9a, 0x9a, 0x9a),
-        bytes: Color32::from_rgb(0x85, 0x85, 0x85),
+        line_number: Color32::from_rgb(0x6b, 0x74, 0x82),
+        bytes: Color32::from_rgb(0x7c, 0x86, 0x94),
         mnemonic: Color32::from_rgb(0x7e, 0x9e, 0xd0),
         number: Color32::from_rgb(0xb5, 0xce, 0xa8),
         register: Color32::from_rgb(0xc5, 0x86, 0xc0),
@@ -156,7 +156,7 @@ impl Palette {
         hover_row: Color32::from_rgb(0x2a, 0x30, 0x38),
         tab_active_bg: Color32::from_rgb(0x2a, 0x2a, 0x2a),
         tab_focused_bg: Color32::from_rgb(0x33, 0x33, 0x33),
-        tab_inactive_text: Color32::from_rgb(0x90, 0x98, 0xa6),
+        tab_inactive_text: Color32::from_rgb(0x8b, 0x94, 0xa3),
         grid_line: Color32::from_rgb(0x2c, 0x32, 0x3c),
         graph_node: Color32::from_rgb(0x0d, 0x10, 0x12),
         graph_border: Color32::from_rgb(0x4a, 0x8f, 0x8f),
@@ -176,7 +176,7 @@ impl Palette {
 
     /// Full light scheme: white views and light grey chrome.
     const LIGHT: Self = Self {
-        panel: Color32::from_rgb(0xf0, 0xf0, 0xf0),
+        panel: Color32::from_rgb(0xf5, 0xf7, 0xfa),
         view: Color32::from_rgb(0xff, 0xff, 0xff),
         text: Color32::from_rgb(0x1e, 0x1e, 0x1e),
         addr: Color32::from_rgb(0x1a, 0x3f, 0x8f),
@@ -4720,7 +4720,15 @@ impl ReCraftApp {
         // (13 px Segoe UI) and Monospace (12.5 px Consolas) labels in one row leaves
         // their baselines ~3 px apart, because egui centres widget boxes in the row
         // rather than aligning text baselines.
-        egui::Panel::bottom("recraft_bottom").show(ui, |ui| {
+        let pal = self.palette();
+        egui::Panel::bottom("recraft_bottom")
+            .frame(
+                egui::Frame::new()
+                    .fill(pal.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 4))
+                    .stroke(egui::Stroke::new(1.0, pal.border)),
+            )
+            .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(self.t("status_au_idle")).monospace().weak());
                 ui.separator();
