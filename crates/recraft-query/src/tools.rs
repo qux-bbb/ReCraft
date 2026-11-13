@@ -85,6 +85,13 @@ pub fn strings(session: &mut Session, arguments: &Value, budget: Budget) -> Resu
     let limit = limit_of(arguments, 500, budget);
     let offset = offset_of(arguments);
     let entries = session.strings().map_err(|e| e.to_string())?;
+    // A user edit replaces the decoded bytes in the list; a hidden row never reaches here.
+    let overrides: std::collections::HashMap<u64, String> = session
+        .string_overrides()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|(addr, entry)| entry.text.map(|text| (addr.get(), text)))
+        .collect();
     let total_available = entries.len();
     let mut items = Vec::new();
     let mut matched = 0usize;
@@ -92,10 +99,15 @@ pub fn strings(session: &mut Session, arguments: &Value, budget: Budget) -> Resu
         if filter.is_none() && items.len() >= limit {
             break;
         }
-        let text = session
-            .read_bytes(entry.addr, (entry.len as usize).max(2))
-            .map(|bytes| decode_string(&bytes, entry.enc))
-            .unwrap_or_default();
+        let text = overrides
+            .get(&entry.addr.get())
+            .cloned()
+            .unwrap_or_else(|| {
+                session
+                    .read_bytes(entry.addr, (entry.len as usize).max(2))
+                    .map(|bytes| decode_string(&bytes, entry.enc))
+                    .unwrap_or_default()
+            });
         if let Some(filter) = &filter
             && !text.to_ascii_lowercase().contains(filter)
         {

@@ -654,6 +654,8 @@ struct StringRow {
     raw: Vec<u8>,
     /// Resolved symbol name at the address, if any.
     name: Option<String>,
+    /// The user replaced the decoded text with their own (see `string_override`).
+    overridden: bool,
 }
 
 /// One row of the xrefs dialog, laid out like IDA's `xrefs to …` window: direction,
@@ -915,6 +917,8 @@ enum EditKind {
     /// The Decompile view's trailing comment (IDA's `/`).
     PseudoComment,
     Prototype,
+    /// Replacement text for one extracted string (Strings view).
+    StringText,
 }
 
 /// IDA-style data operations on the current address.
@@ -2271,7 +2275,12 @@ impl ReCraftApp {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        let text = edit.text.trim().to_owned();
+        // A string's text is data: leading/trailing spaces and newlines are meaningful, so
+        // it is taken verbatim. Names, comments and prototypes are trimmed.
+        let text = match edit.kind {
+            EditKind::StringText => edit.text.clone(),
+            _ => edit.text.trim().to_owned(),
+        };
         let result = match edit.kind {
             EditKind::Rename => session.execute(Command::Rename {
                 addr: edit.addr,
@@ -2291,6 +2300,11 @@ impl ReCraftApp {
                 addr: edit.addr,
                 text: if text.is_empty() { None } else { Some(text) },
             }),
+            EditKind::StringText => session.execute(Command::SetString {
+                addr: edit.addr,
+                text: if text.is_empty() { None } else { Some(text) },
+                hidden: false,
+            }),
         };
         match result {
             Ok(_) => {
@@ -2299,9 +2313,32 @@ impl ReCraftApp {
                 // Function labels feed the Functions list and the pseudo-C symbol lookup
                 // (double-clicking a callee name), so a rename must refresh them too.
                 self.functions_dirty = true;
+                // A string edit changes the row's text; the list is cheap to rebuild.
+                if edit.kind == EditKind::StringText {
+                    self.refresh_strings();
+                }
                 self.set_status(self.t_args(
                     "ui_changed_addr",
                     &[("addr", &format!("{:#x}", edit.addr.get()))],
+                ));
+            }
+            Err(error) => self.set_error(error),
+        }
+    }
+
+    /// Delete or restore one string in the list. Runs through the command bus so `Ctrl+Z`
+    /// brings the row back and every front end sees the same table.
+    fn apply_string_edit(&mut self, addr: Address, text: Option<String>, hidden: bool) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match session.execute(Command::SetString { addr, text, hidden }) {
+            Ok(_) => {
+                self.strings_dirty = true;
+                self.refresh_strings();
+                self.set_status(self.t_args(
+                    "ui_changed_addr",
+                    &[("addr", &format!("{:#x}", addr.get()))],
                 ));
             }
             Err(error) => self.set_error(error),
@@ -3935,12 +3972,22 @@ impl ReCraftApp {
         };
         match session.strings() {
             Ok(rows) => {
+                // User edits live beside the derived table: `text` replaces the decoded
+                // bytes, `hidden` rows are already filtered out by `Session::strings`.
+                let overrides: std::collections::HashMap<u64, recraft_core::StringOverride> =
+                    session
+                        .string_overrides()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(addr, entry)| (addr.get(), entry))
+                        .collect();
                 let mut strings = Vec::with_capacity(rows.len());
                 for row in rows {
                     // Read the full stored string (analysis caps it at ~1 KiB of text).
                     let mut bytes = vec![0u8; row.len.min(64 * 1024) as usize];
                     let read = session.read_at(row.addr, &mut bytes).unwrap_or(0);
                     bytes.truncate(read);
+                    let edit = overrides.get(&row.addr.get());
                     strings.push(StringRow {
                         addr: row.addr,
                         len: row.len,
@@ -3950,9 +3997,12 @@ impl ReCraftApp {
                             .segment_containing(row.addr)
                             .map(|segment| segment.name.clone())
                             .unwrap_or_default(),
-                        text: decode_string(&bytes, row.enc),
+                        text: edit
+                            .and_then(|edit| edit.text.clone())
+                            .unwrap_or_else(|| decode_string(&bytes, row.enc)),
                         raw: bytes.iter().take(15).copied().collect(),
                         name: session.name_at(row.addr).ok().flatten(),
+                        overridden: edit.is_some_and(|edit| edit.text.is_some()),
                     });
                 }
                 self.strings = strings;
@@ -5562,7 +5612,13 @@ impl ReCraftApp {
             .filter(|(pane, _)| *pane == Pane::Strings)
             .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
+        let edit_row_label = self.t("ui_edit_string");
+        let hide_row_label = self.t("ui_delete_string");
+        let restore_row_label = self.t("ui_restore_string");
         let mut picked_now = None;
+        let mut edit_row = None;
+        let mut hide_row = None;
+        let mut restore_row = None;
         let scroll = egui::ScrollArea::both()
             .id_salt("strings_rows")
             .auto_shrink([false, false])
@@ -5637,12 +5693,38 @@ impl ReCraftApp {
                             *action = Action::Copy;
                             ui.close();
                         }
+                        if ui.button(edit_row_label.as_str()).clicked() {
+                            edit_row = Some((row.addr, row.text.clone()));
+                            ui.close();
+                        }
+                        if ui.button(hide_row_label.as_str()).clicked() {
+                            hide_row = Some(row.addr);
+                            ui.close();
+                        }
+                        if row.overridden && ui.button(restore_row_label.as_str()).clicked() {
+                            restore_row = Some(row.addr);
+                            ui.close();
+                        }
                     });
                 }
                 if more {
                     ui.weak(self.t("ui_first_2000_matches"));
                 }
             });
+        if let Some((addr, text)) = edit_row {
+            self.edit = Some(EditState {
+                kind: EditKind::StringText,
+                addr,
+                text,
+                just_opened: true,
+            });
+        }
+        if let Some(addr) = hide_row {
+            self.apply_string_edit(addr, None, true);
+        }
+        if let Some(addr) = restore_row {
+            self.apply_string_edit(addr, None, false);
+        }
         let painter = ui.painter_at(header);
         let left = header.left() - scroll.state.offset.x;
         for (x, text) in [
@@ -7969,6 +8051,7 @@ impl ReCraftApp {
             EditKind::Comment => self.t("ui_comment_2").to_owned(),
             EditKind::PseudoComment => self.t("ui_pseudo_comment").to_owned(),
             EditKind::Prototype => self.t("ui_prototype").to_owned(),
+            EditKind::StringText => self.t("ui_edit_string").to_owned(),
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -7976,11 +8059,14 @@ impl ReCraftApp {
             .show(ctx, |ui| {
                 ui.label(format!("{:#x}", edit.addr.get()));
                 // A pseudocode comment may span several lines; the disassembly comment
-                // stays single-line because it is painted on one listing row.
+                // stays single-line because it is painted on one listing row. A string
+                // literal may contain newlines too, so it gets the same multi-line field.
                 let text_edit = match edit.kind {
-                    EditKind::PseudoComment => egui::TextEdit::multiline(&mut edit.text)
-                        .desired_width(420.0)
-                        .desired_rows(3),
+                    EditKind::PseudoComment | EditKind::StringText => {
+                        egui::TextEdit::multiline(&mut edit.text)
+                            .desired_width(420.0)
+                            .desired_rows(3)
+                    }
                     _ => egui::TextEdit::singleline(&mut edit.text).desired_width(360.0),
                 };
                 let response = ui.add(text_edit.hint_text(self.t("ui_empty_deletes")));
@@ -7998,7 +8084,7 @@ impl ReCraftApp {
                 });
                 // A multi-line field consumes Enter, so it commits with Ctrl+Enter instead.
                 let submit = match edit.kind {
-                    EditKind::PseudoComment => {
+                    EditKind::PseudoComment | EditKind::StringText => {
                         ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter))
                     }
                     _ => response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)),
@@ -8940,6 +9026,8 @@ impl ReCraftApp {
                     Some(Ok(Some(_))) => {
                         self.disasm_dirty = true;
                         self.pseudo_dirty = true;
+                        // Deleting a string is undoable; the list is cheap to rebuild.
+                        self.strings_dirty = true;
                         self.set_status(self.t("ui_undo_2").to_owned());
                     }
                     Some(Ok(None)) => self.set_status(self.t("ui_nothing_to_undo").to_owned()),
@@ -8953,6 +9041,7 @@ impl ReCraftApp {
                     Some(Ok(Some(_))) => {
                         self.disasm_dirty = true;
                         self.pseudo_dirty = true;
+                        self.strings_dirty = true;
                         self.set_status(self.t("ui_redo_2").to_owned());
                     }
                     Some(Ok(None)) => self.set_status(self.t("ui_nothing_to_redo").to_owned()),
@@ -13977,6 +14066,7 @@ mod tests {
             text: text.to_owned(),
             raw: text.as_bytes().to_vec(),
             name: None,
+            overridden: false,
         }
     }
 
@@ -14526,6 +14616,7 @@ mod tests {
                 text: text.to_owned(),
                 raw: text.as_bytes().to_vec(),
                 name: None,
+                overridden: false,
             }
         }
         let strings = vec![row(0x1000, 10, "O=========")];
@@ -14612,6 +14703,82 @@ mod tests {
         // The setting is project state, not a transient UI toggle.
         let session = Session::open(&project).unwrap();
         assert_eq!(recraft_analysis::string_min_len(&session), 4);
+    }
+
+    /// A user edit wins over the decoded bytes, deletion drops the row, and both survive a
+    /// reopen: the `string` table is derived, the override is user data.
+    #[test]
+    fn string_overrides_edit_and_delete_rows() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/x64/corpus.exe");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("string-override.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project.clone()),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let (addr, decoded) = {
+            let row = app.strings.first().expect("corpus has strings");
+            (row.addr, row.text.clone())
+        };
+
+        app.apply_string_edit(addr, Some("====".to_owned()), false);
+        let row = app
+            .strings
+            .iter()
+            .find(|row| row.addr == addr)
+            .expect("the edited row stays in the list");
+        assert_eq!(row.text, "====");
+        assert!(row.overridden);
+
+        app.apply_string_edit(addr, None, true);
+        assert!(
+            app.strings.iter().all(|row| row.addr != addr),
+            "a deleted row leaves the list"
+        );
+
+        // Deletion is a journaled command: undo puts the row (and its edit) back.
+        app.apply_action(&egui::Context::default(), Action::Undo);
+        app.tick();
+        let row = app
+            .strings
+            .iter()
+            .find(|row| row.addr == addr)
+            .expect("undo restores the deleted row");
+        assert_eq!(row.text, "====", "undo keeps the earlier edit");
+        app.apply_string_edit(addr, None, true);
+
+        // Both edits are user data: they survive closing and reopening the project.
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project.clone()),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        assert!(app.strings.iter().all(|row| row.addr != addr));
+
+        // Restoring the row brings the decoded bytes back.
+        app.apply_string_edit(addr, None, false);
+        let row = app
+            .strings
+            .iter()
+            .find(|row| row.addr == addr)
+            .expect("the row is back after restoring it");
+        assert_eq!(row.text, decoded);
+        assert!(!row.overridden);
     }
 
     #[test]
@@ -16095,6 +16262,7 @@ mod tests {
                 text: "hello".to_owned(),
                 raw: vec![b'h', b'e', b'l', b'l', b'o'],
                 name: None,
+                overridden: false,
             }],
             names: vec![(Address::new(0x140001000), "main".to_owned())],
             imports: vec![ImportRow {

@@ -316,3 +316,6 @@ ui_thinking_mode = 思考模式
 ui_thinking_hint = 关（默认）：模型直接作答，首字最快。开：模型先推理再作答，思考过程显示在结果上方，完成后自动折叠。
 ui_thinking_process = 思考过程 · { $chars } 字
 ui_thinking = 思考中…
+ui_edit_string = 编辑字符串…
+ui_delete_string = 删除该字符串
+ui_restore_string = 恢复默认

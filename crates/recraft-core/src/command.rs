@@ -318,6 +318,13 @@ pub enum Command {
     DefineStruct { def: StructDef },
     /// Internal: delete a user struct layout (undo support).
     DeleteStruct { name: String },
+    /// Set (`Some`) or clear (`None`) the user's text for the extracted string at `addr`;
+    /// `hidden` deletes it from the list instead. Clearing both restores the decoded text.
+    SetString {
+        addr: Address,
+        text: Option<String>,
+        hidden: bool,
+    },
     /// Bind a struct layout to a function argument slot (`0` = first argument).
     ApplyType {
         func: Address,
@@ -336,6 +343,7 @@ impl Command {
             Command::DefineFunc { .. } => "define_func",
             Command::UndefineFunc { .. } => "undefine_func",
             Command::SetPrototype { .. } => "prototype",
+            Command::SetString { .. } => "string",
             Command::DefineStruct { .. } => "define_struct",
             Command::DeleteStruct { .. } => "delete_struct",
             Command::ApplyType { .. } => "apply_type",
@@ -348,6 +356,7 @@ impl Command {
             Command::Rename { addr, .. }
             | Command::UndefineFunc { start: addr }
             | Command::SetPrototype { addr, .. }
+            | Command::SetString { addr, .. }
             | Command::ApplyType { func: addr, .. } => {
                 vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
             }
@@ -381,6 +390,14 @@ impl Command {
                 addr: *addr,
                 text: session.prototype_at(*addr)?,
             }),
+            Command::SetString { addr, .. } => {
+                let previous = session.string_override_at(*addr)?;
+                Ok(Command::SetString {
+                    addr: *addr,
+                    text: previous.as_ref().and_then(|entry| entry.text.clone()),
+                    hidden: previous.is_some_and(|entry| entry.hidden),
+                })
+            }
             Command::DefineStruct { def } => match session.struct_def(&def.name)? {
                 Some(previous) => Ok(Command::DefineStruct { def: previous }),
                 None => Ok(Command::DeleteStruct {
@@ -609,6 +626,26 @@ pub(crate) fn apply(
                 [name.as_str()],
             )
             .map_err(db_err)?;
+        }
+        Command::SetString { addr, text, hidden } => {
+            if text.as_ref().is_some_and(|text| text.len() > 64 * 1024) {
+                return Err(Error::internal("string override is too long (64 KiB max)"));
+            }
+            if text.is_none() && !hidden {
+                conn.execute(
+                    "DELETE FROM string_override WHERE addr = ?1",
+                    [addr.get() as i64],
+                )
+                .map_err(db_err)?;
+            } else {
+                conn.execute(
+                    "INSERT INTO string_override(addr, text, hidden) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(addr) DO UPDATE SET text = excluded.text,
+                                                    hidden = excluded.hidden",
+                    params![addr.get() as i64, text, i64::from(*hidden)],
+                )
+                .map_err(db_err)?;
+            }
         }
         Command::ApplyType {
             func,

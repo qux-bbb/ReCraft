@@ -2751,10 +2751,21 @@ fn cmd_strings(project: &Path, max_text: usize, as_json: bool) -> Result<()> {
         println!("no strings in this project - run `recraft analyze` first");
         return Ok(());
     }
-    let previews: Vec<String> = strings
-        .iter()
-        .map(|string| truncate_string(&mut session, string.addr, string.len, max_text))
-        .collect();
+    let previews: Vec<String> = {
+        // A user edit (edit/delete in the Strings view) wins over the bytes.
+        let overrides: std::collections::HashMap<u64, String> = session
+            .string_overrides()?
+            .into_iter()
+            .filter_map(|(addr, entry)| entry.text.map(|text| (addr.get(), text)))
+            .collect();
+        strings
+            .iter()
+            .map(|string| match overrides.get(&string.addr.get()) {
+                Some(text) => truncate_text(text, max_text),
+                None => truncate_string(&mut session, string.addr, string.len, max_text),
+            })
+            .collect()
+    };
     if as_json {
         let rows: Vec<Value> = strings
             .iter()
@@ -2786,6 +2797,16 @@ fn cmd_strings(project: &Path, max_text: usize, as_json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Truncate an already-decoded preview to `max_text` characters, adding an ellipsis.
+fn truncate_text(text: &str, max_text: usize) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    if chars.len() > max_text {
+        chars.truncate(max_text);
+        chars.push('…');
+    }
+    chars.into_iter().collect()
 }
 
 fn truncate_string(session: &mut Session, addr: Address, len: u32, max_text: usize) -> String {

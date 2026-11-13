@@ -316,3 +316,6 @@ ui_thinking_mode = Thinking mode
 ui_thinking_hint = Off (default): answer directly, fastest first token. On: the model reasons first; the thinking stream appears above the result and folds when it finishes.
 ui_thinking_process = Thinking · { $chars } chars
 ui_thinking = thinking…
+ui_edit_string = Edit string…
+ui_delete_string = Delete string
+ui_restore_string = Restore default

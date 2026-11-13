@@ -13,7 +13,7 @@ use recraft_common::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Current schema version. Stored in `meta.schema_version`.
-pub const CURRENT_VERSION: i64 = 4;
+pub const CURRENT_VERSION: i64 = 5;
 
 /// DDL for schema version 1.
 ///
@@ -109,6 +109,15 @@ CREATE TABLE IF NOT EXISTS user_struct_field (
     name        TEXT    NOT NULL,
     kind        TEXT    NOT NULL,
     PRIMARY KEY (struct_name, off)
+);
+
+-- The extracted string table is derived data, but a user edit is not: an override keeps the
+-- text the user typed (or marks the row deleted) and survives every rebuild, because
+-- analysis rewrites `string` and never touches this table.
+CREATE TABLE IF NOT EXISTS string_override (
+    addr   INTEGER PRIMARY KEY,
+    text   TEXT,
+    hidden INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS func_arg_type (
@@ -269,8 +278,9 @@ pub fn initialize(conn: &Connection) -> Result<i64> {
 ///
 /// All DDL is additive and idempotent; v2 added the `prototype` table, v3 user struct
 /// layouts + per-argument type bindings, v4 provenance (`origin`) and batch grouping on the
-/// journal. Columns cannot be added by re-running `CREATE TABLE IF NOT EXISTS`, so a table
-/// that predates v4 gets an explicit `ALTER TABLE` here.
+/// journal, v5 the string overrides (`string_override`). Columns cannot be added by
+/// re-running `CREATE TABLE IF NOT EXISTS`, so a table that predates v4 gets an explicit
+/// `ALTER TABLE` here.
 fn migrate(conn: &Connection, from: i64) -> Result<()> {
     conn.execute_batch(SCHEMA_V1).map_err(db_err)?;
     if from < 4 {
@@ -349,6 +359,24 @@ mod tests {
             .unwrap();
         assert_eq!(origin, "user", "old records get the default provenance");
         assert_eq!(batch, None);
+    }
+
+    #[test]
+    fn version_4_gains_the_string_override_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        // Simulate a v4 project: no `string_override` table yet.
+        conn.execute_batch("DROP TABLE string_override;").unwrap();
+        set_schema_version(&conn, 4).unwrap();
+
+        initialize(&conn).unwrap();
+
+        assert_eq!(schema_version(&conn).unwrap(), Some(CURRENT_VERSION));
+        conn.execute(
+            "INSERT INTO string_override(addr, text) VALUES (1, 'x')",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

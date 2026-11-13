@@ -132,6 +132,20 @@ pub struct StringEntry {
     pub kind: i64,
 }
 
+/// A user edit on one extracted string: replacement text and/or a deletion marker.
+///
+/// Analysis owns the derived `string` table; this record is user data, so a rebuild keeps
+/// the correction. `text` replaces the decoded bytes in the Strings view and in the read
+/// tools, while the decompiler keeps reading the real bytes (a literal's meaning must not
+/// depend on an annotation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringOverride {
+    /// Text the user typed, or `None` to show the decoded bytes.
+    pub text: Option<String>,
+    /// The user deleted this string from the list.
+    pub hidden: bool,
+}
+
 /// One cross-reference, as stored in the `xref` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XrefEntry {

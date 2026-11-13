@@ -31,7 +31,7 @@ use crate::command::{
 use crate::flags::{Flags, FlagsStore};
 use crate::segments::{self, Segment};
 use crate::snapshot::SessionSnapshot;
-use crate::view::{DisasmLine, FunctionInfo, SessionView, StringEntry, XrefEntry};
+use crate::view::{DisasmLine, FunctionInfo, SessionView, StringEntry, StringOverride, XrefEntry};
 
 const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
@@ -968,12 +968,17 @@ impl Session {
         Ok(())
     }
 
-    /// All stored strings, ordered by address.
+    /// All stored strings, ordered by address, minus the rows the user deleted.
     pub fn strings(&self) -> Result<Vec<StringEntry>> {
         let mut stmt = self
             .project
             .conn()
-            .prepare("SELECT addr, len, enc, kind FROM string ORDER BY addr")
+            .prepare(
+                "SELECT addr, len, enc, kind FROM string AS s
+                 WHERE NOT EXISTS (SELECT 1 FROM string_override AS o
+                                   WHERE o.addr = s.addr AND o.hidden != 0)
+                 ORDER BY addr",
+            )
             .map_err(command::db_err)?;
         let rows = stmt
             .query_map([], |row| {
@@ -1006,6 +1011,45 @@ impl Session {
     /// Returns `None` when the address is not the start of a stored string.
     pub fn string_at(&self, addr: Address) -> Result<Option<String>> {
         SessionView::string_at(self, addr)
+    }
+
+    /// All user edits of the string list, ordered by address.
+    pub fn string_overrides(&self) -> Result<Vec<(Address, StringOverride)>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare("SELECT addr, text, hidden FROM string_override ORDER BY addr")
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    Address::new(row.get::<_, i64>(0)? as u64),
+                    StringOverride {
+                        text: row.get(1)?,
+                        hidden: row.get::<_, i64>(2)? != 0,
+                    },
+                ))
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
+    /// The user edit on the string at `addr`, if the user changed or deleted it.
+    pub fn string_override_at(&self, addr: Address) -> Result<Option<StringOverride>> {
+        self.project
+            .conn()
+            .query_row(
+                "SELECT text, hidden FROM string_override WHERE addr = ?1",
+                [addr.get() as i64],
+                |row| {
+                    Ok(StringOverride {
+                        text: row.get(0)?,
+                        hidden: row.get::<_, i64>(1)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .map_err(command::db_err)
     }
 
     /// Cross-references pointing *to* `addr`.
@@ -2545,6 +2589,85 @@ mod tests {
         assert!(reopened.prototype_at(entry).unwrap().is_some());
         reopened.undo().unwrap();
         assert!(reopened.prototype_at(entry).unwrap().is_none());
+    }
+
+    #[test]
+    fn string_overrides_edit_hide_and_undo() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let start = session.entry_point();
+        let second = Address::new(start.get() + 0x10);
+        session
+            .replace_auto_strings(&[
+                // `enc` 1 = printable ASCII (the constants live in `recraft-analysis`).
+                (start, 6, 1, 0),
+                (second, 4, 1, 0),
+            ])
+            .unwrap();
+        assert_eq!(session.strings().unwrap().len(), 2);
+
+        // Editing replaces the display text but keeps the extracted row: the decompiler
+        // still reads the bytes, only the list and the read tools see the override.
+        session
+            .execute(Command::SetString {
+                addr: start,
+                text: Some("====".to_owned()),
+                hidden: false,
+            })
+            .unwrap();
+        assert_eq!(
+            session
+                .string_override_at(start)
+                .unwrap()
+                .and_then(|entry| entry.text)
+                .as_deref(),
+            Some("====")
+        );
+        assert_eq!(session.strings().unwrap().len(), 2);
+        assert!(session.string_meta_at(second).unwrap().is_some());
+
+        // Deleting drops the row from the list, not from the derived table.
+        session
+            .execute(Command::SetString {
+                addr: second,
+                text: None,
+                hidden: true,
+            })
+            .unwrap();
+        assert_eq!(session.strings().unwrap().len(), 1);
+        assert!(session.string_meta_at(second).unwrap().is_some());
+
+        // Undo restores the deletion, then the edit; redo re-applies the edit.
+        session.undo().unwrap();
+        assert_eq!(session.strings().unwrap().len(), 2);
+        session.undo().unwrap();
+        assert!(session.string_override_at(start).unwrap().is_none());
+        session.redo().unwrap();
+        assert!(session.string_override_at(start).unwrap().is_some());
+
+        // Overrides are user data and survive a reopen; clearing restores the bytes.
+        let path = session.path().to_path_buf();
+        drop(session);
+        let mut reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .string_override_at(start)
+                .unwrap()
+                .and_then(|entry| entry.text)
+                .as_deref(),
+            Some("====")
+        );
+        reopened
+            .execute(Command::SetString {
+                addr: start,
+                text: None,
+                hidden: false,
+            })
+            .unwrap();
+        assert!(reopened.string_override_at(start).unwrap().is_none());
+        assert_eq!(reopened.strings().unwrap().len(), 2);
     }
 
     #[test]
