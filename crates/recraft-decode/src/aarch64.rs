@@ -39,6 +39,17 @@ pub fn decode_aarch64(bytes: &[u8], addr: Address) -> Option<DecodedInsn> {
         .take_while(|operand| !matches!(operand, Operand::Nothing))
         .map(|operand| aarch64_operand(operand, addr))
         .collect();
+    let mut operands = operands;
+    // `cmp`/`cmn`/`tst` write to the discarded `xzr`; yaxpeax keeps that destination in the
+    // operand list while its own printer hides it.
+    if matches!(mnemonic.as_str(), "cmp" | "cmn" | "tst")
+        && matches!(
+            operands.first(),
+            Some(DecodedOperand::Register { name, .. }) if name.ends_with("zr")
+        )
+    {
+        operands.remove(0);
+    }
     let branch_target = if matches!(
         flow,
         FlowKind::UnconditionalBranch | FlowKind::ConditionalBranch | FlowKind::Call
@@ -105,12 +116,40 @@ fn aarch64_operand(operand: &Operand, addr: Address) -> DecodedOperand {
         }
         Operand::RegShift(_, shift, size, number) => {
             let mut register = register_operand(*size, *number, false);
-            if let DecodedOperand::Register { name, .. } = &mut register {
-                name.push_str(&format!("<<{shift}"));
+            if *shift != 0
+                && let DecodedOperand::Register { name, .. } = &mut register
+            {
+                name.push_str(&format!(", lsl #{shift}"));
             }
             register
         }
+        // Memory operands: `[xN]`, `[xN, #off]`, `[xN], #off`, `[xN, xM]`.
+        Operand::RegPreIndex(base, offset, _) => memory_operand(*base, None, 0, i64::from(*offset)),
+        Operand::RegPostIndex(base, offset) => {
+            memory_operand(*base, None, 0, i64::from(*offset))
+        }
+        Operand::RegPostIndexReg(base, index) => {
+            memory_operand(*base, Some(*index), 0, 0)
+        }
+        Operand::RegRegOffset(base, index, _, _, shift) => {
+            memory_operand(*base, Some(*index), *shift, 0)
+        }
         _ => DecodedOperand::Immediate(0),
+    }
+}
+
+/// A64 memory operand: `base` plus an optional index shifted by `shift`.
+fn memory_operand(base: u16, index: Option<u16>, shift: u8, disp: i64) -> DecodedOperand {
+    DecodedOperand::Memory {
+        base: Some(if base == 31 {
+            "xsp".to_owned()
+        } else {
+            format!("x{base}")
+        }),
+        index: index.map(|index| format!("x{index}")),
+        scale: 1u8 << shift.min(4),
+        disp,
+        size: 8,
     }
 }
 

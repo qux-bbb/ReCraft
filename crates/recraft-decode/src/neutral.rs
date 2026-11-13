@@ -53,6 +53,50 @@ pub struct DecodedInsn {
     pub writes: Vec<String>,
 }
 
+impl DecodedInsn {
+    /// Operands rendered in either syntax (registers as named by the backend, immediates as
+    /// `#0x…`, direct targets as absolute addresses).
+    pub fn operand_text(&self) -> String {
+        self.operands
+            .iter()
+            .map(|operand| match operand {
+                DecodedOperand::Register { name, .. } => name.clone(),
+                DecodedOperand::Immediate(value) if *value < 0 => format!("#-0x{:x}", -value),
+                DecodedOperand::Immediate(value) => format!("#0x{value:x}"),
+                DecodedOperand::Memory {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                    ..
+                } => {
+                    let mut text = String::from("[");
+                    if let Some(base) = base {
+                        text.push_str(base);
+                    }
+                    if let Some(index) = index {
+                        text.push_str(&format!(", {index}"));
+                        if *scale > 1 {
+                            text.push_str(&format!(", lsl #{scale}"));
+                        }
+                    }
+                    if *disp != 0 {
+                        if *disp < 0 {
+                            text.push_str(&format!(", #-{:#x}", -disp));
+                        } else {
+                            text.push_str(&format!(", #{disp:#x}"));
+                        }
+                    }
+                    text.push(']');
+                    text
+                }
+                DecodedOperand::NearBranch(target) => format!("{:#x}", target.get()),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 impl Insn {
     /// Describe this instruction without exposing the backend's types.
     pub fn neutral(&self) -> DecodedInsn {

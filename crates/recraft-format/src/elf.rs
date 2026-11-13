@@ -258,9 +258,9 @@ pub fn load(bytes: &[u8]) -> Result<LoadedImage> {
             header.e_machine, header.class
         )));
     }
-    if arch != Arch::X64 && arch != Arch::X86 {
+    if arch != Arch::X64 && arch != Arch::X86 && arch != Arch::Aarch64 {
         return Err(Error::format(
-            "ELF arm64 images parse, but the decoder is x86-only until the ARM64 lifter lands",
+            "this build decodes i386, x86-64 and AArch64 images",
         ));
     }
     let is_64 = arch.is_64();
@@ -1337,7 +1337,7 @@ mod tests {
     }
 
     #[test]
-    fn arm64_images_are_refused_until_the_lifter_exists() {
+    fn arm64_images_load_with_the_aarch64_arch() {
         let mut bytes = vec![0u8; 64];
         bytes[..4].copy_from_slice(&ELF_MAGIC);
         bytes[4] = ELFCLASS64;
@@ -1345,7 +1345,8 @@ mod tests {
         bytes[6] = EV_CURRENT;
         bytes[16] = ET_EXEC as u8;
         bytes[18] = EM_AARCH64 as u8;
-        let error = load(&bytes).unwrap_err();
-        assert!(error.to_string().contains("ARM64 lifter"), "{error}");
+        let loaded = load(&bytes).expect("arm64 parses");
+        assert_eq!(loaded.arch, Arch::Aarch64);
+        assert_eq!(loaded.format, Format::Elf);
     }
 }

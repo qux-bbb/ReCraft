@@ -370,6 +370,11 @@ impl Session {
 
     /// Decode the instruction at `addr` (cached).
     pub fn insn_at(&self, addr: Address) -> Result<Option<Insn>> {
+        // AArch64 has no iced instruction; callers that need one instruction of any
+        // architecture use [`Self::decoded_at`].
+        if self.arch == Arch::Aarch64 {
+            return Ok(None);
+        }
         if let Some(insn) = self.decoders.borrow_mut().get(addr) {
             return Ok(Some(insn));
         }
@@ -383,6 +388,62 @@ impl Session {
         };
         self.decoders.borrow_mut().insert(insn);
         Ok(Some(insn))
+    }
+
+    /// Decode one instruction through the backend-neutral model (x86: iced adapter,
+    /// AArch64: yaxpeax-arm).
+    pub fn decoded_at(&self, addr: Address) -> Result<Option<recraft_decode::DecodedInsn>> {
+        if self.arch == Arch::Aarch64 {
+            let mut raw = [0u8; 4];
+            let read = self.read_at(addr, &mut raw)?;
+            if read < raw.len() {
+                return Ok(None);
+            }
+            return Ok(recraft_decode::decode_aarch64(&raw, addr));
+        }
+        Ok(self.insn_at(addr)?.map(|insn| insn.neutral()))
+    }
+
+    /// AArch64 disassembly: the neutral decoder fills the same [`DisasmLine`] shape, so the
+    /// CLI/MCP/UI listing code does not need an architecture branch of its own.
+    fn disasm_aarch64(&mut self, start: Address, count: usize) -> Result<Vec<DisasmLine>> {
+        let mut lines = Vec::with_capacity(count.min(4096));
+        let mut addr = start;
+        for _ in 0..count {
+            if self.segment_containing(addr).is_none() {
+                break;
+            }
+            let Some(decoded) = self.decoded_at(addr)? else {
+                break;
+            };
+            let mut raw = [0u8; 15];
+            let read = self.read_at(addr, &mut raw)?;
+            if read == 0 {
+                break;
+            }
+            let mut operands = decoded.operand_text();
+            if let Some(target) = decoded.branch_target
+                && let Some(target_name) = self.name_at(target)?
+            {
+                operands.push_str("  ; ");
+                operands.push_str(&target_name);
+            }
+            let name = self.name_at(addr)?;
+            let comment = self.comment_at(addr, CommentKind::Regular)?;
+            let flags = self.flags_at(addr)?;
+            lines.push(DisasmLine {
+                addr,
+                len: decoded.len,
+                raw,
+                mnemonic: decoded.mnemonic,
+                operands,
+                name,
+                comment,
+                flags,
+            });
+            addr = Address::new(addr.get() + u64::from(decoded.len));
+        }
+        Ok(lines)
     }
 
     pub fn flags_at(&mut self, addr: Address) -> Result<Flags> {
@@ -1539,6 +1600,9 @@ impl Session {
 
     /// Linear disassembly starting at `start`.
     pub fn disasm(&mut self, start: Address, count: usize) -> Result<Vec<DisasmLine>> {
+        if self.arch == Arch::Aarch64 {
+            return self.disasm_aarch64(start, count);
+        }
         let mut lines = Vec::with_capacity(count.min(4096));
         let mut formatter = Formatter::new();
         let mut addr = start;

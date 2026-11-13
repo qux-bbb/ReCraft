@@ -1442,11 +1442,11 @@ fn cmd_import(file: &Path, out: &Path) -> Result<()> {
     let session = Session::create(out, &bytes, &mut progress, &|| false)?;
     eprintln!("\rimported {total_bytes} bytes");
     println!(
-        "OK: {} ({} segments, entry {:#x}, x{})",
+        "OK: {} ({} segments, entry {:#x}, {})",
         out.display(),
         session.segments().len(),
         session.entry_point().get(),
-        if session.mode().is_64() { 64 } else { 32 }
+        session.arch().name()
     );
     Ok(())
 }
