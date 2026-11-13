@@ -4201,7 +4201,6 @@ impl ReCraftApp {
     fn top_bar(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let open_label = self.t("ui_open_project");
         let import_label = self.t("ui_import_binary");
-        let close_label = self.t("ui_close_project");
         let close_shortcut_label = self.t("ui_close_project_ctrl_w");
         let has_project = self.project.is_some();
         let undo_label = self.t("ui_undo");
@@ -4214,7 +4213,6 @@ impl ReCraftApp {
         let analyze_label = self.t("ui_analyze_functions");
         let cancel_label = self.t("ui_cancel");
         let analyzing_label = self.t("ui_analyzing");
-        let no_project = self.t("ui_no_project");
         let file_menu = self.t("menu_file");
         let edit_menu = self.t("menu_edit");
         let jump_menu = self.t("menu_jump");
@@ -4227,8 +4225,6 @@ impl ReCraftApp {
         let dark_label = self.t("theme_dark");
         let light_label = self.t("theme_light");
         let about_label = self.t("menu_about");
-        let text_label = self.t("view_text");
-        let graph_label = self.t("view_graph");
         egui::Panel::top("recraft_top").show(ui, |ui| {
             // IDA-style menu bar.
             ui.horizontal(|ui| {
@@ -4313,10 +4309,18 @@ impl ReCraftApp {
                 });
                 ui.menu_button(options_menu.as_str(), |ui| {
                     // Like IDA's "Reanalyze program": analysis has no key of its own, it
-                    // runs when a binary is imported and can be re-run from here.
-                    let can_reanalyze = has_project && self.analysis.is_none();
-                    if ui
-                        .add_enabled(can_reanalyze, egui::Button::new(analyze_label.as_str()))
+                    // runs when a binary is imported and can be re-run from here. While a job
+                    // runs the same slot reports progress and offers Cancel: the toolbar that
+                    // used to hold them is gone.
+                    if let Some(job) = self.analysis.as_ref() {
+                        let elapsed = job.started.elapsed().as_secs_f64();
+                        ui.label(format!("{analyzing_label}… {elapsed:.1}s"));
+                        if ui.button(cancel_label.as_str()).clicked() {
+                            *action = Action::CancelAnalysis;
+                            ui.close();
+                        }
+                    } else if ui
+                        .add_enabled(has_project, egui::Button::new(analyze_label.as_str()))
                         .clicked()
                     {
                         *action = Action::Analyze;
@@ -4379,91 +4383,6 @@ impl ReCraftApp {
                         self.set_status(format!("ReCraft {}", env!("CARGO_PKG_VERSION")));
                         ui.close();
                     }
-                });
-            });
-            ui.separator();
-            // Toolbar row.
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(self.history_pos > 0, egui::Button::new("◀"))
-                    .on_hover_text(back_label.as_str())
-                    .clicked()
-                {
-                    *action = Action::Back;
-                }
-                if ui
-                    .add_enabled(
-                        self.history_pos + 1 < self.history.len(),
-                        egui::Button::new("▶"),
-                    )
-                    .on_hover_text(forward_label.as_str())
-                    .clicked()
-                {
-                    *action = Action::Forward;
-                }
-                ui.separator();
-                let graph_active = self.view_mode == ViewMode::Graph;
-                // One target-mode button instead of two labels: it stays discoverable,
-                // shows what clicking will switch to, and removes the duplicate
-                // Text/Graph pair.
-                let switch_label = if graph_active {
-                    text_label.as_str()
-                } else {
-                    graph_label.as_str()
-                };
-                if ui
-                    .button(switch_label)
-                    .on_hover_text(self.t("palette_toggle_view_mode"))
-                    .clicked()
-                {
-                    *action = Action::ToggleViewMode;
-                }
-                ui.separator();
-                if let Some(job) = self.analysis.as_ref() {
-                    let elapsed = job.started.elapsed().as_secs_f64();
-                    ui.label(format!("{analyzing_label}… {elapsed:.1}s"));
-                    if ui.button(cancel_label).clicked() {
-                        *action = Action::CancelAnalysis;
-                    }
-                } else if ui.button(analyze_label).clicked() {
-                    *action = Action::Analyze;
-                }
-                ui.separator();
-                if ui.button("AI").clicked() {
-                    *action = Action::FocusPane(Pane::Ai);
-                }
-                if ui
-                    .button(match self.theme {
-                        ThemeMode::Dark => "◐",
-                        ThemeMode::Light => "◑",
-                    })
-                    .on_hover_text(self.t("ui_toggle_theme_ctrl_t"))
-                    .clicked()
-                {
-                    *action = Action::ToggleTheme;
-                }
-                ui.separator();
-                if ui
-                    .button(if self.lang == Lang::En {
-                        "中文"
-                    } else {
-                        "English"
-                    })
-                    .clicked()
-                {
-                    *action = Action::ToggleLang;
-                }
-                let path_text = self
-                    .project
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| no_project.to_owned());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if has_project && ui.button("×").on_hover_text(close_label.as_str()).clicked()
-                    {
-                        *action = Action::CloseProject;
-                    }
-                    ui.weak(path_text);
                 });
             });
             ui.separator();

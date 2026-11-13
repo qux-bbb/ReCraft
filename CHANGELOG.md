@@ -305,6 +305,13 @@
 
 ### 变更
 
+- **删除顶部工具栏行。** 第二行（◀▶、Graph/Text、Analyze、AI、主题、语言、项目路径、×）的每个
+  入口都在别处：后退/前进入 **Jump** 菜单，Graph/Text 用空格或命令面板，分析重跑在
+  **Options → Analyze functions**（运行期间同一位置显示“分析中… Ns”与「取消」，补回原先只存在于
+  工具栏的进度/取消入口），主题 `Ctrl+T`，语言与 AI 在 Options/命令面板，项目路径在窗口标题。
+  删掉后顶部只剩菜单栏 + 导航带，省约 30px；DEMO 走查同步改写。截图等 0.4 的 UI 现代化统一重拍
+  （现有 `docs/images/` 仍是旧工具栏）。
+
 - **Strings 视图改用 IDA 同款的 `Shift+F12`。** IDA 的 Strings 窗口就是 `Shift+F12`，ReCraft
   此前把 Strings 绑在 `F4`。现在 `Shift+F12` 打开/聚焦 Strings（页签关掉时重新停靠），Views
   菜单的工具提示同步为该组合；`F4` 不再响应（IDA 的 F4 属于调试器，ReCraft 没有对应命令）。

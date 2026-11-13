@@ -54,25 +54,26 @@ applied 3 proposal(s) through the command bus (undoable)
 ## GUI 走查（1–2 分钟）
 
 1. 启动 `recraft.exe`，**File → Open/Import** 选择 `%TEMP%\recraft-demo-*\demo.rcraft`
-   （用 `-Keep` 运行演示脚本会打印路径）。**File → Close project**（`Ctrl+W`，或工具栏
-   项目路径旁的 `×`）会卸载当前项目并回到欢迎页；正在跑的后台分析会被取消，布局/主题/
-   语言/最近项目列表保持不变，之后可直接打开另一个项目。
+   （用 `-Keep` 运行演示脚本会打印路径）。**File → Close project**（`Ctrl+W`）会卸载当前项目
+   并回到欢迎页；正在跑的后台分析会被取消，布局/主题/语言/最近项目列表保持不变，之后可直接
+   打开另一个项目。
 2. 导入 PE 后**自动开始分析**（后台线程，可取消；与 IDA 加载即分析一致），需要重跑时走
-   **Options → Analyze functions**（工具栏 Analyze 按钮同效）。工作区按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/
-   Search/View/Options/Windows/Help）+ **工具栏**（后退/前进、Text/Graph、Analyze、AI、语言、
-   项目路径）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
+   **Options → Analyze functions**（分析运行期间同一位置显示“分析中… Ns”与「取消」）。工作区
+   按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/Search/View/Options/Windows/Help，没有第二行
+   工具栏）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
    图标），其下方是 **Graph overview**（只在 Disassembly 的 Graph 模式出现，Text 模式把空间还给
    Functions，与 IDA 相同）；右侧**文档标签区**按固定顺序显示 **Disassembly、
    Decompile、Hex、Strings、Local Types、Imports、Exports、AI**（Names、Segments
    默认隐藏，可从 **Views** 菜单打开）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、
    字节、函数、与 Hex 同步提示）。
-   **Disassembly 是单个视图**，内部有 **Graph / Text 两种模式**：工具栏 `Graph`/`Text` 或
-   **空格键**切换，不会切换标签页；Graph 中双击基本块会切到 Text 并定位，**点击 Graph overview
-   里的块会在图内居中**（不离开 Graph）。图形支持节点块/箭头连线与 `Fit`/`-`/`+` 缩放（50–200%）；
-   overview 把整张 CFG 缩放进面板，并用虚线框标出当前可视区域（图大于视口时）。空格同 IDA 只属于反汇编视图：Decompile 等
+   **Disassembly 是单个视图**，内部有 **Graph / Text 两种模式**：**空格键**或命令面板切换（菜单
+   与快捷键都不再占一行工具栏），不会切换标签页；Graph 中双击基本块会切到 Text 并定位，
+   **点击 Graph overview 里的块会在图内居中**（不离开 Graph）。图形支持节点块/箭头连线与
+   `Fit`/`-`/`+` 缩放（50–200%）；overview 把整张 CFG 缩放进面板，并用虚线框标出当前可视区域
+   （图大于视口时）。空格同 IDA 只属于反汇编视图：Decompile 等
    页签里按空格没有作用；光标落在数据行或函数外时按空格会留在 Text 并在状态栏说明原因
    （IDA 的"该条目无法用图形显示"提示）。
-   **Options → Theme** 或工具栏 `◐/◑`、`Ctrl+T` 可在**全浅色/全深色**主题间切换；默认是**全浅色**，
+   **Options → Theme** 或 `Ctrl+T` 可在**全浅色/全深色**主题间切换；默认是**全浅色**，
    选择随布局一起保存。
    ![Default light theme](images/ida-layout.png)
    ![Dark theme](images/ida-layout-dark.png)
@@ -101,8 +102,8 @@ applied 3 proposal(s) through the command bus (undoable)
    的 **Graph** 模式看 CFG。`F5` 会把光标所在函数的伪代码居中显示（同 IDA 的反编译键）；
    在伪代码里按 **`Tab`** 回到该行对应的反汇编（Graph 模式下回到同一张图）。
    反编译与反汇编**联动**：反汇编行有 IDA 式整行高亮（点击任意位置选中、双击跟随、右键菜单、
-   工具栏 ◀ ▶ 前进后退、顶部导航带可点击跳转）；反汇编选中行在反编译里同步高亮，
-   反编译**单击**同步光标；**双击函数名进入该函数**（`Back`/◀ 返回调用方），**双击字符串字面量跳到该字符串的数据**（`db '…',0`），双击其他位置跳到反汇编。
+   Jump 菜单里的后退/前进、顶部导航带可点击跳转）；反汇编选中行在反编译里同步高亮，
+   反编译**单击**同步光标；**双击函数名进入该函数**（Jump → Back 返回调用方），**双击字符串字面量跳到该字符串的数据**（`db '…',0`），双击其他位置跳到反汇编。
    伪代码按 C 语法分色（深/浅主题各自映射）：关键字与类型名蓝、寄存器紫、函数/标签/全局名金、
    数字用立即数色、字符串与注释绿；局部变量与标点保持正文色。
    ![Decompile view](images/decompile.png)
