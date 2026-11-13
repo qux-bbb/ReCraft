@@ -14,7 +14,7 @@
 //! separate `ReadOnlyProject` connection.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1052,6 +1052,43 @@ impl Session {
             .map_err(command::db_err)
     }
 
+    /// The user's name for the stack variable at `offset` in `func`, if any.
+    pub fn var_name(&self, func: Address, offset: i64) -> Result<Option<String>> {
+        self.project
+            .conn()
+            .query_row(
+                "SELECT v.name FROM var AS v JOIN func AS f ON f.id = v.func_id
+                 WHERE f.start = ?1 AND v.stack_off = ?2",
+                params![func.get() as i64, offset],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(command::db_err)
+    }
+
+    /// Every user-named stack variable of `func`, keyed by stack offset.
+    pub fn var_names(&self, func: Address) -> Result<BTreeMap<i64, String>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT v.stack_off, v.name FROM var AS v JOIN func AS f ON f.id = v.func_id
+                 WHERE f.start = ?1 ORDER BY v.stack_off",
+            )
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([func.get() as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(command::db_err)?;
+        let mut names = BTreeMap::new();
+        for row in rows {
+            let (offset, name) = row.map_err(command::db_err)?;
+            names.insert(offset, name);
+        }
+        Ok(names)
+    }
+
     /// Cross-references pointing *to* `addr`.
     pub fn xrefs_to(&self, addr: Address) -> Result<Vec<XrefEntry>> {
         let mut stmt = self
@@ -1872,6 +1909,10 @@ impl SessionView for Session {
     fn string_meta_at(&self, addr: Address) -> Result<Option<(u32, i64)>> {
         Session::string_meta_at(self, addr)
     }
+
+    fn var_names(&self, func: Address) -> BTreeMap<i64, String> {
+        Session::var_names(self, func).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -2668,6 +2709,83 @@ mod tests {
             .unwrap();
         assert!(reopened.string_override_at(start).unwrap().is_none());
         assert_eq!(reopened.strings().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn stack_variable_names_roundtrip_undo_and_persist() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        session
+            .execute(Command::DefineFunc {
+                start: entry,
+                end: Address::new(entry.get() + 0x20),
+            })
+            .unwrap();
+        assert!(session.var_name(entry, -8).unwrap().is_none());
+
+        session
+            .execute(Command::RenameVar {
+                func: entry,
+                offset: -8,
+                name: Some("buffer".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(
+            session.var_name(entry, -8).unwrap().as_deref(),
+            Some("buffer")
+        );
+        assert_eq!(
+            session
+                .var_names(entry)
+                .unwrap()
+                .get(&-8)
+                .map(String::as_str),
+            Some("buffer")
+        );
+
+        // A generated-looking name would collide with the listing's own syntax.
+        assert!(
+            session
+                .execute(Command::RenameVar {
+                    func: entry,
+                    offset: -8,
+                    name: Some("var_8".to_owned()),
+                })
+                .is_err()
+        );
+
+        session.undo().unwrap();
+        assert!(session.var_name(entry, -8).unwrap().is_none());
+        session.redo().unwrap();
+        assert_eq!(
+            session.var_name(entry, -8).unwrap().as_deref(),
+            Some("buffer")
+        );
+
+        let path = session.path().to_path_buf();
+        drop(session);
+        let mut reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .var_names(entry)
+                .unwrap()
+                .get(&-8)
+                .map(String::as_str),
+            Some("buffer"),
+            "the name is user data and survives a reopen"
+        );
+
+        reopened
+            .execute(Command::RenameVar {
+                func: entry,
+                offset: -8,
+                name: None,
+            })
+            .unwrap();
+        assert!(reopened.var_name(entry, -8).unwrap().is_none());
     }
 
     #[test]

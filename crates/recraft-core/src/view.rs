@@ -51,6 +51,12 @@ pub trait SessionView {
     /// Length and encoding of the stored string that starts at `addr`, if any.
     fn string_meta_at(&self, addr: Address) -> Result<Option<(u32, i64)>>;
 
+    /// User names for the stack variables of the function at `func`, keyed by stack offset.
+    /// The L2 renderer prints them instead of the generated `var_<offset>` slots.
+    fn var_names(&self, _func: Address) -> std::collections::BTreeMap<i64, String> {
+        std::collections::BTreeMap::new()
+    }
+
     fn segment_containing(&self, addr: Address) -> Option<&Segment> {
         self.segments()
             .iter()

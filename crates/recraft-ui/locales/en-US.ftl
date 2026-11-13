@@ -325,3 +325,4 @@ ui_prompt_polish = Polish
 ui_prompt_agent = Agent
 ui_save_prompt = Save prompt
 ui_reset_prompt = Restore built-in
+ui_rename_variable = Rename variable…

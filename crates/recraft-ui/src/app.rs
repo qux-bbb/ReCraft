@@ -699,6 +699,25 @@ struct XrefDialog {
 }
 
 /// Decode stored string bytes according to the analysis encoding id.
+/// The first stack-slot token (`var_20`, `var_n8`) of a pseudo-C line, with its offset.
+///
+/// The Decompile view's context menu offers "rename variable" only when the row actually
+/// names a slot; a row without one keeps the menu unchanged.
+fn stack_slot_token(text: &str) -> Option<(i64, &str)> {
+    for token in text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {
+        if let Some(hex) = token.strip_prefix("var_n") {
+            if let Ok(value) = i64::from_str_radix(hex, 16) {
+                return Some((-value, token));
+            }
+        } else if let Some(hex) = token.strip_prefix("var_") {
+            if let Ok(value) = i64::from_str_radix(hex, 16) {
+                return Some((value, token));
+            }
+        }
+    }
+    None
+}
+
 fn decode_string(bytes: &[u8], enc: i64) -> String {
     if enc == recraft_analysis::STRING_ENC_UTF16LE {
         let units: Vec<u16> = bytes
@@ -1298,6 +1317,11 @@ enum Action {
     EditPseudoComment {
         addr: Option<Address>,
     },
+    /// Rename the stack variable at `offset` in `func` (context menu on a `var_XX` token).
+    RenameVar {
+        func: Address,
+        offset: i64,
+    },
     ShowXrefs,
     MoveSelection(i32),
     Page(i32),
@@ -1532,6 +1556,8 @@ pub struct ReCraftApp {
     struct_fields: String,
     struct_slot: u8,
     edit: Option<EditState>,
+    /// Pending stack-variable rename: function, stack offset and the edited text.
+    var_edit: Option<(Address, i64, String)>,
     goto: Option<String>,
     palette: Option<PaletteState>,
     recent: Vec<PathBuf>,
@@ -1648,6 +1674,7 @@ impl Default for ReCraftApp {
             struct_fields: String::new(),
             struct_slot: 0,
             edit: None,
+            var_edit: None,
             goto: None,
             palette: None,
             recent: Vec::new(),
@@ -7843,6 +7870,7 @@ impl ReCraftApp {
         let mut took_focus = false;
         let copy_menu = self.t("ui_copy");
         let comment_menu = self.t("ui_edit_pseudo_comment");
+        let rename_var_menu = self.t("ui_rename_variable");
         // Editor-style text selection over the pseudo-C rows (the gutter stays out of it).
         let mut text_sel = self.pseudo_sel;
         let mut dragging = self.pseudo_drag;
@@ -8037,6 +8065,13 @@ impl ReCraftApp {
                             };
                             ui.close();
                         }
+                        if let Some((offset, _)) = stack_slot_token(&line.text)
+                            && let Some(func) = current_function
+                            && ui.button(rename_var_menu.as_str()).clicked()
+                        {
+                            *action = Action::RenameVar { func, offset };
+                            ui.close();
+                        }
                     });
                 }
             });
@@ -8083,6 +8118,70 @@ impl ReCraftApp {
     }
 
     // ------------------------------------------------------------- windows --
+
+    /// IDA-style stack-variable rename. Empty text restores the generated `var_<offset>`
+    /// name; anything else is a C identifier stored as user data and applied by the L2
+    /// renderer (`var_20` → `input`, `var_20.field` → `input.field`).
+    fn var_rename_window(&mut self, ctx: &egui::Context) {
+        let Some((func, offset, mut text)) = self.var_edit.take() else {
+            return;
+        };
+        let slot = if offset < 0 {
+            format!("var_n{:x}", -offset)
+        } else {
+            format!("var_{offset:x}")
+        };
+        let mut commit = false;
+        let mut cancel = false;
+        let title = self.t("ui_rename_variable");
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("{:#x}  {slot}", func.get()));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .desired_width(320.0)
+                        .hint_text(self.t("ui_empty_deletes")),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button(self.t("ui_ok")).clicked() {
+                        commit = true;
+                    }
+                    if ui.button(self.t("ui_cancel")).clicked() {
+                        cancel = true;
+                    }
+                });
+                if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
+                    commit = true;
+                }
+            });
+        if cancel {
+            return;
+        }
+        if commit {
+            let name = text.trim();
+            let Some(session) = self.session.as_mut() else {
+                return;
+            };
+            match session.execute(Command::RenameVar {
+                func,
+                offset,
+                name: (!name.is_empty()).then(|| name.to_owned()),
+            }) {
+                Ok(_) => {
+                    self.pseudo_dirty = true;
+                    self.set_status(self.t_args(
+                        "ui_changed_addr",
+                        &[("addr", &format!("{:#x}", func.get()))],
+                    ));
+                }
+                Err(error) => self.set_error(error),
+            }
+        } else {
+            self.var_edit = Some((func, offset, text));
+        }
+    }
 
     fn edit_window(&mut self, ctx: &egui::Context, _action: &mut Action) {
         let Some(mut edit) = self.edit.take() else {
@@ -9152,6 +9251,14 @@ impl ReCraftApp {
                     just_opened: true,
                 });
             }
+            Action::RenameVar { func, offset } => {
+                let existing = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.var_name(func, offset).ok().flatten())
+                    .unwrap_or_default();
+                self.var_edit = Some((func, offset, existing));
+            }
             Action::EditPseudoComment { addr } => {
                 if self.pseudo.is_none() {
                     return;
@@ -9248,6 +9355,7 @@ impl ReCraftApp {
         self.dock_area(root, &mut action);
         self.ai_settings_window(&ctx);
         self.edit_window(&ctx, &mut action);
+        self.var_rename_window(&ctx);
         self.goto_window(&ctx, &mut action);
         self.strings_setup_window(&ctx);
         self.palette_window(&ctx, &mut action);
@@ -16314,6 +16422,21 @@ mod tests {
             Some("4D 5A 90 00"),
             "the clipboard must hold the selected bytes"
         );
+    }
+
+    #[test]
+    fn stack_slots_are_found_in_pseudo_lines() {
+        assert_eq!(stack_slot_token("    var_20 = 0;"), Some((0x20, "var_20")));
+        assert_eq!(
+            stack_slot_token("    *(u8*)(&var_n8 + i) = 0;"),
+            Some((-8, "var_n8"))
+        );
+        assert_eq!(
+            stack_slot_token("    var_20.field = 1;"),
+            Some((0x20, "var_20"))
+        );
+        assert_eq!(stack_slot_token("    return 0;"), None);
+        assert_eq!(stack_slot_token("    var_zz = 1;"), None);
     }
 
     #[test]

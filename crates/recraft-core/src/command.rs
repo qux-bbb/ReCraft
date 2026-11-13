@@ -154,6 +154,21 @@ fn validate_identifier(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a stack-variable name: a C identifier that does not shadow the generated slot
+/// syntax (`var_20`) or a symbol prefix the listing already uses.
+fn validate_var_name(name: &str) -> Result<()> {
+    validate_identifier(name)?;
+    if ["var_", "sub_", "loc_", "arg"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        return Err(Error::internal(format!(
+            "{name:?} looks like a generated symbol; use a plain C identifier"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate a rename and refuse a name another address already owns.
 ///
 /// Uniqueness is enforced in the database, not only in the AI reply parser: `ai apply`
@@ -325,6 +340,13 @@ pub enum Command {
         text: Option<String>,
         hidden: bool,
     },
+    /// Name (or clear) the stack variable at `offset` in the function at `func`. The L2 view
+    /// prints the name instead of `var_<offset>`; clearing restores the generated slot name.
+    RenameVar {
+        func: Address,
+        offset: i64,
+        name: Option<String>,
+    },
     /// Bind a struct layout to a function argument slot (`0` = first argument).
     ApplyType {
         func: Address,
@@ -344,6 +366,7 @@ impl Command {
             Command::UndefineFunc { .. } => "undefine_func",
             Command::SetPrototype { .. } => "prototype",
             Command::SetString { .. } => "string",
+            Command::RenameVar { .. } => "var",
             Command::DefineStruct { .. } => "define_struct",
             Command::DeleteStruct { .. } => "delete_struct",
             Command::ApplyType { .. } => "apply_type",
@@ -357,6 +380,7 @@ impl Command {
             | Command::UndefineFunc { start: addr }
             | Command::SetPrototype { addr, .. }
             | Command::SetString { addr, .. }
+            | Command::RenameVar { func: addr, .. }
             | Command::ApplyType { func: addr, .. } => {
                 vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
             }
@@ -398,6 +422,11 @@ impl Command {
                     hidden: previous.is_some_and(|entry| entry.hidden),
                 })
             }
+            Command::RenameVar { func, offset, .. } => Ok(Command::RenameVar {
+                func: *func,
+                offset: *offset,
+                name: session.var_name(*func, *offset)?,
+            }),
             Command::DefineStruct { def } => match session.struct_def(&def.name)? {
                 Some(previous) => Ok(Command::DefineStruct { def: previous }),
                 None => Ok(Command::DeleteStruct {
@@ -645,6 +674,41 @@ pub(crate) fn apply(
                     params![addr.get() as i64, text, i64::from(*hidden)],
                 )
                 .map_err(db_err)?;
+            }
+        }
+        Command::RenameVar { func, offset, name } => {
+            let function_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM func WHERE start = ?1",
+                    [func.get() as i64],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            let Some(function_id) = function_id else {
+                return Err(Error::internal(format!(
+                    "no function starts at {:#x}",
+                    func.get()
+                )));
+            };
+            match name {
+                Some(name) => {
+                    validate_var_name(name)?;
+                    conn.execute(
+                        "INSERT INTO var(func_id, stack_off, name, type_id, kind)
+                         VALUES (?1, ?2, ?3, 0, 0)
+                         ON CONFLICT(func_id, stack_off) DO UPDATE SET name = excluded.name",
+                        params![function_id, offset, name],
+                    )
+                    .map_err(db_err)?;
+                }
+                None => {
+                    conn.execute(
+                        "DELETE FROM var WHERE func_id = ?1 AND stack_off = ?2",
+                        params![function_id, offset],
+                    )
+                    .map_err(db_err)?;
+                }
             }
         }
         Command::ApplyType {

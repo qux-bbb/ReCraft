@@ -1046,6 +1046,60 @@ mod tests {
     /// Snapshots are optional here: the ELF image embeds the host gcc/glibc startup code, so a
     /// committed set would drift with every toolchain update. `build-linux.sh --snapshots`
     /// writes `tests/golden/crackme-elf`; when it exists, it is checked like any other set.
+    /// A user-named stack variable replaces the generated slot in the L2 text, while L1 (the
+    /// golden form) keeps `var_<offset>`.
+    #[test]
+    fn a_user_named_stack_variable_changes_the_l2_text() {
+        let Some((mut session, _dir)) = real_crackme_elf() else {
+            return;
+        };
+        let main = session
+            .functions()
+            .unwrap()
+            .into_iter()
+            .find(|function| session.name_at(function.start).unwrap().as_deref() == Some("main"))
+            .expect("main is in .symtab")
+            .start;
+        let text = pseudocode_l2(&session, main).unwrap().text();
+        let Some((offset, slot)) = first_stack_slot(&text) else {
+            panic!("main has no stack slot to rename:\n{text}");
+        };
+        session
+            .execute(recraft_core::Command::RenameVar {
+                func: main,
+                offset,
+                name: Some("renamed_buffer".to_owned()),
+            })
+            .unwrap();
+        let renamed = pseudocode_l2(&session, main).unwrap().text();
+        assert!(renamed.contains("renamed_buffer"), "{renamed}");
+        assert!(
+            !renamed.contains(&slot),
+            "the generated slot {slot} is gone:\n{renamed}"
+        );
+        let l1 = pseudocode_l1(&session, main).unwrap().text();
+        assert!(
+            l1.contains(&slot),
+            "L1 stays the register-level golden form"
+        );
+    }
+
+    /// Find the first stack-slot token (`var_20` / `var_n8`) in rendered pseudo-C.
+    fn first_stack_slot(text: &str) -> Option<(i64, String)> {
+        for token in text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {
+            if let Some(hex) = token.strip_prefix("var_n") {
+                if let Ok(value) = i64::from_str_radix(hex, 16) {
+                    return Some((-value, token.to_owned()));
+                }
+            } else if let Some(hex) = token.strip_prefix("var_") {
+                if let Ok(value) = i64::from_str_radix(hex, 16) {
+                    return Some((value, token.to_owned()));
+                }
+            }
+        }
+        None
+    }
+
     #[test]
     fn the_real_crackme_elf_keeps_optional_snapshots() {
         let Some((mut session, _dir)) = real_crackme_elf() else {

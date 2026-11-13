@@ -39,6 +39,30 @@ pub fn pseudocode_l2(session: &dyn SessionView, start: Address) -> Result<Pseudo
     structure(session, start, Some(info))
 }
 
+/// Print the user's names for the function's stack variables instead of `var_<offset>`.
+///
+/// Runs on the L2 text only (L1 is the register-level golden form), after locals were
+/// recovered: a renamed slot keeps its type/local promotion, only the identifier changes.
+/// `var_20.field` and `&var_20` are whole-token replacements, so field suffixes survive.
+fn apply_user_var_names(lines: &mut [PseudoLine], session: &dyn SessionView, func: Address) {
+    let names = session.var_names(func);
+    if names.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        for (offset, name) in &names {
+            let slot = if *offset < 0 {
+                format!("var_n{:x}", -offset)
+            } else {
+                format!("var_{offset:x}")
+            };
+            if line.text.contains(&slot) {
+                line.text = replace_token(&line.text, &slot, name);
+            }
+        }
+    }
+}
+
 fn structure(
     session: &dyn SessionView,
     start: Address,
@@ -656,6 +680,7 @@ fn structure(
             session.image().is_64,
             crate::sysv_frames(session),
         );
+        apply_user_var_names(&mut lines, session, start);
     }
     // A function that still has jumps says so in the header: a reader can tell at a glance that
     // this body could not be reduced to structured control flow.

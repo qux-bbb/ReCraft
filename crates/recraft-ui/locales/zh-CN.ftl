@@ -325,3 +325,4 @@ ui_prompt_polish = 润色
 ui_prompt_agent = 智能体
 ui_save_prompt = 保存提示词
 ui_reset_prompt = 恢复内置
+ui_rename_variable = 重命名变量…
