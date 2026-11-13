@@ -438,6 +438,63 @@ pub struct JournalRecord {
     pub inverse: Command,
 }
 
+/// Current value a command would overwrite, for optimistic concurrency checks.
+///
+/// The comparison runs inside the write transaction (see `Session::execute_guarded`), so a
+/// concurrent editor cannot slip between the check and the change. Only user-visible fields
+/// that the MCP write tools expose are covered; internal commands return an error.
+pub(crate) fn current_value(conn: &Connection, command: &Command) -> Result<Option<String>> {
+    match command {
+        Command::Rename { addr, .. } => conn
+            .query_row(
+                "SELECT text FROM name WHERE addr = ?1",
+                [addr.get() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err),
+        Command::SetComment { addr, kind, .. } => conn
+            .query_row(
+                "SELECT text FROM comment WHERE addr = ?1 AND kind = ?2",
+                params![addr.get() as i64, kind.as_i64()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err),
+        Command::SetPrototype { addr, .. } => conn
+            .query_row(
+                "SELECT text FROM prototype WHERE addr = ?1",
+                [addr.get() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err),
+        Command::ApplyType { func, slot, .. } => conn
+            .query_row(
+                "SELECT struct_name FROM func_arg_type WHERE func_addr = ?1 AND slot = ?2",
+                params![func.get() as i64, i64::from(*slot)],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err),
+        Command::DefineFunc { start, .. } => {
+            let end: Option<i64> = conn
+                .query_row(
+                    "SELECT end FROM func WHERE start = ?1",
+                    [start.get() as i64],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            Ok(end.map(|end| Address::new(end as u64).to_string()))
+        }
+        other => Err(Error::unsupported(format!(
+            "{} has no conflict check",
+            other.name()
+        ))),
+    }
+}
+
 /// Apply a command to the database. Must run inside the command's transaction.
 pub(crate) fn apply(
     conn: &Connection,

@@ -47,11 +47,14 @@ impl McpServer {
     }
 
     /// Apply one parsed edit and report the previous value, the new value and dirty ranges.
+    ///
+    /// `expected_previous` (when present) is checked inside the same immediate transaction
+    /// as the write, so two clients cannot both believe they overwrite the same old value.
     pub(crate) fn apply_edit(&mut self, edit: Edit) -> ToolResult {
         let previous = edit.previous(self.session_ref()?)?;
         let effect = self
             .session_mut()?
-            .execute(edit.command.clone())
+            .execute_guarded(edit.command.clone(), edit.expected.clone())
             .map_err(|e| e.to_string())?;
         self.notify_resources_updated();
         let seq = self
@@ -120,6 +123,12 @@ impl McpServer {
 
     /// Define or replace a user struct layout (the missing half of `apply_type`).
     pub(crate) fn tool_define_struct(&mut self, arguments: &Value) -> ToolResult {
+        if arguments.get("expected_previous").is_some() {
+            return Err(
+                "define_struct has no single previous value; use `batch` and re-read the struct"
+                    .to_owned(),
+            );
+        }
         let entry = script_entry("define_struct", arguments)?;
         let command = recraft_core::parse_command(self.session_ref()?, &BTreeMap::new(), &entry)
             .map_err(|error| error.to_string())?;
@@ -195,6 +204,9 @@ pub(crate) struct Edit {
     tool: &'static str,
     addr: Address,
     command: Command,
+    /// Optional optimistic guard: `None` skips the check, `Some(None)` expects no current
+    /// value, `Some(Some(text))` expects that exact text.
+    expected: Option<Option<String>>,
 }
 
 impl Edit {
@@ -209,6 +221,17 @@ impl Edit {
         let command = recraft_core::parse_command(server.session_ref()?, &BTreeMap::new(), &entry)
             .map_err(|error| error.to_string())?;
         let addr = edit_address(&command)?;
+        let expected = match arguments.get("expected_previous") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(Value::String(text)) => Some(Some(text.clone())),
+            Some(_) => {
+                return Err(
+                    "expected_previous must be a string (the previous value) or null (no value)"
+                        .to_owned(),
+                );
+            }
+        };
         Ok(Edit {
             tool: match tool {
                 "rename" => "rename",
@@ -220,6 +243,7 @@ impl Edit {
             },
             addr,
             command,
+            expected,
         })
     }
 

@@ -22,7 +22,7 @@ use recraft_common::{Address, AddressRange, Error, Result};
 use recraft_decode::{DecodeCache, FlowKind, Formatter, Insn, Mode, decode};
 use recraft_format::{Arch, Format, Image};
 use recraft_storage::{JournalEntry, Project};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::command::{
     self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER, StructDef,
@@ -1190,11 +1190,35 @@ impl Session {
         Ok(())
     }
 
+    /// Apply one command only when the value it overwrites still equals `expected`.
+    ///
+    /// `expected` has three states: `None` skips the check, `Some(None)` requires that the
+    /// field is currently empty, and `Some(Some(value))` requires an exact match. The
+    /// comparison runs inside the same immediate transaction as the write, so two clients
+    /// cannot both believe they are changing the old value.
+    pub fn execute_guarded(
+        &mut self,
+        command: Command,
+        expected: Option<Option<String>>,
+    ) -> Result<Effect> {
+        let mut effects = self.execute_batch_guarded(&[command], &[(0, expected)])?;
+        Ok(effects.remove(0))
+    }
+
     /// Apply several commands in one transaction: all of them land or none does.
     ///
     /// The journal records share one batch id, so a single [`Session::undo`] reverts the
     /// whole call — that is what makes an AI "rename these 20 functions" flow one undo.
     pub fn execute_batch(&mut self, commands: &[Command]) -> Result<Vec<Effect>> {
+        self.execute_batch_guarded(commands, &[])
+    }
+
+    /// [`Session::execute_batch`] with optional per-command optimistic guards.
+    fn execute_batch_guarded(
+        &mut self,
+        commands: &[Command],
+        guards: &[(usize, Option<Option<String>>)],
+    ) -> Result<Vec<Effect>> {
         if commands.is_empty() {
             return Ok(Vec::new());
         }
@@ -1221,7 +1245,26 @@ impl Session {
                 ..
             } = self;
             let batch = project.next_batch_id()?;
-            let tx = project.conn_mut().transaction().map_err(command::db_err)?;
+            // `IMMEDIATE` takes the write lock before the guards read: a second process
+            // cannot commit between "the old value is X" and "write the new value".
+            let tx = project
+                .conn_mut()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(command::db_err)?;
+            for (index, expected) in guards {
+                let Some(expected) = expected else {
+                    continue;
+                };
+                let actual = command::current_value(&tx, &commands[*index])?;
+                if actual != *expected {
+                    return Err(Error::invalid_argument(format!(
+                        "stale write: {} expected previous value {}, found {}; re-read and retry",
+                        commands[*index].name(),
+                        describe_value(expected),
+                        describe_value(&actual),
+                    )));
+                }
+            }
             // A new command invalidates everything that could be redone.
             tx.execute("DELETE FROM journal WHERE undone = 1", [])
                 .map_err(command::db_err)?;
@@ -1279,6 +1322,19 @@ impl Session {
             None => vec![newest],
         };
         self.undo_entries(entries)
+    }
+
+    /// SQLite's `data_version` for this connection.
+    ///
+    /// It changes whenever *another* connection commits to the same project file (an MCP
+    /// server, a second GUI, the background analysis job), which is exactly the signal the
+    /// GUI polls to pick up external edits. Writes made through this session do not change
+    /// it, so a front end does not refresh itself after its own commands.
+    pub fn data_version(&self) -> Result<i64> {
+        self.project
+            .conn()
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .map_err(command::db_err)
     }
 
     /// Sequence number of the newest journal record (`0` when the journal is empty).
@@ -1712,6 +1768,14 @@ impl Session {
     }
 }
 
+/// Render an optional previous value for a conflict message (`<none>` = field is unset).
+fn describe_value(value: &Option<String>) -> String {
+    match value {
+        Some(value) => format!("{value:?}"),
+        None => "<none>".to_owned(),
+    }
+}
+
 impl SessionView for Session {
     fn image(&self) -> &Image {
         &self.image
@@ -2101,6 +2165,94 @@ mod tests {
             })
             .unwrap();
         assert!(!reopened.can_redo().unwrap());
+    }
+
+    #[test]
+    fn guarded_rename_rejects_a_stale_previous_value() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+
+        // The guard matches the loader name, so the write lands.
+        session
+            .execute_guarded(
+                Command::Rename {
+                    addr: entry,
+                    name: Some("first".to_owned()),
+                },
+                Some(Some("start".to_owned())),
+            )
+            .unwrap();
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("first"));
+
+        // Same guard again: the previous value is no longer "start", so nothing changes.
+        let error = session
+            .execute_guarded(
+                Command::Rename {
+                    addr: entry,
+                    name: Some("second".to_owned()),
+                },
+                Some(Some("start".to_owned())),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("stale write"), "{error}");
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("first"));
+
+        // `Some(None)` means "expect no value"; the name must be cleared first.
+        session
+            .execute_guarded(
+                Command::Rename {
+                    addr: entry,
+                    name: None,
+                },
+                Some(Some("first".to_owned())),
+            )
+            .unwrap();
+        assert!(session.name_at(entry).unwrap().is_none());
+        session
+            .execute_guarded(
+                Command::Rename {
+                    addr: entry,
+                    name: Some("third".to_owned()),
+                },
+                Some(None),
+            )
+            .unwrap();
+        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("third"));
+    }
+
+    #[test]
+    fn data_version_sees_only_other_connections() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut first) = fixture(&dir) else {
+            return;
+        };
+        let entry = first.entry_point();
+        let path = first.path().to_path_buf();
+        let before = first.data_version().unwrap();
+
+        // A write through this connection does not move `PRAGMA data_version`; that is what
+        // keeps the GUI from reloading after its own commands.
+        first
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("own_edit".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(first.data_version().unwrap(), before);
+
+        // A second connection (an MCP server, another GUI) committing does move it.
+        let mut second = Session::open(&path).unwrap();
+        second
+            .execute(Command::SetComment {
+                addr: entry,
+                kind: CommentKind::Regular,
+                text: Some("from the other process".to_owned()),
+            })
+            .unwrap();
+        assert_ne!(first.data_version().unwrap(), before);
     }
 
     /// The Decompile view keeps its indented comments in their own slot: editing one must

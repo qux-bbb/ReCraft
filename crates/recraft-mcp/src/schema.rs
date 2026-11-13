@@ -27,7 +27,7 @@ fn instance_tools() -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "open_program",
-            "description": "Import a PE/ELF binary into a new project, or open an existing .rcraft project, and make it the active instance. A fresh import runs function discovery, xrefs and string extraction. Without `project`, the database goes to the per-user ReCraft folder (`%LOCALAPPDATA%\\ReCraft\\projects` on Windows), named after the binary so reopening the same program reuses the user's names and comments. `analyze: true` re-runs discovery on a project that is already open on disk. Calling it again for an already-open project just switches to that instance. stdio transport only.",
+            "description": "Import a PE/ELF binary into a new project, or open an existing .rcraft project, and make it the active instance. A fresh import runs function discovery, xrefs and string extraction. Without `project`, the database goes to the per-user ReCraft folder (`%LOCALAPPDATA%\\ReCraft\\projects` on Windows), named after the binary so reopening the same program reuses the user's names and comments. `analyze: true` re-runs discovery on a project that is already open on disk. Calling it again for an already-open project just switches to that instance.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -67,7 +67,7 @@ fn instance_tools() -> Vec<Value> {
         }),
         json!({
             "name": "close_instance",
-            "description": "Close an open project and release its database handle. The project file stays on disk; a later open_program picks it up again. stdio transport only.",
+            "description": "Close an open project and release its database handle. The project file stays on disk; a later open_program picks it up again.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -110,6 +110,7 @@ fn write_tools() -> Vec<Value> {
                 "properties": {
                     "addr": {"type": ["integer", "string"], "description": "Address, hex string, name, or 'entry'."},
                     "name": {"type": ["string", "null"], "description": "New name; null clears it."},
+                    "expected_previous": {"type": ["string", "null"], "description": "Optional optimistic guard: apply only when the current name equals this string; null means no name is set. Omit to skip the check."},
                 },
                 "required": ["addr", "name"],
             },
@@ -123,6 +124,7 @@ fn write_tools() -> Vec<Value> {
                     "addr": {"type": ["integer", "string"]},
                     "text": {"type": ["string", "null"]},
                     "kind": {"type": "string", "enum": ["regular", "repeatable", "anterior", "pseudo"], "description": "Comment slot; default regular. `pseudo` is the Decompile view's comment (shown at the end of its line, kept apart from the disassembly comment)."},
+                    "expected_previous": {"type": ["string", "null"], "description": "Optional optimistic guard: apply only when this comment slot currently equals this string; null means empty. Omit to skip the check."},
                 },
                 "required": ["addr", "text"],
             },
@@ -135,6 +137,7 @@ fn write_tools() -> Vec<Value> {
                 "properties": {
                     "addr": {"type": ["integer", "string"]},
                     "text": {"type": ["string", "null"], "description": "C declaration, e.g. 'int __cdecl sub_140001008(int a, char *b)'."},
+                    "expected_previous": {"type": ["string", "null"], "description": "Optional optimistic guard: apply only when the current prototype equals this string; null means none. Omit to skip the check."},
                 },
                 "required": ["addr", "text"],
             },
@@ -148,6 +151,7 @@ fn write_tools() -> Vec<Value> {
                     "func": {"type": ["integer", "string"]},
                     "slot": {"type": "integer", "minimum": 0, "maximum": 255},
                     "struct": {"type": ["string", "null"]},
+                    "expected_previous": {"type": ["string", "null"], "description": "Optional optimistic guard: apply only when this slot currently binds this struct name; null means unbound. Omit to skip the check."},
                 },
                 "required": ["func", "slot", "struct"],
             },
@@ -160,6 +164,7 @@ fn write_tools() -> Vec<Value> {
                 "properties": {
                     "start": {"type": ["integer", "string"]},
                     "end": {"type": ["integer", "string"]},
+                    "expected_previous": {"type": ["string", "null"], "description": "Optional optimistic guard: apply only when the current function end equals this hex address (e.g. '0x140001100'); null means no function. Omit to skip the check."},
                 },
                 "required": ["start", "end"],
             },
