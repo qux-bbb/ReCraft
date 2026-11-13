@@ -1,5 +1,7 @@
 # ReCraft
 
+<img src="assets/recraft.png" width="96" align="right" alt="ReCraft application icon: a letter R above a cyan scan line">
+
 [简体中文](README.md) | **English**
 
 > **Status: 0.1.0 (technical preview) is out** — M0–M4 are complete; build artifacts are on

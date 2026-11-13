@@ -335,4 +335,6 @@ ui_var_applied = applied { $count } variable name(s)
 ui_auto_apply = Apply all
 ui_agent_use_selection = Include selection
 ui_agent_selection_hint = the selected pseudo-C, instruction or bytes are sent with the question
+ui_about_tagline = native reverse-engineering workbench for PE and ELF binaries
+ui_about_license = AGPL-3.0-only · not affiliated with Hex-Rays / IDA Pro
 ui_prompt_vars = Variables

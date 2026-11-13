@@ -85,8 +85,8 @@ function Ensure-WixExtensions {
 # Finish pages (their text sits on the right; the left 164 px are ours). Both 24-bit BMPs.
 function New-InstallerArt([string]$IconPng, [string]$BannerOut, [string]$DialogOut) {
     Add-Type -AssemblyName System.Drawing
-    $panelColor = [System.Drawing.ColorTranslator]::FromHtml('#0C3A46')
-    $accent = [System.Drawing.ColorTranslator]::FromHtml('#1EB5CD')
+    $panelColor = [System.Drawing.ColorTranslator]::FromHtml('#1E2936')
+    $accent = [System.Drawing.ColorTranslator]::FromHtml('#40CDE0')
     $icon = [System.Drawing.Image]::FromFile($IconPng)
     try {
         foreach ($spec in @(@($BannerOut, 493, 58), @($DialogOut, 493, 312))) {

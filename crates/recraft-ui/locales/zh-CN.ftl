@@ -335,4 +335,6 @@ ui_var_applied = 已应用 { $count } 个变量名
 ui_auto_apply = 全部应用
 ui_agent_use_selection = 附带选中内容
 ui_agent_selection_hint = 选中的伪代码、指令或字节会随问题一起发送
+ui_about_tagline = 面向 PE / ELF 二进制的原生逆向工作台
+ui_about_license = AGPL-3.0-only · 与 Hex-Rays / IDA Pro 无关
 ui_prompt_vars = 变量

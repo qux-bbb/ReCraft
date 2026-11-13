@@ -1,5 +1,7 @@
 # ReCraft
 
+<img src="assets/recraft.png" width="96" align="right" alt="ReCraft 应用图标：字母 R 与一条青色扫描线">
+
 **简体中文** | [English](README.en.md)
 
 > **状态：0.1.0（技术预览）已发布** —— M0–M4 完成，发布包见
