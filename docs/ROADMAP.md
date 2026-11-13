@@ -108,6 +108,9 @@
   ELF64-AArch64 夹具（32 个带符号的小函数），`tests/golden/aarch64/` 存 32 份快照，测试
   `the_aarch64_fixture_matches_its_snapshots` 走「导入 → 分析 → 反编译 → 快照比对」全链路，
   `RECRAFT_UPDATE_GOLDEN=1` 可重新生成。W5 验收的「golden ≥30 函数」达成。
+  质量实测（Go arm64 样本前 100 个函数）：**100/100 出非空伪 C、0 报错**，共 5130 行输出、
+  `__asm` 167 行（**3.3%**，平均每函数 1.67 行）。加上指令命中率 96.3%，kill criteria 的
+  「覆盖率 ≥60%」可以按「承诺 L2」处理；W5 只剩 PE-ARM64、A64 的 lint 适用性与 SIMD 命名。
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
 - 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。
