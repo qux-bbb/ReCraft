@@ -127,7 +127,16 @@ try {
 
     if (-not $NoBuild) {
         Write-Host '[package] cargo build --release -p recraft-cli -p recraft-ui'
-        & cargo build --release -p recraft-cli -p recraft-ui
+        # Windows PowerShell 5.1 raises NativeCommandError for every line cargo writes to
+        # stderr, and with $ErrorActionPreference = 'Stop' that aborts a healthy build.
+        # Relax the preference for this call only and keep the exit code as the verdict.
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & cargo build --release -p recraft-cli -p recraft-ui
+        } finally {
+            $ErrorActionPreference = $previous
+        }
         if ($LASTEXITCODE -ne 0) { throw 'release build failed' }
     }
 

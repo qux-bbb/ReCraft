@@ -86,6 +86,10 @@ try {
     }
     Write-Host "[verify] package entries present ($($required.Count) checked)"
 
+    # Windows PowerShell 5.1 raises NativeCommandError for native stderr under Stop, and the
+    # packaged CLI writes progress there; the explicit $LASTEXITCODE checks below are the
+    # verdicts, so relax the preference for the tool runs.
+    $ErrorActionPreference = 'Continue'
     $exe = Join-Path $extract 'recraft-cli.exe'
     $info = & $exe info $PEFile
     if ($LASTEXITCODE -ne 0) { throw 'packaged recraft-cli info failed' }

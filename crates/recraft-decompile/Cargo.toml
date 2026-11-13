@@ -14,7 +14,7 @@ publish = false
 recraft-analysis.workspace = true
 recraft-common = { workspace = true }
 recraft-core = { workspace = true }
-recraft-decode = { version = "0.1.0", path = "../recraft-decode" }
+recraft-decode = { path = "../recraft-decode" }
 recraft-ir = { workspace = true }
 rayon = { workspace = true }
 serde_json = "1.0.154"

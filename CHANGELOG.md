@@ -5,11 +5,14 @@
 本格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，
 并且本项目遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-0.1.0 是首个公开技术预览。下面按使用者能感知的能力组织；从 M0 骨架到本版本的**完整**
+0.1.0 是首个公开技术预览。下面按使用者能感知的能力组织；从 M0 骨架到 0.1.0 的**完整**
 开发记录（每条修复、每次指标变化、每个负结果）归档在
 [docs/CHANGELOG-0.1.0.md](docs/CHANGELOG-0.1.0.md)。
 
-## [未发布]
+## [0.2.0] - 2026-11-14
+
+W1 波次（14 人日，见 [docs/ROADMAP.md](docs/ROADMAP.md)）：字符串可编辑、ELF crackme
+对照、CRT 签名库扩容、AI 提示词可调、图标重设计、顶部工具栏收敛。下面是本版的全部变更。
 
 ### 新增
 
@@ -544,5 +547,5 @@
 - `scripts/package.ps1` + `verify-package.ps1` + `verify-msi.ps1`：zip、MSI、哈希与
   包内二进制全链路通过。
 
-[未发布]: https://github.com/qux-bbb/ReCraft/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/qux-bbb/ReCraft/releases/tag/v0.2.0
 [0.1.0]: https://github.com/qux-bbb/ReCraft/releases/tag/v0.1.0

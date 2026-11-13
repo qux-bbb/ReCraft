@@ -71,6 +71,13 @@
 
 总量 ≈ 92 人日；按 DESIGN §14 的 3 天/周 ≈ 30 周，加 20% 缓冲 ≈ 37 周。
 
+进度：
+
+- **W1**：✅ 2026-11-14 收口，**0.2.0 已打包**（zip 15.5 MiB + MSI 13.9 MiB +
+  `SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 全 PASS）。
+- **W2**：两项（AI 自动命名、选中内容对话）已实现并提交待确认。
+- 下一步：W2 确认后进 W3（多入口循环、inline asm 收敛，各 10 天时间盒）。
+
 规则：
 
 - 每波结束过 `package.ps1` → `verify-package.ps1` → `demo.ps1`，W1 末发 **0.2.0**；
