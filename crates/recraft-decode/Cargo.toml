@@ -13,3 +13,5 @@ publish = false
 [dependencies]
 iced-x86 = "1.21.0"
 recraft-common = { workspace = true }
+yaxpeax-arch = "0.3.3"
+yaxpeax-arm = { version = "0.5.0", default-features = false, features = ["std"] }

@@ -270,6 +270,9 @@ struct Insn {
   操作数（寄存器名、立即数、`base + index*scale + disp`、直接分支目标）/读写寄存器。
   分析与 CFG 侧以及将来的 ARM64 后端只依赖这一形状；x86 lifter 继续用 iced 的类型化 API
   （那是 x86 的公开契约），因此新增后端不需要动 x86 的输出。
+- **AArch64 解码**（W5）：`recraft_decode::decode_aarch64` 用 yaxpeax-arm（0BSD）解出一条
+  4 字节指令，直接产出 `DecodedInsn`（助记符、`FlowKind`、分支目标、寄存器/立即数操作数）；
+  目前只做解码，尚未接入 `Session`/CFG（导入仍被显式挡在 x86 之外）。
 
 实测（2026-10-23，stateless 逐条解码，NOP 密集）：**约 46 M insn/s**；接入缓存与
 分支处理后，分析管线吞吐会低于此值。
