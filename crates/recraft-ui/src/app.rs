@@ -4521,182 +4521,198 @@ impl ReCraftApp {
         let dark_label = self.t("theme_dark");
         let light_label = self.t("theme_light");
         let about_label = self.t("menu_about");
-        egui::Panel::top("recraft_top").show(ui, |ui| {
-            // IDA-style menu bar.
-            ui.horizontal(|ui| {
-                ui.menu_button(file_menu.as_str(), |ui| {
-                    if ui.button(open_label).clicked() {
-                        *action = Action::Open;
-                        ui.close();
-                    }
-                    if ui.button(import_label).clicked() {
-                        *action = Action::Import;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui
-                        .add_enabled(
-                            has_project,
-                            egui::Button::new(close_shortcut_label.as_str()),
-                        )
-                        .clicked()
-                    {
-                        *action = Action::CloseProject;
-                        ui.close();
-                    }
-                });
-                ui.menu_button(edit_menu.as_str(), |ui| {
-                    if ui.button(undo_label).clicked() {
-                        *action = Action::Undo;
-                        ui.close();
-                    }
-                    if ui.button(redo_label).clicked() {
-                        *action = Action::Redo;
-                        ui.close();
-                    }
-                });
-                ui.menu_button(jump_menu.as_str(), |ui| {
-                    if ui.button(goto_label).clicked() {
-                        *action = Action::GotoDialog;
-                        ui.close();
-                    }
-                    if ui.button(xrefs_label).clicked() {
-                        *action = Action::ShowXrefs;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(back_label.as_str()).clicked() {
-                        *action = Action::Back;
-                        ui.close();
-                    }
-                    if ui.button(forward_label.as_str()).clicked() {
-                        *action = Action::Forward;
-                        ui.close();
-                    }
-                });
-                ui.menu_button(search_menu.as_str(), |ui| {
-                    for pane in [Pane::Strings, Pane::Names, Pane::Imports, Pane::Exports] {
-                        if ui.button(self.t(pane.key())).clicked() {
-                            *action = Action::FocusPane(pane);
+        let pal = self.palette();
+        egui::Panel::top("recraft_top")
+            // Chrome sits one surface above the view and breathes a little more than the
+            // dense listing (docs/UI.md §4: panel padding 12, bar height ~34).
+            .frame(
+                egui::Frame::new()
+                    .fill(pal.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .stroke(egui::Stroke::new(1.0, pal.border)),
+            )
+            .show(ui, |ui| {
+                // IDA-style menu bar.
+                ui.horizontal(|ui| {
+                    ui.menu_button(file_menu.as_str(), |ui| {
+                        if ui.button(open_label).clicked() {
+                            *action = Action::Open;
                             ui.close();
                         }
-                    }
-                });
-                ui.menu_button(view_menu.as_str(), |ui| {
-                    self.pane_menu_items(ui, action);
-                    ui.separator();
-                    if ui.button(self.t("ui_zoom_in_ctrl")).clicked() {
-                        *action = Action::ZoomIn;
-                        ui.close();
-                    }
-                    if ui.button(self.t("ui_zoom_out_ctrl")).clicked() {
-                        *action = Action::ZoomOut;
-                        ui.close();
-                    }
-                    if ui.button(self.t("ui_reset_zoom_ctrl_0")).clicked() {
-                        *action = Action::ZoomReset;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(reset_label.as_str()).clicked() {
-                        *action = Action::ResetLayout;
-                        ui.close();
-                    }
-                });
-                ui.menu_button(options_menu.as_str(), |ui| {
-                    // Like IDA's "Reanalyze program": analysis has no key of its own, it
-                    // runs when a binary is imported and can be re-run from here. While a job
-                    // runs the same slot reports progress and offers Cancel: the toolbar that
-                    // used to hold them is gone.
-                    if let Some(job) = self.analysis.as_ref() {
-                        let elapsed = job.started.elapsed().as_secs_f64();
-                        ui.label(format!("{analyzing_label}… {elapsed:.1}s"));
-                        if ui.button(cancel_label.as_str()).clicked() {
-                            *action = Action::CancelAnalysis;
+                        if ui.button(import_label).clicked() {
+                            *action = Action::Import;
                             ui.close();
                         }
-                    } else if ui
-                        .add_enabled(has_project, egui::Button::new(analyze_label.as_str()))
-                        .clicked()
-                    {
-                        *action = Action::Analyze;
-                        ui.close();
-                    }
-                    ui.separator();
-                    ui.menu_button(theme_menu.as_str(), |ui| {
+                        ui.separator();
                         if ui
-                            .selectable_label(self.theme == ThemeMode::Dark, dark_label.as_str())
+                            .add_enabled(
+                                has_project,
+                                egui::Button::new(close_shortcut_label.as_str()),
+                            )
                             .clicked()
                         {
-                            *action = Action::SetTheme(ThemeMode::Dark);
-                            ui.close();
-                        }
-                        if ui
-                            .selectable_label(self.theme == ThemeMode::Light, light_label.as_str())
-                            .clicked()
-                        {
-                            *action = Action::SetTheme(ThemeMode::Light);
+                            *action = Action::CloseProject;
                             ui.close();
                         }
                     });
-                    if ui
-                        .selectable_label(self.ai_sidebar, self.t("ui_ai_sidebar"))
-                        .clicked()
-                    {
-                        *action = Action::ToggleAiSidebar;
-                        ui.close();
-                    }
-                    if ui.button(self.t("ui_provider_settings")).clicked() {
-                        *action = Action::OpenAiSettings;
-                        ui.close();
-                    }
-                    if ui
-                        .button(if self.lang == Lang::En {
-                            "中文"
-                        } else {
-                            "English"
-                        })
-                        .clicked()
-                    {
-                        *action = Action::ToggleLang;
-                        ui.close();
-                    }
-                    if ui.button("AI").clicked() {
-                        *action = Action::FocusPane(Pane::Ai);
-                        ui.close();
-                    }
+                    ui.menu_button(edit_menu.as_str(), |ui| {
+                        if ui.button(undo_label).clicked() {
+                            *action = Action::Undo;
+                            ui.close();
+                        }
+                        if ui.button(redo_label).clicked() {
+                            *action = Action::Redo;
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button(jump_menu.as_str(), |ui| {
+                        if ui.button(goto_label).clicked() {
+                            *action = Action::GotoDialog;
+                            ui.close();
+                        }
+                        if ui.button(xrefs_label).clicked() {
+                            *action = Action::ShowXrefs;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(back_label.as_str()).clicked() {
+                            *action = Action::Back;
+                            ui.close();
+                        }
+                        if ui.button(forward_label.as_str()).clicked() {
+                            *action = Action::Forward;
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button(search_menu.as_str(), |ui| {
+                        for pane in [Pane::Strings, Pane::Names, Pane::Imports, Pane::Exports] {
+                            if ui.button(self.t(pane.key())).clicked() {
+                                *action = Action::FocusPane(pane);
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.menu_button(view_menu.as_str(), |ui| {
+                        self.pane_menu_items(ui, action);
+                        ui.separator();
+                        if ui.button(self.t("ui_zoom_in_ctrl")).clicked() {
+                            *action = Action::ZoomIn;
+                            ui.close();
+                        }
+                        if ui.button(self.t("ui_zoom_out_ctrl")).clicked() {
+                            *action = Action::ZoomOut;
+                            ui.close();
+                        }
+                        if ui.button(self.t("ui_reset_zoom_ctrl_0")).clicked() {
+                            *action = Action::ZoomReset;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(reset_label.as_str()).clicked() {
+                            *action = Action::ResetLayout;
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button(options_menu.as_str(), |ui| {
+                        // Like IDA's "Reanalyze program": analysis has no key of its own, it
+                        // runs when a binary is imported and can be re-run from here. While a job
+                        // runs the same slot reports progress and offers Cancel: the toolbar that
+                        // used to hold them is gone.
+                        if let Some(job) = self.analysis.as_ref() {
+                            let elapsed = job.started.elapsed().as_secs_f64();
+                            ui.label(format!("{analyzing_label}… {elapsed:.1}s"));
+                            if ui.button(cancel_label.as_str()).clicked() {
+                                *action = Action::CancelAnalysis;
+                                ui.close();
+                            }
+                        } else if ui
+                            .add_enabled(has_project, egui::Button::new(analyze_label.as_str()))
+                            .clicked()
+                        {
+                            *action = Action::Analyze;
+                            ui.close();
+                        }
+                        ui.separator();
+                        ui.menu_button(theme_menu.as_str(), |ui| {
+                            if ui
+                                .selectable_label(
+                                    self.theme == ThemeMode::Dark,
+                                    dark_label.as_str(),
+                                )
+                                .clicked()
+                            {
+                                *action = Action::SetTheme(ThemeMode::Dark);
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.theme == ThemeMode::Light,
+                                    light_label.as_str(),
+                                )
+                                .clicked()
+                            {
+                                *action = Action::SetTheme(ThemeMode::Light);
+                                ui.close();
+                            }
+                        });
+                        if ui
+                            .selectable_label(self.ai_sidebar, self.t("ui_ai_sidebar"))
+                            .clicked()
+                        {
+                            *action = Action::ToggleAiSidebar;
+                            ui.close();
+                        }
+                        if ui.button(self.t("ui_provider_settings")).clicked() {
+                            *action = Action::OpenAiSettings;
+                            ui.close();
+                        }
+                        if ui
+                            .button(if self.lang == Lang::En {
+                                "中文"
+                            } else {
+                                "English"
+                            })
+                            .clicked()
+                        {
+                            *action = Action::ToggleLang;
+                            ui.close();
+                        }
+                        if ui.button("AI").clicked() {
+                            *action = Action::FocusPane(Pane::Ai);
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button(windows_menu.as_str(), |ui| {
+                        self.pane_menu_items(ui, action);
+                        ui.separator();
+                        if ui.button(reset_label.as_str()).clicked() {
+                            *action = Action::ResetLayout;
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button(help_menu.as_str(), |ui| {
+                        if ui.button(about_label.as_str()).clicked() {
+                            self.about_open = true;
+                            ui.close();
+                        }
+                    });
                 });
-                ui.menu_button(windows_menu.as_str(), |ui| {
-                    self.pane_menu_items(ui, action);
-                    ui.separator();
-                    if ui.button(reset_label.as_str()).clicked() {
-                        *action = Action::ResetLayout;
-                        ui.close();
-                    }
-                });
-                ui.menu_button(help_menu.as_str(), |ui| {
-                    if ui.button(about_label.as_str()).clicked() {
-                        self.about_open = true;
-                        ui.close();
+                ui.separator();
+                // Navigation band + legend (IDA's address-space strip).
+                self.navigation_band(ui, action);
+                ui.horizontal_wrapped(|ui| {
+                    for (color, label) in [
+                        (NAV_FUNCTION, self.t("ui_regular_function")),
+                        (NAV_INSTRUCTION, self.t("ui_instruction")),
+                        (NAV_DATA, self.t("ui_data")),
+                        (NAV_UNEXPLORED, self.t("ui_unexplored")),
+                        (NAV_EXTERNAL, self.t("ui_external_symbol")),
+                    ] {
+                        ui.colored_label(color, "■");
+                        ui.weak(label);
                     }
                 });
             });
-            ui.separator();
-            // Navigation band + legend (IDA's address-space strip).
-            self.navigation_band(ui, action);
-            ui.horizontal_wrapped(|ui| {
-                for (color, label) in [
-                    (NAV_FUNCTION, self.t("ui_regular_function")),
-                    (NAV_INSTRUCTION, self.t("ui_instruction")),
-                    (NAV_DATA, self.t("ui_data")),
-                    (NAV_UNEXPLORED, self.t("ui_unexplored")),
-                    (NAV_EXTERNAL, self.t("ui_external_symbol")),
-                ] {
-                    ui.colored_label(color, "■");
-                    ui.weak(label);
-                }
-            });
-        });
     }
 
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
@@ -7583,9 +7599,11 @@ impl ReCraftApp {
         );
         ui.add_space(6.0);
         ui.label(
-            RichText::new(self.t("ui_drop_a_rcraft_project_or_a_pe_file_anywhere_in_this_window_or"))
-                .size(13.0)
-                .color(pal.muted),
+            RichText::new(
+                self.t("ui_drop_a_rcraft_project_or_a_pe_file_anywhere_in_this_window_or"),
+            )
+            .size(13.0)
+            .color(pal.muted),
         );
         ui.add_space(16.0);
         ui.horizontal(|ui| {
@@ -7650,15 +7668,16 @@ impl ReCraftApp {
                             *action = Action::OpenRecent(index);
                         }
                     });
-                card.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                card.response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
                 ui.add_space(6.0);
             }
         }
         ui.add_space(20.0);
         ui.label(
-            RichText::new(self.t(
-                "ui_shortcuts_ctrl_p_palette_g_goto_n_rename_comment_x_xrefs_spac",
-            ))
+            RichText::new(
+                self.t("ui_shortcuts_ctrl_p_palette_g_goto_n_rename_comment_x_xrefs_spac"),
+            )
             .size(11.0)
             .color(pal.muted),
         );
