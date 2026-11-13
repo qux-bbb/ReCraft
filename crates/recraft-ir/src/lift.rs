@@ -212,6 +212,8 @@ impl Lifter {
                 self.lift_cmpxchg_flags(insn);
                 self.intrinsic(insn, &mut stmts)
             }
+            // `rep stosb` fills memory; the pointer/counter updates are modelled too.
+            M::Stosb => self.lift_stosb(insn, &mut stmts),
             M::Xadd => self.lift_xadd(insn, &mut stmts),
             // `int 0x29` is Windows' fast-fail: a noreturn barrier whose code lives in ecx.
             M::Int => self.lift_fast_fail(insn, &mut stmts),
@@ -435,16 +437,7 @@ impl Lifter {
                 let Some(view) = from_iced(insn.op_register(index)) else {
                     return false;
                 };
-                stmts.push(Stmt::WriteReg { reg: view, value });
-                if view.offset == 0 {
-                    self.reg_env.insert(view.base, value);
-                } else {
-                    self.reg_env.remove(&view.base);
-                }
-                if view.base == Reg::Rsp {
-                    // `sub esp`/`add esp` move the frame: stale push values are void.
-                    self.stack_args.clear();
-                }
+                self.write_view(view, value, stmts);
                 true
             }
             OpKind::Memory => {
@@ -458,6 +451,20 @@ impl Lifter {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Record a register write and keep the value environment in sync.
+    fn write_view(&mut self, view: RegView, value: ExprId, stmts: &mut Vec<Stmt>) {
+        stmts.push(Stmt::WriteReg { reg: view, value });
+        if view.offset == 0 {
+            self.reg_env.insert(view.base, value);
+        } else {
+            self.reg_env.remove(&view.base);
+        }
+        if view.base == Reg::Rsp {
+            // `sub esp`/`add esp` move the frame: stale push values are void.
+            self.stack_args.clear();
         }
     }
 
@@ -1274,6 +1281,55 @@ impl Lifter {
     /// `xadd dst, src`: `src = dst; dst = dst + src`, with the add's flags. For a register
     /// destination the old value is recovered as `dst - src` after the write; for memory the
     /// same expression re-reads the updated slot. No temporary is needed.
+    /// `rep stosb`: fill `rcx` bytes at `rdi` with `al`. The fill is a `memset`, and the
+    /// pointer/counter updates are written back so later code sees them.
+    fn lift_stosb(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+        use iced_x86::Register;
+        let (Some(rdi), Some(al), Some(rcx)) = (
+            from_iced(Register::RDI).map(|view| self.reg(view)),
+            from_iced(Register::AL).map(|view| self.reg(view)),
+            from_iced(Register::RCX).map(|view| self.reg(view)),
+        ) else {
+            return self.intrinsic(insn, stmts);
+        };
+        if insn.instruction().has_rep_prefix() {
+            stmts.push(Stmt::PseudoCall {
+                name: "memset".to_owned(),
+                args: vec![rdi, al, rcx],
+            });
+            // `rdi` advances by `rcx` bytes and `rcx` becomes zero; both read the values
+            // from *before* the stores, so the expressions are built first.
+            let advanced = self.push(Expr::Bin {
+                op: BinOp::Add,
+                lhs: rdi,
+                rhs: rcx,
+            });
+            let zero = self.constant(0);
+            if let Some(view) = from_iced(Register::RDI) {
+                self.write_view(view, advanced, stmts);
+            }
+            if let Some(view) = from_iced(Register::RCX) {
+                self.write_view(view, zero, stmts);
+            }
+        } else {
+            stmts.push(Stmt::Store {
+                addr: rdi,
+                value: al,
+                size: 1,
+            });
+            let one = self.constant(1);
+            let advanced = self.push(Expr::Bin {
+                op: BinOp::Add,
+                lhs: rdi,
+                rhs: one,
+            });
+            if let Some(view) = from_iced(Register::RDI) {
+                self.write_view(view, advanced, stmts);
+            }
+        }
+        Flow::Fallthrough
+    }
+
     /// `int 0x29` (Windows fast-fail): the code is in `ecx`, and the instruction does not
     /// return, so only the call itself is rendered.
     fn lift_fast_fail(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {

@@ -22,6 +22,8 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// Unsigned remainder (`div`'s `edx` output; no x86 mnemonic of its own).
+    Rem,
     /// Scalar float arithmetic (same C operators, distinct for type-aware printing).
     FAdd,
     FSub,
@@ -45,6 +47,7 @@ impl BinOp {
             BinOp::Sub | BinOp::FSub => "-",
             BinOp::Mul | BinOp::FMul => "*",
             BinOp::Div | BinOp::FDiv => "/",
+            BinOp::Rem => "%",
             BinOp::And => "&",
             BinOp::Or => "|",
             BinOp::Xor => "^",
