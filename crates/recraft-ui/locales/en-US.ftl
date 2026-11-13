@@ -315,3 +315,13 @@ ui_thinking = thinking…
 ui_edit_string = Edit string…
 ui_delete_string = Delete string
 ui_restore_string = Restore default
+
+ui_prompts = System prompts
+ui_prompt_language = Prompt language
+ui_prompt_language_hint = Independent of the UI language; saved with the other AI settings.
+ui_prompt_explain = Explanation
+ui_prompt_rename = Naming
+ui_prompt_polish = Polish
+ui_prompt_agent = Agent
+ui_save_prompt = Save prompt
+ui_reset_prompt = Restore built-in

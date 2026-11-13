@@ -32,7 +32,8 @@ mod secret;
 mod transport;
 
 pub use agent::{
-    AGENT_MAX_ROUNDS, AGENT_SYSTEM, AgentEvent, agent_tools, run_agent, run_agent_with_history,
+    AGENT_MAX_ROUNDS, AGENT_SYSTEM, AGENT_SYSTEM_ZH, AgentEvent, agent_tools, run_agent,
+    run_agent_with_history, run_agent_with_history_system,
 };
 pub use cache::{
     AUDIT_FILE, AiCache, AuditRecord, CACHE_FILE, CacheEntry, append_audit, append_default_audit,
@@ -45,12 +46,13 @@ pub use eval_names::{
 };
 pub use provider::{
     AuditEntry, AuditLog, ChatMessage, ChatRole, DEEPSEEK_ENDPOINT, DEEPSEEK_MODELS,
-    EXPLAIN_SYSTEM, OPENCODE_GO_ENDPOINT, OPENCODE_GO_MODELS, OllamaProvider,
-    OpenAiCompatibleProvider, POLISH_SYSTEM, PROMPT_TEMPLATE_VERSION, PromptCache, PromptRequest,
-    Provider, ProviderKind, ProviderPreset, ProviderSettings, RENAME_SYSTEM, RenameSuggestion,
-    TokenBudget, ToolCall, ToolReply, ToolSpec, UnavailableProvider, apply_rename_reply,
-    build_explain_prompt, build_polish_prompt, build_rename_prompt, build_rename_prompt_blinded,
-    parse_rename_reply, parse_tool_reply, provider_from_settings, redact,
+    EXPLAIN_SYSTEM, EXPLAIN_SYSTEM_ZH, OPENCODE_GO_ENDPOINT, OPENCODE_GO_MODELS, OllamaProvider,
+    OpenAiCompatibleProvider, POLISH_SYSTEM, POLISH_SYSTEM_ZH, PROMPT_TEMPLATE_VERSION,
+    PromptCache, PromptKind, PromptLanguage, PromptRequest, Provider, ProviderKind, ProviderPreset,
+    ProviderSettings, RENAME_SYSTEM, RENAME_SYSTEM_ZH, RenameSuggestion, TokenBudget, ToolCall,
+    ToolReply, ToolSpec, UnavailableProvider, apply_rename_reply, build_explain_prompt,
+    build_polish_prompt, build_rename_prompt, build_rename_prompt_blinded, parse_rename_reply,
+    parse_tool_reply, prompt_key, provider_from_settings, redact, system_prompt,
 };
 pub use query::{QueryAnswer, QueryItem, answer_query};
 pub use transport::{
@@ -954,6 +956,25 @@ mod tests {
             !prompt.thinking,
             "polish asks for a direct answer so the first content token is not delayed"
         );
+    }
+
+    #[test]
+    fn a_prompt_edit_reaches_the_rendered_request() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let entry = session.entry_point();
+        let mut settings = ProviderSettings::default();
+        settings.set_prompt_override(
+            crate::PromptKind::Polish,
+            Some("自定义的系统提示".to_owned()),
+        );
+        let prompt = build_polish_prompt(&mut session, entry, &settings).unwrap();
+        assert_eq!(prompt.system, "自定义的系统提示");
+        // Switching the built-in language is enough to change what the model sees.
+        settings.prompt_language = crate::PromptLanguage::Zh;
+        let prompt = build_polish_prompt(&mut session, entry, &settings).unwrap();
+        assert_eq!(prompt.system, crate::POLISH_SYSTEM_ZH);
     }
 
     #[test]

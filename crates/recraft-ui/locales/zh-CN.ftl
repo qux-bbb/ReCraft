@@ -315,3 +315,13 @@ ui_thinking = 思考中…
 ui_edit_string = 编辑字符串…
 ui_delete_string = 删除该字符串
 ui_restore_string = 恢复默认
+
+ui_prompts = 系统提示词
+ui_prompt_language = 提示词语言
+ui_prompt_language_hint = 与界面语言无关，随其它 AI 设置一起保存。
+ui_prompt_explain = 函数解释
+ui_prompt_rename = 命名
+ui_prompt_polish = 润色
+ui_prompt_agent = 智能体
+ui_save_prompt = 保存提示词
+ui_reset_prompt = 恢复内置

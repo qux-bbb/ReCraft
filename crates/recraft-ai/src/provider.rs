@@ -130,6 +130,10 @@ pub struct ProviderSettings {
     pub max_tokens: usize,
     /// True only when a provider has an endpoint and a key is available.
     pub enabled: bool,
+    /// Language of the built-in system prompts (independent of the UI language).
+    pub prompt_language: PromptLanguage,
+    /// User edits keyed by [`prompt_key`]; an absent key means "use the built-in text".
+    pub prompt_overrides: BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for ProviderSettings {
@@ -143,6 +147,8 @@ impl std::fmt::Debug for ProviderSettings {
             .field("saved_api_keys", &self.saved_api_keys.len())
             .field("max_tokens", &self.max_tokens)
             .field("enabled", &self.enabled)
+            .field("prompt_language", &self.prompt_language)
+            .field("prompt_overrides", &self.prompt_overrides.len())
             .finish()
     }
 }
@@ -158,6 +164,8 @@ impl Default for ProviderSettings {
             saved_api_keys: BTreeMap::new(),
             max_tokens: 65536,
             enabled: false,
+            prompt_language: PromptLanguage::En,
+            prompt_overrides: BTreeMap::new(),
         }
     }
 }
@@ -260,6 +268,22 @@ impl ProviderSettings {
         if let Some(max_tokens) = value.get("max_tokens").and_then(|value| value.as_u64()) {
             settings.max_tokens = max_tokens as usize;
         }
+        if let Some(language) = value
+            .get("prompt_language")
+            .and_then(|value| value.as_str())
+            .and_then(PromptLanguage::parse)
+        {
+            settings.prompt_language = language;
+        }
+        if let Some(prompts) = value.get("prompts").and_then(|value| value.as_object()) {
+            for (key, text) in prompts {
+                if let Some(text) = text.as_str() {
+                    settings
+                        .prompt_overrides
+                        .insert(key.clone(), text.to_owned());
+                }
+            }
+        }
         if let Some(sealed) = value.get("api_key_sealed").and_then(|value| value.as_str()) {
             settings.api_key = crate::secret::open(sealed);
         }
@@ -311,6 +335,8 @@ impl ProviderSettings {
             "model": self.model,
             "api_key_env": self.api_key_env,
             "max_tokens": self.max_tokens,
+            "prompt_language": self.prompt_language.as_str(),
+            "prompts": self.prompt_overrides,
         });
         if let Some(key) = self.api_key.as_deref().filter(|key| !key.is_empty()) {
             value["api_key_sealed"] = serde_json::Value::String(crate::secret::seal(key)?);
@@ -335,6 +361,25 @@ impl ProviderSettings {
     /// Recompute `enabled` from the current environment after the user edits settings.
     pub fn refresh_enabled(&mut self) {
         self.enabled = !self.endpoint.is_empty() && self.api_key_present();
+    }
+
+    /// Store (`Some`) or clear (`None`) the user's text for the current prompt language.
+    /// Empty text counts as clearing, so the built-in prompt comes back.
+    pub fn set_prompt_override(&mut self, kind: PromptKind, text: Option<String>) {
+        let key = prompt_key(kind, self.prompt_language);
+        match text.filter(|text| !text.trim().is_empty()) {
+            Some(text) => {
+                self.prompt_overrides.insert(key, text);
+            }
+            None => {
+                self.prompt_overrides.remove(&key);
+            }
+        }
+    }
+
+    /// The shipped prompt for `kind` in the configured language ("reset" restores this).
+    pub fn builtin_prompt(&self, kind: PromptKind) -> &'static str {
+        kind.builtin(self.prompt_language)
     }
 
     /// Whether a session key or the configured API-key environment variable is present.
@@ -487,6 +532,126 @@ Output only the reconstructed C function(s), without markdown fences or commenta
 Declare every external array/global you reference (e.g. `extern unsigned char table[];`) \
 so the snippet is self-contained.";
 
+/// Which system prompt is being built or edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PromptKind {
+    /// Why does this function exist (`build_explain_prompt`).
+    Explain,
+    /// What should this function be called (`build_rename_prompt`).
+    Rename,
+    /// Reconstruct the original C (`build_polish_prompt`).
+    Polish,
+    /// The project-level agent's tool-using loop.
+    Agent,
+}
+
+impl PromptKind {
+    /// Stable iteration order for the settings UI and the built-in table.
+    pub const ALL: [PromptKind; 4] = [
+        PromptKind::Explain,
+        PromptKind::Rename,
+        PromptKind::Polish,
+        PromptKind::Agent,
+    ];
+
+    /// Identifier used by the settings file and the override keys.
+    pub const fn key(self) -> &'static str {
+        match self {
+            PromptKind::Explain => "explain",
+            PromptKind::Rename => "rename",
+            PromptKind::Polish => "polish",
+            PromptKind::Agent => "agent",
+        }
+    }
+
+    /// The shipped prompt in `language`.
+    pub fn builtin(self, language: PromptLanguage) -> &'static str {
+        match (self, language) {
+            (PromptKind::Explain, PromptLanguage::En) => EXPLAIN_SYSTEM,
+            (PromptKind::Explain, PromptLanguage::Zh) => EXPLAIN_SYSTEM_ZH,
+            (PromptKind::Rename, PromptLanguage::En) => RENAME_SYSTEM,
+            (PromptKind::Rename, PromptLanguage::Zh) => RENAME_SYSTEM_ZH,
+            (PromptKind::Polish, PromptLanguage::En) => POLISH_SYSTEM,
+            (PromptKind::Polish, PromptLanguage::Zh) => POLISH_SYSTEM_ZH,
+            (PromptKind::Agent, PromptLanguage::En) => crate::agent::AGENT_SYSTEM,
+            (PromptKind::Agent, PromptLanguage::Zh) => crate::agent::AGENT_SYSTEM_ZH,
+        }
+    }
+}
+
+/// Language of the built-in prompts. Independent of the UI language: models often behave
+/// better with an English system prompt even in a Chinese session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptLanguage {
+    #[default]
+    En,
+    Zh,
+}
+
+impl PromptLanguage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PromptLanguage::En => "en",
+            PromptLanguage::Zh => "zh",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "en" | "en-US" | "english" => Some(PromptLanguage::En),
+            "zh" | "zh-CN" | "chinese" => Some(PromptLanguage::Zh),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PromptLanguage::En => "English",
+            PromptLanguage::Zh => "中文",
+        }
+    }
+}
+
+/// Chinese system prompt for function explanation.
+pub const EXPLAIN_SYSTEM_ZH: &str = "你是 ReCraft 的反向工程助手。用平实的语言解释给定函数\
+的功能。只使用提供的证据（API 调用、字符串、伪代码），绝不臆造行为；不确定的地方要明确说明。";
+
+/// Chinese rename prompt. The reply contract is strict because [`parse_rename_reply`] turns
+/// it straight into rename proposals, so the translation keeps the exact line format.
+pub const RENAME_SYSTEM_ZH: &str = "你是 ReCraft 的符号命名助手。为列出的函数提出简洁的 \
+snake_case 名称。每个建议只能依据提供的 API 调用、字符串与伪代码，绝不臆造证据。每个函数恰好\
+输出一行，顺序与输入一致，格式为 `<地址> <名称> -- <理由>`：地址从输入原样复制\
+（`0x140001000`），名称写不带引号、不带 `sub_` 前缀、不带地址后缀的小写 C 标识符，理由用一句\
+话点明依据的调用或字符串。不要输出其它内容：没有标题、没有 Markdown、没有编号、没有空行。";
+
+/// Chinese pseudo-code polishing prompt (DESIGN §9.2: post-processing, never stored).
+pub const POLISH_SYSTEM_ZH: &str = "你是一名反向工程反编译器。根据提供的伪 C 与反汇编，重建\
+最可能的原始 C 源码。反汇编及其跳转目标是**权威**的：伪代码可能压平或错排基本块。保持每一个\
+可达基本块在正确的路径上；绝不把包含在循环里的检查移到循环外，也绝不把提前退出与成功路径合并。\
+必须保留每一次内存访问、调用、常量、比较与控制流边；不得臆造或删除行为，也不得把输入中出现的\
+库函数替换成别的函数。你可以：恢复有意义的局部变量名与类型（例如传给 fgets 的栈缓冲区写成 \
+`char input[0x100]`）、把实参准备折进调用、在边等价时把 goto 标签改写成 while/for/if/else、去掉\
+序言/收尾处的寄存器保存。你也可以：当实参和用法唯一确定某个 C 运行时函数时，把 `sub_XXX` 调用\
+换成规范名（例如缓冲区 + 大小 + 流、且结果被检测的是 fgets；两个字符串比较结果与零比较是 \
+strcmp；一个字符串长度与常量比较是 strlen）。证据不明确时保留 `sub_XXX`，绝不臆造非标准函数。\
+只输出重建的 C 函数，不要 Markdown 围栏或说明。声明你引用的每个外部数组/全局（例如 \
+`extern unsigned char table[];`），让片段自包含。";
+
+/// The key a user override for `kind`/`language` is stored under (`"zh:polish"`).
+pub fn prompt_key(kind: PromptKind, language: PromptLanguage) -> String {
+    format!("{}:{}", language.as_str(), kind.key())
+}
+
+/// The system prompt to send for `kind`: the user's override, else the built-in text.
+pub fn system_prompt(settings: &ProviderSettings, kind: PromptKind) -> String {
+    let language = settings.prompt_language;
+    settings
+        .prompt_overrides
+        .get(&prompt_key(kind, language))
+        .cloned()
+        .unwrap_or_else(|| kind.builtin(language).to_owned())
+}
+
 /// Redact URLs, IPv4 addresses and e-mail addresses before context leaves the process.
 /// Line structure is preserved so the prompt stays readable for review.
 pub fn redact(text: &str) -> String {
@@ -569,7 +734,8 @@ pub fn build_explain_prompt(
         user.push('\n');
     }
     let user = redact(&user);
-    Ok(PromptRequest::new(budget, EXPLAIN_SYSTEM, &user))
+    let system = system_prompt(settings, PromptKind::Explain);
+    Ok(PromptRequest::new(budget, &system, &user))
 }
 
 /// Upper bound on functions described in one naming request. Bodies make each block
@@ -669,7 +835,8 @@ fn build_rename_prompt_impl(
         user.push_str(&block);
     }
     user.push_str("\nreply with one line per function: 0xADDR new_name -- rationale\n");
-    Ok(PromptRequest::new(budget, RENAME_SYSTEM, &user))
+    let system = system_prompt(settings, PromptKind::Rename);
+    Ok(PromptRequest::new(budget, &system, &user))
 }
 
 /// Replace whole identifier tokens only (`start` must not touch `restart_service`).
@@ -873,7 +1040,8 @@ pub fn build_polish_prompt(
     let user = redact(&user);
     // DeepSeek V4 answers directly by default here: a reasoning pass would delay the first
     // content token of this transformation task by about a minute.
-    Ok(PromptRequest::new(budget, POLISH_SYSTEM, &user))
+    let system = system_prompt(settings, PromptKind::Polish);
+    Ok(PromptRequest::new(budget, &system, &user))
 }
 
 /// In-memory prompt → response cache keyed by a stable hash of the request.
@@ -2076,6 +2244,71 @@ mod tests {
     }
 
     #[test]
+    fn prompts_switch_language_and_take_overrides() {
+        let mut settings = ProviderSettings::default();
+        assert_eq!(system_prompt(&settings, PromptKind::Polish), POLISH_SYSTEM);
+        settings.prompt_language = PromptLanguage::Zh;
+        assert_eq!(
+            system_prompt(&settings, PromptKind::Polish),
+            POLISH_SYSTEM_ZH
+        );
+        assert!(system_prompt(&settings, PromptKind::Explain).contains("ReCraft"));
+
+        // An override only replaces the language it was written for.
+        settings.set_prompt_override(PromptKind::Polish, Some("自定义".to_owned()));
+        assert_eq!(system_prompt(&settings, PromptKind::Polish), "自定义");
+        settings.prompt_language = PromptLanguage::En;
+        assert_eq!(system_prompt(&settings, PromptKind::Polish), POLISH_SYSTEM);
+        // Empty text after trimming clears the override instead of sending a blank prompt.
+        settings.prompt_language = PromptLanguage::Zh;
+        settings.set_prompt_override(PromptKind::Polish, Some("   ".to_owned()));
+        assert_eq!(
+            system_prompt(&settings, PromptKind::Polish),
+            POLISH_SYSTEM_ZH
+        );
+    }
+
+    #[test]
+    fn prompt_edits_roundtrip_through_settings_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-settings.json");
+        let mut settings = ProviderSettings {
+            prompt_language: PromptLanguage::Zh,
+            ..ProviderSettings::default()
+        };
+        settings.set_prompt_override(PromptKind::Rename, Some("自定义命名提示".to_owned()));
+        settings.save_to(&path).unwrap();
+
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(loaded.prompt_language, PromptLanguage::Zh);
+        assert_eq!(system_prompt(&loaded, PromptKind::Rename), "自定义命名提示");
+        assert_eq!(
+            system_prompt(&loaded, PromptKind::Explain),
+            EXPLAIN_SYSTEM_ZH,
+            "kinds without an override keep their built-in text"
+        );
+    }
+
+    #[test]
+    fn a_changed_prompt_changes_the_cache_key() {
+        let mut settings = ProviderSettings::default();
+        let request = PromptRequest::new(
+            TokenBudget::new(128),
+            &system_prompt(&settings, PromptKind::Explain),
+            "user",
+        );
+        let before = crate::AiCache::key(&request, "provider", "model", PROMPT_TEMPLATE_VERSION);
+        settings.set_prompt_override(PromptKind::Explain, Some("different".to_owned()));
+        let request = PromptRequest::new(
+            TokenBudget::new(128),
+            &system_prompt(&settings, PromptKind::Explain),
+            "user",
+        );
+        let after = crate::AiCache::key(&request, "provider", "model", PROMPT_TEMPLATE_VERSION);
+        assert_ne!(before, after, "a cached reply must not outlive its prompt");
+    }
+
+    #[test]
     fn settings_roundtrip_through_json_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ai-settings.json");
@@ -2205,6 +2438,7 @@ mod tests {
             saved_api_keys: BTreeMap::new(),
             max_tokens: 256,
             enabled: true,
+            ..ProviderSettings::default()
         }
     }
 

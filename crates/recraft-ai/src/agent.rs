@@ -35,6 +35,14 @@ as the evidence supports it instead of reading everything. Cite addresses as 0x.
 answer. Answer in the language of the question. You cannot modify the project: propose renames \
 as plain text and leave applying them to the user.";
 
+/// Chinese system prompt for the agent (the built-in table pairs it with [`AGENT_SYSTEM`]).
+pub const AGENT_SYSTEM_ZH: &str = "你是 ReCraft 的反向工程智能体。通过调用只读工具回答关于\
+当前项目的问题；绝不臆造没有读过的函数、地址或字符串。安静地调用工具（不要“我先去找……”这类\
+叙述）：先广后深（list_functions、find_api_callers），然后读真正重要的一两个函数\
+（function_summary、get_pseudocode）。两到四次工具调用通常就够了：证据一足够就回答，不要\
+把所有东西都读一遍。回答里用 0x... 引用地址。用提问的语言回答。你不能修改项目：把改名建议\
+写成纯文本，交给用户应用。";
+
 /// Default number of model turns `run_agent` allows (each may contain several tool calls).
 /// One extra turn is always reserved for the answer after the tool budget is spent.
 pub const AGENT_MAX_ROUNDS: usize = 10;
@@ -84,12 +92,23 @@ pub fn run_agent(
     max_rounds: usize,
     on_event: &mut dyn FnMut(AgentEvent),
 ) -> Result<String> {
+    let system = crate::provider::system_prompt(settings, crate::provider::PromptKind::Agent);
     let mut provider = provider_from_settings(settings);
-    run_agent_with_provider(session, provider.as_mut(), question, max_rounds, on_event)
+    let mut history = Vec::new();
+    run_agent_with_history_system(
+        session,
+        provider.as_mut(),
+        &mut history,
+        question,
+        &system,
+        max_rounds,
+        on_event,
+    )
 }
 
-/// [`run_agent`] against an already constructed provider (tests drive the loop with a
-/// scripted provider; production builds one from the settings).
+/// [`run_agent`] against an already constructed provider. Only the tests use it: production
+/// builds the provider from the settings, which is also where the system prompt comes from.
+#[cfg(test)]
 pub fn run_agent_with_provider(
     session: &mut Session,
     provider: &mut dyn Provider,
@@ -120,13 +139,35 @@ pub fn run_agent_with_history(
     max_rounds: usize,
     on_event: &mut dyn FnMut(AgentEvent),
 ) -> Result<String> {
+    run_agent_with_history_system(
+        session,
+        provider,
+        history,
+        question,
+        AGENT_SYSTEM,
+        max_rounds,
+        on_event,
+    )
+}
+
+/// [`run_agent_with_history`] with an explicit system prompt: the settings UI can replace
+/// [`AGENT_SYSTEM`] with the user's text (or its Chinese built-in).
+pub fn run_agent_with_history_system(
+    session: &mut Session,
+    provider: &mut dyn Provider,
+    history: &mut Vec<ChatMessage>,
+    question: &str,
+    system: &str,
+    max_rounds: usize,
+    on_event: &mut dyn FnMut(AgentEvent),
+) -> Result<String> {
     if question.trim().is_empty() {
         return Err(Error::invalid_argument("the agent needs a question"));
     }
     let tools = agent_tools();
     let messages = history;
     if messages.is_empty() {
-        messages.push(ChatMessage::system(AGENT_SYSTEM));
+        messages.push(ChatMessage::system(system));
     }
     trim_history(messages);
     messages.push(ChatMessage::user(question));
@@ -422,6 +463,31 @@ mod tests {
     }
     /// A follow-up question sees the previous answer: the conversation is carried, not
     /// rebuilt from scratch.
+    #[test]
+    fn a_custom_system_prompt_reaches_the_model() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let mut provider = Scripted {
+            replies: VecDeque::from(vec![ToolReply::Text("ok".to_owned())]),
+            seen: Vec::new(),
+        };
+        let mut history = Vec::new();
+        run_agent_with_history_system(
+            &mut session,
+            &mut provider,
+            &mut history,
+            "hi",
+            "CUSTOM SYSTEM",
+            1,
+            &mut |_| {},
+        )
+        .unwrap();
+        let first = &provider.seen[0][0];
+        assert_eq!(first.role, ChatRole::System);
+        assert_eq!(first.content, "CUSTOM SYSTEM");
+    }
+
     #[test]
     fn a_follow_up_question_keeps_the_previous_turn() {
         let Some((mut session, _dir)) = notepad() else {

@@ -13,6 +13,14 @@
 
 ### 新增
 
+- **AI 的系统提示词可以改，并且内置中英文两套。** 四条系统提示词（函数解释、命名、润色、
+  项目级智能体）各自提供英文（原有文案）与中文（新增翻译）内置版本，语言与界面语言无关、
+  默认英文；`ai-settings.json` 记 `prompt_language` 与按 `"<语言>:<用途>"` 键的覆盖文本。
+  设置窗口新增「系统提示词」区：切换语言、查看/编辑任意一条、保存覆盖或恢复内置；空文本
+  等于恢复。`system_prompt` 同时供三个 `build_*_prompt` 与 `run_agent` 使用，提示词参与缓存
+  key（system 已哈希），改文案不会命中旧答案。新增单测覆盖语言切换、覆盖优先级、清空恢复、
+  设置文件往返、缓存 key 变化与请求里实际携带的系统提示。
+
 - **内置 CRT 签名从 9 条扩到 43 条，`.map` 逐地址校验零误报。** 覆盖 MSVC 静态 CRT 的启动
   （`mainCRTStartup`、`__scrt_common_main_seh`）、异常与 RTC（`__C_specific_handler`、
   `__CxxFrameHandler3`、`_CxxThrowException`、`_RTC_Initialize`）、内存与字符串

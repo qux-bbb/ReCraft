@@ -260,6 +260,12 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   代码围栏、缺省理由，丢弃非法标识符与重名），`apply_rename_reply` 把结果合并回本地
   Proposal（未命中的候选保留回退名，证据地址不变，置信度抬到至少 0.7）。两条函数都有离线
   单测，不需要模型。
+- **可编辑的中英文提示词**（2026-11-14）：四条系统提示词（解释 `explain`、命名 `rename`、
+  润色 `polish`、智能体 `agent`）各有英文与中文内置版本（`*_SYSTEM_ZH`），由
+  `PromptKind::builtin` 选择；`PromptLanguage` 与界面语言无关，默认英文。设置窗口的
+  「系统提示词」区可以按语言查看、编辑、保存与恢复内置：编辑值存进 `ai-settings.json` 的
+  `prompts`（键为 `"<lang>:<kind>"`），空文本等于恢复内置；`system_prompt` 优先返回覆盖值，
+  三个 `build_*_prompt` 与 `run_agent` 都走它，所以缓存 key（含 system 的哈希）自动失效旧答案。
 - **离线评测**（无需模型/网络）：`crates/recraft-ai/src/eval.rs`
   - `EVAL_VERSION = "prompt-eval-2026-10-v1"`，内置 corpus 用例（`field_probe`、
     `array_probe`、`str_probe`、`float_math`、`branchy`）；

@@ -1523,6 +1523,10 @@ pub struct ReCraftApp {
     ai_sidebar_width: f32,
     ai_fab_pos: Option<egui::Pos2>,
     ai_settings_open: bool,
+    /// Editors for the four system prompts, loaded when the settings window opens.
+    prompt_drafts: Vec<(recraft_ai::PromptKind, String)>,
+    prompt_drafts_language: recraft_ai::PromptLanguage,
+    prompt_drafts_ready: bool,
     struct_name: String,
     struct_size: u64,
     struct_fields: String,
@@ -1636,6 +1640,9 @@ impl Default for ReCraftApp {
             ai_sidebar_width: 360.0,
             ai_fab_pos: None,
             ai_settings_open: false,
+            prompt_drafts: Vec::new(),
+            prompt_drafts_language: recraft_ai::PromptLanguage::En,
+            prompt_drafts_ready: false,
             struct_name: String::new(),
             struct_size: 16,
             struct_fields: String::new(),
@@ -3359,11 +3366,14 @@ impl ReCraftApp {
             let result = match recraft_core::Session::open(&path) {
                 Ok(mut session) => {
                     let mut provider = recraft_ai::provider_from_settings(&settings);
-                    recraft_ai::run_agent_with_history(
+                    let system =
+                        recraft_ai::system_prompt(&settings, recraft_ai::PromptKind::Agent);
+                    recraft_ai::run_agent_with_history_system(
                         &mut session,
                         provider.as_mut(),
                         &mut history,
                         &question,
+                        &system,
                         recraft_ai::AGENT_MAX_ROUNDS,
                         &mut |event| match event {
                             recraft_ai::AgentEvent::Tool { name, arguments } => {
@@ -6508,6 +6518,7 @@ impl ReCraftApp {
 
     fn ai_settings_window(&mut self, ctx: &egui::Context) {
         if !self.ai_settings_open {
+            self.prompt_drafts_ready = false;
             return;
         }
         let mut open = self.ai_settings_open;
@@ -6744,6 +6755,120 @@ impl ReCraftApp {
         self.ai_settings.api_key =
             (!self.ai_api_key.trim().is_empty()).then(|| self.ai_api_key.trim().to_owned());
         self.ai_settings.refresh_enabled();
+        self.prompt_section(ui);
+    }
+
+    /// Fill the prompt editors from the settings: one per kind, in [`PromptKind::ALL`] order.
+    fn reload_prompt_drafts(&mut self) {
+        self.prompt_drafts = recraft_ai::PromptKind::ALL
+            .iter()
+            .map(|kind| (*kind, recraft_ai::system_prompt(&self.ai_settings, *kind)))
+            .collect();
+        self.prompt_drafts_language = self.ai_settings.prompt_language;
+        self.prompt_drafts_ready = true;
+    }
+
+    /// Built-in system prompts: pick the prompt language, edit any of the four, save the
+    /// override or restore the shipped text. Edits are user data in `ai-settings.json`; the
+    /// cache key hashes the system text, so a changed prompt never hits an old reply.
+    fn prompt_section(&mut self, ui: &mut egui::Ui) {
+        let title = self.t("ui_prompts");
+        let language_label = self.t("ui_prompt_language");
+        let hint = self.t("ui_prompt_language_hint");
+        let save_label = self.t("ui_save_prompt");
+        let reset_label = self.t("ui_reset_prompt");
+        let labels = [
+            self.t("ui_prompt_explain"),
+            self.t("ui_prompt_rename"),
+            self.t("ui_prompt_polish"),
+            self.t("ui_prompt_agent"),
+        ];
+        if !self.prompt_drafts_ready
+            || self.prompt_drafts_language != self.ai_settings.prompt_language
+        {
+            self.reload_prompt_drafts();
+        }
+        egui::CollapsingHeader::new(title)
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(language_label.as_str());
+                    egui::ComboBox::from_id_salt("ai_prompt_language")
+                        .selected_text(self.ai_settings.prompt_language.label())
+                        .show_ui(ui, |ui| {
+                            for language in [
+                                recraft_ai::PromptLanguage::En,
+                                recraft_ai::PromptLanguage::Zh,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        self.ai_settings.prompt_language == language,
+                                        language.label(),
+                                    )
+                                    .clicked()
+                                    && self.ai_settings.prompt_language != language
+                                {
+                                    self.ai_settings.prompt_language = language;
+                                    self.reload_prompt_drafts();
+                                }
+                            }
+                        });
+                });
+                ui.weak(hint.as_str());
+                for (index, kind) in recraft_ai::PromptKind::ALL.iter().copied().enumerate() {
+                    let overridden =
+                        self.ai_settings
+                            .prompt_overrides
+                            .contains_key(&recraft_ai::prompt_key(
+                                kind,
+                                self.ai_settings.prompt_language,
+                            ));
+                    egui::CollapsingHeader::new(labels[index].as_str())
+                        .id_salt(kind.key())
+                        .show(ui, |ui| {
+                            {
+                                let text = &mut self.prompt_drafts[index].1;
+                                ui.add(
+                                    egui::TextEdit::multiline(text)
+                                        .desired_rows(7)
+                                        .desired_width(f32::INFINITY),
+                                );
+                            }
+                            let mut save = false;
+                            let mut reset = false;
+                            ui.horizontal(|ui| {
+                                save = ui.button(save_label.as_str()).clicked();
+                                reset = ui
+                                    .add_enabled(
+                                        overridden,
+                                        egui::Button::new(reset_label.as_str()),
+                                    )
+                                    .clicked();
+                            });
+                            if !(save || reset) {
+                                return;
+                            }
+                            if reset {
+                                self.ai_settings.set_prompt_override(kind, None);
+                                self.prompt_drafts[index].1 =
+                                    self.ai_settings.builtin_prompt(kind).to_owned();
+                            } else {
+                                let text = self.prompt_drafts[index].1.clone();
+                                self.ai_settings.set_prompt_override(kind, Some(text));
+                            }
+                            self.ai_settings.api_key = (!self.ai_api_key.trim().is_empty())
+                                .then(|| self.ai_api_key.trim().to_owned());
+                            self.ai_settings.remember_current_key();
+                            self.ai_settings.refresh_enabled();
+                            match self.ai_settings.save() {
+                                Ok(()) => {
+                                    self.ai_status = self.t("ui_settings_saved").to_owned();
+                                }
+                                Err(error) => self.set_error(error),
+                            }
+                        });
+                }
+            });
     }
 
     /// Apply every ticked AI proposal through the command bus (journaled/undoable).
@@ -14959,6 +15084,28 @@ mod tests {
         app.ai_settings.endpoint = recraft_ai::DEEPSEEK_ENDPOINT.to_owned();
         app.sync_provider_key_identity();
         assert_eq!(app.ai_api_key, "deepseek-secret");
+    }
+
+    #[test]
+    fn prompt_editors_follow_the_selected_language() {
+        let mut app = ReCraftApp::default();
+        app.ai_settings.prompt_language = recraft_ai::PromptLanguage::En;
+        app.reload_prompt_drafts();
+        assert_eq!(app.prompt_drafts.len(), 4);
+        assert_eq!(
+            app.prompt_drafts[2].1,
+            recraft_ai::POLISH_SYSTEM,
+            "the editor starts from the built-in English prompt"
+        );
+
+        app.ai_settings.prompt_language = recraft_ai::PromptLanguage::Zh;
+        app.reload_prompt_drafts();
+        assert_eq!(app.prompt_drafts[2].1, recraft_ai::POLISH_SYSTEM_ZH);
+
+        app.ai_settings
+            .set_prompt_override(recraft_ai::PromptKind::Polish, Some("自定义".to_owned()));
+        app.reload_prompt_drafts();
+        assert_eq!(app.prompt_drafts[2].1, "自定义");
     }
 
     #[test]
