@@ -81,8 +81,14 @@
 - **W5**（进行中，2026-11-14）：解码器（yaxpeax-arm）与中立指令已接；ELF-ARM64 可导入、
   可反汇编、可发现函数（Go 的 arm64 样本：1904 函数、45417 条指令、1954 条调用边）。
   **反汇编正确性已达标**：`scripts/compare-arm64.ps1` 抽 100 个函数与 `go tool objdump`
-  逐指令比对，地址序列 100/100 一致。下一步：A64 lifter → IR、AAPCS64、反编译覆盖率
-  评估（<60% 就按 kill criteria 只承诺反汇编 + 调用图 + 字符串）。
+  逐指令比对，地址序列 100/100 一致。
+  **A64 lifter 第一版**：`recraft-ir::A64Lifter` 覆盖 mov/add/sub/and/orr/eor、
+  ldr/str（含 ldur/stur）、adr/adrp、movz/movn/movk、cmp/cmn/tst、b/b.cond/cbz/cbnz/bl/ret，
+  寄存器用 `Reg::A64Xn` 命名空间（与 x86 互不干扰）。`scripts/measure-a64-lift.ps1`
+  实测前 100 个函数：**2308 条指令里 1929 条命中建模集合（83.6%）**，高于 kill criteria 的
+  60% 线——但这是"lifter 能建模的指令占比"，不等于反编译成功率：结构化器仍是 x86 形状，
+  还需要中立 CFG 才能出伪 C。
+- 下一步：中立 CFG（让结构化器吃 `DecodedInsn`）→ 反编译覆盖率实测 → AAPCS64 参数/返回。
 - 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。
 
 规则：

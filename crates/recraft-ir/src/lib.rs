@@ -10,10 +10,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aarch64;
 pub mod expr;
 pub mod lift;
 pub mod reg;
 
+pub use aarch64::A64Lifter;
 pub use expr::{
     BinOp, Builtin, CondKind, Expr, ExprId, Flow, Lifted, LiftedInsn, Stmt, UnOp, cond_name,
 };

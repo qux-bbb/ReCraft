@@ -45,6 +45,42 @@ pub enum Reg {
     Xmm13,
     Xmm14,
     Xmm15,
+    /// AArch64 general-purpose registers `x0`-`x30` (`w0`-`w30` as 32-bit).
+    A64X0,
+    A64X1,
+    A64X2,
+    A64X3,
+    A64X4,
+    A64X5,
+    A64X6,
+    A64X7,
+    A64X8,
+    A64X9,
+    A64X10,
+    A64X11,
+    A64X12,
+    A64X13,
+    A64X14,
+    A64X15,
+    A64X16,
+    A64X17,
+    A64X18,
+    A64X19,
+    A64X20,
+    A64X21,
+    A64X22,
+    A64X23,
+    A64X24,
+    A64X25,
+    A64X26,
+    A64X27,
+    A64X28,
+    A64X29,
+    A64X30,
+    /// AArch64 stack pointer (`sp`/`wsp`).
+    A64Sp,
+    /// AArch64 zero register (`xzr`/`wzr`).
+    A64Zr,
 }
 
 impl Reg {
@@ -54,13 +90,128 @@ impl Reg {
         "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
     ];
 
+    const A64_X: [&'static str; 31] = [
+        "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
+        "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26",
+        "x27", "x28", "x29", "x30",
+    ];
+
+    const A64_W: [&'static str; 31] = [
+        "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10", "w11", "w12", "w13",
+        "w14", "w15", "w16", "w17", "w18", "w19", "w20", "w21", "w22", "w23", "w24", "w25", "w26",
+        "w27", "w28", "w29", "w30",
+    ];
+
+    /// Name-table index for the AArch64 xN/wN variants.
+    const fn a64_index(self) -> Option<usize> {
+        let index = self as usize;
+        if index >= 32 && index < 63 {
+            Some(index - 32)
+        } else {
+            None
+        }
+    }
+
     /// 64-bit (or full XMM) name of this register.
     pub fn name64(self) -> &'static str {
-        Self::NAMES[self as usize]
+        match self {
+            Reg::A64Sp => "sp",
+            Reg::A64Zr => "xzr",
+            other => match other.a64_index() {
+                Some(index) => Self::A64_X[index],
+                None => Self::NAMES[other as usize],
+            },
+        }
+    }
+
+    /// True for the AArch64 namespace (x86 code never sees these).
+    pub const fn is_aarch64(self) -> bool {
+        (self as usize) >= 32
+    }
+
+    /// AArch64 register view: `xN`/`wN`, or `sp`/`wsp` and `xzr`/`wzr` for 31.
+    ///
+    /// `stack_pointer` selects which meaning 31 has: AArch64 encodes `sp` and `xzr`
+    /// with the same number, and whether it is one or the other depends on the instruction.
+    pub fn aarch64(number: u16, width: u8, stack_pointer: bool) -> RegView {
+        let base = if number >= 31 {
+            if stack_pointer {
+                Reg::A64Sp
+            } else {
+                Reg::A64Zr
+            }
+        } else {
+            Self::a64_gpr(number)
+        };
+        RegView::new(base, width, 0)
+    }
+
+    fn a64_gpr(number: u16) -> Reg {
+        match number {
+            1 => Reg::A64X1,
+            2 => Reg::A64X2,
+            3 => Reg::A64X3,
+            4 => Reg::A64X4,
+            5 => Reg::A64X5,
+            6 => Reg::A64X6,
+            7 => Reg::A64X7,
+            8 => Reg::A64X8,
+            9 => Reg::A64X9,
+            10 => Reg::A64X10,
+            11 => Reg::A64X11,
+            12 => Reg::A64X12,
+            13 => Reg::A64X13,
+            14 => Reg::A64X14,
+            15 => Reg::A64X15,
+            16 => Reg::A64X16,
+            17 => Reg::A64X17,
+            18 => Reg::A64X18,
+            19 => Reg::A64X19,
+            20 => Reg::A64X20,
+            21 => Reg::A64X21,
+            22 => Reg::A64X22,
+            23 => Reg::A64X23,
+            24 => Reg::A64X24,
+            25 => Reg::A64X25,
+            26 => Reg::A64X26,
+            27 => Reg::A64X27,
+            28 => Reg::A64X28,
+            29 => Reg::A64X29,
+            30 => Reg::A64X30,
+            _ => Reg::A64X0,
+        }
     }
 
     /// Name for a width in bytes (1, 2, 4, 8), ignoring high-byte views.
     pub fn name_width(self, width: u8) -> &'static str {
+        match self {
+            Reg::A64Sp => {
+                if width == 4 {
+                    "wsp"
+                } else {
+                    "sp"
+                }
+            }
+            Reg::A64Zr => {
+                if width == 4 {
+                    "wzr"
+                } else {
+                    "xzr"
+                }
+            }
+            other if other.is_aarch64() => {
+                let index = (other as usize) - 32;
+                if width == 4 {
+                    Self::A64_W[index]
+                } else {
+                    Self::A64_X[index]
+                }
+            }
+            _ => self.x86_name_width(width),
+        }
+    }
+
+    fn x86_name_width(self, width: u8) -> &'static str {
         if matches!(
             self,
             Reg::Xmm0
