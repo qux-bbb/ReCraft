@@ -9,16 +9,17 @@ ReCraft 通过 **MCP（Model Context Protocol）** 把项目暴露给 AI 客户�
 
 ## 启动
 
+推荐让客户端在运行时打开程序：服务器启动时是**空注册表**，`open_program` 负责导入或打开
+任意 PE/ELF/`.rcraft`，同一个二进制再次打开会复用项目（名字、注释都在）：
+
 ```powershell
-cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
-cargo run -p recraft-cli -- analyze notepad.rcraft
-cargo run -p recraft-cli -- serve-mcp notepad.rcraft            # 只读
-cargo run -p recraft-cli -- serve-mcp notepad.rcraft --write    # 只读 + 写工具
-cargo run -p recraft-cli -- serve-mcp                           # 不预开项目，由客户端 open_program
+cargo run -p recraft-cli -- serve-mcp                 # 只读，空注册表（推荐）
+cargo run -p recraft-cli -- serve-mcp --write         # 只读 + 写工具
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft  # 可选：启动时先打开一个项目
 ```
 
 传输：**stdio**，每条消息是一行 JSON-RPC 2.0（MCP stdio transport）。服务器只把
-响应写到 stdout；日志/诊断走 stderr。
+响应写到 stdout；日志/诊断走 stderr。`--http` 的行为见下文，同样支持空注册表。
 
 ### 多实例（不绑定单个项目）
 
@@ -40,48 +41,59 @@ cargo run -p recraft-cli -- serve-mcp                           # 不预开项�
 两个实例之间互不影响：`get_metadata`/`list_functions`/写工具都只看活动实例；`save_project`
 只 checkpoint 当前实例，复制出来的文件可以再用 `open_program` 打开成第三个实例。
 
-多实例只在 **stdio** 上成立（registry 存在服务器进程里）。`--http` 必须带项目参数：HTTP 是
-无状态的，每个请求建一个 `Session`，`open_program`/`use_instance`/`close_instance` 会返回
-明确错误，`list_instances`/`save_project` 仍可用。
+多实例在 **stdio 和 HTTP 会话**里都成立：stdio 的注册表属于进程；HTTP 的注册表属于
+`Mcp-Session-Id` 对应的会话（没带头的简单客户端共用一个 default 会话）。
+`--http` 可以带项目（新会话预打开它），也可以不带项目（新会话从空注册表开始）。
 
 
 ### HTTP 传输（`--http`）
 
-DESIGN §9.1 的 HTTP 可选传输已实现：`serve-mcp <project> --http [--bind 127.0.0.1:8765]
-[--token <token>]`。未传 `--token` 时自动生成并打印到 stderr。
+`serve-mcp [project] --http [--bind 127.0.0.1:8765] [--token <token>]`。未传 `--token`
+时自动生成并打印到 stderr。`project` 可以省略：每个新会话从空注册表开始，客户端用
+`open_program` 打开任意程序；带项目时只是给新会话预打开一个项目。
 
 ```powershell
+# 推荐：空注册表，客户端 open_program 任意程序
+cargo run -p recraft-cli -- serve-mcp --http --bind 127.0.0.1:8765 --token demo
+
+# 可选：新会话预打开一个项目（仍可 open_program 其他程序）
 cargo run -p recraft-cli -- serve-mcp notepad.rcraft --http --bind 127.0.0.1:8765 --token demo
-curl -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer demo" `
-     -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}'
 ```
 
 - `POST /mcp`：单个 JSON-RPC 消息，`Authorization: Bearer <token>` 必需（缺失/错误返回
   401，scheme 或长度不符同样拒绝）；token 用恒定时间逐字节比较，避免按响应时间猜
-  token。通知（无 `id`）返回 202；解析失败 400；路径不存在 404；非 POST 405。
-- `GET /health`：`{"status":"ok"}`，无需 token（只用于存活探测）。
-- **并发**：每个连接一个线程、每个请求一个 `Session`，一个慢反编译不会再挡住 `ping` 或
-  下一个客户端；同时处理超过 32 个请求返回 503。
+  token。通知（无 `id`）返回 202；解析失败 400；未知路径 404；除 `DELETE` 外的非 POST
+  方法 405。
+- **会话**：`initialize` 建立会话，响应头返回 `Mcp-Session-Id`；后续请求带上它。
+  会话拥有自己的实例注册表，`open_program`/`use_instance`/`close_instance` 都可用。
+  不带该头的简单客户端固定在 default 会话（`initialize` 也返回 `default`）。`DELETE /mcp`
+  （带会话头）关闭会话，之后用旧 id 请求返回 404。
+- `GET /health`：`{"status":"ok"}`，无需 token（只用于存活探测）。`GET /mcp` 不提供
+  SSE 流，返回 405；本传输用 POST 的 JSON 响应承载结果。
+- **并发**：每个连接一个线程；同一会话的请求由会话锁串行（一个慢反编译会挡住同一会话
+  的后续调用），不同会话、`ping` 和 `/health` 不受影响；同时处理超过 32 个请求返回 503。
+- **会话回收**：30 分钟没有请求的会话在下一次请求时丢弃；最多 16 个会话。
 - **Origin 校验**：带 `Origin` 且不是 `127.0.0.1`/`localhost`/`[::1]` 的请求返回 403
   （MCP streamable HTTP 的 DNS-rebinding 防护）；不带 `Origin` 的本机客户端照常可用。
 - **协议版本**：请求带 `MCP-Protocol-Version` 时必须是 `2024-11-05` 或 `2025-06-18`，
   否则 400。
 - 读取上限：请求头 64 KiB、请求体 4 MiB；`Connection: close` 简化实现（v1）。
 - 回归覆盖：`crates/recraft-mcp` 单测覆盖 token 拒绝/initialize/tools/call/health/404、
-  Origin 拒绝与放行、协议版本校验、空闲连接不阻塞后续请求；
-  `scripts/e2e.ps1` 会后台启动真实 HTTP 服务（随机端口 + token），断言 `/health`、携带
-  token 的 `initialize` 返回 `serverInfo`、无 token 请求返回 401，然后强制结束进程。
+  Origin 拒绝与放行、协议版本校验、空闲连接不阻塞后续请求、会话隔离/`DELETE`/状态化
+  `open_program`；`scripts/e2e.ps1` 会后台启动真实 HTTP 服务（随机端口 + token），断言
+  `/health`、携带 token 的 `initialize` 返回 `serverInfo`、无 token 请求返回 401，然后
+  强制结束进程。
 
-客户端配置示例（OpenCode，stdio）：由 OpenCode 自己拉起 `serve-mcp`，先准备项目：
+客户端配置示例（OpenCode，stdio）：**配一次，之后用 `open_program` 打开任意程序**：
 
 ```powershell
-recraft-cli import C:\Windows\System32\notepad.exe -o C:\work\notepad.rcraft
-recraft-cli analyze C:\work\notepad.rcraft
-opencode mcp add recraft-notepad -- C:\path\to\recraft-cli.exe serve-mcp C:\work\notepad.rcraft
+opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp
+# 需要写工具时在命令末尾加 --write：
+opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp --write
 ```
 
 `opencode mcp add` 默认写项目配置（`opencode.json`），加 `--global` 写全局
-（`~/.config/opencode/opencode.jsonc`）；要写工具就在命令末尾加 `--write`。等价的配置文件
+（`~/.config/opencode/opencode.jsonc`）。等价的配置文件
 （OpenCode V2 形状，服务器放在 `mcp.servers` 下）：
 
 ```json
@@ -89,19 +101,25 @@ opencode mcp add recraft-notepad -- C:\path\to\recraft-cli.exe serve-mcp C:\work
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
-      "recraft-notepad": {
+      "recraft": {
         "type": "local",
-        "command": ["C:\\path\\to\\recraft-cli.exe", "serve-mcp", "C:\\work\\notepad.rcraft"]
+        "command": ["C:\\path\\to\\recraft-cli.exe", "serve-mcp"]
       }
     }
   }
 }
 ```
 
+之后在会话里 `open_program({"path": "C:\\Windows\\System32\\notepad.exe"})` 即可；再打开
+第二个程序会并存为另一个实例，用 `list_instances`/`use_instance` 切换。若想固定一个项目，
+把项目路径加在 `serve-mcp` 后面（`serve-mcp C:\\work\\notepad.rcraft`），仍可用
+`open_program` 追加别的程序。
+
 旧写法（服务器名直接挂在 `mcp` 下、`"enabled": true`、`command` 仍是数组）OpenCode 也照读，
 已存在的配置不必迁移；新加的建议按上面的 `mcp.servers` 放。
 
-走 HTTP 的客户端填 **URL + Authorization 头**，没有 `command`/`args`：
+走 HTTP 的客户端填 **URL + Authorization 头**，没有 `command`/`args`。服务端可以空注册表
+启动，同一个 URL 就能打开任意程序，不用为每个样本重启：
 
 ```powershell
 opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authorization=Bearer demo
@@ -126,7 +144,7 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
   `/health` 只用于探活，不要当 MCP 端点。
 - OpenCode 的 remote 服务器**默认走 OAuth**，只认 header token 的端点必须写 `oauth: false`，
   否则它会去找授权服务器。
-- 验证：`opencode mcp list` 显示 `✓ recraft-notepad connected`。刚改完配置时它可能先报
+- 验证：`opencode mcp list` 显示 `✓ recraft connected`。刚改完配置时它可能先报
   “No MCP servers configured”——list 连的是后台常驻服务、异步重载配置，等几秒或重开客户端
   再跑（`--standalone` 读不到项目配置，别用它排查）。
 
@@ -144,7 +162,7 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 | `resources/list` | 集合资源（functions/strings/imports） |
 | `resources/templates/list` | `pseudocode/{func}` 模板 |
 | `resources/read` | 读取资源；未知 URI 为 `-32602` |
-| `resources/subscribe` / `resources/unsubscribe` | 订阅/退订资源；stdio 下每次写操作（写工具或 `undo`）后发 `notifications/resources/updated`。HTTP 是无状态的（每请求一个 Session），`initialize` 里 `resources.subscribe = false`，调用返回 `-32601` |
+| `resources/subscribe` / `resources/unsubscribe` | 订阅/退订资源；stdio 下每次写操作（写工具或 `undo`）后发 `notifications/resources/updated`。HTTP 会话没有 push 通道，`initialize` 里 `resources.subscribe = false`，调用返回 `-32601` |
 
 错误码：`-32700` 解析错误、`-32600` 无效请求、`-32601` 方法不存在、`-32602` 参数错误、
 `-32603` 资源内部错误。
@@ -186,14 +204,21 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `rename` | `addr`, `name`（`null` 清除） | 重命名函数/数据/导入；重名或保留名会被拒绝 |
-| `set_comment` | `addr`, `text`（`null` 清除）, `kind?`=`regular/repeatable/anterior/pseudo` | 行内/引用/前置注释；`pseudo` 是反编译视图的注释（显示在行尾，与反汇编注释分开保存） |
-| `set_prototype` | `addr`, `text`（`null` 清除） | 函数 C 原型 |
-| `apply_type` | `func`, `slot`（0 = 第一个参数）, `struct`（`null` 清除） | 把已定义的结构体绑定到参数槽 |
-| `define_function` | `start`, `end`（不含端点） | 定义函数或调整范围 |
+| `rename` | `addr`, `name`（`null` 清除）, `expected_previous?` | 重命名函数/数据/导入；重名或保留名会被拒绝 |
+| `set_comment` | `addr`, `text`（`null` 清除）, `kind?`=`regular/repeatable/anterior/pseudo`, `expected_previous?` | 行内/引用/前置注释；`pseudo` 是反编译视图的注释（显示在行尾，与反汇编注释分开保存） |
+| `set_prototype` | `addr`, `text`（`null` 清除）, `expected_previous?` | 函数 C 原型 |
+| `apply_type` | `func`, `slot`（0 = 第一个参数）, `struct`（`null` 清除）, `expected_previous?` | 把已定义的结构体绑定到参数槽 |
+| `define_function` | `start`, `end`（不含端点）, `expected_previous?` | 定义函数或调整范围；previous 是当前结束地址的十六进制 |
 | `define_struct` | `name`, `size`, `fields`（`"offset:name:kind"` 或 `{offset,name,kind}`） | 定义/替换结构体布局（`apply_type` 的前一半，MCP 现在能自己建布局） |
 | `batch` | `commands: [...]` | 一次应用多条命令：要么全成功、要么全不落库，一条 `undo` 撤销整组 |
 | `undo` | `seq?`, `dryRun?` | 撤销最新的命令或整组，并回报撤销了哪些记录 |
+
+**乐观并发（`expected_previous`）**：`rename`/`set_comment`/`set_prototype`/`apply_type`/
+`define_function` 接受一个可选的 `expected_previous`。给了字符串就要求当前值完全等于它；
+给 `null` 要求当前没有值；省略则跳过检查。比较和写入在**同一个 immediate 事务**里完成，
+所以两个客户端不会都以为自己改的是旧值：后到的那个返回 `isError: true` 和
+`stale write: … expected previous …, found …; re-read and retry`。`batch` 和
+`define_struct` 没有单一 previous 值，不支持该参数（分别用逐条写工具/先读再定义）。
 
 **批量脚本语法（`batch` 与 `recraft-cli batch` 共用）**：每条命令是
 `{"type": "<命令>", ...字段}`，`type` 取 `rename` / `comment` / `prototype` /
@@ -295,9 +320,10 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 - 测试：`cargo test -p recraft-mcp`（notepad 真实样本：initialize/tools/list/tools/call、
   resources/read、filter 先于 limit 的回归、伪代码截断上限、恒定时间 token 比较、未知方法与
   未知工具的错误路径，以及 `--write` 的开关、rename 落库 + undo、comment/prototype 往返、
-  只读服务器拒绝写工具；多实例部分覆盖空服务器提示、`open_program` 导入到用户目录并复用、
-  两个实例之间的调用路由与 `instance` 参数、`save_project` 的一致副本与拒绝覆盖、资源按实例
-  前缀、`close_instance`）。
+  `expected_previous` 冲突、只读服务器拒绝写工具；多实例部分覆盖空服务器提示、`open_program`
+  导入到用户目录并复用、两个实例之间的调用路由与 `instance` 参数、`save_project` 的一致副本
+  与拒绝覆盖、资源按实例前缀、`close_instance`；HTTP 部分覆盖会话隔离、`Mcp-Session-Id`、
+  `DELETE` 关闭和状态化 `open_program`）。
 - E2E：`scripts/e2e.ps1` 第 11 步通过管道调用 `serve-mcp` 验证 initialize +
   `list_functions` + `resources/read`，并断言截断契约（`list_functions{limit:1}` 的
   `count/truncated/total`、`get_pseudocode{maxLines:1}` 的 `total_lines/truncated`）。
@@ -312,10 +338,15 @@ opencode mcp add recraft-http --url http://127.0.0.1:8765/mcp --header Authoriza
 - **反编译缓存**：`get_pseudocode` 第一次渲染后按指纹（函数范围/名字/原型/参数类型/结构体
   数量 + 反编译器版本）落库，第二次直接命中。实测 14 768 行的函数：冷 9.8 s → 热 16 ms；
   结果里 `cached` 字段标明是否命中。`includeLines` 请求逐行地址时不走缓存。
-- **多实例仅 stdio**：HTTP 是无状态传输（每请求一个 `Session`），注册表不跨请求；要多项目
-  就用 stdio，或者给每个项目各起一个 HTTP 服务。
+- **多实例的作用域**：stdio 的注册表属于进程；HTTP 的注册表属于 `Mcp-Session-Id` 会话。
+  不同 HTTP 会话各自独立（互不可见），同一会话的调用串行。多个前端要共享**同一个项目**
+  时靠 SQLite WAL：GUI、MCP、CLI 可以同时打开同一个 `.rcraft`。
+- **GUI 与 agent 共存**：GUI 轮询自己连接的 `PRAGMA data_version`；MCP/CLI 提交后版本变化，
+  GUI 把函数/字符串/导入/反汇编/伪代码/CFG 标脏并在下一帧重载，不需要手动重开项目。
+  GUI 自己的写入不改变该连接的数据版本，所以不会自触发刷新。两个客户端改同一字段时，
+  先读后写的那个可以用 `expected_previous` 拒绝覆盖。
 - 资源订阅只在 **stdio** 可用（`resources.subscribe = true`）：订阅后任何写操作都会推一条
-  `notifications/resources/updated`。HTTP 是无状态的，不宣告该能力。
+  `notifications/resources/updated`。HTTP 会话没有 push 通道，不宣告该能力。
 - `search_bytes` 在 1 GiB 段上按需分块扫描，暂无通配符/正则；`callgraph` 基于已持久化
   的 call xref，未分析项目返回空图。
 - `function_summary` 的 API 标签来自分析阶段写入的 `api_tag` 表。

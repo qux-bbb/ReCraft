@@ -13,6 +13,27 @@
 
 ### 新增
 
+- **MCP 的 HTTP 传输改为有状态会话，一次配置即可打开任意程序。** `serve-mcp --http` 现在
+  可以不带项目启动：`initialize` 创建一个 `Mcp-Session-Id` 会话，会话内维护自己的实例注册表，
+  `open_program`/`use_instance`/`close_instance` 在 HTTP 下也可用，`DELETE /mcp` 关闭会话；
+  不带会话头的简单客户端共用一个 default 会话。会话 30 分钟空闲回收，最多 16 个，同一会话的
+  调用串行、不同会话与 `/health` 不受影响。OpenCode 等远程客户端因此不再需要为每个样本重启
+  一个服务；stdio 的空注册表形态保持不变。
+
+- **MCP 写工具支持乐观并发检查。** `rename`/`set_comment`/`set_prototype`/`apply_type`/
+  `define_function` 新增可选 `expected_previous`：字符串要求当前值完全相等，`null` 要求当前
+  没有值，省略则跳过。比较和写入在同一个 immediate 事务里完成，后到的客户端得到
+  `stale write: … expected previous …, found …; re-read and retry`，不会静默覆盖别人的编辑。
+
+- **GUI 自动刷新外部改动。** GUI 轮询当前项目的 `PRAGMA data_version`（只对**其它连接**的提交
+  变化），MCP/CLI/第二个 GUI 写入后把函数、字符串、导入、反汇编、伪代码与 CFG 标脏并在下一帧
+  重载，不再需要关闭重开项目；GUI 自己的写入不会触发刷新。`Session::data_version` 与
+  `Session::execute_guarded` 是这套机制在核心层的入口。
+
+- **OpenCode 文档以“一次配置、运行时打开”为主路径。** `docs/MCP.md` 的启动与客户端章节改为
+  先给空注册表的 `serve-mcp` 配置（`--write` 单独说明），固定项目作为可选形态；HTTP 章节补
+  会话头、`DELETE`、会话隔离与回收，写工具章节补 `expected_previous`。
+
 - **反编译视图可直接加注释。** 伪代码视图支持伪代码注释：光标所在行按 `/`（`;` 也接受，沿用
   全局注释键）弹出“伪代码注释”对话框，支持多行（`Ctrl+Enter` 或 OK 提交），空文本删除。注释以
   `code  // …` 追加在被注释行**末尾**（与反汇编的注释列同一形态），多行注释的后续行紧跟其下、

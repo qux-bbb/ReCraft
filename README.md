@@ -260,18 +260,20 @@ UI 二进制使用 OpenGL（Glow）渲染；wgpu/DX12 在 spike 阶段于 Intel 
 
 ### MCP 服务器
 
-通过 stdio 提供 Model Context Protocol 工具（默认只读，`--write` 再开写工具）：
-`list_functions`、`get_disassembly`、`get_pseudocode`（L0/L1/L2）、`xrefs_to/from`、
-`list_strings`、`list_imports`、`list_exports`、`get_metadata`、`callgraph`、
+通过 stdio 或 HTTP（有状态 MCP 会话）提供 Model Context Protocol 工具（默认只读，
+`--write` 再开写工具）：`list_functions`、`get_disassembly`、`get_pseudocode`（L0/L1/L2）、
+`xrefs_to/from`、`list_strings`、`list_imports`、`list_exports`、`get_metadata`、`callgraph`、
 `search_bytes`、`function_summary`、`find_api_callers`，以及项目资源；`--write`
 提供 `rename`/`set_comment`/`set_prototype`/`apply_type`/`define_function`/
-`define_struct`/`batch`/`undo`。服务器不绑定单个项目：`open_program` 现场导入
-PE/ELF（数据库默认落在 `%LOCALAPPDATA%\ReCraft\projects`）、`list_instances`/
-`use_instance` 在多个已打开样本间切换、`save_project` 把项目文件另存一份。
+`define_struct`/`batch`/`undo`（写工具支持 `expected_previous` 乐观并发检查）。
+服务器不绑定单个项目：`open_program` 现场导入 PE/ELF（数据库默认落在
+`%LOCALAPPDATA%\ReCraft\projects`）、`list_instances`/`use_instance` 在多个已打开样本间
+切换、`save_project` 把项目文件另存一份。一次配置即可打开任意程序：
 
 ```powershell
-cargo run -p recraft-cli -- serve-mcp notepad.rcraft   # 预开一个项目
-cargo run -p recraft-cli -- serve-mcp                  # 空注册表，由 open_program 打开
+cargo run -p recraft-cli -- serve-mcp                  # 空注册表，由 open_program 打开（推荐）
+cargo run -p recraft-cli -- serve-mcp --write          # 另加写工具
+cargo run -p recraft-cli -- serve-mcp notepad.rcraft   # 可选：预开一个项目
 # newline-delimited JSON-RPC 2.0 on stdin/stdout; see docs/MCP.md
 ```
 

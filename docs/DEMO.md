@@ -126,10 +126,12 @@ applied 3 proposal(s) through the command bus (undoable)
 
 ## 对接 MCP 客户端
 
-OpenCode 作客户端（自己拉起 `serve-mcp`）：
+OpenCode 作客户端（自己拉起 `serve-mcp`，一次配置后用 `open_program` 打开任意程序）：
 
 ```powershell
-opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp C:\path\to\project.rcraft
+opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp
+# 需要写工具时加 --write：
+opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp --write
 ```
 
 等价的 `opencode.json`：
@@ -140,12 +142,15 @@ opencode mcp add recraft -- C:\path\to\recraft-cli.exe serve-mcp C:\path\to\proj
     "servers": {
       "recraft": {
         "type": "local",
-        "command": ["C:\\path\\to\\recraft-cli.exe", "serve-mcp", "C:\\path\\to\\project.rcraft"]
+        "command": ["C:\\path\\to\\recraft-cli.exe", "serve-mcp"]
       }
     }
   }
 }
 ```
+
+想固定演示项目时，把项目路径加在 `serve-mcp` 后面（`serve-mcp C:\\path\\to\\project.rcraft`）；
+空注册表仍是推荐形态。
 
 客户端可获得 `list_functions`、`get_disassembly`、`get_pseudocode`、`xrefs_*`、
 `list_strings`、`list_imports`、`list_exports`、`get_metadata`、`callgraph`、

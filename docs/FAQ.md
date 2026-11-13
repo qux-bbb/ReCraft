@@ -52,10 +52,12 @@ DCO），不需要 CLA，也不做版权转让。
 
 ## 9. 有 MCP 吗？怎么接 OpenCode？
 
-有。`recraft-cli serve-mcp <project>` 通过 stdio 提供反汇编、伪代码、xrefs、字符串、导入/导出、
-镜像元数据、调用图、字节搜索、函数摘要等只读工具与项目资源；加 `--write` 后再提供 `rename`、
-`set_comment`、`set_prototype`、`apply_type`、`define_function`、`define_struct`、`batch`、
-`undo` 写工具（走命令总线，每步可撤销）。
+有。`recraft-cli serve-mcp`（不跟项目）通过 stdio 提供反汇编、伪代码、xrefs、字符串、导入/导出、
+镜像元数据、调用图、字节搜索、函数摘要等只读工具与项目资源，客户端用 `open_program` 打开任意
+PE/ELF/`.rcraft`；加 `--write` 后再提供 `rename`、`set_comment`、`set_prototype`、`apply_type`、
+`define_function`、`define_struct`、`batch`、`undo` 写工具（走命令总线，每步可撤销，支持
+`expected_previous` 乐观并发检查）。带项目启动（`serve-mcp <project>`）仍可用，只是把该项目
+预打开。HTTP 形态（`--http`）同样支持空注册表与会话内 `open_program`。
 接入步骤与配置示例见 [docs/MCP.md](MCP.md)（`opencode mcp add` 或 `mcp.servers`），演示脚本见
 [docs/DEMO.md](DEMO.md)。
 

@@ -455,7 +455,7 @@ recraft-cli analyze <file> [--json] [--out project.rcraft]
 recraft-cli strings|imports|funcs|callgraph <file> [--json]
 recraft-cli decompile <file> --addr 0x401000 [--json]
 recraft-cli search --bytes/--string ...
-recraft-cli serve-mcp <project.rcraft> [--stdio|--http]
+recraft-cli serve-mcp [project.rcraft] [--http]
 recraft-cli batch <script.json>
 ```
 
