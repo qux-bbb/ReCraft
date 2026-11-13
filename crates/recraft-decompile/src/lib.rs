@@ -1334,18 +1334,30 @@ fn pseudocode_l0_aarch64(
 ) -> Result<Pseudocode> {
     use recraft_ir::aarch64::A64Lifter;
 
+    // A64 function bounds come from the symbol table, so lift the whole body: a branch to
+    // the epilogue is then local and prints as goto, not as a tail call.
+    let limit = session
+        .functions()
+        .ok()
+        .and_then(|functions| {
+            functions
+                .into_iter()
+                .find(|function| function.start == start)
+                .map(|function| function.end)
+        })
+        .unwrap_or(Address::new(u64::MAX));
     let mut decoded = Vec::new();
     let mut addr = start;
     let mut end = start;
     for _ in 0..max_insns {
+        if addr >= limit {
+            break;
+        }
         let Some(insn) = session.decoded_at(addr)? else {
             break;
         };
         end = Address::new(addr.get() + u64::from(insn.len));
-        let stop = matches!(
-            insn.flow,
-            recraft_decode::FlowKind::Return | recraft_decode::FlowKind::UnconditionalBranch
-        );
+        let stop = matches!(insn.flow, recraft_decode::FlowKind::Return);
         decoded.push(insn);
         addr = end;
         if stop {

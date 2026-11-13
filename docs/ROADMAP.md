@@ -89,8 +89,12 @@
   60% 线——但这是"lifter 能建模的指令占比"，不等于反编译成功率。
   **A64 伪 C 已通**：`SessionView::decoded_at` 让反编译器按架构取指令，
   `pseudocode_l0_aarch64` 用 A64 lifter 产 IR、复用同一套渲染尾（帧/名称/结构化/打印）；
-  样本前 50 个函数全部输出非空伪 C（0 报错）。文本质量仍是第一版：条件分支的命名/条件
-  表达式、`stp` 等成对访存、负偏移的写法都要在后续打磨。
+  样本前 50 个函数全部输出非空伪 C（0 报错）。
+  2026-11-14 第二轮打磨：A64 lifter 补了 `ldrb/ldrsb/ldrh/ldrsh/ldrsw/strb/strh`、
+  `lsl/lsr/asr`、`neg`、`cset`/`csel`、`stp`/`ldp`、`nop`、`adrp`（页基址），条件分支改成
+  比较真实操作数、内部目标落成 `goto loc_…`，负偏移打印成 `sp - 0xc0`；函数范围改用符号表
+  的 end（分析不再在 `b` 处截断）。20 个函数的 `__asm` 从 **215 行降到 56 行**。
+  仍待:`tbnz/tbz`（25）、`cset` 的跨块标志（16）、`ubfx`（5）、`csinc`（2）。
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
 - 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。

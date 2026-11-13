@@ -232,11 +232,9 @@ fn walk_aarch64(
             _ => {}
         }
         addr = Address::new(addr.get().saturating_add(u64::from(insn.len)));
-        // `b` ends the body; `udf` is the padding between Go functions.
-        if insn.flow == FlowKind::UnconditionalBranch || insn.mnemonic == "udf" {
-            break;
-        }
-        if insn.flow == FlowKind::Return {
+        // `udf` is the padding between Go functions; a `b` may be a loop back edge,
+        // so only a return (or the padding) ends the body.
+        if insn.mnemonic == "udf" || insn.flow == FlowKind::Return {
             break;
         }
     }

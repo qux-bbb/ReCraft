@@ -27,8 +27,9 @@ pub struct A64Lifter {
     exprs: Vec<Expr>,
     /// Latest value written to each register.
     env: BTreeMap<Reg, ExprId>,
-    /// Value of the last `cmp`/`cmn`/`tst`, for the next conditional branch.
-    cond: Option<ExprId>,
+    /// Operands of the last `cmp`/`cmn`/`tst`: the next conditional branch compares them
+    /// directly, so `b.ls` reads as an unsigned `<=` instead of `(a - b) <= 0`.
+    cond: Option<(ExprId, ExprId)>,
 }
 
 impl A64Lifter {
@@ -127,40 +128,144 @@ impl A64Lifter {
                 self.write(dest, value, stmts);
                 Some(Flow::Fallthrough)
             }
-            "ldr" | "ldur" => {
+            "ldr" | "ldur" => self.lift_load(ops, 8, false, stmts),
+            "ldrb" => self.lift_load(ops, 1, false, stmts),
+            "ldrsb" => self.lift_load(ops, 1, true, stmts),
+            "ldrh" | "ldurh" => self.lift_load(ops, 2, false, stmts),
+            "ldrsh" => self.lift_load(ops, 2, true, stmts),
+            "ldrsw" => self.lift_load(ops, 4, true, stmts),
+            "str" | "stur" => self.lift_store(ops, 8, stmts),
+            "strb" => self.lift_store(ops, 1, stmts),
+            "strh" | "sturh" => self.lift_store(ops, 2, stmts),
+            "nop" => Some(Flow::Fallthrough),
+            "neg" => {
                 let dest = Self::view(ops.first()?)?;
-                let addr = self.address(ops.get(1)?)?;
-                let value = self.push(Expr::Load { addr, size: 8 });
+                let arg = self.read(ops.get(1)?)?;
+                let value = self.push(Expr::Un {
+                    op: crate::expr::UnOp::Neg,
+                    arg,
+                });
                 self.write(dest, value, stmts);
                 Some(Flow::Fallthrough)
             }
-            "str" | "stur" => {
-                let value = self.read(ops.first()?)?;
-                let addr = self.address(ops.get(1)?)?;
-                stmts.push(Stmt::Store {
-                    addr,
-                    value,
-                    size: 8,
+            "lsl" | "lsr" | "asr" => {
+                let dest = Self::view(ops.first()?)?;
+                let lhs = self.read(ops.get(1)?)?;
+                let rhs = self.read(ops.get(2)?)?;
+                let op = match insn.mnemonic.as_str() {
+                    "lsl" => BinOp::Shl,
+                    "lsr" => BinOp::Shr,
+                    _ => BinOp::Sar,
+                };
+                let value = self.push(Expr::Bin { op, lhs, rhs });
+                self.write(dest, value, stmts);
+                Some(Flow::Fallthrough)
+            }
+            "cset" => {
+                let dest = Self::view(ops.first()?)?;
+                let (lhs, rhs) = self.cond?;
+                let kind = cond_kind_from_code(Self::code(ops.get(1)?)?)?;
+                let cond = self.push(Expr::Cmp { kind, lhs, rhs });
+                let one = self.constant(1);
+                let zero = self.constant(0);
+                let value = self.push(Expr::Select {
+                    cond,
+                    then: one,
+                    otherwise: zero,
                 });
+                self.write(dest, value, stmts);
+                Some(Flow::Fallthrough)
+            }
+            "csel" => {
+                let dest = Self::view(ops.first()?)?;
+                let then = self.read(ops.get(1)?)?;
+                let otherwise = self.read(ops.get(2)?)?;
+                let (lhs, rhs) = self.cond?;
+                let kind = cond_kind_from_code(Self::code(ops.get(3)?)?)?;
+                let cond = self.push(Expr::Cmp { kind, lhs, rhs });
+                let value = self.push(Expr::Select {
+                    cond,
+                    then,
+                    otherwise,
+                });
+                self.write(dest, value, stmts);
                 Some(Flow::Fallthrough)
             }
             "cmp" | "cmn" | "tst" => {
                 let lhs = self.read(ops.first()?)?;
                 let rhs = self.read(ops.get(1)?)?;
-                let op = if insn.mnemonic == "cmn" {
-                    BinOp::Add
-                } else if insn.mnemonic == "tst" {
-                    BinOp::And
-                } else {
-                    BinOp::Sub
+                self.cond = match insn.mnemonic.as_str() {
+                    "cmp" => Some((lhs, rhs)),
+                    "cmn" => {
+                        let value = self.push(Expr::Bin {
+                            op: BinOp::Add,
+                            lhs,
+                            rhs,
+                        });
+                        Some((value, self.constant(0)))
+                    }
+                    _ => {
+                        let value = self.push(Expr::Bin {
+                            op: BinOp::And,
+                            lhs,
+                            rhs,
+                        });
+                        Some((value, self.constant(0)))
+                    }
                 };
-                let value = self.push(Expr::Bin { op, lhs, rhs });
-                self.cond = Some(value);
+                Some(Flow::Fallthrough)
+            }
+            "stp" | "ldp" => {
+                // Store/load pair: the two values sit at ase and ase + 8. A pre/post
+                // index write-back of the base register is not modelled yet.
+                let size = match ops.first() {
+                    Some(DecodedOperand::Register { size, .. }) => *size,
+                    _ => 8,
+                };
+                let base = self.address(ops.get(2)?)?;
+                let eight = self.constant(u64::from(size));
+                let upper = self.push(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: base,
+                    rhs: eight,
+                });
+                if insn.mnemonic == "stp" {
+                    let first = self.read(ops.first()?)?;
+                    let second = self.read(ops.get(1)?)?;
+                    stmts.push(Stmt::Store {
+                        addr: base,
+                        value: first,
+                        size,
+                    });
+                    stmts.push(Stmt::Store {
+                        addr: upper,
+                        value: second,
+                        size,
+                    });
+                } else {
+                    let first = Self::view(ops.first()?)?;
+                    let second = Self::view(ops.get(1)?)?;
+                    let value = self.push(Expr::Load { addr: base, size });
+                    self.write(first, value, stmts);
+                    let value = self.push(Expr::Load { addr: upper, size });
+                    self.write(second, value, stmts);
+                }
                 Some(Flow::Fallthrough)
             }
             "adr" | "adrp" => {
                 let dest = Self::view(ops.first()?)?;
-                let value = self.imm(ops.get(1)?)?;
+                // The operand is PC-relative; `adrp` keeps only the 4 KiB page base.
+                let value = match ops.get(1)? {
+                    DecodedOperand::NearBranch(target) => {
+                        let base = if insn.mnemonic == "adrp" {
+                            target.get() & !0xfff
+                        } else {
+                            target.get()
+                        };
+                        self.constant(base)
+                    }
+                    other => self.imm(other)?,
+                };
                 self.write(dest, value, stmts);
                 Some(Flow::Fallthrough)
             }
@@ -191,14 +296,9 @@ impl A64Lifter {
                 })
             }
             _ if insn.mnemonic.starts_with("b.") => {
-                let cond = self.cond?;
-                let zero = self.constant(0);
+                let (lhs, rhs) = self.cond?;
                 let kind = condition_kind(&insn.mnemonic[2..])?;
-                let cmp = self.push(Expr::Cmp {
-                    kind,
-                    lhs: cond,
-                    rhs: zero,
-                });
+                let cmp = self.push(Expr::Cmp { kind, lhs, rhs });
                 Some(Flow::CondGoto {
                     cond: cmp,
                     target: insn.branch_target?,
@@ -208,6 +308,48 @@ impl A64Lifter {
         }
     }
 
+    /// Load size bytes into the destination register, optionally sign-extending.
+    fn lift_load(
+        &mut self,
+        ops: &[DecodedOperand],
+        size: u8,
+        signed: bool,
+        stmts: &mut Vec<Stmt>,
+    ) -> Option<Flow> {
+        let dest = Self::view(ops.first()?)?;
+        let addr = self.address(ops.get(1)?)?;
+        let mut value = self.push(Expr::Load { addr, size });
+        if signed && size < 8 {
+            value = self.push(Expr::Cast {
+                arg: value,
+                width: 8,
+                signed: true,
+            });
+        }
+        self.write(dest, value, stmts);
+        Some(Flow::Fallthrough)
+    }
+
+    /// Store the low size bytes of the first operand at the second.
+    fn lift_store(
+        &mut self,
+        ops: &[DecodedOperand],
+        size: u8,
+        stmts: &mut Vec<Stmt>,
+    ) -> Option<Flow> {
+        let value = self.read(ops.first()?)?;
+        let addr = self.address(ops.get(1)?)?;
+        stmts.push(Stmt::Store { addr, value, size });
+        Some(Flow::Fallthrough)
+    }
+
+    /// The raw condition code of a cset/csel operand.
+    fn code(operand: &DecodedOperand) -> Option<u8> {
+        match operand {
+            DecodedOperand::Immediate(code) => u8::try_from(*code).ok(),
+            _ => None,
+        }
+    }
     /// A64 integer-argument registers `x0`–`x7`, as far as they hold known values.
     fn call_args(&mut self) -> Vec<ExprId> {
         (0..8u16)
@@ -276,12 +418,23 @@ impl A64Lifter {
         if *disp == 0 {
             return Some(base);
         }
-        let offset = self.constant(*disp as u64);
-        Some(self.push(Expr::Bin {
-            op: BinOp::Add,
-            lhs: base,
-            rhs: offset,
-        }))
+        // Negative displacements subtract, so the printed address reads sp - 0xc0
+        // instead of sp + 0xffffffffffffff40.
+        if *disp > 0 {
+            let offset = self.constant(*disp as u64);
+            Some(self.push(Expr::Bin {
+                op: BinOp::Add,
+                lhs: base,
+                rhs: offset,
+            }))
+        } else {
+            let offset = self.constant((-*disp) as u64);
+            Some(self.push(Expr::Bin {
+                op: BinOp::Sub,
+                lhs: base,
+                rhs: offset,
+            }))
+        }
     }
 
     fn write(&mut self, view: RegView, value: ExprId, stmts: &mut Vec<Stmt>) {
@@ -305,6 +458,24 @@ impl A64Lifter {
     }
 }
 
+/// Map an A64 condition code (eq = 0, ne = 1, ...) to the comparison kind it tests.
+fn cond_kind_from_code(code: u8) -> Option<CondKind> {
+    Some(match code {
+        0 => CondKind::Eq,
+        1 => CondKind::Ne,
+        2 => CondKind::UnsignedGe,
+        3 => CondKind::UnsignedLt,
+        4 => CondKind::SignedLt,
+        5 => CondKind::SignedGe,
+        8 => CondKind::UnsignedGt,
+        9 => CondKind::UnsignedLe,
+        10 => CondKind::SignedGe,
+        11 => CondKind::SignedLt,
+        12 => CondKind::SignedGt,
+        13 => CondKind::SignedLe,
+        _ => return None,
+    })
+}
 /// Map an A64 condition suffix to the comparison kind it tests.
 fn condition_kind(suffix: &str) -> Option<CondKind> {
     Some(match suffix {
@@ -342,25 +513,6 @@ mod tests {
         A64Lifter::new().lift_region(&decode(words))
     }
 
-    #[test]
-    fn probe_encodings() {
-        for word in [
-            0x9100_0402u32,
-            0xf940_0b90,
-            0xf814_0ffe,
-            0xf100_805f,
-            0x5400_00c8,
-            0x9400_0008,
-            0x1400_0000,
-        ] {
-            let insn =
-                recraft_decode::decode_aarch64(&word.to_le_bytes(), Address::new(0x1000)).unwrap();
-            println!(
-                "{word:08x} -> {} | {:?} | {:#x?}",
-                insn.mnemonic, insn.operands, insn.branch_target
-            );
-        }
-    }
     #[test]
     fn add_and_ldr_write_a_register() {
         // add x2, x0, #1 ; ldr x16, [x28, #0x10]
@@ -418,6 +570,31 @@ mod tests {
         assert_eq!(lifted.insns[0].flow, Flow::Return);
     }
 
+    #[test]
+    fn a_store_pair_becomes_two_stores() {
+        // stp xzr, xzr, [x7]
+        let (lifted, ok) = lift(&[0xa900_7cff]);
+        assert_eq!(ok, 1);
+        assert_eq!(lifted.insns[0].stmts.len(), 2);
+        assert!(matches!(
+            &lifted.insns[0].stmts[1],
+            Stmt::Store { size: 8, .. }
+        ));
+    }
+
+    #[test]
+    fn an_adrp_yields_the_page_base() {
+        // adrp x16, +0x10_0000 -> page-aligned constant
+        let (lifted, ok) = lift(&[0xb080_0010]);
+        assert_eq!(ok, 1);
+        let Stmt::WriteReg { value, .. } = &lifted.insns[0].stmts[0] else {
+            panic!("expected a register write");
+        };
+        match lifted.expr(*value) {
+            Expr::Const(base) => assert_eq!(base & 0xfff, 0),
+            other => panic!("expected a constant page base, got {other:?}"),
+        }
+    }
     #[test]
     fn an_unmodelled_instruction_becomes_an_intrinsic() {
         // udf #0
