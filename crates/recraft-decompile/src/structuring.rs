@@ -4573,6 +4573,60 @@ impl Structurer {
         true
     }
 
+    /// Copy a short shared tail that ends in `return` to the current jump site.
+    ///
+    /// A cold path often computes its result and jumps back into the function's shared
+    /// epilogue (`xor eax, eax` + register pops + `ret`). Emitting that as `goto loc_…`
+    /// after the main `return;` leaves the reader with a jump across a return; copying the
+    /// (short, side-effect-free) tail keeps the path readable and drops the label. Only
+    /// tails that already sit earlier in the listing are copied (the definition is what we
+    /// copy from), only straight-line links are followed, and the tail must end in
+    /// `return` — a tail that rejoins live code would duplicate work instead of closing a
+    /// path.
+    fn copy_return_tail(&self, lines: &mut Vec<PseudoLine>, target: usize, level: usize) -> bool {
+        const MAX_BLOCKS: usize = 4;
+        const MAX_STATEMENTS: usize = 16;
+        let mut chain = Vec::new();
+        let mut current = target;
+        let mut statements = 0usize;
+        loop {
+            if chain.len() >= MAX_BLOCKS
+                || current >= self.blocks.len()
+                || !self.emitted[current]
+                || self.blocks[current].has_table
+                || self.loop_headers.contains(&current)
+            {
+                return false;
+            }
+            chain.push(current);
+            statements += self.bodies[current].statements.len();
+            if statements > MAX_STATEMENTS {
+                return false;
+            }
+            match self.blocks[current].flow {
+                Flow::Fallthrough => match self.blocks[current].not_taken {
+                    Some(next) => current = next,
+                    None => return false,
+                },
+                Flow::Goto(_) => match self.blocks[current].goto_target {
+                    Some(next) => current = next,
+                    None => return false,
+                },
+                Flow::Return => break,
+                _ => return false,
+            }
+        }
+        for &block in &chain {
+            self.emit_simple(lines, block, level);
+        }
+        let last = *chain.last().expect("chain is never empty");
+        lines.push(PseudoLine {
+            addr: self.blocks[last].entry,
+            text: format!("{}return;", indent(level)),
+        });
+        true
+    }
+
     fn emit_simple(&self, lines: &mut Vec<PseudoLine>, block: usize, level: usize) {
         for statement in &self.bodies[block].statements {
             if self.hidden.contains(&statement.addr.get()) {
@@ -4695,6 +4749,15 @@ impl Structurer {
                             return;
                         }
                     }
+                    if let Some(next) = self.blocks[block].goto_target
+                        && self.blocks[next].entry < entry
+                    {
+                        let mut copied = Vec::new();
+                        if self.copy_return_tail(&mut copied, next, level) {
+                            lines.extend(copied);
+                            return;
+                        }
+                    }
                     lines.push(PseudoLine {
                         addr: entry,
                         text: format!("{}goto loc_{:x};", indent(level), target.get()),
@@ -4748,6 +4811,23 @@ impl Structurer {
                         lines.push(PseudoLine {
                             addr: entry,
                             text: format!("{}if ({}) break;", indent(level), negate(&condition)),
+                        });
+                        return;
+                    }
+                }
+                if let Some(next) = self.blocks[block].taken
+                    && self.blocks[next].entry < entry
+                {
+                    let mut copied = Vec::new();
+                    if self.copy_return_tail(&mut copied, next, level + 1) {
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}if ({condition}) {{", indent(level)),
+                        });
+                        lines.extend(copied);
+                        lines.push(PseudoLine {
+                            addr: entry,
+                            text: format!("{}}}", indent(level)),
                         });
                         return;
                     }

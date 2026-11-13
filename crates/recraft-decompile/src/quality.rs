@@ -1046,6 +1046,26 @@ mod tests {
     /// Snapshots are optional here: the ELF image embeds the host gcc/glibc startup code, so a
     /// committed set would drift with every toolchain update. `build-linux.sh --snapshots`
     /// writes `tests/golden/crackme-elf`; when it exists, it is checked like any other set.
+    /// A cold path that jumps back into a short shared epilogue is copied instead of
+    /// leaving a `goto` across the main `return;` (see `copy_return_tail`).
+    #[test]
+    fn a_shared_return_tail_is_copied_instead_of_a_backward_goto() {
+        let Some((session, _dir)) = real_crackme() else {
+            return;
+        };
+        let text = pseudocode_l1(&session, Address::new(0x1400079a8))
+            .unwrap()
+            .text();
+        assert!(
+            !text.contains("goto loc_"),
+            "the shared tail is copied:\n{text}"
+        );
+        assert!(
+            text.matches("sub_140008ee0(0);").count() >= 2,
+            "the tail appears on both paths:\n{text}"
+        );
+    }
+
     /// A user-named stack variable replaces the generated slot in the L2 text, while L1 (the
     /// golden form) keeps `var_<offset>`.
     #[test]

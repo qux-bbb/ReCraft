@@ -29,15 +29,20 @@ void sub_1400079a8_l1(void) {
                 rbp += 1;
             } while (*(u8*)((rsi + rbp)) != 0);
             rbp += 1;
-            if (al != 0xADDR) {
-                sub_140008e60(rbp, 1);
-                rdi = rax;
-                strcpy_s(rax, rbp, rsi);
+            if (al == 0xADDR) {
+                rsi += rbp;
                 ecx = 0;
-                *(u64*)(r14) = rdi;
-                r14 += 8;
                 sub_140008ee0(0);
+                eax = 0;
+                return;
             }
+            sub_140008e60(rbp, 1);
+            rdi = rax;
+            strcpy_s(rax, rbp, rsi);
+            ecx = 0;
+            *(u64*)(r14) = rdi;
+            r14 += 8;
+            sub_140008ee0(0);
             rsi += rbp;
         }
         sub_140008ee0(0);
