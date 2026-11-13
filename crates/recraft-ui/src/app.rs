@@ -1362,6 +1362,9 @@ fn direct_answer_token_limit(endpoint: &str, configured: usize) -> usize {
 pub struct ReCraftApp {
     session: Option<Session>,
     project: Option<PathBuf>,
+    /// SQLite `data_version` last seen for `session`; a change means another connection
+    /// (MCP server, second GUI, background analysis) committed to the project.
+    data_version: i64,
     lang: Lang,
     i18n: I18n,
     tab: Tab,
@@ -1537,6 +1540,7 @@ impl Default for ReCraftApp {
         Self {
             session: None,
             project: None,
+            data_version: 0,
             lang: Lang::En,
             i18n: I18n::new(),
             tab: Tab::Disasm,
@@ -1839,6 +1843,7 @@ impl ReCraftApp {
         self.ai_job = None;
         self.session = None;
         self.project = None;
+        self.data_version = 0;
 
         self.tab = Tab::Disasm;
         self.disasm_start = Address::ZERO;
@@ -2067,6 +2072,47 @@ impl ReCraftApp {
         self.history_pos = 0;
         self.edit = None;
         self.goto = None;
+        // Baseline for external-change detection in `poll_external_changes`.
+        self.data_version = self
+            .session
+            .as_ref()
+            .and_then(|session| session.data_version().ok())
+            .unwrap_or(0);
+    }
+
+    /// Pick up edits another SQLite connection committed to the open project (an MCP
+    /// server, a second GUI, the background analysis job).
+    ///
+    /// `PRAGMA data_version` does not move for writes made through this connection, so the
+    /// GUI does not reload itself after its own commands. The refresh is deliberately lazy:
+    /// the dirty flags are the same ones undo sets, and the panes rebuild on their next
+    /// frame, so a burst of external edits costs one reload rather than one per commit.
+    fn poll_external_changes(&mut self) {
+        if self.analysis.is_some() {
+            // The analysis job owns a second connection and already refreshes when it
+            // finishes; a concurrent reload could decompile a half-persisted function.
+            return;
+        }
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Ok(version) = session.data_version() else {
+            return;
+        };
+        if self.data_version == 0 {
+            self.data_version = version;
+            return;
+        }
+        if version == self.data_version {
+            return;
+        }
+        self.data_version = version;
+        self.functions_dirty = true;
+        self.strings_dirty = true;
+        self.imports_dirty = true;
+        self.disasm_dirty = true;
+        self.pseudo_dirty = true;
+        self.cfg_dirty = true;
     }
 
     fn navigate(&mut self, addr: Address) {
@@ -9039,6 +9085,12 @@ impl ReCraftApp {
         // menu bar instead of the app's binding. Drop the move before any widget runs.
         self.claim_tab_from_focus_navigation(&ctx);
         self.tick();
+        // `PRAGMA data_version` is cheap, but polling it every frame is needless: a burst
+        // of external edits only needs one reload, and ~5 checks per second is plenty for
+        // an IDE-style workbench.
+        if self.frame_count % 10 == 0 {
+            self.poll_external_changes();
+        }
         // Background AI requests must wake the UI when they complete; otherwise the
         // polished text only appears after an unrelated mouse/keyboard event.
         if self.ai_job.is_some() {
@@ -13358,6 +13410,46 @@ mod tests {
             (text.x - text_scrolled.x - 200.0).abs() < 0.01,
             "code text should follow the horizontal scroll offset"
         );
+    }
+
+    #[test]
+    fn external_edit_marks_panels_dirty() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("external.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project.clone()),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        assert!(app.data_version > 0, "after_open must record the baseline");
+
+        // Another connection (an MCP server, a second GUI) renames the entry point.
+        let entry = app.session.as_ref().unwrap().entry_point();
+        let mut other = Session::open(&project).unwrap();
+        other
+            .execute(Command::Rename {
+                addr: entry,
+                name: Some("from_outside".to_owned()),
+            })
+            .unwrap();
+
+        app.functions_dirty = false;
+        app.disasm_dirty = false;
+        app.pseudo_dirty = false;
+        app.poll_external_changes();
+        assert!(app.functions_dirty, "function list must reload");
+        assert!(app.disasm_dirty, "disassembly must reload");
+        assert!(app.pseudo_dirty, "decompile view must reload");
+
+        // Polling again without a new commit does not keep invalidating the panes.
+        app.functions_dirty = false;
+        app.poll_external_changes();
+        assert!(!app.functions_dirty);
     }
 
     #[test]
