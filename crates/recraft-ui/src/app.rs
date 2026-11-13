@@ -4729,46 +4729,46 @@ impl ReCraftApp {
                     .stroke(egui::Stroke::new(1.0, pal.border)),
             )
             .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(self.t("status_au_idle")).monospace().weak());
-                ui.separator();
-                let color = if self.is_error {
-                    Color32::from_rgb(0xe0, 0x6a, 0x6a)
-                } else {
-                    ui.visuals().weak_text_color()
-                };
-                if !self.status.is_empty() {
-                    ui.label(RichText::new(self.status.as_str()).monospace().color(color));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(self.t("ui_synchronized_with_hex_view"))
-                            .monospace()
-                            .weak(),
-                    );
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.t("status_au_idle")).monospace().weak());
                     ui.separator();
-                    if let Some((start, _)) = self.current_function() {
-                        let name = self
-                            .session
-                            .as_ref()
-                            .and_then(|session| session.name_at(start).ok().flatten())
-                            .unwrap_or_else(|| format!("sub_{:x}", start.get()));
-                        ui.label(RichText::new(format!("{name}.")).monospace());
+                    let color = if self.is_error {
+                        Color32::from_rgb(0xe0, 0x6a, 0x6a)
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
+                    if !self.status.is_empty() {
+                        ui.label(RichText::new(self.status.as_str()).monospace().color(color));
                     }
-                    if let Some(line) = self.disasm_rows.get(self.selected) {
-                        let bytes = line
-                            .bytes()
-                            .iter()
-                            .map(|byte| format!("{byte:02x}"))
-                            .collect::<String>();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("{:016x}: {}", line.addr.get(), bytes))
-                                .monospace(),
+                            RichText::new(self.t("ui_synchronized_with_hex_view"))
+                                .monospace()
+                                .weak(),
                         );
-                    }
+                        ui.separator();
+                        if let Some((start, _)) = self.current_function() {
+                            let name = self
+                                .session
+                                .as_ref()
+                                .and_then(|session| session.name_at(start).ok().flatten())
+                                .unwrap_or_else(|| format!("sub_{:x}", start.get()));
+                            ui.label(RichText::new(format!("{name}.")).monospace());
+                        }
+                        if let Some(line) = self.disasm_rows.get(self.selected) {
+                            let bytes = line
+                                .bytes()
+                                .iter()
+                                .map(|byte| format!("{byte:02x}"))
+                                .collect::<String>();
+                            ui.label(
+                                RichText::new(format!("{:016x}: {}", line.addr.get(), bytes))
+                                    .monospace(),
+                            );
+                        }
+                    });
                 });
             });
-        });
     }
 
     /// Bottom hex dump: follows the current selection, click selects a byte, double-click
