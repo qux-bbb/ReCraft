@@ -530,6 +530,7 @@ fn structure(
         changed += split_shared_tail_into_branches(&mut lines);
         changed += fold_short_forward_gotos(&mut lines);
         changed += wrap_backward_jumps_in_loops(&mut lines);
+        changed += fold_loop_exit_gotos_to_break(&mut lines);
         if changed == 0 {
             break;
         }
@@ -6555,11 +6556,93 @@ fn fold_backward_gotos_into_loops(lines: &mut Vec<PseudoLine>) -> usize {
     folded
 }
 
+/// Turn `if (c) goto loc_<exit>;` inside a folded loop into `if (c) break;`.
+///
+/// `fold_backward_gotos_into_loops` builds a `do { … } while (…);` whose continuation is
+/// the label right after the closing brace. A guard inside the body that jumps to that very
+/// label leaves the loop, i.e. it is a `break`; the label keeps existing for any jump from
+/// outside and `tidy_labels` drops it when unused. Nested loops are rejected: a `break`
+/// inside them would bind to the inner loop.
+fn fold_loop_exit_gotos_to_break(lines: &mut [PseudoLine]) -> usize {
+    let mut folded = 0usize;
+    let mut index = 0usize;
+    while index < lines.len() {
+        if lines[index].text.trim() != "do {" {
+            index += 1;
+            continue;
+        }
+        let mut depth = 0isize;
+        let mut close = None;
+        for (offset, line) in lines.iter().enumerate().skip(index) {
+            for ch in line.text.chars() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if offset > index && depth <= 0 {
+                close = Some(offset);
+                break;
+            }
+        }
+        let Some(close) = close else {
+            index += 1;
+            continue;
+        };
+        let closing = lines[close].text.trim();
+        if !closing.starts_with("} while (") || !closing.ends_with(");") {
+            index += 1;
+            continue;
+        }
+        // The label immediately after the loop is its continuation.
+        let mut next = close + 1;
+        while next < lines.len() && lines[next].text.trim().is_empty() {
+            next += 1;
+        }
+        let Some(label) = lines.get(next).and_then(|line| {
+            line.text
+                .trim()
+                .strip_suffix(':')
+                .and_then(|label| label.strip_prefix("loc_"))
+                .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        }) else {
+            index += 1;
+            continue;
+        };
+        let mut nested = false;
+        let mut replacements: Vec<(usize, String)> = Vec::new();
+        for (offset, line) in lines.iter().enumerate().take(close).skip(index + 1) {
+            let text = line.text.trim();
+            if text == "do {" || text.starts_with("while (") || text.starts_with("for (") {
+                nested = true;
+                break;
+            }
+            if let Some((condition, target)) = conditional_goto(text)
+                && target == label
+            {
+                let indent = " ".repeat(leading_spaces(&line.text));
+                replacements.push((offset, format!("{indent}if ({condition}) break;")));
+            }
+        }
+        if nested {
+            index += 1;
+            continue;
+        }
+        for (offset, text) in replacements {
+            lines[offset].text = text;
+            folded += 1;
+        }
+        index += 1;
+    }
+    folded
+}
+
 /// Fold an unconditional jump at the end of one sibling arm to the short straight-line
 /// tail of the other arm. Both the jump and the normal `}` fallthrough leave the parent
 /// at the same point, so the tail can be copied and the jump removed.
 fn fold_sibling_tail_gotos(lines: &mut Vec<PseudoLine>) {
-    // Label positions once: looking the target up by scanning made this quadratic.
+    // Label positions once; looking the target up by scanning made this quadratic.
     let mut labels: BTreeMap<String, usize> = BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         let text = line.text.trim();
@@ -13218,6 +13301,49 @@ mod tests {
         assert!(text.contains("continue;"), "{text}");
         assert!(!text.contains("goto loc_20;"), "{text}");
         assert!(!text.contains("loc_20:"), "{text}");
+    }
+
+    #[test]
+    fn a_guard_that_jumps_past_the_loop_becomes_break() {
+        let mut lines = vec![
+            test_line("    do {"),
+            test_line("        if (a == 0) goto loc_1100;"),
+            test_line("        b += 1;"),
+            test_line("    } while (b != 4);"),
+            test_line("    loc_1100:"),
+            test_line("    return;"),
+        ];
+        assert_eq!(fold_loop_exit_gotos_to_break(&mut lines), 1);
+        assert_eq!(lines[1].text.trim(), "if (a == 0) break;");
+        // The label stays: a jump from outside the loop may still need it.
+        assert_eq!(lines[4].text.trim(), "loc_1100:");
+    }
+
+    #[test]
+    fn a_jump_to_a_label_after_other_code_is_not_a_break() {
+        let mut lines = vec![
+            test_line("    do {"),
+            test_line("        if (a == 0) goto loc_1100;"),
+            test_line("    } while (b != 4);"),
+            test_line("    c = 1;"),
+            test_line("    loc_1100:"),
+            test_line("    return;"),
+        ];
+        assert_eq!(fold_loop_exit_gotos_to_break(&mut lines), 0);
+        assert_eq!(lines[1].text.trim(), "if (a == 0) goto loc_1100;");
+    }
+
+    #[test]
+    fn a_nested_loop_keeps_its_exit_jump() {
+        let mut lines = vec![
+            test_line("    do {"),
+            test_line("        while (x != 0) {"),
+            test_line("            if (a == 0) goto loc_1100;"),
+            test_line("        }"),
+            test_line("    } while (b != 4);"),
+            test_line("    loc_1100:"),
+        ];
+        assert_eq!(fold_loop_exit_gotos_to_break(&mut lines), 0);
     }
 
     #[test]
