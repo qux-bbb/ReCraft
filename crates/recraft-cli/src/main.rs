@@ -3663,18 +3663,11 @@ fn cmd_signature_export(project: &Path, out: &Path) -> Result<()> {
 }
 
 /// Name functions that match a signature file; a name the project already has wins.
-fn cmd_signature_import(
-    project: &Path,
-    from: &[PathBuf],
-    builtin: bool,
-    dry_run: bool,
-) -> Result<()> {
-    use recraft_decompile::signature::Signature;
-
-    // A library is usually several exports: accept directories and load their `*.json` files
-    // in a stable order so the same set always produces the same names.
-    let mut files: Vec<PathBuf> = Vec::new();
-    for path in from {
+/// Expand `--from` arguments into signature documents: a directory contributes its `*.json`
+/// files in sorted order, so the same set always produces the same names.
+fn signature_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for path in paths {
         if path.is_dir() {
             let mut found: Vec<PathBuf> = std::fs::read_dir(path)?
                 .filter_map(|entry| entry.ok())
@@ -3687,6 +3680,20 @@ fn cmd_signature_import(
             files.push(path.clone());
         }
     }
+    Ok(files)
+}
+
+fn cmd_signature_import(
+    project: &Path,
+    from: &[PathBuf],
+    builtin: bool,
+    dry_run: bool,
+) -> Result<()> {
+    use recraft_decompile::signature::Signature;
+
+    // A library is usually several exports: accept directories and load their `*.json` files
+    // in a stable order so the same set always produces the same names.
+    let files = signature_files(from)?;
     if files.is_empty() && !builtin {
         return Err(Error::invalid_argument(
             "pass --from <file|dir> or --builtin".to_owned(),
@@ -3901,6 +3908,22 @@ mod tests {
                 "{name}: {pattern}"
             );
         }
+    }
+
+    #[test]
+    fn signature_directories_expand_in_a_stable_order() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("b.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("a.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "").unwrap();
+        let files = super::signature_files(&[dir.path().to_path_buf()]).unwrap();
+        assert_eq!(
+            files.len(),
+            2,
+            "only `*.json` files are signature documents"
+        );
+        assert!(files[0].ends_with("a.json"), "{files:?}");
+        assert!(files[1].ends_with("b.json"), "sorted, not readdir order");
     }
 
     #[test]

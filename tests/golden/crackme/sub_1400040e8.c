@@ -4,7 +4,7 @@ void sub_1400040e8_l1(void) {
     r14 = rdx;
     rsi = rcx;
     if (rdx == 0) {
-        sub_140008860();
+        abort();
     }
     r12b = 0;
     ebp = 0;

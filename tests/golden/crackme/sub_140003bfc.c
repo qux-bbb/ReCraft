@@ -4,7 +4,7 @@ void sub_140003bfc_l1(void) {
     *(u64*)(rcx) = off_1400194a0;
     ebx = edx;
     rcx += 8;
-    sub_140004390(rcx);
+    __std_exception_destroy(rcx);
     if ((bl & 1) != 0) {
         sub_140015c10(rdi, 0xADDR);
     }

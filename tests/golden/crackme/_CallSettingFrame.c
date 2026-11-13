@@ -1,5 +1,5 @@
 // L1 structure recovery (1 blocks)
-void sub_1400042d0_l1(void) {
+void _CallSettingFrame_l1(void) {
     var_40 = r8d;
     rdx = *(u64*)(rdx);
     rax = rcx;

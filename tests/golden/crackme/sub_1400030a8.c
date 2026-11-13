@@ -15,10 +15,10 @@ void sub_1400030a8_l1(void) {
     ebx = eax;
     if (eax < -1 /* signed */) {
         loc_ADDR:
-        sub_140008860();
+        abort();
     }
     if (eax >= *(u32*)((rsi + 4)) /* signed */) {
-        sub_140008860();
+        abort();
         return;
     }
     if (*(u32*)(rdi) != 0xADDR) {
@@ -29,15 +29,15 @@ void sub_1400030a8_l1(void) {
         if (*(u32*)(rdi) != 0xADDR) {
             loc_ADDR:
             if (*(u32*)((rsi + 0xADDR)) <= 0) {
-                sub_14000217c(rcx);
+                __vcrt_getptd(rcx);
                 if (*(u64*)((rax + 0xADDR)) != 0) {
-                    sub_140008860();
+                    abort();
                     return;
                 }
                 return;
             }
             if (var_198 != 0) {
-                sub_140008860();
+                abort();
                 return;
             }
             eax = var_1a0;
@@ -56,11 +56,11 @@ void sub_1400030a8_l1(void) {
         if (eax > 1) goto loc_ADDR;
     }
     if (*(u64*)((rdi + 0xADDR)) != 0) goto loc_ADDR;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     if (*(u64*)((rax + 0xADDR)) == 0) return;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     rdi = *(u64*)((rax + 0xADDR));
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     var_60 = 1;
     r15 = *(u64*)((rax + 0xADDR));
     var_68 = r15;
@@ -77,11 +77,11 @@ void sub_1400030a8_l1(void) {
             }
         }
     }
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     if (*(u64*)((rax + 0xADDR)) == 0) goto loc_ADDR;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     rbx = *(u64*)((rax + 0xADDR));
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     *(u64*)((rax + 0xADDR)) = 0;
     sub_1400040e8(rdi, rbx);
     if (al == 0) {
@@ -190,9 +190,9 @@ void sub_1400030a8_l1(void) {
     loc_ADDR:
     eax = (*(u32*)(rsi) & 0xADDR);
     if (eax < 0xADDR) {
-        sub_14000217c(rcx);
+        __vcrt_getptd(rcx);
         if (*(u64*)((rax + 0xADDR)) != 0) {
-            sub_140008860();
+            abort();
             return;
         }
         return;
@@ -204,27 +204,27 @@ void sub_1400030a8_l1(void) {
     if (rax == 0) {
         loc_ADDR:
         if ((*(u8*)((rsi + 0xADDR)) & 4) == 0) {
-            sub_14000217c(rcx);
+            __vcrt_getptd(rcx);
             if (*(u64*)((rax + 0xADDR)) != 0) {
-                sub_140008860();
+                abort();
                 return;
             }
             return;
         }
         sub_1400026ec(r14, rsi);
         if (al != 0) {
-            sub_14000217c(rcx);
+            __vcrt_getptd(rcx);
             if (*(u64*)((rax + 0xADDR)) != 0) {
-                sub_140008860();
+                abort();
                 return;
             }
             return;
         }
     }
     if ((*(u8*)((rsi + 0xADDR)) & 4) != 0) {
-        sub_14000217c(rcx);
+        __vcrt_getptd(rcx);
         *(u64*)((rax + 0xADDR)) = rdi;
-        sub_14000217c(rcx);
+        __vcrt_getptd(rcx);
         rcx = var_68;
         *(u64*)((rax + 0xADDR)) = rcx;
         sub_1400087a0(var_68);
@@ -240,9 +240,9 @@ void sub_1400030a8_l1(void) {
     loc_ADDR:
     sub_1400040e8(rdi, rdx);
     if (al != 0) {
-        sub_14000217c(rcx);
+        __vcrt_getptd(rcx);
         if (*(u64*)((rax + 0xADDR)) != 0) {
-            sub_140008860();
+            abort();
             return;
         }
         return;
@@ -257,21 +257,21 @@ void sub_1400030a8_l1(void) {
     var_28 = rsi;
     var_20 = 0;
     sub_14000299c(r12, rdi, var_68, rax, 0, rsi, (ecx | -1), (ecx | -1), 0, r14, var_198);
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     if (*(u64*)((rax + 0xADDR)) != 0) {
-        sub_140008860();
+        abort();
         return;
     }
     return;
     loc_ADDR:
     sub_140001f54(rdi, 1);
     sub_140003b90(&var_a0);
-    sub_1400043b8(&var_a0, off_140022230);
+    _CxxThrowException(&var_a0, off_140022230);
     loc_ADDR:
     sub_1400087a0(rcx);
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     *(u64*)((rax + 0xADDR)) = rdi;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     rcx = var_68;
     *(u64*)((rax + 0xADDR)) = rcx;
     sub_1400087a0(var_68);

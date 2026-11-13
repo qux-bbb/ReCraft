@@ -303,6 +303,214 @@ pub fn apply_builtin(session: &mut Session, dry_run: bool) -> recraft_common::Re
 mod tests {
     use super::*;
 
+    /// The pinned MSVC crackme build: its `.map` names every linked function, so it is the
+    /// ground truth for regenerating the built-in set and for proving that set names nothing
+    /// else. Both files are committed; a missing one skips like the other corpus gates.
+    fn crackme_fixture() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let exe = root.join("corpus/build/real/crackme/crackme.exe");
+        let map = root.join("corpus/build/real/crackme/crackme.map");
+        (exe.is_file() && map.is_file()).then_some((exe, map))
+    }
+
+    /// `address -> [symbol, …]` from the map's publics-by-value section (code only).
+    fn map_symbols(text: &str) -> std::collections::BTreeMap<u64, Vec<String>> {
+        let mut symbols: std::collections::BTreeMap<u64, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for line in text.lines() {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            // `0001:00000170 printf 0000000140001170 f i crackme.obj`
+            if tokens.len() < 4 || !tokens[0].contains(':') || !tokens[3..].contains(&"f") {
+                continue;
+            }
+            let Ok(va) = u64::from_str_radix(tokens[2], 16) else {
+                continue;
+            };
+            symbols.entry(va).or_default().push(tokens[1].to_owned());
+        }
+        symbols
+    }
+
+    /// A map name may be a decoration (`?__scrt_common_main_seh@@YAHXZ`); the signature uses
+    /// the plain name.
+    fn map_name_is(map_name: &str, name: &str) -> bool {
+        map_name == name || (map_name.starts_with('?') && map_name[1..].starts_with(name))
+    }
+
+    /// The CRT symbols the built-in set covers.
+    ///
+    /// Heads that are a bare `call`/`ret` plus padding are left out even though the map names
+    /// them (`__std_terminate`, `_guard_check_icall_nop`): their pattern would describe the
+    /// next function's prologue, not the function. `_RTC_Terminate` shares its head with
+    /// `_RTC_Initialize`, so only one of the pair can be named unambiguously.
+    const CRT_NAMES: &[&str] = &[
+        "__scrt_common_main_seh",
+        "mainCRTStartup",
+        "__acrt_iob_func",
+        "printf",
+        "puts",
+        "fgets",
+        "fflush",
+        "strcmp",
+        "strlen",
+        "strpbrk",
+        "strchr",
+        "strrchr",
+        "memcpy",
+        "memmove",
+        "memset",
+        "malloc",
+        "free",
+        "calloc",
+        "abort",
+        "exit",
+        "atexit",
+        "_onexit",
+        "fclose",
+        "qsort",
+        "__security_init_cookie",
+        "__report_gsfailure",
+        "__GSHandlerCheck",
+        "__C_specific_handler",
+        "__CxxFrameHandler3",
+        "_CxxThrowException",
+        "__std_exception_copy",
+        "__std_exception_destroy",
+        "__scrt_fastfail",
+        "_RTC_Initialize",
+        "__isa_available_init",
+        "_CreateFrameInfo",
+        "_FindAndUnlinkFrame",
+        "_CallSettingFrame",
+        "__vcrt_getptd",
+        "__vcrt_getptd_noexit",
+        "__vcrt_initialize_ptd",
+        "_invalid_parameter",
+        "_invoke_watson",
+        "strcpy_s",
+        "strncpy_s",
+    ];
+
+    /// Regenerate [`BUILTIN_SIGNATURES`] from the pinned CRT build.
+    ///
+    /// `cargo test -p recraft-decompile --lib dump_builtin_signatures -- --ignored --nocapture`
+    #[test]
+    #[ignore = "regeneration helper: prints the JSON for builtin_signatures.json"]
+    fn dump_builtin_signatures() {
+        let Some((exe, map)) = crackme_fixture() else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(&exe) else {
+            return;
+        };
+        let Ok(map_text) = std::fs::read_to_string(&map) else {
+            return;
+        };
+        let symbols = map_symbols(&map_text);
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("crt-signatures.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        // A signature must be as long as the function analysis found, not as long as the
+        // 32-byte window: matching caps the pattern at the function's real end, so a short
+        // function with a 32-byte pattern would never match.
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let functions: std::collections::BTreeMap<u64, u64> = session
+            .functions()
+            .unwrap()
+            .into_iter()
+            .map(|function| (function.start.get(), function.end.get()))
+            .collect();
+        let mut used: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+        let mut entries: Vec<String> = Vec::new();
+        for name in CRT_NAMES {
+            let Some((&va, _)) = symbols
+                .iter()
+                .find(|(_, names)| names.iter().any(|symbol| map_name_is(symbol, name)))
+            else {
+                continue;
+            };
+            if !used.insert(va) {
+                continue;
+            }
+            let Some(&end) = functions.get(&va) else {
+                continue;
+            };
+            let start = Address::new(va);
+            let Some(signature) = build(&mut session, start, Address::new(end), name) else {
+                continue;
+            };
+            entries.push(format!(
+                "  {{ \"name\": \"{name}\", \"pattern\": \"{}\" }}",
+                signature.render()
+            ));
+        }
+        println!(
+            "{{\n  \"format\": 1,\n  \"signatures\": [\n{}\n  ]\n}}",
+            entries.join(",\n")
+        );
+    }
+
+    /// Every name the built-in set assigns must be the name the CRT build gives that address:
+    /// an address the map does not list is a false positive.
+    #[test]
+    fn the_builtin_set_names_the_crt_and_nothing_else() {
+        let Some((exe, map)) = crackme_fixture() else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(&exe) else {
+            return;
+        };
+        let Ok(map_text) = std::fs::read_to_string(&map) else {
+            return;
+        };
+        let symbols = map_symbols(&map_text);
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("builtin-names.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let report = apply_builtin(&mut session, false).unwrap();
+        assert!(
+            report.renamed.len() >= 30,
+            "only {} functions named; the set did not grow",
+            report.renamed.len()
+        );
+        for (addr, name) in &report.renamed {
+            let Some(aliases) = symbols.get(&addr.get()) else {
+                panic!(
+                    "{name} renamed {:#x}, which the CRT map does not list",
+                    addr.get()
+                );
+            };
+            assert!(
+                aliases.iter().any(|symbol| map_name_is(symbol, name)),
+                "{name} renamed {:#x}, but the map calls it {aliases:?}",
+                addr.get()
+            );
+        }
+    }
+
+    /// The shipped set must be large enough to pay for itself, and two signatures with the
+    /// same bytes would make the name a function gets depend on JSON order.
+    #[test]
+    fn the_builtin_set_is_large_and_unambiguous() {
+        let signatures = parse_document(BUILTIN_SIGNATURES).unwrap();
+        assert!(
+            signatures.len() >= 40,
+            "the CRT set shrank to {}",
+            signatures.len()
+        );
+        let mut patterns = std::collections::BTreeSet::new();
+        for signature in &signatures {
+            assert!(
+                patterns.insert(signature.render()),
+                "{} duplicates another pattern",
+                signature.name
+            );
+        }
+    }
+
     #[test]
     fn a_pattern_round_trips_through_text() {
         let signature = Signature::parse("printf", "48 89 5C ?? 57 48 83 EC 20 48 8B D9").unwrap();

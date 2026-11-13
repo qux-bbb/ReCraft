@@ -2,13 +2,13 @@
 void sub_140002cb4_l1(void) {
     rbx = r8;
     if (rcx == 0) {
-        sub_140008860();
+        abort();
     }
     r11 = (int64)(*(u32*)((rcx + 0xADDR)));
     r10 = *(u64*)((rdx + 8));
     rax = (r10 + r11);
     if (rax == 0) {
-        sub_140008860();
+        abort();
         return;
     }
     r8d = *(u32*)((rcx + 0xADDR));

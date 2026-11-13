@@ -1,5 +1,5 @@
 // L1 structure recovery (14 blocks)
-void sub_140002198_l1(void) {
+void __vcrt_getptd_noexit_l1(void) {
     if (dword_ADDR != -1) {
         GetLastError();
         edi = eax;
@@ -11,7 +11,7 @@ void sub_140002198_l1(void) {
                 sub_14000257c(dword_ADDR, rdx);
                 if (eax != 0) {
                     edx = 0xADDR;
-                    sub_1400088c0((rdx - 0xADDR), 0xADDR);
+                    calloc((rdx - 0xADDR), 0xADDR);
                     ecx = dword_ADDR;
                     rbp = rax;
                     rbx = rax;
@@ -27,7 +27,7 @@ void sub_140002198_l1(void) {
                             rsi = rbp;
                         }
                     }
-                    sub_1400087c0(rbx);
+                    free(rbx);
                 }
             } else {
                 rsi = rax;

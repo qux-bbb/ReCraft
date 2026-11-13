@@ -5,7 +5,7 @@ void sub_14000391c_l1(void) {
     r15 = r8;
     r14 = rdx;
     sub_140002124(r8);
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     rbx = var_90;
     edx = 0xADDR;
     ecx = 0xADDR;
@@ -143,10 +143,10 @@ void sub_14000391c_l1(void) {
             }
             r9d = *(u32*)((rdi + 0xADDR));
             if (r9d < -1 /* signed */) {
-                sub_140008860();
+                abort();
             }
             if (r9d >= *(u32*)((rbx + 4)) /* signed */) {
-                sub_140008860();
+                abort();
                 return;
             }
             rcx = *(u64*)((rdi + 0xADDR));
@@ -157,7 +157,7 @@ void sub_14000391c_l1(void) {
         }
         sub_140002cb4(rbx, rsi, *(u64*)((rsi + 0xADDR)));
         if ((eax < -1 /* signed */) || (eax >= *(u32*)((rbx + 4)) /* signed */)) {
-            sub_140008860();
+            abort();
             return;
         }
         r9d = eax;
@@ -170,7 +170,7 @@ void sub_14000391c_l1(void) {
         eax &= ecx;
         if (eax < 0xADDR) goto loc_ADDR;
         if ((*(u8*)((rbx + 0xADDR)) & 1) != 0) goto loc_ADDR;
-        sub_140008860();
+        abort();
         return;
     }
     __asm("if (je short 0xADDR /* unmodelled flags */) goto 0xADDR");

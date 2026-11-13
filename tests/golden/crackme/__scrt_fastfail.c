@@ -1,5 +1,5 @@
 // L1 structure recovery (8 blocks)
-void sub_1400017a0_l1(void) {
+void __scrt_fastfail_l1(void) {
     ebx = ecx;
     IsProcessorFeaturePresent(0xADDR);
     if (eax == 0) {

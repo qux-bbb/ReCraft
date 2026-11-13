@@ -1,5 +1,5 @@
 // L1 structure recovery (8 blocks)
-void sub_1400043b8_l1(void) {
+void _CxxThrowException_l1(void) {
     rbx = rdx;
     rsi = rcx;
     edi = 0xADDR;

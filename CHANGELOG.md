@@ -13,6 +13,18 @@
 
 ### 新增
 
+- **内置 CRT 签名从 9 条扩到 43 条，`.map` 逐地址校验零误报。** 覆盖 MSVC 静态 CRT 的启动
+  （`mainCRTStartup`、`__scrt_common_main_seh`）、异常与 RTC（`__C_specific_handler`、
+  `__CxxFrameHandler3`、`_CxxThrowException`、`_RTC_Initialize`）、内存与字符串
+  （`malloc`/`free`/`calloc`、`memcpy`/`memset`、`strchr`/`strrchr`/`strcpy_s`/`strncpy_s`）、
+  文件与进程（`fclose`、`exit`/`abort`、`atexit`/`_onexit`、`qsort`）等。签名由项目钉住的
+  MSVC crackme 构建的 `crackme.map` 生成（`dump_builtin_signatures` 可重生成，`_RTC_Terminate`
+  等与同族函数头部完全相同或只是 `call`+填充的条目被有意排除）。crackme 的自动命名从 10 个
+  函数升到 43 个，`main` 的 `sub_` 引用 17 → 2；`notepad.exe`（同族 CRT 的系统二进制）命中
+  `atexit`/`__security_init_cookie`/`__report_gsfailure`/`_RTC_Initialize`/`__GSHandlerCheck`
+  共 6 个，启动识别另给出 `WinMain`，说明匹配不是撞字节。新增两个单测：用 `.map` 逐地址断言
+  “签名只命名该命名的函数”（杜绝误报），以及拒绝重复 pattern（否则名字取决于 JSON 顺序）。
+
 - **字符串视图可以编辑。** 字符串是从镜像重建的派生数据，遇到链接器把数据表紧贴在字面量之前时
   （crackme 的 `enc[31]` 是 `'O'`，于是 42 个 `=` 被列成 `O====…`）用户没有办法修正。现在字符串
   右键菜单提供「编辑字符串」「删除该字符串」「恢复默认」：编辑替换列表与读工具里的显示文本，

@@ -11,7 +11,7 @@ void sub_140002864_l1(void) {
     r10d = 0;
     r9d = eax;
     if (ebp == 0) {
-        sub_140008860();
+        abort();
     }
     rdi = *(u64*)((rdi + 8));
     r12d = -1;

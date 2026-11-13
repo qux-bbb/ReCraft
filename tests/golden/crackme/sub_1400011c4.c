@@ -9,14 +9,14 @@ void sub_1400011c4_l1(void) {
     *(u32*)(rax) = ebx;
     sub_1400014b0(1);
     if (al == 0) {
-        sub_1400017a0(7);
+        __scrt_fastfail(7);
     }
-    sub_1400019bc();
-    sub_140001660(sub_1400019f8);
+    _RTC_Initialize();
+    atexit(sub_1400019f8);
     sub_14000172c();
     sub_1400077b4(eax);
     if (eax != 0) {
-        sub_1400017a0(7);
+        __scrt_fastfail(7);
         return;
     }
     sub_14000173c();
@@ -35,7 +35,7 @@ void sub_1400011c4_l1(void) {
     sub_140001728();
     sub_1400018ec();
     if (eax != 0) {
-        sub_1400017a0(7);
+        __scrt_fastfail(7);
         return;
     }
     return;

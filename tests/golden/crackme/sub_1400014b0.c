@@ -6,7 +6,7 @@ void sub_1400014b0_l1(void) {
         return;
     }
     if (ecx > 1) {
-        sub_1400017a0(5);
+        __scrt_fastfail(5);
     }
     sub_140001ccc();
     if ((eax == 0) || (ebx != 0)) {

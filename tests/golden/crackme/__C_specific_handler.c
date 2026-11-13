@@ -1,5 +1,5 @@
 // L1 structure recovery (37 blocks)
-void sub_140001ce0_l1(void) {
+void __C_specific_handler_l1(void) {
     rsi = rcx;
     r15 = r9;
     rbp = r8;

@@ -32,7 +32,7 @@ void sub_1400079a8_l1(void) {
             if (al != 0xADDR) {
                 sub_140008e60(rbp, 1);
                 rdi = rax;
-                sub_1400087e0(rax, rbp, rsi);
+                strcpy_s(rax, rbp, rsi);
                 ecx = 0;
                 *(u64*)(r14) = rdi;
                 r14 += 8;

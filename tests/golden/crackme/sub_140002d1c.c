@@ -46,12 +46,12 @@ void sub_140002d1c_l1(void) {
                     }
                     if (rcx != 0) {
                         if (*(u64*)((r13 + 0xADDR)) == rdi) {
-                            sub_140008860();
-                            sub_140008860();
+                            abort();
+                            abort();
                         }
                         if (rsi == 0) {
-                            sub_140008860();
-                            sub_140008860();
+                            abort();
+                            abort();
                             return;
                         }
                         rbx = (int64)(*(u32*)((r14 + 0xADDR)));
@@ -62,8 +62,8 @@ void sub_140002d1c_l1(void) {
                             rcx = (rbx + rax);
                         }
                         if (rcx == 0) {
-                            sub_140008860();
-                            sub_140008860();
+                            abort();
+                            abort();
                             return;
                         }
                         al = (*(u8*)(r14) & 4);
@@ -75,32 +75,32 @@ void sub_140002d1c_l1(void) {
                         return;
                     }
                     if (*(u64*)((r13 + 0xADDR)) == rdi) {
-                        sub_140008860();
+                        abort();
                     }
                     if (rsi == 0) {
-                        sub_140008860();
-                        sub_140008860();
-                        sub_140008860();
+                        abort();
+                        abort();
+                        abort();
                         return;
                     }
                     rbx = (int64)(*(u32*)((r14 + 0xADDR)));
                     sub_140001ffc(*(u64*)((r13 + 0xADDR)), (r14 + 8));
-                    sub_1400164e0(rsi, rax, rbx);
+                    memcpy(rsi, rax, rbx);
                     eax = edi;
                     return;
                 }
                 rdx = *(u64*)((r13 + 0xADDR));
                 if (rdx == 0) {
-                    sub_140008860();
+                    abort();
                 }
                 if (rsi == 0) {
-                    sub_140008860();
-                    sub_140008860();
-                    sub_140008860();
-                    sub_140008860();
+                    abort();
+                    abort();
+                    abort();
+                    abort();
                     return;
                 }
-                sub_1400164e0(rsi, rdx, (int64)(*(u32*)((r14 + 0xADDR))));
+                memcpy(rsi, rdx, (int64)(*(u32*)((r14 + 0xADDR))));
                 if (*(u32*)((r14 + 0xADDR)) != 8) {
                     eax = edi;
                     return;
@@ -117,14 +117,14 @@ void sub_140002d1c_l1(void) {
             }
             rcx = *(u64*)((r13 + 0xADDR));
             if (rcx == 0) {
-                sub_140008860();
+                abort();
             }
             if (rsi == 0) {
-                sub_140008860();
-                sub_140008860();
-                sub_140008860();
-                sub_140008860();
-                sub_140008860();
+                abort();
+                abort();
+                abort();
+                abort();
+                abort();
                 return;
             }
             *(u64*)(rsi) = rcx;
@@ -143,7 +143,7 @@ void sub_140002d1c_l1(void) {
     if (rax == 0) goto loc_ADDR;
     (*qword_ADDR)();
     if ((rax == 0) || (rsi == 0)) {
-        sub_140008860();
+        abort();
         *(u64*)(rsi) = rax;
         rcx = rax;
         sub_140001ffc(rcx, (r14 + 8));

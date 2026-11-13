@@ -3,7 +3,7 @@ void sub_140001474_l1(void) {
     if (ecx == 0) {
         byte_ADDR = 1;
     }
-    sub_140001a34();
+    __isa_available_init();
     sub_140001ef8();
     if (al != 0) {
         sub_140008754();

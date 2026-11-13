@@ -20,6 +20,6 @@ void sub_140004828_l1(void) {
     *(u64*)(rdi) = rax;
     SetLastError(var_30);
     if (rbx == 0) {
-        sub_140008860();
+        abort();
     }
 }

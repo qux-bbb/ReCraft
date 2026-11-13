@@ -9,7 +9,7 @@ void sub_140002688_l1(void) {
         while (1) {
             ebx = (rdi - 1);
             edi = ebx;
-            sub_14000217c(rcx);
+            __vcrt_getptd(rcx);
             rdx = (rbx + (rbx * 4));
             rax = *(u64*)((rax + 0xADDR));
             rcx = (rax + (rdx * 4));

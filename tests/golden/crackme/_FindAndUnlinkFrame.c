@@ -1,14 +1,14 @@
 // L1 structure recovery (7 blocks)
-void sub_140002adc_l1(void) {
+void _FindAndUnlinkFrame_l1(void) {
     rdi = rcx;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     if (rdi != *(u64*)((rax + 0xADDR))) {
-        sub_140008860();
+        abort();
     }
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     rdx = *(u64*)((rax + 0xADDR));
     if (rdx == 0) {
-        sub_140008860();
+        abort();
         return;
     }
     while (1) {
@@ -16,12 +16,12 @@ void sub_140002adc_l1(void) {
         if (rdi == rdx) break;
         rdx = rbx;
         if (rbx == 0) {
-            sub_140008860();
+            abort();
             return;
         }
         continue;
     }
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     *(u64*)((rax + 0xADDR)) = rbx;
     return;
 }

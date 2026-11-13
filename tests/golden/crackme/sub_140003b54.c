@@ -5,7 +5,7 @@ void sub_140003b54_l1(void) {
     *(u64*)(rbx) = off_1400194a0;
     rdx = (rbx + 8);
     *(__m128*)(rdx) = 0;
-    sub_140004310((rax + 8), (rbx + 8));
+    __std_exception_copy((rax + 8), (rbx + 8));
     *(u64*)(rbx) = off_1400194d0;
     rax = rbx;
     return;

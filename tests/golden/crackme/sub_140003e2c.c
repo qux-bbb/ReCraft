@@ -31,7 +31,7 @@ void sub_140003e2c_l1(void) {
                 eax = 0;
                 return;
             }
-            sub_14000217c(rcx);
+            __vcrt_getptd(rcx);
             *(u32*)((rax + 0xADDR)) = 1;
             eax = 1;
             *(u32*)(rbx) = 1;

@@ -1,5 +1,5 @@
 // L1 structure recovery (35 blocks)
-void sub_140001a34_l1(void) {
+void __isa_available_init_l1(void) {
     ecx = 0;
     __asm("cpuid");
     ecx ^= 0xADDR;

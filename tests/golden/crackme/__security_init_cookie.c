@@ -1,5 +1,5 @@
 // L1 structure recovery (3 blocks)
-void sub_140001678_l1(void) {
+void __security_init_cookie_l1(void) {
     rax = qword_ADDR;
     rbx = 0xADDR;
     if (rax == 0xADDR) {

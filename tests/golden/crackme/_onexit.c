@@ -1,5 +1,5 @@
 // L1 structure recovery (4 blocks)
-void sub_140001624_l1(void) {
+void _onexit_l1(void) {
     rbx = rcx;
     if (qword_ADDR != -1) {
         sub_1400085e0(off_140023b48, rbx);

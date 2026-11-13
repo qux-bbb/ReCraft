@@ -2,8 +2,8 @@
 void __scrt_common_main_seh_l1(void) {
     sub_140001474(1);
     if (al == 0) {
-        sub_1400017a0(7);
-        sub_1400017a0(7);
+        __scrt_fastfail(7);
+        __scrt_fastfail(7);
         ecx = ebx;
         sub_140008044(ebx);
         ecx = ebx;
@@ -15,7 +15,7 @@ void __scrt_common_main_seh_l1(void) {
     bl = al;
     ecx = dword_ADDR;
     if (ecx == 1) {
-        sub_1400017a0(7);
+        __scrt_fastfail(7);
         ecx = ebx;
         sub_140008044(ebx);
         ecx = ebx;

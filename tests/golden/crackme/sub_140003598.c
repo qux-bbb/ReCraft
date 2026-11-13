@@ -9,7 +9,7 @@ void sub_140003598_l1(void) {
     if (*(u32*)(rcx) == 0xADDR) {
         return;
     }
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     r13d = var_130;
     r14d = var_128;
     rdi = var_120;
@@ -18,7 +18,7 @@ void sub_140003598_l1(void) {
         var_68 = rax;
         var_60 = rdi;
         if (*(u32*)((rdi + 0xADDR)) <= 0) {
-            sub_140008860();
+            abort();
         }
         var_28 = r13d;
         var_20 = rdi;
@@ -89,13 +89,13 @@ void sub_140003598_l1(void) {
     }
     EncodePointer(0);
     rbx = rax;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     if ((*(u64*)((rax + 0xADDR)) == rbx) || (*(u32*)(rsi) == 0xADDR) || (*(u32*)(rsi) == 0xADDR)) {
         rax = *(u64*)((rbp + 8));
         var_68 = rax;
         var_60 = rdi;
         if (*(u32*)((rdi + 0xADDR)) <= 0) {
-            sub_140008860();
+            abort();
         }
         var_28 = r13d;
         var_20 = rdi;

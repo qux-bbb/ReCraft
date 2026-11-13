@@ -10,7 +10,7 @@ void sub_140003ec4_l1(void) {
     var_28 = rax;
     sub_140002c10(r15, rbx, rsi);
     edi = eax;
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     *(u32*)((rax + 0xADDR)) += 1;
     while (edi != -1) {
         if (edi <= r12d /* signed */) break;
@@ -51,15 +51,15 @@ void sub_140003ec4_l1(void) {
                 sub_140002b30(rcx);
                 rax += rbx;
             }
-            sub_1400042d0(rax, r15, 0xADDR);
+            _CallSettingFrame(rax, r15, 0xADDR);
             sub_140002b58(r13);
         }
         var_24 = edi;
         continue;
     }
-    sub_14000217c(rcx);
+    __vcrt_getptd(rcx);
     if (*(u32*)((rax + 0xADDR)) > 0 /* signed */) {
-        sub_14000217c(rcx);
+        __vcrt_getptd(rcx);
         *(u32*)((rax + 0xADDR)) -= 1;
     }
     if (edi == -1) {
@@ -70,7 +70,7 @@ void sub_140003ec4_l1(void) {
         return;
     }
     if (edi > r12d /* signed */) {
-        sub_140008860();
+        abort();
     }
-    sub_140008860();
+    abort();
 }

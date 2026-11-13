@@ -1,5 +1,5 @@
 // L1 structure recovery (6 blocks)
-void sub_140002264_l1(void) {
+void __vcrt_initialize_ptd_l1(void) {
     sub_1400024a4(sub_14000215c);
     dword_ADDR = eax;
     if (eax == -1) {
