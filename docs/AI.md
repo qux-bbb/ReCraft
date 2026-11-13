@@ -261,7 +261,7 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
   Proposal（未命中的候选保留回退名，证据地址不变，置信度抬到至少 0.7）。两条函数都有离线
   单测，不需要模型。
 - **可编辑的中英文提示词**（2026-11-14）：四条系统提示词（解释 `explain`、命名 `rename`、
-  润色 `polish`、智能体 `agent`）各有英文与中文内置版本（`*_SYSTEM_ZH`），由
+  润色 `polish`、智能体 `agent`，变量命名 `vars` 随后加入，共五种）各有英文与中文内置版本（`*_SYSTEM_ZH`），由
   `PromptKind::builtin` 选择；`PromptLanguage` 与界面语言无关，默认英文。设置窗口的
   「系统提示词」区可以按语言查看、编辑、保存与恢复内置：编辑值存进 `ai-settings.json` 的
   `prompts`（键为 `"<lang>:<kind>"`），空文本等于恢复内置；`system_prompt` 优先返回覆盖值，
@@ -277,6 +277,20 @@ recraft-cli ai prompt notepad.rcraft --addr entry [--max-tokens 1024] [--json]
     recraft-cli ai eval corpus-project.rcraft [--json]     # 5/5 passed，失败时非 0 退出
     ```
 - 这只保证 **prompt 输入质量**；模型回答的准确率由下面的命名基准度量。
+
+## 变量命名（2026-11-14）
+
+- **手动**：Decompile 行右键「重命名变量…」（该行含 `var_XX` 时出现）。名字是用户数据，
+  存在 `var` 表，走 `Command::RenameVar`（可 undo/redo、重开保留）；空名字恢复生成的槽位名。
+- **渲染**：L2 在局部量恢复之后把 `var_<offset>` / `var_n<offset>` 整 token 换成名字，字段
+  后缀（`var_20.field`）与 `&var_20` 正常保留；L1 仍是寄存器级 golden 形态，不受影响。
+- **AI**：Decompile 行右键「AI：命名变量」把该函数的栈槽（最多 24 个，附使用次数与三行伪代码
+  证据）发给模型，按 `<槽位> <名称> -- <理由>` 解析成建议；面板里勾选后「应用」逐个走命令总线，
+  `ui_var_suggest_*` 状态说明命名/失败/未解析。提示词是第五种内置提示词（`PromptKind::Vars`），
+  中英文均可改。
+- **函数一键命名**：建议卡片新增「全部应用」，全选后立刻按命令总线批量改名（每条一个撤销点）。
+- 回归：`parse_var_reply`/`slot_offset`/提示词格式单测；L2 替换与 L1 不变；`stack_slots` 在
+  notepad 的真实函数上取样。
 
 ## 命名准确率基准（2026-11-05）
 

@@ -30,6 +30,7 @@ mod query;
 #[allow(unsafe_code)]
 mod secret;
 mod transport;
+mod vars;
 
 pub use agent::{
     AGENT_MAX_ROUNDS, AGENT_SYSTEM, AGENT_SYSTEM_ZH, AgentEvent, agent_tools, run_agent,
@@ -50,14 +51,19 @@ pub use provider::{
     OpenAiCompatibleProvider, POLISH_SYSTEM, POLISH_SYSTEM_ZH, PROMPT_TEMPLATE_VERSION,
     PromptCache, PromptKind, PromptLanguage, PromptRequest, Provider, ProviderKind, ProviderPreset,
     ProviderSettings, RENAME_SYSTEM, RENAME_SYSTEM_ZH, RenameSuggestion, TokenBudget, ToolCall,
-    ToolReply, ToolSpec, UnavailableProvider, apply_rename_reply, build_explain_prompt,
-    build_polish_prompt, build_rename_prompt, build_rename_prompt_blinded, parse_rename_reply,
-    parse_tool_reply, prompt_key, provider_from_settings, redact, system_prompt,
+    ToolReply, ToolSpec, UnavailableProvider, VARS_SYSTEM, VARS_SYSTEM_ZH, apply_rename_reply,
+    build_explain_prompt, build_polish_prompt, build_rename_prompt, build_rename_prompt_blinded,
+    parse_rename_reply, parse_tool_reply, prompt_key, provider_from_settings, redact,
+    system_prompt,
 };
 pub use query::{QueryAnswer, QueryItem, answer_query};
 pub use transport::{
     HttpRequest, HttpResponse, MockTransport, TcpHttpTransport, Transport, TransportKind,
     UreqTransport, parse_ollama_response, parse_openai_response, transport_for, transport_kind,
+};
+pub use vars::{
+    StackSlot, VarProposal, build_var_prompt, build_var_prompt_from_slots, parse_var_reply,
+    slot_offset, stack_slots,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -956,6 +962,32 @@ mod tests {
             !prompt.thinking,
             "polish asks for a direct answer so the first content token is not delayed"
         );
+    }
+
+    #[test]
+    fn stack_slots_come_from_the_pseudo_text() {
+        let Some((mut session, _dir)) = notepad() else {
+            return;
+        };
+        let starts: Vec<Address> = session
+            .functions()
+            .unwrap()
+            .into_iter()
+            .take(40)
+            .map(|function| function.start)
+            .collect();
+        let slots = starts
+            .into_iter()
+            .find_map(|start| {
+                let slots = crate::stack_slots(&mut session, start).unwrap();
+                (!slots.is_empty()).then_some(slots)
+            })
+            .expect("some analyzed function has a stack frame");
+        assert!(
+            slots.iter().all(|slot| slot.token.starts_with("var_")),
+            "{slots:?}"
+        );
+        assert!(slots.iter().any(|slot| slot.uses >= 1));
     }
 
     #[test]

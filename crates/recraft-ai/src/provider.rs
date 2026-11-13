@@ -543,15 +543,18 @@ pub enum PromptKind {
     Polish,
     /// The project-level agent's tool-using loop.
     Agent,
+    /// Names for the stack variables of one function (`build_var_prompt`).
+    Vars,
 }
 
 impl PromptKind {
     /// Stable iteration order for the settings UI and the built-in table.
-    pub const ALL: [PromptKind; 4] = [
+    pub const ALL: [PromptKind; 5] = [
         PromptKind::Explain,
         PromptKind::Rename,
         PromptKind::Polish,
         PromptKind::Agent,
+        PromptKind::Vars,
     ];
 
     /// Identifier used by the settings file and the override keys.
@@ -561,6 +564,7 @@ impl PromptKind {
             PromptKind::Rename => "rename",
             PromptKind::Polish => "polish",
             PromptKind::Agent => "agent",
+            PromptKind::Vars => "vars",
         }
     }
 
@@ -575,6 +579,8 @@ impl PromptKind {
             (PromptKind::Polish, PromptLanguage::Zh) => POLISH_SYSTEM_ZH,
             (PromptKind::Agent, PromptLanguage::En) => crate::agent::AGENT_SYSTEM,
             (PromptKind::Agent, PromptLanguage::Zh) => crate::agent::AGENT_SYSTEM_ZH,
+            (PromptKind::Vars, PromptLanguage::En) => VARS_SYSTEM,
+            (PromptKind::Vars, PromptLanguage::Zh) => VARS_SYSTEM_ZH,
         }
     }
 }
@@ -636,6 +642,22 @@ pub const POLISH_SYSTEM_ZH: &str = "你是一名反向工程反编译器。根�
 strcmp；一个字符串长度与常量比较是 strlen）。证据不明确时保留 `sub_XXX`，绝不臆造非标准函数。\
 只输出重建的 C 函数，不要 Markdown 围栏或说明。声明你引用的每个外部数组/全局（例如 \
 `extern unsigned char table[];`），让片段自包含。";
+
+/// English prompt for stack-variable naming (the reply contract is [`crate::parse_var_reply`]).
+pub const VARS_SYSTEM: &str = "You are ReCraft's variable-naming assistant. Propose concise \
+snake_case names for the listed stack variables. Base every suggestion only on the supplied \
+pseudo-code; never invent evidence. Reply with exactly one line per variable, in the order \
+given, in the form `<slot> <name> -- <rationale>`: copy the slot token verbatim (`var_20`), \
+write a bare lowercase C identifier for the name (no quotes, no `var_` prefix), and give a \
+one-sentence rationale. Output nothing else: no headings, no markdown, no numbering, no blank \
+lines.";
+
+/// Chinese prompt for stack-variable naming.
+pub const VARS_SYSTEM_ZH: &str = "你是 ReCraft 的变量命名助手。为列出的栈变量提出简洁的 \
+snake_case 名称。每个建议只能依据提供的伪代码，绝不臆造证据。每个变量恰好输出一行，顺序与\
+输入一致，格式为 `<槽位> <名称> -- <理由>`：槽位原样复制（`var_20`），名称写不带引号、不带 \
+`var_` 前缀的小写 C 标识符，理由用一句话说明。不要输出其它内容：没有标题、没有 Markdown、\
+没有编号、没有空行。";
 
 /// The key a user override for `kind`/`language` is stored under (`"zh:polish"`).
 pub fn prompt_key(kind: PromptKind, language: PromptLanguage) -> String {

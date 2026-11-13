@@ -914,6 +914,8 @@ enum AiJobKind {
     Polish,
     /// Project-level agent: the model calls read-only tools, then answers in prose.
     Agent,
+    /// Stack-variable names for one function, merged into the variable suggestions list.
+    VarSuggest,
 }
 
 struct AiJob {
@@ -1328,6 +1330,10 @@ enum Action {
     Back,
     Navigate(Address),
     AiSuggest,
+    /// Name the stack variables of `func` (Decompile context menu).
+    AiRenameVars {
+        func: Address,
+    },
     AiApply,
     AiClear,
     TogglePalette,
@@ -1510,6 +1516,12 @@ pub struct ReCraftApp {
     /// Proposals the user ticked for a batched apply (targets, not list indices: the list
     /// is re-sorted when a suggestion is applied and would shift indices).
     ai_checked: BTreeSet<Address>,
+    /// AI stack-variable names for one function (never applied implicitly).
+    ai_var_proposals: Vec<recraft_ai::VarProposal>,
+    /// Offsets the user ticked for a batched variable apply.
+    ai_var_checked: BTreeSet<i64>,
+    /// Function the variable proposals belong to.
+    ai_var_function: Option<Address>,
     /// Function the explanation/polish result belongs to, so a stale answer cannot be
     /// mistaken for the function now under the cursor.
     ai_result_target: Option<Address>,
@@ -1641,6 +1653,9 @@ impl Default for ReCraftApp {
             analysis: None,
             ai_proposals: Vec::new(),
             ai_checked: BTreeSet::new(),
+            ai_var_proposals: Vec::new(),
+            ai_var_checked: BTreeSet::new(),
+            ai_var_function: None,
             ai_result_target: None,
             ai_status: String::new(),
             ai_mode: AiMode::Custom,
@@ -3153,6 +3168,22 @@ impl ReCraftApp {
                                 )
                             };
                         }
+                        AiJobKind::VarSuggest => {
+                            let proposals = recraft_ai::parse_var_reply(&text);
+                            let total = proposals.len();
+                            self.ai_var_checked =
+                                proposals.iter().map(|proposal| proposal.offset).collect();
+                            self.ai_var_function = job.target;
+                            self.ai_var_proposals = proposals;
+                            self.ai_status = if total == 0 {
+                                self.t("ui_var_suggest_unparsed").to_owned()
+                            } else {
+                                self.t_args(
+                                    "ui_var_suggest_done",
+                                    &[("named", &total.to_string()), ("ms", &elapsed.to_string())],
+                                )
+                            };
+                        }
                     }
                     self.set_status(self.ai_status.clone());
                     return;
@@ -3164,6 +3195,7 @@ impl ReCraftApp {
                         AiJobKind::Explain => "ui_explain_failed",
                         AiJobKind::Suggest => "ui_suggest_failed",
                         AiJobKind::Agent => "ui_agent_failed",
+                        AiJobKind::VarSuggest => "ui_var_suggest_failed",
                     };
                     self.ai_status = self.t_args(key, &[("error", &error)]);
                     self.set_status(self.ai_status.clone());
@@ -3332,6 +3364,80 @@ impl ReCraftApp {
         };
         self.ai_checked.clear();
         self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Suggest, None, proposals);
+    }
+
+    /// Ask the model to name the stack variables of `func`.
+    fn start_var_suggest(&mut self, ctx: &egui::Context, func: Address) {
+        if self.ai_job.is_some() {
+            return;
+        }
+        if !self.require_ai_provider() {
+            return;
+        }
+        let settings = self.ai_request_settings();
+        let Some(session) = self.session.as_mut() else {
+            self.set_status(self.t("ui_open_a_project_first").to_owned());
+            return;
+        };
+        let prompt = match recraft_ai::build_var_prompt(session, func, &settings) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        let prompt = if self.ai_thinking {
+            prompt.with_thinking()
+        } else {
+            prompt
+        };
+        self.ai_var_proposals.clear();
+        self.ai_var_checked.clear();
+        self.ai_var_function = Some(func);
+        self.spawn_ai_job(
+            ctx,
+            settings,
+            prompt,
+            AiJobKind::VarSuggest,
+            Some(func),
+            Vec::new(),
+        );
+    }
+
+    /// Apply every ticked variable proposal through the command bus (journaled/undoable).
+    fn apply_var_selection(&mut self) -> bool {
+        let Some(func) = self.ai_var_function else {
+            return false;
+        };
+        let proposals: Vec<recraft_ai::VarProposal> = self
+            .ai_var_proposals
+            .iter()
+            .filter(|proposal| self.ai_var_checked.contains(&proposal.offset))
+            .cloned()
+            .collect();
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        let mut applied = 0;
+        for proposal in &proposals {
+            match session.execute(Command::RenameVar {
+                func,
+                offset: proposal.offset,
+                name: Some(proposal.value.clone()),
+            }) {
+                Ok(_) => applied += 1,
+                Err(error) => {
+                    self.set_error(error);
+                    break;
+                }
+            }
+        }
+        if applied > 0 {
+            self.pseudo_dirty = true;
+            self.ai_status = self.t_args("ui_var_applied", &[("count", &applied.to_string())]);
+            self.set_status(self.ai_status.clone());
+        }
+        applied > 0
     }
 
     /// Question the "dig deeper" button asks about the function under the cursor.
@@ -6400,6 +6506,16 @@ impl ReCraftApp {
                     if ui.button(self.t("ui_check_none")).clicked() {
                         self.ai_checked.clear();
                     }
+                    if ui.button(self.t("ui_auto_apply")).clicked() {
+                        // One-click naming: check everything, then let the normal apply path
+                        // journal each rename (undo takes them back one at a time).
+                        self.ai_checked = self
+                            .ai_proposals
+                            .iter()
+                            .map(|proposal| proposal.target)
+                            .collect();
+                        *action = Action::AiApply;
+                    }
                 });
                 for (index, proposal) in self.ai_proposals.iter().enumerate() {
                     let mut checked = self.ai_checked.contains(&proposal.target);
@@ -6465,6 +6581,76 @@ impl ReCraftApp {
                     }
                 }
             });
+        }
+
+        if !self.ai_var_proposals.is_empty() {
+            let mut apply_now = false;
+            let rows: Vec<(i64, String, String)> = self
+                .ai_var_proposals
+                .iter()
+                .map(|proposal| {
+                    (
+                        proposal.offset,
+                        proposal.value.clone(),
+                        proposal.rationale.clone(),
+                    )
+                })
+                .collect();
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!("{} ({})", self.t("ui_var_suggestions"), rows.len()))
+                    .strong()
+                    .size(13.0)
+                    .color(pal.text),
+            );
+            ui.add_space(4.0);
+            card_frame(pal).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                if let Some(func) = self.ai_var_function {
+                    ui.weak(format!("{:#x}", func.get()));
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(self.t("ui_check_all")).clicked() {
+                        self.ai_var_checked = rows.iter().map(|row| row.0).collect();
+                    }
+                    if ui.button(self.t("ui_check_none")).clicked() {
+                        self.ai_var_checked.clear();
+                    }
+                    if ui.button(self.t("ui_apply")).clicked() {
+                        apply_now = true;
+                    }
+                });
+                for (offset, value, rationale) in &rows {
+                    let mut checked = self.ai_var_checked.contains(offset);
+                    let slot = if *offset < 0 {
+                        format!("var_n{:x}", -offset)
+                    } else {
+                        format!("var_{offset:x}")
+                    };
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut checked, "").clicked() {
+                            if checked {
+                                self.ai_var_checked.insert(*offset);
+                            } else {
+                                self.ai_var_checked.remove(offset);
+                            }
+                        }
+                        ui.label(
+                            RichText::new(format!("{slot}  →  {value}"))
+                                .monospace()
+                                .color(pal.text),
+                        );
+                    });
+                    ui.label(
+                        RichText::new(rationale)
+                            .size(11.0)
+                            .color(pal.tab_inactive_text),
+                    );
+                }
+            });
+            if apply_now {
+                self.apply_var_selection();
+            }
         }
 
         ui.add_space(8.0);
@@ -6809,6 +6995,7 @@ impl ReCraftApp {
             self.t("ui_prompt_rename"),
             self.t("ui_prompt_polish"),
             self.t("ui_prompt_agent"),
+            self.t("ui_prompt_vars"),
         ];
         if !self.prompt_drafts_ready
             || self.prompt_drafts_language != self.ai_settings.prompt_language
@@ -7871,6 +8058,7 @@ impl ReCraftApp {
         let copy_menu = self.t("ui_copy");
         let comment_menu = self.t("ui_edit_pseudo_comment");
         let rename_var_menu = self.t("ui_rename_variable");
+        let ai_var_menu = self.t("ui_var_suggest");
         // Editor-style text selection over the pseudo-C rows (the gutter stays out of it).
         let mut text_sel = self.pseudo_sel;
         let mut dragging = self.pseudo_drag;
@@ -8070,6 +8258,12 @@ impl ReCraftApp {
                             && ui.button(rename_var_menu.as_str()).clicked()
                         {
                             *action = Action::RenameVar { func, offset };
+                            ui.close();
+                        }
+                        if let Some(func) = current_function
+                            && ui.button(ai_var_menu.as_str()).clicked()
+                        {
+                            *action = Action::AiRenameVars { func };
                             ui.close();
                         }
                     });
@@ -9091,6 +9285,7 @@ impl ReCraftApp {
                 }
             }
             Action::AiSuggest => self.start_suggest(ctx),
+            Action::AiRenameVars { func } => self.start_var_suggest(ctx, func),
             Action::AiAgent => self.start_agent(ctx),
             Action::AiAgentDig => self.start_agent_dig(ctx),
             Action::AiAgentReset => {
@@ -15199,7 +15394,7 @@ mod tests {
         let mut app = ReCraftApp::default();
         app.ai_settings.prompt_language = recraft_ai::PromptLanguage::En;
         app.reload_prompt_drafts();
-        assert_eq!(app.prompt_drafts.len(), 4);
+        assert_eq!(app.prompt_drafts.len(), 5);
         assert_eq!(
             app.prompt_drafts[2].1,
             recraft_ai::POLISH_SYSTEM,
