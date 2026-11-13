@@ -104,6 +104,7 @@
   `[xN, xM, lsl #s]` 索引寻址此前丢掉了索引寄存器（把 `strb w7, [x1, x3]` 渲染成
   `*(u8*)(xzr)`），`mov xD, xzr, #imm` 的 orr 别名此前取错操作数。新增 1 条索引寻址单测，
   IR 41 项全绿。
+  2026-11-14 收口：**PE-ARM64** 落地——ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 字节条目（BeginAddress + 打包的函数长度）解析，`analyze_aarch64` 用它作为函数种子；新增 1.5 KB 的 PE32+ 夹具 `tests/fixtures/aarch64/tiny-arm64.exe` 与两条端到端测试（加载器 + 分析），`recraft-cli info` 显示 `PE32+ (arm64)`。A64 上 `lint` 也是 0 findings。至此验收全部满足：反汇编 100/100、指令覆盖 96.3%、golden 32 份、lint 0、无 panic。SIMD（`stp/ldp v`、`mrs`、`smulh`、`br`）按待办「SIMD 后补」仍走 `__asm`。
   2026-11-14 第五轮：**A64 golden 落地**——`scripts/make-aarch64-fixture.py` 生成 6 KB 的
   ELF64-AArch64 夹具（32 个带符号的小函数），`tests/golden/aarch64/` 存 32 份快照，测试
   `the_aarch64_fixture_matches_its_snapshots` 走「导入 → 分析 → 反编译 → 快照比对」全链路，
