@@ -59,6 +59,8 @@ pub enum CallAbi {
     /// System V i386 (ELF32): every integer argument is pushed on the stack, so there
     /// are no argument registers; the pushed values are the call arguments.
     SysV32,
+    /// AAPCS64 (AArch64): x0–x7, result in x0.
+    Aapcs64,
 }
 
 impl CallAbi {
@@ -68,6 +70,16 @@ impl CallAbi {
             CallAbi::Win64 => &[Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9],
             CallAbi::SysV64 => &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9],
             CallAbi::SysV32 => &[],
+            CallAbi::Aapcs64 => &[
+                Reg::A64X0,
+                Reg::A64X1,
+                Reg::A64X2,
+                Reg::A64X3,
+                Reg::A64X4,
+                Reg::A64X5,
+                Reg::A64X6,
+                Reg::A64X7,
+            ],
         }
     }
 
@@ -95,6 +107,28 @@ impl CallAbi {
                 Reg::R11,
             ],
             CallAbi::SysV32 => &[Reg::Rax, Reg::Rcx, Reg::Rdx],
+            // x0–x17 are caller-saved scratch on AArch64 (x18 is the platform
+            // register, x19–x28 are callee-saved).
+            CallAbi::Aapcs64 => &[
+                Reg::A64X0,
+                Reg::A64X1,
+                Reg::A64X2,
+                Reg::A64X3,
+                Reg::A64X4,
+                Reg::A64X5,
+                Reg::A64X6,
+                Reg::A64X7,
+                Reg::A64X8,
+                Reg::A64X9,
+                Reg::A64X10,
+                Reg::A64X11,
+                Reg::A64X12,
+                Reg::A64X13,
+                Reg::A64X14,
+                Reg::A64X15,
+                Reg::A64X16,
+                Reg::A64X17,
+            ],
         }
     }
 }

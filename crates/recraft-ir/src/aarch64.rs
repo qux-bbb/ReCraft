@@ -77,7 +77,19 @@ impl A64Lifter {
         match insn.mnemonic.as_str() {
             "mov" => {
                 let dest = Self::view(ops.first()?)?;
-                let value = self.read(ops.get(1)?)?;
+                // mov xD, xzr, #imm and mov xD, xzr, xM are the orr alias: the decoder
+                // keeps the alias spelling but reports all three operands.
+                let value = if ops.len() >= 3 {
+                    let lhs = self.read(ops.get(1)?)?;
+                    let rhs = self.read(ops.get(2)?)?;
+                    self.push(Expr::Bin {
+                        op: BinOp::Or,
+                        lhs,
+                        rhs,
+                    })
+                } else {
+                    self.read(ops.get(1)?)?
+                };
                 self.write(dest, value, stmts);
                 Some(Flow::Fallthrough)
             }
@@ -444,12 +456,17 @@ impl A64Lifter {
     }
     /// A64 integer-argument registers `x0`–`x7`, as far as they hold known values.
     fn call_args(&mut self) -> Vec<ExprId> {
-        (0..8u16)
-            .map(|number| {
-                let view = Reg::aarch64(number, 8, false);
-                self.reg(view)
-            })
-            .collect()
+        // AAPCS64 passes arguments in x0–x7; stop at the first register whose value is
+        // unknown so a call does not print eight invented arguments.
+        let mut args = Vec::new();
+        for number in 0..8u16 {
+            let view = Reg::aarch64(number, 8, false);
+            match self.env.get(&view.base) {
+                Some(value) => args.push(*value),
+                None => break,
+            }
+        }
+        args
     }
 
     // ---- operand plumbing -------------------------------------------------------
@@ -498,7 +515,14 @@ impl A64Lifter {
     }
 
     fn address(&mut self, operand: &DecodedOperand) -> Option<ExprId> {
-        let DecodedOperand::Memory { base, disp, .. } = operand else {
+        let DecodedOperand::Memory {
+            base,
+            index,
+            scale,
+            disp,
+            ..
+        } = operand
+        else {
             return None;
         };
         let base = base.as_ref()?;
@@ -506,9 +530,30 @@ impl A64Lifter {
             name: base.clone(),
             size: 8,
         })?;
-        let base = self.reg(view);
+        let mut address = self.reg(view);
+        // `[xN, xM, lsl #s]`: the index register is shifted by `log2(scale)`.
+        if let Some(index) = index {
+            let index_view = Self::view(&DecodedOperand::Register {
+                name: index.clone(),
+                size: 8,
+            })?;
+            let mut index = self.reg(index_view);
+            if *scale > 1 {
+                let shift = self.constant(u64::from(scale.trailing_zeros()));
+                index = self.push(Expr::Bin {
+                    op: BinOp::Shl,
+                    lhs: index,
+                    rhs: shift,
+                });
+            }
+            address = self.push(Expr::Bin {
+                op: BinOp::Add,
+                lhs: address,
+                rhs: index,
+            });
+        }
         if *disp == 0 {
-            return Some(base);
+            return Some(address);
         }
         // Negative displacements subtract, so the printed address reads sp - 0xc0
         // instead of sp + 0xffffffffffffff40.
@@ -516,14 +561,14 @@ impl A64Lifter {
             let offset = self.constant(*disp as u64);
             Some(self.push(Expr::Bin {
                 op: BinOp::Add,
-                lhs: base,
+                lhs: address,
                 rhs: offset,
             }))
         } else {
             let offset = self.constant((-*disp) as u64);
             Some(self.push(Expr::Bin {
                 op: BinOp::Sub,
-                lhs: base,
+                lhs: address,
                 rhs: offset,
             }))
         }
@@ -635,6 +680,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_indexed_load_adds_the_index_register() {
+        let insn = synthetic(
+            "ldrb",
+            vec![
+                x(7),
+                DecodedOperand::Memory {
+                    base: Some("x1".to_owned()),
+                    index: Some("x3".to_owned()),
+                    scale: 1,
+                    disp: 0,
+                    size: 1,
+                },
+            ],
+            None,
+        );
+        let (lifted, ok) = A64Lifter::new().lift_region(&[insn]);
+        assert_eq!(ok, 1);
+        let Stmt::WriteReg { value, .. } = &lifted.insns[0].stmts[0] else {
+            panic!("expected a register write");
+        };
+        let Expr::Load { addr, size } = lifted.expr(*value) else {
+            panic!("expected a load");
+        };
+        assert_eq!(*size, 1);
+        assert!(matches!(
+            lifted.expr(*addr),
+            Expr::Bin { op: BinOp::Add, .. }
+        ));
+    }
     #[test]
     fn a_bit_test_branch_tests_the_requested_bit() {
         let insn = synthetic(

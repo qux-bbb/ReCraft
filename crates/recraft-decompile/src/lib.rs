@@ -1409,6 +1409,9 @@ pub(crate) struct StubTarget {
 /// The x86/x64 calling convention of the image (SysV on ELF, Microsoft on PE). ELF32
 /// passes every argument on the stack, so its register list is empty.
 fn call_abi(session: &dyn SessionView) -> CallAbi {
+    if session.arch() == recraft_core::Arch::Aarch64 {
+        return CallAbi::Aapcs64;
+    }
     match (session.format(), session.image().is_64) {
         (recraft_core::Format::Elf, false) => CallAbi::SysV32,
         (recraft_core::Format::Elf, true) => CallAbi::SysV64,
