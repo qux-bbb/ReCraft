@@ -1061,6 +1061,32 @@ mod tests {
         assert!(report.missing.is_empty(), "{:?}", report.missing);
     }
 
+    /// The ELF `main` reads like its source: a string literal is spelled at its call site and
+    /// the stack-protector bookkeeping is not pseudo-C. The remaining `goto`s are the
+    /// multi-entry loop gap tracked in `docs/NEXT.md` §1, not a literal-rendering problem.
+    #[test]
+    fn the_real_crackme_elf_main_reads_like_its_source() {
+        let Some((session, _dir)) = real_crackme_elf() else {
+            return;
+        };
+        let main = session
+            .functions()
+            .unwrap()
+            .into_iter()
+            .find(|function| session.name_at(function.start).unwrap().as_deref() == Some("main"))
+            .expect("main is in .symtab")
+            .start;
+        let text = pseudocode_l2(&session, main).unwrap().text();
+        assert!(
+            !text.contains("fs:[0x28]"),
+            "the stack guard is bookkeeping:\n{text}"
+        );
+        assert!(text.contains("strpbrk(&var_0, \"\\r\\n\")"), "{text}");
+        assert!(text.contains("__printf_chk(2, \"Enter flag: \")"), "{text}");
+        assert!(text.contains("return 0;"), "{text}");
+        assert!(!text.contains("return eax;"), "{text}");
+    }
+
     #[test]
     fn the_32bit_corpus_passes_every_output_invariant() {
         let Some((mut session, _dir)) = corpus_for("x86") else {

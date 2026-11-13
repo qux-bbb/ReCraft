@@ -459,6 +459,9 @@ fn structure(
     strip_condition_parentheses(&mut lines);
     collapse_nested_if_wrappers(&mut lines);
     strip_inline_condition_parentheses(&mut lines);
+    // The stack-protector guard is bookkeeping like the epilogue restores: hiding it also
+    // lets `fold_return_values` see the assignment that produces the return value.
+    hide_stack_guard(&mut lines);
     mark("  ifs");
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
@@ -4944,6 +4947,76 @@ fn is_callee_saved(reg: &str) -> bool {
         reg,
         "rbx" | "rbp" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15"
     )
+}
+
+/// Hide the stack-protector bookkeeping GCC and Clang emit around a function.
+///
+/// The guard is saved once at entry (`__asm("mov rax, fs:[0x28]")`, `<slot> = rax;`) and
+/// checked before every return (`<reg> = <slot>;`, `__asm("sub <reg>, fs:[0x28]")`,
+/// `__asm("if (jne …) goto …")`). The check only calls `__stack_chk_fail` on a corrupted
+/// frame, so it is compiler bookkeeping like the epilogue restores: dropping it leaves the
+/// function's own logic readable and lets the return value fold again. The rewrite only runs
+/// when every mention of `<slot>` is part of that idiom, so a slot the code itself reads keeps
+/// the check.
+fn hide_stack_guard(lines: &mut Vec<PseudoLine>) {
+    let entry = lines.windows(2).enumerate().find_map(|(index, pair)| {
+        let asm = pair[0].text.trim();
+        let reg = asm
+            .strip_prefix("__asm(\"mov ")
+            .and_then(|rest| rest.strip_suffix(", fs:[0x28]\");"))?;
+        let saved = pair[1].text.trim().strip_suffix(';')?;
+        let slot = saved.strip_suffix(reg)?.strip_suffix(" = ")?;
+        (slot.starts_with("var_")).then_some((index, slot.to_owned(), reg.to_owned()))
+    });
+    let Some((entry_index, slot, saved_reg)) = entry else {
+        return;
+    };
+    // Each check is exactly three lines: reload the guard, subtract it, branch on the flags.
+    let mut checks: Vec<usize> = Vec::new();
+    for index in 1..lines.len().saturating_sub(1) {
+        let asm = lines[index].text.trim();
+        let Some(reg) = asm
+            .strip_prefix("__asm(\"sub ")
+            .and_then(|rest| rest.strip_suffix(", fs:[0x28]\");"))
+        else {
+            continue;
+        };
+        let reload = lines[index - 1].text.trim();
+        let branch = lines[index + 1].text.trim();
+        if reload == format!("{reg} = {slot};") && branch.starts_with("__asm(\"if (jne") {
+            checks.push(index);
+        }
+    }
+    if checks.is_empty() {
+        return;
+    }
+    // The slot must belong to the guard alone: the entry save and the reloads above.
+    let reloads: Vec<&str> = checks
+        .iter()
+        .map(|index| lines[index - 1].text.trim())
+        .collect();
+    let shared = lines.iter().any(|line| {
+        let text = line.text.trim();
+        mentions_token(text, &slot)
+            && text != format!("{slot} = {saved_reg};")
+            && !reloads.contains(&text)
+    });
+    if shared {
+        return;
+    }
+    for index in checks.into_iter().rev() {
+        lines.remove(index + 1);
+        lines.remove(index);
+        lines.remove(index - 1);
+    }
+    lines.remove(entry_index + 1);
+    lines.remove(entry_index);
+}
+
+/// Whether `text` mentions `token` as a whole word.
+fn mentions_token(text: &str, token: &str) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|word| word == token)
 }
 
 /// Drop callee-saved restores that lead directly to a `return`. `rsi = var_50; return;`
@@ -9505,6 +9578,46 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn the_stack_guard_is_hidden_with_its_save_and_check() {
+        let mut lines = snippet(&[
+            "int32 f(void) {",
+            "    __asm(\"mov rax, fs:[0x28]\");",
+            "    var_8 = rax;",
+            "    eax = 0;",
+            "    rdx = var_8;",
+            "    __asm(\"sub rdx, fs:[0x28]\");",
+            "    __asm(\"if (jne short 0x1010 /* unmodelled flags */) goto 0x1010\");",
+            "    return;",
+            "}",
+        ]);
+        hide_stack_guard(&mut lines);
+        let text = joined(&lines);
+        assert!(!text.contains("fs:[0x28]"), "{text}");
+        assert!(!text.contains("var_8"), "the canary slot is gone: {text}");
+        assert!(text.contains("    eax = 0;\n    return;"), "{text}");
+    }
+
+    #[test]
+    fn a_stack_slot_the_body_reads_keeps_the_guard() {
+        let mut lines = snippet(&[
+            "int32 f(void) {",
+            "    __asm(\"mov rax, fs:[0x28]\");",
+            "    var_8 = rax;",
+            "    g = var_8;",
+            "    rdx = var_8;",
+            "    __asm(\"sub rdx, fs:[0x28]\");",
+            "    __asm(\"if (jne short 0x1010 /* unmodelled flags */) goto 0x1010\");",
+            "    return;",
+            "}",
+        ]);
+        hide_stack_guard(&mut lines);
+        assert!(
+            joined(&lines).contains("fs:[0x28]"),
+            "the check stays when the slot has another reader"
+        );
     }
 
     #[test]

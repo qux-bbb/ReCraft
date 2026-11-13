@@ -348,3 +348,37 @@ TLS/pdata 访问器。CI 的 `cargo test --workspace` 会自动执行（约 0.06
 - CI 策略：windows-latest 的 MSVC 版本与本地可能不同，直接对比仓库快照会抖动；
   CI 先写入临时目录再 `--check` 做**确定性/归一化回环**校验。仓库快照用于本地与
   review 时的真实回归。M3 引入固定 toolchain 容器后改为直接对比提交的快照。
+
+## ELF crackme 对照（2026-11-14）
+
+`corpus/build/real/crackme-linux/crackme.elf`（gcc `-O2`、栈保护、保留 `.symtab`）与 Windows
+版同源，用来量 ELF 前端的反编译效果：
+
+| 指标 | Windows（MSVC） | ELF（gcc -O2） |
+|---|---|---|
+| 函数 | 495 | 24 |
+| 覆盖率 | 92.9% | 97.5% |
+| 结构化 | 460/495（92.9%） | 23/24（95.8%） |
+| `main` | 1 处 `goto`（12 块） | 5 处 `goto`（19 块） |
+
+这次修好的两处编译器簿记（都不改 L1 的语句形状，因此 919 份 golden 零 diff）：
+
+- **字面量内联**：GCC 把一个字符串地址存在寄存器里复用，L2 曾输出
+  `v5 = "===="; v6 = v5; puts(v6);`。`variables::inline_literal_locals` 把“只被赋值为字符串字面量”
+  的局部量在使用点展开并删掉声明，`main` 现在是 `strpbrk(&var_0, "\r\n")` 与
+  `__printf_chk(2, "Enter flag: ")`；出现 `&vN`、二次赋值或 `vN++` 时保留变量。
+- **栈保护簿记**：入口的 `mov rax, fs:[0x28]` + 槽保存，与每个出口的“重装 / 相减 / 条件跳转”三行，
+  都是编译器簿记。`structuring::hide_stack_guard` 只在“该栈槽除这套 idiom 外没有别的读者”时整组
+  隐藏，返回值因此重新折叠成 `return 0;`，不再出现 `return eax;`。
+
+仍存在的差距（都属于多入口循环，见 `docs/NEXT.md` §1，由 W3 处理）：
+
+- `loc_12b0`（legacy flag 比较）被放进内层 `while`，块序与源码相反；该路径因此折叠出
+  `return (uint32)v14;` 这一误导性返回值，`puts` 的返回值也与循环计数共用 `v14`。
+- 入口 `ebp = 3` 之后 `sub ebp, 1` 在 L1 里被印成 `ebp = &var_n1`（帧基址判定把这个计数器当成
+  帧指针；L2 已折回 `v4 -= 1`）。
+- 在这之前 `main` 保留 `// L2 structure recovery (19 blocks, 5 goto)` 头，便于读者知道结构未收敛。
+
+回归：`quality::tests::the_real_crackme_elf_main_reads_like_its_source` 钉住字面量内联、栈保护隐藏、
+`return 0` 与“没有 `return eax;`”；另有 `structuring` 的两个单测分别覆盖隐藏与“槽有别的读者时不隐藏”。
+L1 快照仍按上面的口径不提交（含 glibc 启动代码，随工具链漂移）。

@@ -51,11 +51,14 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool, sysv: 
     let original = lines.clone();
     if !recover_structured(lines, is_64, sysv) {
         *lines = original;
-        if recover_linear(lines, is_64) {
+        let recovered = recover_linear(lines, is_64);
+        if recovered {
             strip_parameter_registers(lines);
-            return true;
+            // A literal is a constant across blocks too, so the linear fallback can inline it
+            // even though it never carries a value across a branch.
+            inline_literal_locals(lines);
         }
-        return false;
+        return recovered;
     }
     let before = register_line_count(lines);
     let mut candidate = original;
@@ -66,6 +69,7 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool, sysv: 
     strip_parameter_registers(lines);
     fold_copy_then_update(lines);
     drop_write_only_locals(lines);
+    inline_literal_locals(lines);
     drop_redundant_signed_notes(lines);
 
     /// Drop the `/* signed */` note when the comparison already carries a signed cast.
@@ -274,6 +278,116 @@ fn drop_write_only_locals(lines: &mut Vec<PseudoLine>) {
         lines.remove(*index);
     }
 }
+/// Inline a local whose only definition is a string literal.
+///
+/// GCC keeps one address in a register and reuses it across calls (`rbx = "===="` … `puts(rbx)`),
+/// which the value flow renders as `v5 = "===="; v6 = v5; puts(v6);`. A literal is a pure
+/// constant, so spelling it at every use is valid and readable, and both the value and its
+/// declaration disappear. A second assignment, `&v5`, or `v5++` keeps the local: those observe
+/// the object rather than the value.
+fn inline_literal_locals(lines: &mut Vec<PseudoLine>) {
+    // One literal is inlined per sweep, and inlining a copy (`v6 = v5`) exposes the next
+    // one, so keep sweeping until a pass finds nothing.
+    for _ in 0..64 {
+        if !inline_literal_locals_once(lines) {
+            break;
+        }
+    }
+}
+
+fn inline_literal_locals_once(lines: &mut Vec<PseudoLine>) -> bool {
+    let Some(signature) = lines.iter().position(|line| signature_line(&line.text)) else {
+        return false;
+    };
+    let mut declarations: Vec<(usize, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate().skip(signature + 1) {
+        let text = line.text.trim();
+        if text == "}" || text.is_empty() {
+            break;
+        }
+        if text.starts_with("//") {
+            continue;
+        }
+        match declaration_name(text) {
+            Some(name) => declarations.push((index, name)),
+            None => break,
+        }
+    }
+    for (decl_index, name) in declarations.iter().rev() {
+        let mut definition: Option<(usize, String)> = None;
+        let mut blocked = false;
+        for (index, line) in lines.iter().enumerate() {
+            if index == *decl_index {
+                continue;
+            }
+            let text = line.text.trim();
+            if !mentions_name(text, name) {
+                continue;
+            }
+            if let Some(rest) = text.strip_prefix(&format!("{name} = ")) {
+                let value = rest.trim_end_matches(';').trim();
+                if definition.is_some() || !is_literal_text(value) {
+                    blocked = true;
+                    break;
+                }
+                definition = Some((index, value.to_owned()));
+                continue;
+            }
+            // Any other assignment, address-of or update mutates the local.
+            if text.starts_with(&format!("{name} "))
+                || text.contains(&format!("&{name}"))
+                || text.contains(&format!("{name}++"))
+                || text.contains(&format!("{name}--"))
+            {
+                blocked = true;
+                break;
+            }
+        }
+        if blocked {
+            continue;
+        }
+        let Some((definition_index, value)) = definition else {
+            continue;
+        };
+        // Removing the assignment must not leave a braceless body or a dangling `else`. A
+        // comment above the definition is not part of the block structure.
+        let previous_safe = definition_index == 0
+            || lines[definition_index - 1]
+                .text
+                .trim_end()
+                .ends_with(['{', ';', '}', ':'])
+            || lines[definition_index - 1]
+                .text
+                .trim_start()
+                .starts_with("//");
+        let next_safe = lines
+            .get(definition_index + 1)
+            .is_none_or(|line| !line.text.trim_start().starts_with("else"));
+        if !previous_safe || !next_safe {
+            continue;
+        }
+        for (index, line) in lines.iter_mut().enumerate() {
+            if index == *decl_index || index == definition_index {
+                continue;
+            }
+            if mentions_name(&line.text, name) {
+                line.text = crate::structuring::replace_token(&line.text, name, &value);
+            }
+        }
+        lines.remove(definition_index);
+        lines.remove(*decl_index);
+        return true;
+    }
+    false
+}
+
+/// A string literal, optionally behind a cast: `"…"`, `L"…"`, `(char*)"…"`.
+fn is_literal_text(text: &str) -> bool {
+    let text = text.trim();
+    let text = text.strip_prefix("(char*)").unwrap_or(text).trim();
+    (text.starts_with('"') || text.starts_with("L\"")) && text.ends_with('"') && text.len() > 2
+}
+
 /// The name a declaration line introduces: uint32 v4; -> v4.
 fn declaration_name(text: &str) -> Option<String> {
     if !text.ends_with(';') || text.contains('=') || text.contains('(') {
@@ -3214,6 +3328,29 @@ mod tests {
                 token.reg.name_width(token.width)
             );
         }
+    }
+
+    #[test]
+    fn a_literal_local_is_inlined_at_its_uses() {
+        let mut lines = vec![
+            line(0x1000, "int64 foo(void) {"),
+            line(0x1001, "uint64 v1;"),
+            line(0x1002, "v1 = \"\\r\\n\";"),
+            line(0x1003, "strpbrk(&var_0, v1);"),
+            line(0x2000, "}"),
+        ];
+        inline_literal_locals(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert!(
+            text.contains(&"strpbrk(&var_0, \"\\r\\n\");"),
+            "{}",
+            text.join("\n")
+        );
+        assert!(
+            !text.iter().any(|line| line.contains("uint64 v1;")),
+            "the declaration is gone:\n{}",
+            text.join("\n")
+        );
     }
 
     #[test]
