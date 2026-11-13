@@ -45,6 +45,14 @@ pub trait SessionView {
     /// Decode the instruction at `addr` (cached).
     fn insn_at(&self, addr: Address) -> Result<Option<Insn>>;
 
+    /// Decode one instruction through the backend-neutral model.
+    ///
+    /// The default adapts [`Self::insn_at`] (the x86 backend); AArch64 sessions override it
+    /// because an A64 instruction has no iced counterpart.
+    fn decoded_at(&self, addr: Address) -> Result<Option<recraft_decode::DecodedInsn>> {
+        Ok(self.insn_at(addr)?.map(|insn| insn.neutral()))
+    }
+
     /// Copy up to `out.len()` image bytes starting at virtual address `addr`.
     fn read_at(&self, addr: Address, out: &mut [u8]) -> Result<usize>;
 

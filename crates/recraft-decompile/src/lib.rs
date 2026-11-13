@@ -1161,6 +1161,9 @@ pub fn pseudocode_l0(
     start: Address,
     max_insns: usize,
 ) -> Result<Pseudocode> {
+    if session.arch() == recraft_core::Arch::Aarch64 {
+        return pseudocode_l0_aarch64(session, start, max_insns);
+    }
     let mut lifter = Lifter::with_abi(call_abi(session));
     let mut lifted: Vec<LiftedInsn> = Vec::new();
     let mut targets: BTreeSet<u64> = BTreeSet::new();
@@ -1200,7 +1203,22 @@ pub fn pseudocode_l0(
         )));
     }
 
-    let mut exprs = lifter.into_exprs();
+    let exprs = lifter.into_exprs();
+    render_lifted(session, start, end, targets, calls, lifted, exprs)
+}
+
+/// Rendering tail shared by both backends: frame/probe fixups, names, structurer, printer.
+/// Everything here consumes IR only, so the AArch64 lifter feeds it directly.
+#[allow(clippy::too_many_arguments)]
+fn render_lifted(
+    session: &dyn SessionView,
+    start: Address,
+    end: Address,
+    targets: BTreeSet<u64>,
+    calls: BTreeSet<u64>,
+    mut lifted: Vec<LiftedInsn>,
+    mut exprs: Vec<Expr>,
+) -> Result<Pseudocode> {
     let literals = collect_literals(session, &exprs)?;
     // `sub rsp, rax` allocates the frame after `call __chkstk`: the size was loaded into rax
     // and the probe preserves it, so the frame step is that constant. Without it the whole
@@ -1307,6 +1325,57 @@ pub fn pseudocode_l0(
     })
 }
 
+/// L0 pseudo-C for an AArch64 function: the neutral decoder feeds the A64 lifter, and the
+/// shared rendering tail prints the same IR the x86 path produces.
+fn pseudocode_l0_aarch64(
+    session: &dyn SessionView,
+    start: Address,
+    max_insns: usize,
+) -> Result<Pseudocode> {
+    use recraft_ir::aarch64::A64Lifter;
+
+    let mut decoded = Vec::new();
+    let mut addr = start;
+    let mut end = start;
+    for _ in 0..max_insns {
+        let Some(insn) = session.decoded_at(addr)? else {
+            break;
+        };
+        end = Address::new(addr.get() + u64::from(insn.len));
+        let stop = matches!(
+            insn.flow,
+            recraft_decode::FlowKind::Return | recraft_decode::FlowKind::UnconditionalBranch
+        );
+        decoded.push(insn);
+        addr = end;
+        if stop {
+            break;
+        }
+    }
+    if decoded.is_empty() {
+        return Err(Error::invalid_argument(format!(
+            "nothing to decompile at {:#x}",
+            start.get()
+        )));
+    }
+
+    let mut lifter = A64Lifter::new();
+    let (mut region, _lifted) = lifter.lift_region(&decoded);
+    let mut targets = BTreeSet::new();
+    let mut calls = BTreeSet::new();
+    for item in &region.insns {
+        for stmt in &item.stmts {
+            if let Stmt::Call { target, .. } = stmt {
+                calls.insert(target.get());
+            }
+        }
+        if let Flow::Goto(target) | Flow::CondGoto { target, .. } = item.flow {
+            targets.insert(target.get());
+        }
+    }
+    let exprs = std::mem::take(&mut region.exprs);
+    render_lifted(session, start, end, targets, calls, region.insns, exprs)
+}
 fn resolve_name(session: &dyn SessionView, addr: Address) -> Result<String> {
     if let Some(name) = session.name_at(addr)? {
         return Ok(name);

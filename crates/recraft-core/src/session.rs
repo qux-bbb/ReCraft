@@ -1966,6 +1966,10 @@ impl SessionView for Session {
         Session::insn_at(self, addr)
     }
 
+    fn decoded_at(&self, addr: Address) -> Result<Option<recraft_decode::DecodedInsn>> {
+        Session::decoded_at(self, addr)
+    }
+
     fn read_at(&self, addr: Address, out: &mut [u8]) -> Result<usize> {
         Session::read_at(self, addr, out)
     }
