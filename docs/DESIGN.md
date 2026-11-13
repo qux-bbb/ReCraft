@@ -559,3 +559,4 @@ CLI 与 UI 直接使用 `recraft-core` 的 `Session`，MCP 与内置 agent 共�
 | ADR-012 | 多窗口 | 已定 |
 | ADR-013 | 纯 AGPL-3.0-only，DCO 取代 CLA，取消商业许可 | 已定 |
 | ADR-014 | MCP 写工具由 `--write` 显式开启，走 Command 总线可 undo（部分取代 ADR-008） | 已定 |
+| ADR-015 | 保留 iced 作为 x86 后端；新增中立 `DecodedInsn` 边界；ARM64 选 yaxpeax-arm（capstone 备选） | 已定 |
