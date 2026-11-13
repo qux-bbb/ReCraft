@@ -20,7 +20,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Recraft) {
-    $Recraft = Join-Path $repo 'target\debug\recraft-cli.exe'
+    # Prefer the release binary: it is what `package.ps1` ships, and a stale debug build
+    # would report an old version (the MCP `serverInfo` test reads it).
+    $release = Join-Path $repo 'target\release\recraft-cli.exe'
+    $debug = Join-Path $repo 'target\debug\recraft-cli.exe'
+    $Recraft = if (Test-Path -LiteralPath $release) { $release } else { $debug }
     if (-not (Test-Path -LiteralPath $Recraft)) {
         Push-Location $repo
         try { & cargo build -p recraft-cli --quiet } finally { Pop-Location }
