@@ -24,6 +24,9 @@ use recraft_common::Address;
 
 pub use iced_x86;
 
+pub mod neutral;
+pub use neutral::{DecodedInsn, DecodedOperand};
+
 // The iced formatter methods live on a trait; bring it into scope under `_` so it
 // does not collide with our own `Formatter` wrapper.
 use iced_x86::Formatter as _;
