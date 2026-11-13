@@ -10755,6 +10755,52 @@ mod tests {
         assert_ne!(pal.panel, pal.surface_2);
         assert_ne!(pal.border, pal.border_strong);
     }
+    /// WCAG relative luminance of one sRGB channel.
+    fn channel_luminance(value: u8) -> f32 {
+        let channel = f32::from(value) / 255.0;
+        if channel <= 0.039_28 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn relative_luminance(color: egui::Color32) -> f32 {
+        0.2126 * channel_luminance(color.r())
+            + 0.7152 * channel_luminance(color.g())
+            + 0.0722 * channel_luminance(color.b())
+    }
+
+    /// WCAG contrast ratio between two opaque colours.
+    fn contrast_ratio(a: egui::Color32, b: egui::Color32) -> f32 {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        let (lighter, darker) = if la >= lb { (la, lb) } else { (lb, la) };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn the_palette_meets_the_documented_contrast_floor() {
+        // docs/UI.md §6.5: body text ≥ 4.5:1, accent (links/selection) ≥ 3:1.
+        for pal in [Palette::DARK, Palette::LIGHT] {
+            for background in [pal.panel, pal.view, pal.surface_2] {
+                assert!(
+                    contrast_ratio(pal.text, background) >= 4.5,
+                    "text on {background:?} is {:.2}:1",
+                    contrast_ratio(pal.text, background)
+                );
+                assert!(
+                    contrast_ratio(pal.muted, background) >= 4.5,
+                    "muted on {background:?} is {:.2}:1",
+                    contrast_ratio(pal.muted, background)
+                );
+                assert!(
+                    contrast_ratio(pal.accent, background) >= 3.0,
+                    "accent on {background:?} is {:.2}:1",
+                    contrast_ratio(pal.accent, background)
+                );
+            }
+        }
+    }
     fn sample_pe() -> Option<Vec<u8>> {
         for path in [
             "C:/Windows/System32/notepad.exe",
