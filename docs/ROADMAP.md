@@ -76,7 +76,14 @@
 - **W1**：✅ 2026-11-14 收口，**0.2.0 已打包**（zip 15.5 MiB + MSI 13.9 MiB +
   `SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 全 PASS）。
 - **W2**：两项（AI 自动命名、选中内容对话）已实现并提交待确认。
-- 下一步：W2 确认后进 W3（多入口循环、inline asm 收敛，各 10 天时间盒）。
+- **W3**：✅ 两项提交（多入口循环按时间盒收在 11 处并记录结论；inline asm 104 → 84）。
+- **W4**：✅ 两项提交（ADR-015 选型 + 中立 `DecodedInsn` 边界，x86 输出零变化）。
+- **W5**（进行中，2026-11-14）：解码器（yaxpeax-arm）与中立指令已接；ELF-ARM64 可导入、
+  可反汇编、可发现函数（Go 的 arm64 样本：1904 函数、45417 条指令、1954 条调用边）。
+  **反汇编正确性已达标**：`scripts/compare-arm64.ps1` 抽 100 个函数与 `go tool objdump`
+  逐指令比对，地址序列 100/100 一致。下一步：A64 lifter → IR、AAPCS64、反编译覆盖率
+  评估（<60% 就按 kill criteria 只承诺反汇编 + 调用图 + 字符串）。
+- 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。
 
 规则：
 

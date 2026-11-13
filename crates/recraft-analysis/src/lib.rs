@@ -147,11 +147,110 @@ pub fn analyze(session: &mut Session) -> Result<AnalysisResult> {
     analyze_with_options(session, &AnalysisOptions::default())
 }
 
+/// AArch64 function discovery.
+///
+/// The ELF symbol table provides exact starts and sizes (Go binaries carry all of them), so
+/// there is no prologue heuristic. Each body is walked with the neutral decoder to collect
+/// call and branch edges; data references and the Go `pclntab` reader stay x86-only until
+/// the A64 lifter lands, so `go_names`/`data_refs` are empty here.
+fn analyze_aarch64(session: &mut Session) -> Result<AnalysisResult> {
+    let segments = session.segments().to_vec();
+    let mut starts: BTreeMap<u64, u64> = BTreeMap::new();
+    let entry = session.entry_point();
+    if is_code(&segments, entry) {
+        starts.insert(entry.get(), 0);
+    }
+    for symbol in &session.image().symbols {
+        if symbol.size > 0 && is_code(&segments, symbol.address) {
+            starts.entry(symbol.address.get()).or_insert(symbol.size);
+        }
+    }
+
+    let ordered: Vec<u64> = starts.keys().copied().collect();
+    let mut result = AnalysisResult::default();
+    for (index, start) in ordered.iter().copied().enumerate() {
+        let start_address = Address::new(start);
+        let size = starts.get(&start).copied().unwrap_or(0);
+        let segment_end = segments
+            .iter()
+            .find(|segment| segment.perm.is_executable() && segment.contains(start_address))
+            .map_or(start, |segment| segment.range.end.get());
+        let mut end = if size > 0 {
+            start.saturating_add(size)
+        } else {
+            segment_end
+        };
+        if let Some(next) = ordered.get(index + 1).copied() {
+            end = end.min(next.max(start + 4));
+        }
+        end = end.min(segment_end).max(start + 4);
+        let (body_end, calls, jumps) = walk_aarch64(session, start_address, Address::new(end))?;
+        result.instructions += (body_end.get().saturating_sub(start)) / 4;
+        result.calls.extend(calls);
+        result.jumps.extend(jumps);
+        result.functions.push(AnalyzedFunction {
+            start: start_address,
+            end: Address::new(body_end.get().max(start + 4)),
+            source: FunctionSource::Prologue,
+        });
+    }
+    result.seeds = result.functions.len() as u64;
+    Ok(result)
+}
+
+/// Edges a walk reports: call sites and branch sites, both with their targets.
+type WalkEdges = Vec<(Address, Address)>;
+
+/// Walk one AArch64 function body, returning its end and the call/jump edges it takes.
+fn walk_aarch64(
+    session: &Session,
+    start: Address,
+    end: Address,
+) -> Result<(Address, WalkEdges, WalkEdges)> {
+    let mut addr = start;
+    let mut calls = Vec::new();
+    let mut jumps = Vec::new();
+    while addr.get().saturating_add(4) <= end.get() {
+        let mut raw = [0u8; 4];
+        if session.read_at(addr, &mut raw)? < raw.len() {
+            break;
+        }
+        let Some(insn) = recraft_decode::decode_aarch64(&raw, addr) else {
+            break;
+        };
+        match insn.flow {
+            FlowKind::Call => {
+                if let Some(target) = insn.branch_target {
+                    calls.push((addr, target));
+                }
+            }
+            FlowKind::UnconditionalBranch | FlowKind::ConditionalBranch => {
+                if let Some(target) = insn.branch_target {
+                    jumps.push((addr, target));
+                }
+            }
+            _ => {}
+        }
+        addr = Address::new(addr.get().saturating_add(u64::from(insn.len)));
+        // `b` ends the body; `udf` is the padding between Go functions.
+        if insn.flow == FlowKind::UnconditionalBranch || insn.mnemonic == "udf" {
+            break;
+        }
+        if insn.flow == FlowKind::Return {
+            break;
+        }
+    }
+    Ok((addr, calls, jumps))
+}
+
 /// Run function discovery (plus call/jump/data xref collection) over an opened session.
 pub fn analyze_with_options(
     session: &mut Session,
     options: &AnalysisOptions,
 ) -> Result<AnalysisResult> {
+    if session.arch() == recraft_core::Arch::Aarch64 {
+        return analyze_aarch64(session);
+    }
     let entry = session.entry_point();
     let segments = session.segments().to_vec();
     let image = session.image().clone();

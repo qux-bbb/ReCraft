@@ -125,12 +125,8 @@ fn aarch64_operand(operand: &Operand, addr: Address) -> DecodedOperand {
         }
         // Memory operands: `[xN]`, `[xN, #off]`, `[xN], #off`, `[xN, xM]`.
         Operand::RegPreIndex(base, offset, _) => memory_operand(*base, None, 0, i64::from(*offset)),
-        Operand::RegPostIndex(base, offset) => {
-            memory_operand(*base, None, 0, i64::from(*offset))
-        }
-        Operand::RegPostIndexReg(base, index) => {
-            memory_operand(*base, Some(*index), 0, 0)
-        }
+        Operand::RegPostIndex(base, offset) => memory_operand(*base, None, 0, i64::from(*offset)),
+        Operand::RegPostIndexReg(base, index) => memory_operand(*base, Some(*index), 0, 0),
         Operand::RegRegOffset(base, index, _, _, shift) => {
             memory_operand(*base, Some(*index), *shift, 0)
         }
