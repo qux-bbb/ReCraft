@@ -126,6 +126,16 @@ struct Palette {
     edge_taken: Color32,
     edge_not_taken: Color32,
     edge_jump_table: Color32,
+    /// Raised surface (cards, menus, inputs) above `panel`.
+    surface_2: Color32,
+    /// Hairline separator, 1 px.
+    border: Color32,
+    /// Focus / selected outline.
+    border_strong: Color32,
+    /// Secondary text (labels, hints).
+    muted: Color32,
+    /// The single accent (links, selection, focus).
+    accent: Color32,
 }
 
 impl Palette {
@@ -157,6 +167,11 @@ impl Palette {
         edge_taken: Color32::from_rgb(0x6a, 0xb0, 0x6a),
         edge_not_taken: Color32::from_rgb(0xc0, 0x6a, 0x6a),
         edge_jump_table: Color32::from_rgb(0xa0, 0x8a, 0xc0),
+        surface_2: Color32::from_rgb(0x1a, 0x1e, 0x24),
+        border: Color32::from_rgb(0x26, 0x2b, 0x33),
+        border_strong: Color32::from_rgb(0x33, 0x3a, 0x45),
+        muted: Color32::from_rgb(0x98, 0xa2, 0xb3),
+        accent: Color32::from_rgb(0x40, 0xcd, 0xe0),
     };
 
     /// Full light scheme: white views and light grey chrome.
@@ -188,16 +203,21 @@ impl Palette {
         edge_taken: Color32::from_rgb(0x1f, 0x7a, 0x1f),
         edge_not_taken: Color32::from_rgb(0xa0, 0x20, 0x20),
         edge_jump_table: Color32::from_rgb(0x6a, 0x3f, 0x9f),
+        surface_2: Color32::from_rgb(0xed, 0xf1, 0xf6),
+        border: Color32::from_rgb(0xd6, 0xdc, 0xe4),
+        border_strong: Color32::from_rgb(0xb7, 0xc0, 0xcc),
+        muted: Color32::from_rgb(0x5a, 0x64, 0x72),
+        accent: Color32::from_rgb(0x0e, 0x74, 0x90),
     };
 }
 
 /// Rounded card used by the AI panel sections.
 fn card_frame(pal: Palette) -> egui::Frame {
     egui::Frame::new()
-        .fill(pal.panel)
-        .stroke(egui::Stroke::new(1.0, pal.grid_line))
-        .corner_radius(egui::CornerRadius::same(6))
-        .inner_margin(egui::Margin::same(8))
+        .fill(pal.surface_2)
+        .stroke(egui::Stroke::new(1.0, pal.border))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::same(12))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2798,12 +2818,30 @@ impl ReCraftApp {
             ThemeMode::Dark => egui::Visuals::dark(),
             ThemeMode::Light => egui::Visuals::light(),
         };
+        // Surface ladder (docs/UI.md): view < panel < raised, separated by hairline borders
+        // instead of shadows, with one accent for links, selection and focus.
         visuals.panel_fill = pal.panel;
-        visuals.window_fill = pal.panel;
+        visuals.window_fill = pal.surface_2;
         visuals.extreme_bg_color = pal.view;
-        visuals.faint_bg_color = pal.tab_focused_bg;
+        visuals.faint_bg_color = pal.surface_2;
         visuals.override_text_color = Some(pal.text);
-        visuals.selection.bg_fill = pal.selected_row;
+        visuals.window_stroke = egui::Stroke::new(1.0, pal.border_strong);
+        visuals.selection.bg_fill = pal.accent.gamma_multiply(0.18);
+        visuals.selection.stroke = egui::Stroke::new(1.0, pal.accent);
+        visuals.hyperlink_color = pal.accent;
+        let widgets = &mut visuals.widgets;
+        widgets.noninteractive.bg_fill = pal.panel;
+        widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, pal.border);
+        widgets.inactive.bg_fill = pal.surface_2;
+        widgets.inactive.weak_bg_fill = pal.surface_2;
+        widgets.inactive.bg_stroke = egui::Stroke::new(1.0, pal.border);
+        widgets.hovered.bg_fill = pal.surface_2;
+        widgets.hovered.weak_bg_fill = pal.surface_2;
+        widgets.hovered.bg_stroke = egui::Stroke::new(1.0, pal.border_strong);
+        widgets.active.bg_fill = pal.accent.gamma_multiply(0.12);
+        widgets.active.weak_bg_fill = pal.accent.gamma_multiply(0.12);
+        widgets.active.bg_stroke = egui::Stroke::new(1.0, pal.accent);
+        widgets.open.bg_stroke = egui::Stroke::new(1.0, pal.border_strong);
         ctx.set_theme(match self.theme {
             ThemeMode::Dark => egui::Theme::Dark,
             ThemeMode::Light => egui::Theme::Light,
@@ -2826,8 +2864,21 @@ impl ReCraftApp {
                 TextStyle::Monospace,
                 FontId::new(MONO_SIZE, FontFamily::Monospace),
             );
-            style.spacing.item_spacing = egui::vec2(6.0, 3.0);
-            style.spacing.button_padding = egui::vec2(6.0, 2.0);
+            // Spacing scale 4 / 8 / 12 / 16 and radii 6 / 10 / 12 (docs/UI.md §4).
+            style.spacing.item_spacing = egui::vec2(8.0, 4.0);
+            style.spacing.button_padding = egui::vec2(10.0, 4.0);
+            style.spacing.interact_size.y = 22.0;
+            for widget in [
+                &mut style.visuals.widgets.noninteractive,
+                &mut style.visuals.widgets.inactive,
+                &mut style.visuals.widgets.hovered,
+                &mut style.visuals.widgets.active,
+                &mut style.visuals.widgets.open,
+            ] {
+                widget.corner_radius = egui::CornerRadius::same(6);
+            }
+            style.visuals.window_corner_radius = egui::CornerRadius::same(12);
+            style.visuals.menu_corner_radius = egui::CornerRadius::same(10);
         });
     }
 
@@ -6167,7 +6218,7 @@ impl ReCraftApp {
             ui.label(
                 RichText::new(self.t("ai_assistant"))
                     .size(12.0)
-                    .color(pal.tab_inactive_text),
+                    .color(pal.muted),
             );
             if let Some(job) = self.ai_job.as_ref() {
                 ui.spinner();
@@ -6358,10 +6409,7 @@ impl ReCraftApp {
                             .show(ui, |ui| {
                                 for line in &self.ai_agent_trace {
                                     ui.label(
-                                        RichText::new(line)
-                                            .monospace()
-                                            .size(10.0)
-                                            .color(pal.tab_inactive_text),
+                                        RichText::new(line).monospace().size(10.0).color(pal.muted),
                                     );
                                 }
                             });
@@ -6666,7 +6714,7 @@ impl ReCraftApp {
                         ui.label(
                             RichText::new(&proposal.rationale)
                                 .size(11.0)
-                                .color(pal.tab_inactive_text),
+                                .color(pal.muted),
                         );
                     });
                     if let Some(evidence) = proposal.evidence.first()
@@ -6745,11 +6793,7 @@ impl ReCraftApp {
                                 .color(pal.text),
                         );
                     });
-                    ui.label(
-                        RichText::new(rationale)
-                            .size(11.0)
-                            .color(pal.tab_inactive_text),
-                    );
+                    ui.label(RichText::new(rationale).size(11.0).color(pal.muted));
                 }
             });
             if apply_now {
@@ -10585,6 +10629,42 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    #[test]
+    fn the_modern_theme_lands_the_documented_tokens() {
+        // docs/UI.md §1/§3/§4: surface ladder, one accent, hairline borders, radii 6/10/12.
+        let ctx = egui::Context::default();
+        let mut app = ReCraftApp {
+            theme: ThemeMode::Dark,
+            ..ReCraftApp::default()
+        };
+        app.apply_theme(&ctx);
+        let pal = Palette::DARK;
+        let mut seen_dark = false;
+        ctx.all_styles_mut(|style| {
+            let visuals = &style.visuals;
+            if visuals.panel_fill != pal.panel {
+                return; // the light style is built from the light palette
+            }
+            seen_dark = true;
+            assert_eq!(visuals.extreme_bg_color, pal.view);
+            assert_eq!(visuals.window_fill, pal.surface_2);
+            assert_eq!(visuals.hyperlink_color, pal.accent);
+            assert_eq!(visuals.window_stroke.color, pal.border_strong);
+            assert_eq!(
+                visuals.widgets.inactive.corner_radius,
+                egui::CornerRadius::same(6)
+            );
+            assert_eq!(visuals.window_corner_radius, egui::CornerRadius::same(12));
+            // Selection is an accent tint, not the dense-list row colour.
+            assert_ne!(visuals.selection.bg_fill, pal.selected_row);
+            assert_eq!(visuals.selection.stroke.color, pal.accent);
+        });
+        assert!(seen_dark, "the dark palette was not applied");
+        // The three surface levels must be distinct or the layers disappear.
+        assert_ne!(pal.view, pal.panel);
+        assert_ne!(pal.panel, pal.surface_2);
+        assert_ne!(pal.border, pal.border_strong);
+    }
     fn sample_pe() -> Option<Vec<u8>> {
         for path in [
             "C:/Windows/System32/notepad.exe",
