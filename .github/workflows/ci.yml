@@ -110,7 +110,7 @@ jobs:
         env:
           # Set to 1 only when the corpus or its expectations changed on purpose: the
           # step rewrites the snapshots before checking them.
-          RECRAFT_REGEN_ELF_SNAPSHOTS: "1"
+          RECRAFT_REGEN_ELF_SNAPSHOTS: "0"
         run: |
           set -euo pipefail
           regen="${RECRAFT_REGEN_ELF_SNAPSHOTS:-0}"
