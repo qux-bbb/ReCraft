@@ -1,6 +1,6 @@
 // L1 structure recovery (123 blocks)
 void sub_14000627c_l1(void) {
-    var_40 = -0xADDR;
+    var_20 = -0xADDR;
     rbx = rcx;
     ecx = (int32)(*(u8*)((rcx + 0xADDR)));
     esi = 0xADDR;
@@ -16,8 +16,8 @@ void sub_14000627c_l1(void) {
                 r13d = 0;
                 if (al != 0) {
                     if (*(u8*)((rbx + 0xADDR)) == 0xADDR) {
-                        var_38 = ax;
-                        var_3a = al;
+                        var_28 = ax;
+                        var_26 = al;
                         rdi = 0;
                         edx = *(u32*)((rbx + 0xADDR));
                         eax = (edx >> 4);
@@ -27,15 +27,15 @@ void sub_14000627c_l1(void) {
                                 if ((*(u8*)((rbx + 0xADDR)) & 1) == 0) {
                                     eax = (edx >> 1);
                                     if ((al & 1) != 0) {
-                                        var_38 = 0xADDR;
+                                        var_28 = 0xADDR;
                                         edi = 1;
                                     }
                                 } else {
-                                    var_38 = 0xADDR;
+                                    var_28 = 0xADDR;
                                     edi = 1;
                                 }
                             } else {
-                                var_38 = 0xADDR;
+                                var_28 = 0xADDR;
                                 edi = 1;
                             }
                         }
@@ -91,8 +91,8 @@ void sub_14000627c_l1(void) {
                         rax = *(u64*)(r14);
                         ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                         if ((cl & 1) == 0) {
-                            var_20 = rdx;
-                            sub_140006d38(r14, &var_38, edi, rsi, rdx);
+                            var_40 = rdx;
+                            sub_140006d38(r14, &var_28, edi, rsi, rdx);
                         } else {
                             rax = *(u64*)(r14);
                             if (*(u64*)((rax + 8)) == r13) {
@@ -138,7 +138,7 @@ void sub_14000627c_l1(void) {
                             rax = *(u64*)(r10);
                             ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                             if ((cl & 1) == 0) {
-                                var_20 = rdx;
+                                var_40 = rdx;
                                 sub_140006d38(r10, r11, r8, r9, rdx);
                             } else {
                                 rax = *(u64*)(r10);
@@ -159,21 +159,21 @@ void sub_14000627c_l1(void) {
                                 if (ecx != 0) {
                                     r14 = (rbx + 0xADDR);
                                     while (1) {
-                                        var_38 = r13d;
+                                        var_28 = r13d;
                                         r9d = (uint32)(*(u16*)(r12));
                                         r12 += 2;
                                         rax = *(u64*)((rbx + 8));
-                                        var_20 = rax;
-                                        sub_14000c348(&var_38, &var_48, 6, (uint32)(*(u16*)(r12)), *(u64*)((rbx + 8)));
+                                        var_40 = rax;
+                                        sub_14000c348(&var_28, &var_18, 6, (uint32)(*(u16*)(r12)), *(u64*)((rbx + 8)));
                                         if (eax != 0) break;
-                                        r8d = var_38;
+                                        r8d = var_28;
                                         if (r8d == 0) break;
                                         rdx = *(u64*)((rbx + 8));
                                         rax = *(u64*)(r14);
                                         ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
-                                            var_20 = rdx;
-                                            sub_140006d38(r14, &var_48, var_n28, (rbx + 0xADDR), rdx);
+                                            var_40 = rdx;
+                                            sub_140006d38(r14, &var_18, var_n28, (rbx + 0xADDR), rdx);
                                         } else {
                                             rax = *(u64*)(r14);
                                             if (*(u64*)((rax + 8)) == r13) {
@@ -186,7 +186,7 @@ void sub_14000627c_l1(void) {
                                     *(u32*)((rbx + 0xADDR)) = -1;
                                 }
                             } else {
-                                var_38 = r13;
+                                var_28 = r13;
                                 esi = r13d;
                                 if (ecx != 0) {
                                     rdi = (rbx + 0xADDR);
@@ -194,7 +194,7 @@ void sub_14000627c_l1(void) {
                                     do {
                                         edx = (uint32)(*(u16*)(r12));
                                         r12 += 2;
-                                        sub_14000c868(&var_48, (uint32)(*(u16*)(r12)), &var_38, *(u64*)((rbx + 8)));
+                                        sub_14000c868(&var_18, (uint32)(*(u16*)(r12)), &var_28, *(u64*)((rbx + 8)));
                                         r8 = rax;
                                         if (rax == -1) {
                                             *(u32*)(rdi) = -1;
@@ -204,8 +204,8 @@ void sub_14000627c_l1(void) {
                                         rax = *(u64*)(r14);
                                         ecx = (*(u32*)((rax + 0xADDR)) >> 0xADDR);
                                         if ((cl & 1) == 0) {
-                                            var_20 = rdx;
-                                            sub_140006d38(r14, &var_48, r8, rdi, rdx);
+                                            var_40 = rdx;
+                                            sub_140006d38(r14, &var_18, r8, rdi, rdx);
                                         } else {
                                             rax = *(u64*)(r14);
                                             if (*(u64*)((rax + 8)) == r13) {

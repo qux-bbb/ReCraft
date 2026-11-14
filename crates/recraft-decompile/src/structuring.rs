@@ -73,6 +73,99 @@ fn apply_user_var_names(lines: &mut [PseudoLine], session: &dyn SessionView, fun
     }
 }
 
+/// Frame size from the prologue: `push rbp; mov rbp, rsp; sub rsp, N` → `N`.
+fn prologue_frame_size(session: &dyn SessionView, start: Address) -> Option<i64> {
+    let mut saw_frame_pointer = false;
+    let mut addr = start;
+    for _ in 0..12 {
+        let insn = session.insn_at(addr).ok().flatten()?;
+        if insn.is_invalid() {
+            return None;
+        }
+        let mnemonic = insn.mnemonic();
+        if mnemonic == iced_x86::Mnemonic::Mov
+            && insn.op_register(0) == iced_x86::Register::RBP
+            && insn.op_register(1) == iced_x86::Register::RSP
+        {
+            saw_frame_pointer = true;
+        }
+        if saw_frame_pointer
+            && mnemonic == iced_x86::Mnemonic::Sub
+            && insn.op_register(0) == iced_x86::Register::RSP
+        {
+            let size = match insn.op_kind(1) {
+                iced_x86::OpKind::Immediate8 => i64::from(insn.immediate8()),
+                iced_x86::OpKind::Immediate32 => i64::from(insn.immediate32()),
+                iced_x86::OpKind::Immediate8to32 => i64::from(insn.immediate8to32()),
+                iced_x86::OpKind::Immediate8to64 => insn.immediate8to64(),
+                iced_x86::OpKind::Immediate32to64 => insn.immediate32to64(),
+                _ => return None,
+            };
+            return (size > 0).then_some(size);
+        }
+        let next = insn.next_addr();
+        if next <= addr {
+            return None;
+        }
+        addr = next;
+    }
+    None
+}
+
+/// Rename `var_<rsp offset>` to the frame-pointer depth IDA uses: `[rbp-0x18]` becomes
+/// `var_18` and `[rbp-8]` becomes `var_8`. Only slots inside the frame are touched; x86
+/// arguments above rbp keep their `[ebp+…]` spelling.
+fn relabel_frame_slots(lines: &mut [PseudoLine], frame: i64) {
+    fn replacement(token: &str, frame: i64) -> Option<String> {
+        let hex = token.strip_prefix("var_")?;
+        let offset = i64::from_str_radix(hex, 16).ok()?;
+        if offset <= 0 || offset >= frame {
+            return None;
+        }
+        Some(format!("var_{:x}", frame - offset))
+    }
+    // Two phases: `var_8` → `var_18` and `var_18` → `var_8` in one function would otherwise
+    // feed each other.
+    let mut names: Vec<String> = Vec::new();
+    for line in lines.iter() {
+        for token in line
+            .text
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        {
+            if let Some(new) = replacement(token, frame)
+                && !names.contains(&new)
+            {
+                names.push(new);
+            }
+        }
+    }
+    if names.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        if !line.text.contains("var_") {
+            continue;
+        }
+        let mut out = String::with_capacity(line.text.len());
+        let mut token = String::new();
+        for ch in line.text.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                token.push(ch);
+                continue;
+            }
+            if !token.is_empty() {
+                out.push_str(&replacement(&token, frame).unwrap_or_else(|| token.clone()));
+                token.clear();
+            }
+            out.push(ch);
+        }
+        if !token.is_empty() {
+            out.push_str(&replacement(&token, frame).unwrap_or(token));
+        }
+        line.text = out;
+    }
+}
+
 fn structure(
     session: &dyn SessionView,
     start: Address,
@@ -708,6 +801,12 @@ fn structure(
             .find(|line| line.text.starts_with("// L2 structure recovery ("))
     {
         header.text = format!("{}, {fallbacks} goto)", header.text.trim_end_matches(')'));
+    }
+    // IDA spells locals by their distance below the frame pointer. The printer names them by
+    // rsp offset whenever `stack_layout` could not prove the frame (a `pop` mid-prologue, an
+    // intrinsic that touches rsp …), so relabel with the frame size from the prologue.
+    if let Some(frame) = prologue_frame_size(session, function.start) {
+        relabel_frame_slots(&mut lines, frame);
     }
     // A user-set prototype is authoritative for naming/definitions; show it verbatim
     // above the generated signature (which already reflects its parsed types/names).

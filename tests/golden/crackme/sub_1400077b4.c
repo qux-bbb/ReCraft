@@ -17,7 +17,7 @@ void sub_1400077b4_l1(void) {
             }
             rax = &var_78;
             var_70 = rdi;
-            var_20 = rax;
+            var_10 = rax;
             r8d = 0;
             var_78 = rdi;
             edx = 0;
@@ -29,7 +29,7 @@ void sub_1400077b4_l1(void) {
             if (rax != 0) {
                 r8 = (rax + (r15 * 8));
                 rax = &var_78;
-                var_20 = rax;
+                var_10 = rax;
                 sub_140007594(rsi, rbx, (rax + (r15 * 8)), &var_70, &var_78);
                 if (r14d != 1) {
                     var_68 = rdi;
