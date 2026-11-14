@@ -553,3 +553,13 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
   常量条件，它可能暴露的是我们常量归属推断的边界）。
 - 不要在未跑 `recraft-cli lint` 的情况下提交文本 pass 改动——它能立刻发现未定义标签、
   括号失衡、参数未声明等硬错误。
+
+## 4. AArch64 的已知缺口（2026-11-14 记录）
+
+- **`metrics`/`lint` 在 AArch64 上统计为 0 条指令**：质量统计走 `recraft_analysis::build_cfg` +
+  `session.insn_at`，两条都是 iced/x86 路径；A64 需要一条中立 CFG 才能被统计。
+  临时的替代度量是 `scripts/measure-a64-lift.ps1`（按函数范围逐条解码，当前 96.3%）。
+- **结构化 L2 仍是 x86-only**：`--l1`/`--l2` 在 AArch64 上回退到 L0（线性 + 标签），
+  见 `crates/recraft-decompile/src/structuring.rs` 的 arch 判断。
+- 两者共用同一个前置条件：**中立 CFG**（用 `DecodedInsn` 而不是 iced 指令建块），
+  做完之后 A64 才能同时拿到结构化 L2 与可统计的质量指标。
