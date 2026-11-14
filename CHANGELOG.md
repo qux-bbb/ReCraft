@@ -13,6 +13,16 @@
 
 ### 变更
 
+- **图标回到 v1（用户决定）。** 2026-11-14 先用 v2「字母 + 扫描线」替换，随后试了 v3 双变体，
+  用户认为都不如原版，于是恢复 v1：六边形里的几何 R、六个电路节点与一条走线、深海底渐变
+  底（`#071B26 → #0C3A46`）+ 薄荷青光晕。`assets/generate_icon.py` 回退到 v1 版本（Pillow +
+  numpy，重跑逐字节可复现），ICO 仍是 16/24/32/48/64/128/256 七帧；exe 内嵌图标与 ICO 32px
+  帧逐像素一致（maxdiff 0）。安装器向导 art 的配色回到 v1 的 `#0C3A46` / `#1EB5CD`，
+  `docs/ICON.md` 改回 v1 的设计说明并记录这次来回。v2/v3 的脚本与产物保留在 git 历史
+  （`0874a32`、`966b9a1`）。
+
+### 修复
+
 - **AArch64 解码器从 yaxpeax-arm 换成 capstone。** 理由是可维护性：yaxpeax-arm 只有 51 个
   GitHub star、单一维护者，而 capstone 有 9,187 star、被主流逆向工具长期使用。落地：移除
   `yaxpeax-arm`/`yaxpeax-arch`，改用 `capstone = "=0.13.0"`（`full` feature，C 构建由
