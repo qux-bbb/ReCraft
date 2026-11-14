@@ -11,7 +11,18 @@
 
 ## [未发布]
 
-### 修复
+### 变更
+
+- **可以拿 IDA 的字符串列表对拍了。** 新增 `scripts/ida-strings-dump.py`（`ida64.exe -A -S`
+  调用，`idautils.Strings()` → JSON）与 `scripts/compare-ida-strings.ps1`（自动 import/analyze
+  目标、跑 IDA、按地址比对并打印差异）。默认 IDA 路径是
+  `D:\sec_tools\IDA_Pro_v8.3_Portable\ida64.exe`，可用 `-Ida` 覆盖。
+  crackme 实测：616 个共有地址文本 **全部一致**；仅 ReCraft 多 8 条（PE 头里的
+  `!This program cannot be run in DOS mode.`、各节名，以及修正后的 banner）；仅 IDA 多 468 条
+  （都在代码段里，是 x86 操作码被当成可打印串，我们在扫描时跳过已解码代码）。
+- `recraft strings --json` 不再 `trim()` 文本：`"Enter flag: "` 这种尾随空格与
+  `"  Simple Crackme…"` 的前导空格现在与字节、与 IDA 一致（UI 原本就不裁剪）。
+
 
 - **字符串从代码引用的位置开始，不再多带一个前导字节。** crackme 里的乱序表以 `O` 结尾，
   紧接着就是 `"=========================================="` 且中间没有 NUL，线性扫描于是一次把

@@ -2817,10 +2817,7 @@ fn truncate_string(session: &mut Session, addr: Address, len: u32, max_text: usi
     // Strings are file-backed; a read failure just yields an empty preview.
     let read = session.read_at(addr, &mut bytes).unwrap_or(0);
     bytes.truncate(read);
-    let text = String::from_utf8_lossy(&bytes)
-        .replace('\0', "")
-        .trim()
-        .to_owned();
+    let text = String::from_utf8_lossy(&bytes).replace('\0', "");
     let mut chars: Vec<char> = text.chars().collect();
     if chars.len() > max_text {
         chars.truncate(max_text);
