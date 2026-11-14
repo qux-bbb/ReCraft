@@ -9,16 +9,31 @@
 开发记录（每条修复、每次指标变化、每个负结果）归档在
 [docs/CHANGELOG-0.1.0.md](docs/CHANGELOG-0.1.0.md)。
 
-## [未发布]
+## [0.4.0] - 2026-11-14
+
+0.4.0 收 W6：界面现代化第一遍（主题令牌、空状态、框架条、标签页、图标 v3、对比度回归）；
+命令区收敛与侧栏卡片化顺延到 0.4.x。
 
 ### 界面
 
-- **（0.4.0 进行中）主题令牌与现代化外观第一步。** `docs/UI.md` 定下设计基线（三层近黑
-  表面、1px 发丝边框、单一青色强调 `#40CDE0`、间距 4/8/12/16、圆角 6/10/12）；`Palette`
-  扩展 surface/border/muted/accent，`apply_theme` 把它们写进 egui Visuals（分层、选择色、
-  超链接、焦点、弹层阴影），欢迎页改为大标题 + 青色主操作 + 最近项目卡片，顶栏与状态栏
-  改为带发丝边框的 surface_1 条，标签页并入表面阶梯。渲染回归由
-  `the_modern_theme_lands_the_documented_tokens` 钉住。命令区收敛与侧栏卡片化留到 0.4.0。
+- **主题令牌与现代化外观。** `docs/UI.md` 定下设计基线（三层近黑表面 surface_0/1/2、
+  1px 发丝边框、单一青色强调 `#40CDE0`、间距 4/8/12/16、圆角 6/10/12、交互态与可访问性
+  要求）；`Palette` 扩展 surface/border/muted/accent（暗/亮各一套），`apply_theme` 把它们
+  写进 egui Visuals（三层表面、控件 6 / 菜单 10 / 窗口 12 圆角、强调色选择态、超链接与
+  焦点统一、仅弹层有柔和阴影）。欢迎页改为 24px 大标题 + 青色主操作 + 最近项目卡片；
+  顶栏与状态栏改为带发丝边框的 surface_1 条；标签页并入表面阶梯；次级文字统一用 muted。
+  渲染回归由 `the_modern_theme_lands_the_documented_tokens` 钉住，可访问性由
+  `the_palette_meets_the_documented_contrast_floor`（正文/次级 ≥4.5:1、强调色 ≥3:1）守住。
+
+- **应用图标 v3：按尺寸双变体。** 16/24/32 px 改为 5×7 位图 **R** + 加粗青色扫描带 + 3 个
+  刻度（硬像素落位，任务栏里仍读得出"字母 + 扫描线"）；48–256 px 保留几何 R、光晕、圆角
+  描边、投影与 7 个刻度。顺带修掉几何 R 骨架越界（x 到 1270 而画布只有 1024）导致的右侧
+  裁切。`assets/generate_icon.py` 现在手工拼装 ICO 的 PNG 帧，每个尺寸独立绘制；exe 嵌入
+  图标与 ICO 32px 帧逐像素一致。`docs/ICON.md` 记录 v3 设计与生成方式。
+
+- **演示脚本默认用 release 二进制。** `scripts/demo.ps1` 以前固定 `target/debug`，发布会
+  后演示里的 MCP `serverInfo.version` 还是旧版本；现在优先 `target/release`，缺失才回退
+  debug 并构建。
 
 ## [0.3.0] - 2026-11-14
 

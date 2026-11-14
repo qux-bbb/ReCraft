@@ -115,6 +115,7 @@
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
 - **0.3.0 已打包（2026-11-14）**：dist/recraft-v0.3.0-windows-x64.zip 15.7 MiB、.msi 14.1 MiB、SHA256SUMS.txt；package.ps1 / erify-package.ps1 / demo.ps1 均 PASS，tag 0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
+- **W6**（✅ 2026-11-14 收口）：界面现代化第一遍（docs/UI.md 设计基线、主题令牌、欢迎页空状态、顶栏/状态栏发丝边框、标签页表面阶梯、对比度回归）、图标 v3 双变体、演示脚本改用 release；命令区收敛与侧栏卡片化顺延到 0.4.x。**0.4.0 已打包**（zip 15.7 MiB + MSI 14.1 MiB + SHA256SUMS；package/verify/demo 全 PASS；dist 内 exe 图标与 ICO 32px 帧逐像素一致），tag `v0.4.0`。
 - 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。
 
 规则：
