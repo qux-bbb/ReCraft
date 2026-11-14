@@ -18,8 +18,8 @@
 > 请用 `SHA256SUMS.txt` 校验；预览清单见 [`docs/M4.md`](docs/M4.md)，
 > 常见问题见 [`docs/FAQ.md`](docs/FAQ.md)。
 
-ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的原生桌面反汇编器与反编译器，
-从第一天就内置 MCP 服务器和 LLM 辅助。
+ReCraft 是一个 AI 原生的二进制逆向工程平台：反汇编与反编译 PE32/PE32+、ELF32/ELF64 与
+ARM64（AArch64），从第一天就内置 MCP 服务器和 LLM 辅助。
 
 它是独立的净室实现，**与 Hex-Rays / IDA Pro 没有关联**，不使用 IDA 的 SDK、数据库格式或
 签名库。

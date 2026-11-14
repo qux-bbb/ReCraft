@@ -19,8 +19,9 @@
 > (SmartScreen will warn) — verify them against `SHA256SUMS.txt`. See
 > [`docs/M4.md`](docs/M4.md) for the preview checklist and [`docs/FAQ.md`](docs/FAQ.md).
 
-ReCraft is an AI-native reverse-engineering platform: a native desktop disassembler and
-decompiler for Windows binaries, with an MCP server and LLM assistance built in from day one.
+ReCraft is an AI-native reverse-engineering platform: a native desktop app that disassembles
+and decompiles PE32/PE32+, ELF32/ELF64 and ARM64 (AArch64) binaries, with an MCP server and
+LLM assistance built in from day one.
 
 It is an independent, clean-room implementation. It is **not** affiliated with Hex-Rays or
 IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
