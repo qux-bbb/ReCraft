@@ -97,11 +97,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # ADR-009: the headless core is portable. This job proves it on every push,
       # which is also what the ELF work needs (Linux-built corpus samples).
+      # 32-bit headers must be in place *before* the build: `corpus/build-linux.sh`
+      # only emits libcorpus32.so when `gcc -m32` works, otherwise it skips the file
+      # and the gate below fails with "cannot read …/libcorpus32.so".
+      - name: install 32-bit glibc headers (ELF32 corpus)
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - name: build ELF corpus (gcc)
         run: bash corpus/build-linux.sh
-      - name: install 32-bit glibc headers (ELF32 corpus)
-        # `corpus/build-linux.sh` skips libcorpus32.so without them; the gate below needs it.
-        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - name: build real crackme fixture as ELF (feeds the fixture tests)
         run: bash corpus/real/crackme/build-linux.sh
       - name: ELF corpus quality gate
