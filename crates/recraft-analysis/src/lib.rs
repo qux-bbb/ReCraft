@@ -1003,6 +1003,36 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// A literal that follows a data array with no NUL in between must start where the code
+    /// references it. The crackme's shuffled table ends in `O` right before the banner, so a
+    /// linear scan reports `O====…` and the Strings window inherits one bogus character.
+    #[test]
+    fn a_string_that_starts_mid_run_begins_at_its_reference() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/real/crackme/crackme.exe");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skipping: {} is missing", path.display());
+            return;
+        };
+        let (result, mut session, _dir) = analyze_bytes(&bytes);
+        // Strings are read from the project, so the xrefs have to be persisted first: the
+        // snapping needs to know where the code points.
+        persist(&mut session, &result).unwrap();
+        let strings = extract_strings(&mut session, 4, 10_000).unwrap();
+        let banner = strings
+            .iter()
+            .find(|string| string.text.contains("=========="))
+            .expect("the banner is extracted");
+        assert_eq!(banner.text, "==========================================");
+        assert_eq!(banner.len, 42);
+        assert!(
+            !strings
+                .iter()
+                .any(|string| string.text.starts_with('O') && string.text.contains("====")),
+            "no literal may start one byte early"
+        );
+    }
+
     /// PE-ARM64: the image has no symbol table, so .pdata (8-byte ARM64 entries) is the
     /// only source of function starts and ends.
     #[test]

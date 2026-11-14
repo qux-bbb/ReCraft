@@ -313,6 +313,7 @@ ui_thinking_hint = Off (default): answer directly, fastest first token. On: the 
 ui_thinking_process = Thinking · { $chars } chars
 ui_thinking = thinking…
 ui_edit_string = Edit string…
+ui_edit_string_hint = Edit the selected string (right-click a row works too)
 ui_delete_string = Delete string
 ui_restore_string = Restore default
 

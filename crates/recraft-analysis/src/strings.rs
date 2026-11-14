@@ -22,6 +22,8 @@
 //! byte ends a run" behaviour. Scans run in chunks so a 1 GiB sample is never materialised
 //! in memory; runs split across chunk boundaries are carried over.
 
+use std::collections::BTreeSet;
+
 use recraft_common::{Address, Result};
 use recraft_core::Session;
 
@@ -355,7 +357,86 @@ pub fn extract_strings_with(
         }
     }
 
-    Ok(drop_overlaps(scanner.out))
+    let strings = drop_overlaps(scanner.out);
+    snap_to_references(session, strings, options.min_len)
+}
+
+/// Start a literal where the code references it, the way IDA lists strings.
+///
+/// A data array can end with a printable byte immediately before a literal — the crackme's
+/// shuffled table ends in `O`, and the banner follows with no NUL in between — so a linear
+/// scan reports one character too many (`O====…`). The code references the real first
+/// character, so the candidate is split there; the prefix only survives when it is long
+/// enough to be a literal on its own.
+fn snap_to_references(
+    session: &mut Session,
+    strings: Vec<ExtractedString>,
+    min_len: usize,
+) -> Result<Vec<ExtractedString>> {
+    let referenced: BTreeSet<u64> = session
+        .all_xrefs(Some(crate::XREF_DATA))?
+        .into_iter()
+        .map(|xref| xref.to.get())
+        .collect();
+    if referenced.is_empty() {
+        return Ok(strings);
+    }
+    let mut out = Vec::with_capacity(strings.len());
+    for string in strings {
+        let start = string.addr.get();
+        let end = start + u64::from(string.len);
+        let Some(target) = referenced.range(start + 1..end).next().copied() else {
+            out.push(string);
+            continue;
+        };
+        let prefix_len = (target - start) as usize;
+        if prefix_len >= min_len {
+            if let Some(prefix) = decode_range(session, start, prefix_len, string.enc)? {
+                out.push(prefix);
+            }
+        }
+        let rest_len = (end - target) as usize;
+        if let Some(rest) = decode_range(session, target, rest_len, string.enc)? {
+            out.push(rest);
+        }
+    }
+    Ok(out)
+}
+
+/// Re-decode `len` bytes at `start` as one string in `enc`.
+fn decode_range(
+    session: &mut Session,
+    start: u64,
+    len: usize,
+    enc: i64,
+) -> Result<Option<ExtractedString>> {
+    if len == 0 {
+        return Ok(None);
+    }
+    let mut bytes = vec![0u8; len];
+    session.read_at(Address::new(start), &mut bytes)?;
+    let (text, size) = if enc == STRING_ENC_UTF16LE {
+        let wide: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let text: String = wide
+            .iter()
+            .map(|&value| char::from_u32(u32::from(value)).unwrap_or('\u{fffd}'))
+            .collect();
+        (text, wide.len() * 2)
+    } else {
+        (String::from_utf8_lossy(&bytes).into_owned(), bytes.len())
+    };
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ExtractedString {
+        addr: Address::new(start),
+        len: size as u32,
+        enc,
+        text,
+    }))
 }
 
 /// IDA walks the database once and steps over each literal it reports, so a later

@@ -313,6 +313,7 @@ ui_thinking_hint = 关（默认）：模型直接作答，首字最快。开：�
 ui_thinking_process = 思考过程 · { $chars } 字
 ui_thinking = 思考中…
 ui_edit_string = 编辑字符串…
+ui_edit_string_hint = 编辑选中的字符串（右键行也可以）
 ui_delete_string = 删除该字符串
 ui_restore_string = 恢复默认
 

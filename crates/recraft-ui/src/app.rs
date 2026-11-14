@@ -5778,6 +5778,14 @@ impl ReCraftApp {
         let hint = self.t("ui_substring");
         let hide_label = self.t("ui_hide_header_strings");
         let setup_label = self.t("ui_setup");
+        // Editing used to live only in the row context menu; a visible button makes it
+        // discoverable for the selected row (the menu is still there).
+        let edit_label = self.t("ui_edit_string");
+        let selected_row = self
+            .list_sel
+            .filter(|(pane, _)| *pane == Pane::Strings)
+            .map(|(_, key)| key);
+        let mut edit_selected = None;
         ui.horizontal(|ui| {
             ui.weak(self.t("ui_filter"));
             ui.add(
@@ -5790,8 +5798,28 @@ impl ReCraftApp {
             if ui.button(setup_label).clicked() {
                 self.strings_setup = Some(self.strings_min_len);
             }
+            if ui
+                .add_enabled(
+                    selected_row.is_some(),
+                    egui::Button::new(edit_label.as_str()),
+                )
+                .on_hover_text(self.t("ui_edit_string_hint"))
+                .clicked()
+            {
+                edit_selected = selected_row;
+            }
             ui.weak(format!("{}", self.strings.len()));
         });
+        if let Some(key) = edit_selected
+            && let Some(row) = self.strings.iter().find(|row| row.addr.get() == key)
+        {
+            self.edit = Some(EditState {
+                kind: EditKind::StringText,
+                addr: row.addr,
+                text: row.text.clone(),
+                just_opened: true,
+            });
+        }
         let filter = self.string_filter.to_lowercase();
         let hide_header = self.strings_hide_header;
         // Rows the filter and the header switch keep, in list order. Built once so the
