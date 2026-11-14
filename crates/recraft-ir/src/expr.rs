@@ -178,6 +178,8 @@ pub enum Builtin {
     Rdtsc,
     /// `mov r64, gs:[disp]`: read the thread environment block at `disp`.
     ReadGsqword,
+    /// `mov r64, fs:[disp]`: the SysV equivalent (the stack canary lives at `fs:0x28`).
+    ReadFsqword,
 }
 
 impl Builtin {
@@ -185,6 +187,7 @@ impl Builtin {
         match self {
             Builtin::Rdtsc => "__rdtsc",
             Builtin::ReadGsqword => "__readgsqword",
+            Builtin::ReadFsqword => "__readfsqword",
         }
     }
 }

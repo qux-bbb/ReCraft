@@ -200,9 +200,13 @@ impl Lifter {
         let mut stmts = Vec::new();
         let addr = insn.addr();
         let flow = match insn.mnemonic() {
-            // `mov r64, gs:[disp]` reads the TEB; `rdtsc` reads the timestamp counter.
+            // `mov r64, gs:[disp]` reads the TEB and `mov r64, fs:[disp]` the SysV TLS
+            // block (the stack canary sits at `fs:0x28`); `rdtsc` reads the timestamp counter.
             M::Mov if insn.instruction().segment_prefix() == iced_x86::Register::GS => {
-                self.lift_gs_load(insn, &mut stmts)
+                self.lift_segment_load(insn, &mut stmts, Builtin::ReadGsqword)
+            }
+            M::Mov if insn.instruction().segment_prefix() == iced_x86::Register::FS => {
+                self.lift_segment_load(insn, &mut stmts, Builtin::ReadFsqword)
             }
             M::Rdtsc => self.lift_rdtsc(insn, &mut stmts),
             M::Mov | M::Movd | M::Movq | M::Movdqa | M::Movdqu | M::Movaps | M::Movups => {
@@ -1401,7 +1405,7 @@ impl Lifter {
     }
 
     /// `mov r64, gs:[disp]`: a read of the thread environment block at `disp`.
-    fn lift_gs_load(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>) -> Flow {
+    fn lift_segment_load(&mut self, insn: &Insn, stmts: &mut Vec<Stmt>, kind: Builtin) -> Flow {
         use iced_x86::Register;
         let Some(view) = from_iced(insn.op_register(0)) else {
             return self.intrinsic(insn, stmts);
@@ -1412,11 +1416,11 @@ impl Lifter {
         let error = insn.instruction().memory_displacement64();
         let arg = self.constant(error);
         let value = self.push(Expr::Builtin {
-            kind: Builtin::ReadGsqword,
+            kind,
             arg: Some(arg),
         });
         self.write_view(view, value, stmts);
-        let _ = Register::GS;
+        let _ = (Register::GS, Register::FS);
         Flow::Fallthrough
     }
 
