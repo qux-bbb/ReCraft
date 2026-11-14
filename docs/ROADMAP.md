@@ -1,8 +1,8 @@
 # 路线图（DESIGN §14 摘要）
 
-> 状态更新于 2026-11-08：M0–M4 的功能、产物与安装器验证完成，**0.1.0（技术预览）已发布**
-> （zip + MSI + SHA256SUMS 在 GitHub Releases）。发布后仍待补的外部项只有代码签名（需证书）
-> 与干净 VM 复验。详细设计见 [DESIGN.md](DESIGN.md)，里程碑验收记录见 [M4.md](M4.md)。
+> 状态更新于 2026-11-14：M0–M4 的功能、产物与安装器验证完成，**0.1.0（技术预览）已发布**
+> （zip + MSI + SHA256SUMS 在 GitHub Releases）。发布后的待补项：代码签名已于 2026-11-14
+> 废弃，干净 VM 复验已完成。详细设计见 [DESIGN.md](DESIGN.md)，里程碑验收记录见 [M4.md](M4.md)。
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
@@ -10,7 +10,7 @@
 | M1 | 函数发现 + 字符串/xref/API 标签、CLI/UI 基线、undo/redo | ✅ 完成 |
 | M2 | IR/lifter 语义覆盖、L1 结构化、L2 签名/ABI/类型、MCP 只读工具 | ✅ 完成（M2 验收时：corpus 覆盖 97.4%、结构化 100%；notepad 覆盖 99.4%、结构化 86.1%） |
 | M3 | 质量门禁/golden、AI（解释/命名/摘要/UI propose-apply/http(s) provider/prompt 评测/缓存审计）、1 GiB 性能门禁、打包 | ✅ 完成 |
-| M4 | 覆盖率冲刺、安装包验证、文档/演示、公开技术预览 | ✅ 完成并已发布 **0.1.0**（zip + MSI + SHA256SUMS 在 GitHub Releases，结构与载荷脚本化验证）；代码签名与干净 VM 复验为发布后待补项 |
+| M4 | 覆盖率冲刺、安装包验证、文档/演示、公开技术预览 | ✅ 完成并已发布 **0.1.0**（zip + MSI + SHA256SUMS 在 GitHub Releases，结构与载荷脚本化验证）；干净 VM 复验已完成，代码签名已废弃（2026-11-14） |
 | M5+（预览后） | 动态调试、ARM64、插件/脚本 API、团队协作 | 规划中 |
 
 ## DESIGN 差距清单（v0.1 预览前）
@@ -36,8 +36,9 @@
 1. **安装器**：WiX 5 MSI 已生成，结构与载荷由 `scripts/verify-msi.ps1` 校验（`msiexec /a`
    解包逐字节比对）；安装→CLI→卸载流程需提权提示符或 CI msi job，发布前在干净
    Win10/Win11 各复验一次（按机器安装，需要一次管理员权限）。
-2. **代码签名**：v0.1 决定暂不签名（SHA-256 校验 + SmartScreen 操作说明）；后续可申请
-   SignPath Foundation（免费 OSS）或购买 OV 证书，再重打发布产物。
+2. **代码签名**：**已废弃（2026-11-14，用户决定）**——不申请 SignPath Foundation、Certum
+   开源证书或 Azure Trusted Signing，也不购买 OV/EV 证书。发布物保持未签名，
+   `SHA256SUMS.txt` 是完整性凭据；归档见 [SIGNING.md](SIGNING.md)。
 3. **UI 渲染快照 / README 截图**：无头 egui 交互测试已覆盖；README/DEMO 截图已按
    2026-11-07 界面刷新，动图尚未生成。
 4. **增强项（非 v1 门槛）**：真正 SSA/phi、共享外键/嵌套结构体布局、`cargo-fuzz`
@@ -52,7 +53,7 @@
 2. ARM64 支持，插件/脚本 API（自有 API，不做 IDAPython 兼容）。
 3. SSA/phi 与更强的类型推断，提升真实样本结构化率与可读性（评估：全 SSA + phi 成本高、
    对 preview 收益有限；当前先以 SSA-lite + 可见噪声清理为主，列为预览后增强）。
-4. 自动更新、MSIX 打包与签名流水线。
+4. 自动更新、MSIX 打包（签名流水线已废弃，见 [SIGNING.md](SIGNING.md)）。
 
 ## 待办编排：0.2.0–0.4.0（2026-11-14 定）
 
@@ -66,7 +67,7 @@
 | W3 | 多入口循环（10 天硬停）、inline asm 收敛 | 15 | 0.3.0 |
 | W4 | 中立解码抽象、ADR-015 | 5.5 | 0.3.0 |
 | W5 | ARM64（先定 kill criteria） | 30 | **0.3.0** |
-| W6 | UI 现代化、图标迭代、发起签名申请 | 15 | **0.4.0** |
+| W6 | UI 现代化、图标迭代（签名申请已废弃） | 15 | **0.4.0** |
 | P | decbench 收口（W1 顺手） | 1 | — |
 
 总量 ≈ 92 人日；按 DESIGN §14 的 3 天/周 ≈ 30 周，加 20% 缓冲 ≈ 37 周。
@@ -119,19 +120,22 @@ ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 
   L0 伪 C」，结构化 L2 需要中立 CFG，列为后续项；PE-ARM64、A64 lint 与 SIMD 命名已完成/已记录。
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
-- **P 线**：DecBench 调研收口（docs/DECBENCH.md：指标对照、提交判据、本地跑法；2026-11-14 决定暂不公开提交）；代码签名申请包与 .github/workflows/release.yml 就绪（tag 触发打包/校验/可选发布，SignPath 签名位已标注），正式申请待你提供仓库地址与组织信息。
+- **P 线**：DecBench 调研收口（docs/DECBENCH.md：指标对照、提交判据、本地跑法；2026-11-14
+  决定暂不公开提交）；`.github/workflows/release.yml` 就绪（tag 触发打包/校验/可选发布）。
+  **代码签名已废弃（2026-11-14，用户决定）**：不申请 SignPath / Certum / Azure，发布物保持
+  未签名，`SHA256SUMS.txt` 作为完整性凭据，归档见 [SIGNING.md](SIGNING.md)。
 - **0.3.0 已打包（2026-11-14）**：`dist/recraft-v0.3.0-windows-x64.zip` 15.7 MiB、`.msi` 14.1 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 均 PASS，tag `v0.3.0`。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
-erify-package.ps1 / demo.ps1 均 PASS，tag 0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
+0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
 - **W6**（✅ 2026-11-14 收口）：界面现代化第一遍（docs/UI.md 设计基线、主题令牌、欢迎页空状态、顶栏/状态栏发丝边框、标签页表面阶梯、对比度回归）、图标 v3 双变体、演示脚本改用 release；命令区收敛与侧栏卡片化顺延到 0.4.x。**0.4.0 已打包**（zip 15.7 MiB + MSI 14.1 MiB + SHA256SUMS；package/verify/demo 全 PASS；dist 内 exe 图标与 ICO 32px 帧逐像素一致），tag `v0.4.0`。
 - 六波全部收口（2026-11-14）：W1 → 0.2.0、W3/W4/W5 → 0.3.0、W6 → 0.4.0；W2 的两项随
-  0.2.0 发布。P 线的 DecBench 与签名见上，签名正式申请待用户提供仓库地址与组织信息。
+  0.2.0 发布。P 线的 DecBench 见上，签名已废弃。
 
 规则：
 
 - 每波结束过 `package.ps1` → `verify-package.ps1` → `demo.ps1`，W1 末发 **0.2.0**；
 - W3 的两个时间盒任务不阻塞发版：到点没达标就记录结论、保留现状；
 - W5 先写死 kill criteria（100 函数与 objdump 逐指令一致、覆盖率 ≥60% 才承诺 L2，否则反编译标 beta），再开工；
-- 签名保持 2026-11-08 的暂缓决定，W6 开始时递 SignPath 申请，审批期不占开发时间；
+- 代码签名已于 2026-11-14 废弃（不申请任何免费/付费签名渠道），发布物保持未签名；
 - 单线程推进：W3 只能插在等 CI / 等审核的空档，不与 ARM64、UI 并行。
 
 ## 明确不做（v1）

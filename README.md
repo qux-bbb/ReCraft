@@ -7,7 +7,7 @@
 > **状态：0.4.0（技术预览）已发布** —— W6 界面现代化完成，发布包见
 > [Releases](https://github.com/qux-bbb/ReCraft/releases)。
 > 支持导入/分析 PE32/PE32+（x64 + Win32）、ELF32/ELF64（i386 + x86-64）与
-> **ARM64（ELF/PE，AArch64）**；带签名、ABI 和类型的结构化伪 C；通过带撤销的
+> **ARM64（ELF/PE，AArch64）**；带签名、ABI 和类型的结构化伪 C（“带签名”指函数签名，不是代码签名）；通过带撤销的
 > 日志命令总线执行重命名/注释/原型/结构体类型/栈变量命名/字符串编辑；MCP 服务器（默认只读，
 > `--write` 开写工具）；AI 辅助（解释 / 重命名建议 / 变量命名 / 选中内容对话 / 初筛）及
 > propose-apply UI，内置 CRT 签名 43 条，系统提示词中英文可改。
@@ -216,9 +216,8 @@ CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产�
 
 ### 安装（未签名预览版）
 
-v0.1 预览二进制**没有代码签名**（这是刻意决定；见
-[`docs/RELEASE.md`](docs/RELEASE.md)）。在项目采用可信的开源签名服务之前，Windows
-SmartScreen 会显示“未知发布者”：
+预览二进制**没有代码签名**（刻意决定：2026-11-14 起签名不在计划内，见
+[`docs/RELEASE.md`](docs/RELEASE.md)）。Windows SmartScreen 会显示“未知发布者”：
 
 1. 下载 `recraft-v0.4.0-windows-x64.zip` 或 `recraft-v0.4.0-windows-x64.msi`，以及
    `SHA256SUMS.txt`。
@@ -248,7 +247,8 @@ SmartScreen 会显示“未知发布者”：
 `%LOCALAPPDATA%\ReCraft`（`layout.json` 里的布局/主题和 `recent.txt` 最近项目）；要彻底清理，
 卸载后手动删除该目录即可。
 
-签名构建（以及确切的证书身份）将在可用时公布；在此之前，校验和就是完整性依据。
+代码签名不在项目计划内（2026-11-14 决定废弃）：发布包保持未签名，`SHA256SUMS.txt`
+的校验和就是完整性依据；SmartScreen 的“未知发布者”提示按上面第 3 步绕过。
 
 ### 演示
 

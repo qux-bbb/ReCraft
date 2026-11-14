@@ -226,7 +226,7 @@ restore`); machines without dotnet/WiX pass `-NoMsi` and get the zip only. See
 
 v0.1 preview binaries are **not code-signed** (a deliberate decision; see
 [`docs/RELEASE.md`](docs/RELEASE.md)). Windows SmartScreen will show "Unknown publisher"
-until the project adopts a trusted OSS signing service:
+because signing is out of scope (dropped 2026-11-14):
 
 1. Download `recraft-v0.4.0-windows-x64.zip` or `recraft-v0.4.0-windows-x64.msi` together
    with `SHA256SUMS.txt`.
@@ -258,8 +258,9 @@ Uninstall removes the install folder, Start-menu/desktop shortcuts, the PATH ent
 HKLM registrations, but **leaves** `%LOCALAPPDATA%\ReCraft` (`layout.json` layout/theme and
 `recent.txt`); delete that folder after uninstalling for a clean slate.
 
-Signed builds (and the exact certificate identity) will be announced when available;
-until then checksums are the integrity reference.
+Code signing is out of scope (dropped 2026-11-14): the builds stay unsigned, and the
+`SHA256SUMS.txt` checksums are the integrity reference; follow step 3 above to bypass the
+SmartScreen “unknown publisher” prompt.
 
 ### Demo
 

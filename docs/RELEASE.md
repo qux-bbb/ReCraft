@@ -222,21 +222,18 @@ MSI 的安装→CLI→卸载流程需要提权的提示符：本机普通提示�
 `-SkipInstall` 的结构/载荷两段；提权后执行 `powershell -File scripts/verify-msi.ps1` 与 CI
 的 msi job 覆盖完整流程（此前 NSIS 安装器的同流程验证记录见 git 历史与 CHANGELOG）。
 
-## 签名决定（v0.1：暂不签名）
+## 签名决定（已废弃，2026-11-14）
 
-v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后续路径：
+**用户于 2026-11-14 决定：代码签名不做了，整条线废弃**，不再申请 SignPath Foundation、
+Certum 开源证书或 Azure Artifact Signing，也不购买 OV/EV 证书。发布物保持未签名。
 
-- 常规 OV 证书 $150–300/年（且 2023 起强制硬件令牌/HSM），EV $400+/年且 2024 起不再
-  绕过 SmartScreen；Azure Artifact Signing（原 Trusted Signing）约 $9.99/月，但个人开发者
-  仅限美国/加拿大，当前不可用。
-- 开源项目有免费通道：**SignPath Foundation**（免费 OSS 签名，OV 级、HSM、CI 集成，需
-  公开仓库+申请审核）；Certum 开源证书对 GitHub ≥1k Star 且中国国籍申请人免费。
-  这两条作为后续（公开仓库、申请通过后）的签名路径。
-- 在此之前以 `SHA256SUMS.txt` 作为完整性凭据，并在 README/Release Notes 说明 SmartScreen
-  操作（更多信息 → 仍要运行）。
+原有的成本/资格调研（证书价格、SignPath Foundation 与 Certum 的免费通道、Azure 个人开发者
+地域限制）不再作为路线图项，仅归档在 `docs/SIGNING.md`。完整性凭据继续是
+`SHA256SUMS.txt`，README 与 Release Notes 保留 SmartScreen 操作说明
+（更多信息 → 仍要运行）。
 
-签名恢复时需：`signtool` 签 `recraft-cli.exe`、`recraft.exe` 和 `dist\*.msi`（MSI 可直接
-签名，无需额外步骤），然后重打 zip/MSI 并更新校验和；本仓库打包脚本无需改动。
+若将来重启：`signtool` 签 `recraft-cli.exe`、`recraft.exe` 与 `dist\*.msi`（MSI 可直接
+签名），重打 zip/MSI 并更新校验和；打包脚本本身无需改动。
 
 ## 发布清单
 
@@ -247,7 +244,7 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
    校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
 5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
 6. 干净机的安装→启动 UI→卸载已复验（见上节 2026-11-12：Win10 22H2 虚机 + Win11 25H2 本机）；
-   代码签名上线后需重打产物再复验一次。
+   签名已废弃：发布物保持未签名，无需为签名重打产物。
 7. 打附注标签并推送：`git tag -a v0.1.0 -m "ReCraft 0.1.0"` +
    `git push origin main v0.1.0`；用 CHANGELOG 的 0.1.0 节作为 Release notes
    （`gh release create v0.1.0 --notes-file <utf8 临时文件> <zip> <msi> SHA256SUMS.txt`）。
@@ -255,7 +252,7 @@ v0.1 预览发布**不进行代码签名**（用户已确认）。原因与后�
 
 ## 限制
 
-- 未做代码签名（需证书）；SmartScreen 会提示。
+- 没有代码签名（2026-11-14 决定废弃）；SmartScreen 会提示，按 README 的步骤绕过。
 - 未做增量/自动更新；未做 MSIX。安装包只有 MSI 一种（按机器安装，需管理员）。
 - 发布 MSI 是中文向导；英文向导用 `scripts/package.ps1 -Culture en-US` 重打（产物同名，会
   覆盖中文包）。

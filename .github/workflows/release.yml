@@ -4,10 +4,9 @@ name: Release
 # GitHub release. The tag push path only *builds*; publishing stays a manual decision so a
 # mis-tagged commit cannot become a download by itself.
 #
-# Signing (docs/SIGNING.md) is intentionally not wired in yet: SignPath Foundation has to
-# approve the project first. When it does, add a `signpath` step between "verify MSI" and
-# "publish", sign `dist/*.exe` + `dist/*.msi`, then let the release upload the signed files
-# (the step is documented in docs/SIGNING.md §3 step 3).
+# The builds are unsigned by decision (docs/SIGNING.md, 2026-11-14). If that ever changes,
+# insert a signing step between "verify MSI" and "publish" and upload the signed files
+# instead of the ones built here.
 
 on:
   workflow_dispatch:
@@ -66,17 +65,8 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
-      # Signing goes here once SignPath approves the project (docs/SIGNING.md §3):
-      #   - uses: signpath/github-action-submit-signing-request@v1
-      #     with:
-      #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-      #       organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
-      #       project-slug: recraft
-      #       signing-policy-slug: release-signing
-      #       artifact-configuration-slug: windows-msi
-      #       github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
-      #       wait-for-completion: true
-      #       output-artifact-directory: dist-signed
+      # Unsigned by decision (docs/SIGNING.md). A future signing step belongs here, between
+      # "verify MSI" and "publish".
 
       - name: publish GitHub release
         if: ${{ github.event_name == 'push' || inputs.publish }}

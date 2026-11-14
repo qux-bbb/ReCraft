@@ -11,6 +11,14 @@
 
 ## [未发布]
 
+### 变更
+
+- **代码签名废弃（2026-11-14，用户决定）。** 不再申请 SignPath Foundation、Certum 开源证书
+  或 Azure Trusted Signing，也不购买 OV/EV 证书；发布物保持未签名，`SHA256SUMS.txt` 是
+  完整性凭据，README 保留 SmartScreen 操作说明。`docs/SIGNING.md` 改为废弃记录（含当初的
+  成本/资格调研与重启方法），`docs/RELEASE.md` 的签名章节同步；`.github/workflows/release.yml`
+  保留打包/校验/可选发布能力，只移除 SignPath 占位。
+
 ### 修复
 
 - **AArch64 上 `--l1`/`--l2` 回退到 L0，而不是报错。** 块结构化器仍只吃 iced 指令，
