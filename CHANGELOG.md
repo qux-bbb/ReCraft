@@ -11,7 +11,14 @@
 
 ## [未发布]
 
-### 变更
+### 修复
+
+- **“打开”对话框也能直接选二进制了。** 以前 `File → Open` 只列 `.rcraft`，ELF/PE 只能走
+  `Import` 或拖进窗口；很多人会先点 Open，看不到 `tiny.elf` 就以为导入失败。现在对话框同时
+  提供工程、可执行文件与全部文件三个过滤器——`open_path` 本来就会按扩展名分派，选中的二进制
+  会走导入流程。新增回归测试 `the_aarch64_elf_fixture_imports_from_the_open_path`：把
+  `tests/fixtures/aarch64/tiny.elf` 拷到临时目录后调用 `open_path`，断言不报错且拿到工程。
+
 
 - **栈槽按 rbp 深度命名（IDA 风格）。** `[rbp-0x18]` 现在叫 `var_18`、`[rbp-8]` 叫
   `var_8`，与 IDA 一致。此前打印器在 `stack_layout` 证明不了帧时（prologue 里有 `pop`、有

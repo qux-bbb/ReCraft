@@ -9373,8 +9373,15 @@ impl ReCraftApp {
                 self.select_all_in_focus();
             }
             Action::Open => {
+                // Opening a project and importing a binary are the same call: `open_path`
+                // dispatches on the extension. The dialog used to list only `.rcraft`, so an
+                // ELF had to be dragged in or reached through Import — a dead end for anyone
+                // who clicked Open first.
+                let executables = self.t("ui_filter_executables");
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("ReCraft project", &["rcraft"])
+                    .add_filter(executables.as_str(), IMPORT_EXTENSIONS)
+                    .add_filter("All files", &["*"])
                     .pick_file()
                 {
                     self.open_path(&path);
@@ -11683,6 +11690,34 @@ mod tests {
         app.focus_pane(Pane::Hex);
         app.tick();
         assert_eq!(active_pane(&mut app), Some(Pane::Hex));
+    }
+
+    #[test]
+    fn the_aarch64_elf_fixture_imports_from_the_open_path() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/aarch64/tiny.elf");
+        let Ok(bytes) = std::fs::read(&fixture) else {
+            eprintln!("skipping: {} is missing", fixture.display());
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("tiny.elf");
+        std::fs::write(&source, &bytes).unwrap();
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+
+        app.open_path(&source);
+
+        assert!(
+            !app.is_error,
+            "importing the ELF fixture must not report an error"
+        );
+        assert!(app.session.is_some(), "the fixture must load");
+        let project = app.project.clone().expect("a project path is set");
+        assert_eq!(
+            project.extension().and_then(|value| value.to_str()),
+            Some("rcraft")
+        );
     }
 
     #[test]
