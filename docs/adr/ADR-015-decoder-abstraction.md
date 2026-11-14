@@ -2,7 +2,7 @@
 
 # ADR-015: 解码抽象与 ARM64 解码器选型（保留 iced，新增中立指令边界）
 
-- Status: Accepted
+- Status: Accepted（2026-11-14 修订：ARM64 解码器改为 capstone）
 - Date: 2026-11-14
 - Related: 待办「更换反汇编框架」（改法：不换 iced，加多架构解码抽象）、W5 ARM64 波次
 
@@ -40,6 +40,9 @@ lifter 逐条依赖的东西。capstone 对 x86 没有功能收益，却要引�
 适配层里的 match，也不要把两个后端都钉死在一个大而全的 schema 上。
 
 ### 3. ARM64 用 yaxpeax-arm（capstone 备选）
+
+> **已被 2026-11-14 的决策变更取代**：实际实现已切到 capstone，见文末「决策变更」一节。
+> 以下表格与理由保留为当时的记录。
 
 | 维度 | yaxpeax-arm 0.5.0 | capstone 5.x | bad64 |
 |---|---|---|---|
@@ -87,19 +90,41 @@ yaxpeax-arm 在分支目标/操作数元数据上缺口大到需要大量补丁�
 `cfg!(feature = "full")` 门控（即必须把所有架构一起编进来），且 0.14.0 开 `full` 会编译失败
 （`ArchDetail` 的 E0392），只能退 0.13。
 
-**结论：保留 yaxpeax-arm**。理由：在同一份代码上两者的**识别能力等价**（纯代码 100% 一致），
-差异集中在文本格式与别名；yaxpeax-arm 的原始覆盖率更高，且纯 Rust 与
-`forbid(unsafe_code)` 一致。降低维护风险的做法是：精确 pin `yaxpeax-arm = "=0.5.0"`、
-对拍测试留在仓库、capstone 仍作为记录在案的备选（切换只动适配层）。
+**当时的结论：保留 yaxpeax-arm**。理由：在同一份代码上两者的**识别能力等价**（纯代码 100%
+一致），差异集中在文本格式与别名；yaxpeax-arm 的原始覆盖率更高，且纯 Rust 与
+`forbid(unsafe_code)` 一致。
+
+## 决策变更（2026-11-14）：ARM64 改用 capstone
+
+用户看过上面的数据后仍然决定**切到 capstone**，理由是维护风险：yaxpeax-arm 只有 51 star、
+单一维护者；capstone 有 9,187 star、被主流逆向工具长期使用，出问题时社区与文档都更厚。
+这个理由优先于"纯 Rust"的洁癖，所以按用户决定执行。
+
+落地内容（同一批提交）：
+
+- `crates/recraft-decode`：移除 `yaxpeax-arm` / `yaxpeax-arch`，改用
+  `capstone = "=0.13.0"`（`full` feature，C 构建由 `capstone-sys` 完成）；A64 适配层重写为
+  capstone 的 operand detail → `DecodedInsn`，线程本地复用 handle（每条指令新建代价太高）；
+- x86 仍是 iced，`DecodedInsn` 边界不变，lifter 与反编译器零改动；
+- capstone 用别名（`lr`/`fp`/`ip0`/`ip1`）而不是编号寄存器，适配层做规范化回 `x30`/`x29`/
+  `x16`/`x17`；`udf #imm` capstone 会拒绝解码，适配层按编码补回（分析器把它当作
+  intrinsic 与 walk 终止符）；
+- 验证：`compare-arm64.ps1` 100/100 函数与 `go tool objdump` 逐指令一致、
+  `measure-a64-lift.ps1` 覆盖率仍是 **96.3%**（2223/2308，与 yaxpeax 时相同）、
+  A64 的 32 份 golden 与全部测试不变。
+
+代价（明确接受）：多了 C 工具链构建（MSVC/cc）与 unsafe FFI 面（隔离在 `capstone` crate
+内，本仓库仍 `forbid(unsafe_code)`）；包体增长（capstone 静态链接）；capstone-rs 的文本
+API 要求 `full` feature，把所有架构一起编进来。
 
 ## Consequences
 
 - 0.3.0 的 ARM64 支持不碰 x86 的 lifter；x86 输出保持逐字节一致（golden 守门）。
 - `DecodedInsn` 是唯一需要同时满足两个后端的地方；适配层的每个字段都要有 x86 侧的单测。
-- 选型结论可回退：换 capstone 只需重写适配层，不动 lifter 与反编译器。
-- 代价：多一层转换（每条指令一次），预期在解码缓存命中路径之外增加个位数百分比；
-  0.3.0 spike 里用 notepad + 一个 ARM64 样本实测解码吞吐与端到端分析时间。
-- 许可：0BSD 不需要在发布物里附署名；依赖与版本仍记录在本 ADR 与 `Cargo.lock`。
+- 选型结论可回退：换解码器只需重写适配层，不动 lifter 与反编译器（这次切换就是这么做的）。
+- 代价：多一层转换（每条指令一次）；capstone 另加 C 构建与静态链接体积。
+- 许可：capstone（MIT 绑定 + BSD-3-Clause 引擎）与 AGPL-3.0-only 兼容，`deny.toml` 已允许
+  BSD-3-Clause；依赖与版本记录在本 ADR 与 `Cargo.lock`。
 
 ## Spike 验收（W5 开工前）
 
@@ -111,7 +136,7 @@ yaxpeax-arm 在分支目标/操作数元数据上缺口大到需要大量补丁�
 
 ## References
 
-- [yaxpeax-arm on crates.io](https://crates.io/crates/yaxpeax-arm)（0BSD，0.5.0，2026-09）
+- [yaxpeax-arm on crates.io](https://crates.io/crates/yaxpeax-arm)（0BSD，0.5.0，2026-09；已不再使用）
 - [Capstone](https://www.capstone-engine.org/)（BSD-3-Clause，C）
 - [bad64](https://github.com/yrp604/bad64)（Binary Ninja arm64 解码器的 Rust 绑定）
 - [iced-x86](https://github.com/icedland/iced)（MIT，本项目 x86 后端）

@@ -270,7 +270,7 @@ struct Insn {
   操作数（寄存器名、立即数、`base + index*scale + disp`、直接分支目标）/读写寄存器。
   分析与 CFG 侧以及将来的 ARM64 后端只依赖这一形状；x86 lifter 继续用 iced 的类型化 API
   （那是 x86 的公开契约），因此新增后端不需要动 x86 的输出。
-- **AArch64 解码**（W5）：`recraft_decode::decode_aarch64` 用 yaxpeax-arm（0BSD）解出一条
+- **AArch64 解码**（W5）：`recraft_decode::decode_aarch64` 用 capstone（BSD-3-Clause，0.13）解出一条
   4 字节指令，直接产出 `DecodedInsn`（助记符、`FlowKind`、分支目标、寄存器/立即数操作数）；
   目前只做解码，尚未接入 `Session`/CFG（导入仍被显式挡在 x86 之外）。
 
@@ -566,4 +566,4 @@ CLI 与 UI 直接使用 `recraft-core` 的 `Session`，MCP 与内置 agent 共�
 | ADR-012 | 多窗口 | 已定 |
 | ADR-013 | 纯 AGPL-3.0-only，DCO 取代 CLA，取消商业许可 | 已定 |
 | ADR-014 | MCP 写工具由 `--write` 显式开启，走 Command 总线可 undo（部分取代 ADR-008） | 已定 |
-| ADR-015 | 保留 iced 作为 x86 后端；新增中立 `DecodedInsn` 边界；ARM64 选 yaxpeax-arm（capstone 备选） | 已定 |
+| ADR-015 | 保留 iced 作为 x86 后端；新增中立 `DecodedInsn` 边界；ARM64 用 capstone（原 yaxpeax-arm，2026-11-14 切换） | 已定 |

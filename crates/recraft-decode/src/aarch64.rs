@@ -1,20 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! AArch64 decoding into the neutral instruction model (ADR-015, W5 spike).
+//! AArch64 decoding into the neutral instruction model (ADR-015).
 //!
-//! The decoder is [`yaxpeax-arm`](https://crates.io/crates/yaxpeax-arm) (0BSD, pure Rust);
-//! the x86 path keeps iced and is untouched. A64 instructions are fixed-width (4 bytes), so
-//! a decode that succeeds always consumes four bytes.
+//! The backend is [capstone](https://www.capstone-engine.org/) behind the `capstone` crate
+//! (BSD-3-Clause, C, built by `capstone-sys`); the x86 path keeps iced and is untouched.
+//! A64 instructions are fixed-width (4 bytes), so a decode that succeeds always consumes four
+//! bytes.
 //!
-//! Scope of this spike: mnemonic, control-flow kind, branch target and the register /
-//! immediate operands needed by the CFG and the disassembly view. SIMD lane operands and
-//! complex addressing modes are only partially modelled; an operand we cannot describe ends
-//! the operand list rather than inventing a value (the mnemonic and branch target survive).
+//! Capstone is used for the AArch64 side because its operand detail and printed forms match
+//! `objdump`/IDA, and because the alternative (yaxpeax-arm, 51 GitHub stars) is a one-person
+//! project: the switch keeps the risk inside this adapter, since everything downstream only
+//! sees [`DecodedInsn`].
+//!
+//! Scope: mnemonic, control-flow kind, branch target and the register / immediate / memory
+//! operands the CFG, the disassembly view and the A64 lifter need. Lane-level SIMD detail is
+//! rendered as text but not modelled semantically.
 
+use std::cell::RefCell;
+
+use capstone::arch::arm64::{Arm64OperandType, Arm64Shift};
+use capstone::prelude::*;
 use recraft_common::Address;
-use yaxpeax_arch::{Decoder, U8Reader};
-use yaxpeax_arm::armv8::a64::{InstDecoder, Operand, SIMDSizeCode, SizeCode};
 
 use crate::FlowKind;
 use crate::neutral::{DecodedInsn, DecodedOperand};
@@ -22,68 +29,146 @@ use crate::neutral::{DecodedInsn, DecodedOperand};
 /// Length of one A64 instruction in bytes.
 pub const AARCH64_INSN_LEN: u8 = 4;
 
+thread_local! {
+    /// One capstone handle per thread: creating it per instruction costs milliseconds, and a
+    /// `Capstone` is not `Sync`.
+    static A64: RefCell<Option<Capstone>> = const { RefCell::new(None) };
+}
+
+/// Build (once per thread) the AArch64 capstone handle.
+fn with_capstone<T>(f: impl FnOnce(&Capstone) -> Option<T>) -> Option<T> {
+    A64.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Capstone::new()
+                .arm64()
+                .mode(capstone::arch::arm64::ArchMode::Arm)
+                .detail(true)
+                .build()
+                .ok();
+        }
+        let capstone = slot.as_ref()?;
+        f(capstone)
+    })
+}
+
 /// Decode one AArch64 instruction at `addr`.
 pub fn decode_aarch64(bytes: &[u8], addr: Address) -> Option<DecodedInsn> {
     if bytes.len() < usize::from(AARCH64_INSN_LEN) {
         return None;
     }
-    let mut reader = U8Reader::new(&bytes[..usize::from(AARCH64_INSN_LEN)]);
-    let instruction = InstDecoder::default().decode(&mut reader).ok()?;
-    let text = format!("{instruction}");
-    let mut parts = text.split_whitespace();
-    let mnemonic = parts.next().unwrap_or("?").to_lowercase();
-    let flow = aarch64_flow(&mnemonic);
-    let operands: Vec<DecodedOperand> = instruction
-        .operands
-        .iter()
-        .take_while(|operand| !matches!(operand, Operand::Nothing))
-        .map(|operand| aarch64_operand(operand, addr))
-        .collect();
-    let mut operands = operands;
-    // `cmp`/`cmn`/`tst` write to the discarded `xzr`; yaxpeax keeps that destination in the
-    // operand list while its own printer hides it.
-    if matches!(mnemonic.as_str(), "cmp" | "cmn" | "tst")
-        && matches!(
-            operands.first(),
-            Some(DecodedOperand::Register { name, .. }) if name.ends_with("zr")
-        )
-    {
-        operands.remove(0);
-    }
-    // `movz`/`movn`/`movk` encode a 16-bit lane plus a shift (`hw * 16`). yaxpeax folds the
-    // shift into the immediate in some encodings, which loses the lane and made the lifter
-    // shift `movk` by a constant 16; rebuild both operands from the encoding word.
-    if matches!(mnemonic.as_str(), "movz" | "movn" | "movk") && bytes.len() >= 4 {
+    let word_bytes = &bytes[..usize::from(AARCH64_INSN_LEN)];
+    with_capstone(|capstone| decode_with(capstone, word_bytes, addr)).or_else(|| {
+        // capstone rejects `udf #imm` (it is not a valid instruction on every ARMv8 profile),
+        // but the analyzer and the lifter use `udf` as an intrinsic and as a walk terminator.
         let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let imm16 = i64::from((word >> 5) & 0xffff);
-        let shift = i64::from((word >> 21) & 0x3) * 16;
-        if let Some(slot) = operands.get_mut(1)
-            && matches!(slot, DecodedOperand::Immediate(_))
-        {
-            *slot = DecodedOperand::Immediate(imm16);
-        }
-        if shift != 0 {
-            let shift_operand = DecodedOperand::Immediate(shift);
-            match operands.len() {
-                0 | 1 => {}
-                2 => operands.push(shift_operand),
-                _ => operands[2] = shift_operand,
+        (word & 0xFFFF_0000 == 0).then(|| DecodedInsn {
+            addr,
+            len: AARCH64_INSN_LEN,
+            mnemonic: "udf".to_owned(),
+            flow: FlowKind::Next,
+            branch_target: None,
+            operands: vec![DecodedOperand::Immediate(i64::from(word & 0xffff))],
+            reads: Vec::new(),
+            writes: Vec::new(),
+        })
+    })
+}
+
+fn decode_with(capstone: &Capstone, bytes: &[u8], addr: Address) -> Option<DecodedInsn> {
+    let instructions = capstone.disasm_all(bytes, addr.get()).ok()?;
+    let instruction = instructions.iter().next()?;
+    let mnemonic = instruction.mnemonic()?.to_lowercase();
+    let flow = aarch64_flow(&mnemonic);
+    let detail = capstone.insn_detail(instruction).ok()?;
+    let architecture = detail.arch_detail();
+    let arm64 = architecture.arm64()?;
+
+    let mut operands = Vec::new();
+    for operand in arm64.operands() {
+        let shift = match operand.shift {
+            Arm64Shift::Lsl(amount) => Some(amount),
+            _ => None,
+        };
+        match operand.op_type {
+            Arm64OperandType::Reg(reg) => {
+                let name = canonical_register(capstone.reg_name(reg).unwrap_or_default());
+                if name.is_empty() {
+                    continue;
+                }
+                operands.push(DecodedOperand::Register {
+                    size: register_size(&name),
+                    name,
+                });
             }
+            Arm64OperandType::Imm(value) => operands.push(DecodedOperand::Immediate(value)),
+            Arm64OperandType::Mem(memory) => {
+                let base = memory_reg(capstone, memory.base());
+                let index = memory_reg(capstone, memory.index());
+                operands.push(DecodedOperand::Memory {
+                    base,
+                    index,
+                    scale: 1,
+                    disp: i64::from(memory.disp()),
+                    size: 8,
+                });
+            }
+            _ => {}
+        }
+        // `movk`/`movz`/`movn` carry the lane shift on the immediate operand; hand it to the
+        // lifter as its own operand so it can shift by 0/16/32/48 instead of a constant.
+        if matches!(mnemonic.as_str(), "movk" | "movz" | "movn")
+            && let Some(amount) = shift
+            && let Some(DecodedOperand::Immediate(_)) = operands.last()
+        {
+            operands.push(DecodedOperand::Immediate(i64::from(amount)));
         }
     }
 
-    let branch_target = if matches!(
+    // Branch targets arrive as absolute immediates; promote the last one so the CFG and the
+    // call graph see the same shape the x86 backend produces.
+    if matches!(
         flow,
         FlowKind::UnconditionalBranch | FlowKind::ConditionalBranch | FlowKind::Call
-    ) {
-        operands.iter().find_map(|operand| match operand {
-            DecodedOperand::NearBranch(target) => Some(*target),
-            _ => None,
-        })
-    } else {
-        None
-    };
-    let (reads, writes) = aarch64_registers(&instruction.operands);
+    ) && let Some(last) = operands.last_mut()
+        && let DecodedOperand::Immediate(target) = last
+    {
+        let target = *target as u64;
+        *last = DecodedOperand::NearBranch(Address::new(target));
+    }
+    let branch_target = operands.iter().find_map(|operand| match operand {
+        DecodedOperand::NearBranch(target) => Some(*target),
+        _ => None,
+    });
+
+    let mut reads = register_names(capstone, detail.regs_read());
+    let mut writes = register_names(capstone, detail.regs_write());
+    // capstone reports *implicit* registers here; the explicit destination (the first register
+    // operand of a data-processing instruction) has to be added, or the xrefs and the "what
+    // does this function touch" views lose every written register.
+    let writes_destination = !(mnemonic.starts_with("st")
+        || mnemonic.starts_with("cmp")
+        || mnemonic.starts_with("cmn")
+        || mnemonic.starts_with("tst")
+        || matches!(
+            flow,
+            FlowKind::UnconditionalBranch
+                | FlowKind::ConditionalBranch
+                | FlowKind::Call
+                | FlowKind::IndirectBranch
+                | FlowKind::IndirectCall
+                | FlowKind::Return
+        ));
+    for (index, operand) in operands.iter().enumerate() {
+        let DecodedOperand::Register { name, .. } = operand else {
+            continue;
+        };
+        let destination = index == 0 && writes_destination;
+        let target = if destination { &mut writes } else { &mut reads };
+        if !target.contains(name) {
+            target.push(name.clone());
+        }
+    }
     Some(DecodedInsn {
         addr,
         len: AARCH64_INSN_LEN,
@@ -110,187 +195,59 @@ fn aarch64_flow(mnemonic: &str) -> FlowKind {
     }
 }
 
-/// One A64 operand in the neutral model.
-fn aarch64_operand(operand: &Operand, addr: Address) -> DecodedOperand {
-    match operand {
-        Operand::Register(size, number) => register_operand(*size, *number, false),
-        Operand::RegisterOrSP(size, number) => register_operand(*size, *number, true),
-        Operand::RegisterPair(size, number) => register_operand(*size, *number, true),
-        Operand::SIMDRegister(size, number) => simd_operand(*size, *number, None, None, None),
-        Operand::SIMDRegisterElements(size, number, element) => {
-            simd_operand(*size, *number, Some(*element), None, None)
-        }
-        Operand::SIMDRegisterElementsLane(size, number, element, lane) => {
-            simd_operand(*size, *number, Some(*element), Some(*lane), None)
-        }
-        Operand::SIMDRegisterElementsMultipleLane(size, number, element, lane, count) => {
-            simd_operand(*size, *number, Some(*element), Some(*lane), Some(*count))
-        }
-        Operand::SIMDRegisterGroup(size, number, element, count) => {
-            simd_group_operand(*size, *number, *element, *count, None)
-        }
-        Operand::SIMDRegisterGroupLane(number, element, count, lane) => {
-            simd_group_operand(SIMDSizeCode::Q, *number, *element, *count, Some(*lane))
-        }
-        Operand::ConditionCode(code) => DecodedOperand::Immediate(i64::from(*code)),
-        Operand::PCOffset(offset) => {
-            DecodedOperand::NearBranch(Address::new(addr.get().wrapping_add(*offset as u64)))
-        }
-        Operand::Immediate(value) => DecodedOperand::Immediate(i64::from(*value)),
-        Operand::Imm64(value) => DecodedOperand::Immediate(*value as i64),
-        Operand::Imm16(value) => DecodedOperand::Immediate(i64::from(*value)),
-        Operand::ImmediateDouble(value) => DecodedOperand::Immediate(*value as i64),
-        Operand::ImmShift(base, shift) => DecodedOperand::Immediate(if *shift >= 64 {
-            0
-        } else {
-            (i64::from(*base)) << shift
-        }),
-        Operand::RegShift(_, shift, size, number) => {
-            let mut register = register_operand(*size, *number, false);
-            if *shift != 0
-                && let DecodedOperand::Register { name, .. } = &mut register
-            {
-                name.push_str(&format!(", lsl #{shift}"));
-            }
-            register
-        }
-        // Memory operands: `[xN]`, `[xN, #off]`, `[xN], #off`, `[xN, xM]`.
-        Operand::RegPreIndex(base, offset, _) => memory_operand(*base, None, 0, i64::from(*offset)),
-        Operand::RegPostIndex(base, offset) => memory_operand(*base, None, 0, i64::from(*offset)),
-        Operand::RegPostIndexReg(base, index) => memory_operand(*base, Some(*index), 0, 0),
-        Operand::RegRegOffset(base, index, _, _, shift) => {
-            memory_operand(*base, Some(*index), *shift, 0)
-        }
-        _ => DecodedOperand::Immediate(0),
+/// Capstone prints the architectural aliases (`lr`, `fp`, `ip0`, `ip1`); the lifter and the
+/// rest of ReCraft use the numbered registers.
+fn canonical_register(name: String) -> String {
+    match name.as_str() {
+        "lr" => "x30".to_owned(),
+        "fp" => "x29".to_owned(),
+        "ip0" => "x16".to_owned(),
+        "ip1" => "x17".to_owned(),
+        _ => name,
     }
 }
 
-/// A64 memory operand: `base` plus an optional index shifted by `shift`.
-fn memory_operand(base: u16, index: Option<u16>, shift: u8, disp: i64) -> DecodedOperand {
-    DecodedOperand::Memory {
-        base: Some(if base == 31 {
-            "xsp".to_owned()
-        } else {
-            format!("x{base}")
-        }),
-        index: index.map(|index| format!("x{index}")),
-        scale: 1u8 << shift.min(4),
-        disp,
-        size: 8,
-    }
-}
-
-fn register_operand(size: SizeCode, number: u16, stack_pointer: bool) -> DecodedOperand {
-    let prefix = if matches!(size, SizeCode::W) {
-        'w'
-    } else {
-        'x'
-    };
-    let name = if number == 31 && !stack_pointer {
-        format!("{prefix}zr")
-    } else if number == 31 {
-        // The stack pointer is spelled `sp`/`wsp`, never `xsp`.
-        if matches!(size, SizeCode::W) {
-            "wsp".to_owned()
-        } else {
-            "sp".to_owned()
-        }
-    } else {
-        format!("{prefix}{number}")
-    };
-    DecodedOperand::Register {
-        name,
-        size: match size {
-            SizeCode::W => 4,
-            SizeCode::X => 8,
+/// Register width in bytes, inferred from the capstone register name.
+fn register_size(name: &str) -> u8 {
+    match name {
+        "sp" => 8,
+        "wsp" => 4,
+        "xzr" => 8,
+        "wzr" => 4,
+        _ => match name.chars().next() {
+            Some('x') => 8,
+            Some('w') => 4,
+            Some('v') | Some('q') => 16,
+            Some('d') => 8,
+            Some('s') => 4,
+            Some('h') => 2,
+            Some('b') => 1,
+            _ => 8,
         },
     }
 }
 
-/// Width of one SIMD element in bytes and the letter used in the textual form.
-fn simd_element(element: SIMDSizeCode) -> (u16, char) {
-    match element {
-        SIMDSizeCode::B => (1, 'b'),
-        SIMDSizeCode::H => (2, 'h'),
-        SIMDSizeCode::S => (4, 's'),
-        SIMDSizeCode::D => (8, 'd'),
-        SIMDSizeCode::Q => (16, 'q'),
+/// A base/index register of a memory operand, if capstone reports one.
+fn memory_reg(capstone: &Capstone, reg: RegId) -> Option<String> {
+    if reg.0 == 0 {
+        return None;
     }
+    capstone.reg_name(reg).filter(|name| !name.is_empty())
 }
 
-/// A SIMD register operand: `v3`, `v3.4s`, `v3.s[1]` instead of a bare `v`.
-fn simd_operand(
-    size: SIMDSizeCode,
-    number: u16,
-    element: Option<SIMDSizeCode>,
-    lane: Option<u8>,
-    count: Option<u8>,
-) -> DecodedOperand {
-    let width: u16 = if matches!(size, SIMDSizeCode::D) {
-        8
-    } else {
-        16
-    };
-    let mut name = format!("v{number}");
-    if let Some(element) = element {
-        let (bytes, letter) = simd_element(element);
-        let lanes = count
-            .map(u16::from)
-            .unwrap_or_else(|| (width / bytes).max(1));
-        name.push_str(&format!(".{lanes}{letter}"));
-        if let Some(lane) = lane {
-            name.push_str(&format!("[{lane}]"));
-        }
-    }
-    DecodedOperand::Register { name, size: 16 }
-}
-
-/// A group of consecutive SIMD registers: `{v2.2d, v3.2d, v4.2d}[1]`.
-fn simd_group_operand(
-    size: SIMDSizeCode,
-    number: u16,
-    element: SIMDSizeCode,
-    count: u8,
-    lane: Option<u8>,
-) -> DecodedOperand {
-    let mut names = Vec::new();
-    for index in 0..count.max(1) {
-        let one = simd_operand(size, number + u16::from(index), Some(element), lane, None);
-        if let DecodedOperand::Register { name, .. } = one {
-            names.push(name);
-        }
-    }
-    DecodedOperand::Register {
-        name: format!("{{{}}}", names.join(", ")),
-        size: 16,
-    }
-}
-
-/// Registers read and written, from the explicit operands only.
-///
-/// A64 has no fixed destination register, so the first operand is a destination for the
-/// data-processing forms and the branch forms write `x30`; implicit effects (flags, `ret`
-/// reading `x30`) are not modelled yet and stay with the ARM64 lifter work.
-fn aarch64_registers(operands: &[Operand; 4]) -> (Vec<String>, Vec<String>) {
-    let mut reads = Vec::new();
-    let mut writes = Vec::new();
-    for (index, operand) in operands.iter().enumerate() {
-        let (Operand::Register(size, number)
-        | Operand::RegisterOrSP(size, number)
-        | Operand::RegisterPair(size, number)) = operand
-        else {
+/// Map capstone register ids to names, dropping invalid entries and duplicates.
+fn register_names(capstone: &Capstone, registers: &[RegId]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for reg in registers {
+        let Some(name) = capstone.reg_name(*reg) else {
             continue;
         };
-        let DecodedOperand::Register { name, .. } = register_operand(*size, *number, true) else {
+        if name.is_empty() || names.contains(&name) {
             continue;
-        };
-        if index == 0 {
-            writes.push(name);
-        } else {
-            reads.push(name);
         }
+        names.push(name);
     }
-    (reads, writes)
+    names
 }
 
 #[cfg(test)]
@@ -372,7 +329,7 @@ mod tests {
     #[test]
     fn a_movk_keeps_its_lane_and_shift() {
         // movk x6, #0x38e3, lsl #32 (hw = 2): the immediate and the shift are separate
-        // operands, otherwise the lifter shifted every lane by 16.
+        // operands, otherwise the lifter would shift every lane by the same amount.
         let insn = decode(0xf2c7_1c66);
         assert_eq!(insn.mnemonic, "movk");
         assert_eq!(
@@ -385,17 +342,29 @@ mod tests {
 
     #[test]
     fn the_stack_pointer_is_spelled_sp() {
-        // sub x29, sp, #8 (RegisterOrSP 31 in an X context)
+        // sub x29, sp, #8
         let insn = decode(0xd10023fd);
+        let text = insn.operand_text();
+        assert!(text.contains("sp"), "{text}");
+        assert!(!text.contains("xsp"), "{text}");
+    }
+
+    #[test]
+    fn a_load_exposes_its_memory_operand() {
+        // ldr x0, [x1, #0x18]
+        let insn = decode(0xf9400c20);
+        assert_eq!(insn.mnemonic, "ldr");
         assert!(
-            insn.operand_text().contains("sp"),
-            "{}",
-            insn.operand_text()
-        );
-        assert!(
-            !insn.operand_text().contains("xsp"),
-            "{}",
-            insn.operand_text()
+            insn.operands.iter().any(|operand| matches!(
+                operand,
+                DecodedOperand::Memory {
+                    base: Some(base),
+                    disp: 0x18,
+                    ..
+                } if base == "x1"
+            )),
+            "{:?}",
+            insn.operands
         );
     }
 

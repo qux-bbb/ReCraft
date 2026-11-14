@@ -13,6 +13,18 @@
 
 ### 变更
 
+- **AArch64 解码器从 yaxpeax-arm 换成 capstone。** 理由是可维护性：yaxpeax-arm 只有 51 个
+  GitHub star、单一维护者，而 capstone 有 9,187 star、被主流逆向工具长期使用。落地：移除
+  `yaxpeax-arm`/`yaxpeax-arch`，改用 `capstone = "=0.13.0"`（`full` feature，C 构建由
+  `capstone-sys` 完成），A64 适配层重写为 capstone operand detail → `DecodedInsn`，handle
+  按线程复用；capstone 的别名寄存器（`lr`/`fp`/`ip0`/`ip1`）在适配层规范化回 `x30`/`x29`/
+  `x16`/`x17`；capstone 拒绝解码的 `udf #imm` 按编码补回。x86 仍是 iced，lifter 与反编译器
+  零改动。验证：与 `go tool objdump` 对拍仍是 **100/100 函数逐指令一致**，覆盖率仍是
+  **96.3%**（2223/2308），32 份 A64 golden 与全部测试不变。代价：C 工具链构建、静态链接
+  体积与 unsafe FFI 面（隔离在 capstone crate 内，本仓库仍 `forbid(unsafe_code)`）。
+
+### 修复
+
 - **代码签名废弃（2026-11-14，用户决定）。** 不再申请 SignPath Foundation、Certum 开源证书
   或 Azure Trusted Signing，也不购买 OV/EV 证书；发布物保持未签名，`SHA256SUMS.txt` 是
   完整性凭据，README 保留 SmartScreen 操作说明。`docs/SIGNING.md` 改为废弃记录（含当初的
