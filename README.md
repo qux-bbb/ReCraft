@@ -4,7 +4,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> **状态：0.4.0（技术预览）已发布** —— W6 界面现代化完成，发布包见
+> **状态：0.4.1（技术预览）已发布** —— W6 界面现代化完成，发布包见
 > [Releases](https://github.com/qux-bbb/ReCraft/releases)。
 > 支持导入/分析 PE32/PE32+（x64 + Win32）、ELF32/ELF64（i386 + x86-64）与
 > **ARM64（ELF/PE，AArch64）**；带签名、ABI 和类型的结构化伪 C（“带签名”指函数签名，不是代码签名）；通过带撤销的
@@ -204,9 +204,9 @@ lint（L1+L2）与 160 份 golden，ELF 版跑全量 lint、结构化率与覆�
 
 ```powershell
 pwsh -File scripts/package.ps1 -NoMsi         # release build + green zip + SHA256SUMS
-# dist/recraft-v0.4.0-windows-x64.zip, dist/ReCraft-0.4.0/, dist/SHA256SUMS.txt
+# dist/recraft-v0.4.1-windows-x64.zip, dist/ReCraft-0.4.1/, dist/SHA256SUMS.txt
 pwsh -File scripts/package.ps1                # also builds the MSI when the WiX toolchain is there
-# dist/recraft-v0.4.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+# dist/recraft-v0.4.1-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
 pwsh -File scripts/verify-msi.ps1             # MSI: structure + payload + install/uninstall (elevated)
 ```
 
@@ -219,11 +219,11 @@ CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产�
 预览二进制**没有代码签名**（刻意决定：2026-11-14 起签名不在计划内，见
 [`docs/RELEASE.md`](docs/RELEASE.md)）。Windows SmartScreen 会显示“未知发布者”：
 
-1. 下载 `recraft-v0.4.0-windows-x64.zip` 或 `recraft-v0.4.0-windows-x64.msi`，以及
+1. 下载 `recraft-v0.4.1-windows-x64.zip` 或 `recraft-v0.4.1-windows-x64.msi`，以及
    `SHA256SUMS.txt`。
 2. 运行前先校验下载：
    ```powershell
-   Get-FileHash .\recraft-v0.4.0-windows-x64.msi -Algorithm SHA256
+   Get-FileHash .\recraft-v0.4.1-windows-x64.msi -Algorithm SHA256
    # 与 SHA256SUMS.txt 中对应行比较
    ```
 3. 如果出现 SmartScreen：**更多信息 → 仍要运行**。MSI 安装到

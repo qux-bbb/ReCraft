@@ -127,6 +127,7 @@ ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 
 - **0.3.0 已打包（2026-11-14）**：`dist/recraft-v0.3.0-windows-x64.zip` 15.7 MiB、`.msi` 14.1 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 均 PASS，tag `v0.3.0`。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
 0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
 - **W6**（✅ 2026-11-14 收口）：界面现代化第一遍（docs/UI.md 设计基线、主题令牌、欢迎页空状态、顶栏/状态栏发丝边框、标签页表面阶梯、对比度回归）、图标 v3 双变体、演示脚本改用 release；命令区收敛与侧栏卡片化顺延到 0.4.x。**0.4.0 已打包**（zip 15.7 MiB + MSI 14.1 MiB + SHA256SUMS；package/verify/demo 全 PASS；dist 内 exe 图标与 ICO 32px 帧逐像素一致），tag `v0.4.0`。
+- **0.4.1 已打包（2026-11-14）**：`dist/recraft-v0.4.1-windows-x64.zip` 17.6 MiB、`.msi` 15.6 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `verify-msi.ps1`（结构+载荷）/ `demo.ps1` 全 PASS，tag `v0.4.1`。内容：AArch64 解码器切到 capstone（覆盖率 96.3% 不变、100/100 对拍）、A64 的 sp/SIMD/movk 修正、图标回到 v1。
 - 六波全部收口（2026-11-14）：W1 → 0.2.0、W3/W4/W5 → 0.3.0、W6 → 0.4.0；W2 的两项随
   0.2.0 发布。P 线的 DecBench 见上，签名已废弃。
 
