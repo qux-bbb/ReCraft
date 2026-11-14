@@ -104,7 +104,8 @@
   `[xN, xM, lsl #s]` 索引寻址此前丢掉了索引寄存器（把 `strb w7, [x1, x3]` 渲染成
   `*(u8*)(xzr)`），`mov xD, xzr, #imm` 的 orr 别名此前取错操作数。新增 1 条索引寻址单测，
   IR 41 项全绿。
-  2026-11-14 收口：**PE-ARM64** 落地——ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 字节条目（BeginAddress + 打包的函数长度）解析，`analyze_aarch64` 用它作为函数种子；新增 1.5 KB 的 PE32+ 夹具 `tests/fixtures/aarch64/tiny-arm64.exe` 与两条端到端测试（加载器 + 分析），`recraft-cli info` 显示 `PE32+ (arm64)`。A64 上 `lint` 也是 0 findings。至此验收全部满足：反汇编 100/100、指令覆盖 96.3%、golden 32 份、lint 0、无 panic。SIMD（`stp/ldp v`、`mrs`、`smulh`、`br`）按待办「SIMD 后补」仍走 `__asm`。
+  2026-11-14 收口：**PE-ARM64** 落地——
+ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 字节条目（BeginAddress + 打包的函数长度）解析，`analyze_aarch64` 用它作为函数种子；新增 1.5 KB 的 PE32+ 夹具 `tests/fixtures/aarch64/tiny-arm64.exe` 与两条端到端测试（加载器 + 分析），`recraft-cli info` 显示 `PE32+ (arm64)`。A64 上 `lint` 也是 0 findings。至此验收全部满足：反汇编 100/100、指令覆盖 96.3%、golden 32 份、lint 0、无 panic。SIMD（`stp/ldp v`、`mrs`、`smulh`、`br`）按待办「SIMD 后补」仍走 `__asm`。
   2026-11-14 第五轮：**A64 golden 落地**——`scripts/make-aarch64-fixture.py` 生成 6 KB 的
   ELF64-AArch64 夹具（32 个带符号的小函数），`tests/golden/aarch64/` 存 32 份快照，测试
   `the_aarch64_fixture_matches_its_snapshots` 走「导入 → 分析 → 反编译 → 快照比对」全链路，
@@ -115,9 +116,11 @@
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
 - **P 线**：DecBench 调研收口（docs/DECBENCH.md：指标对照、提交判据、本地跑法；2026-11-14 决定暂不公开提交）；代码签名申请包与 .github/workflows/release.yml 就绪（tag 触发打包/校验/可选发布，SignPath 签名位已标注），正式申请待你提供仓库地址与组织信息。
-- **0.3.0 已打包（2026-11-14）**：dist/recraft-v0.3.0-windows-x64.zip 15.7 MiB、.msi 14.1 MiB、SHA256SUMS.txt；package.ps1 / erify-package.ps1 / demo.ps1 均 PASS，tag 0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
+- **0.3.0 已打包（2026-11-14）**：`dist/recraft-v0.3.0-windows-x64.zip` 15.7 MiB、`.msi` 14.1 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 均 PASS，tag `v0.3.0`。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
+erify-package.ps1 / demo.ps1 均 PASS，tag 0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
 - **W6**（✅ 2026-11-14 收口）：界面现代化第一遍（docs/UI.md 设计基线、主题令牌、欢迎页空状态、顶栏/状态栏发丝边框、标签页表面阶梯、对比度回归）、图标 v3 双变体、演示脚本改用 release；命令区收敛与侧栏卡片化顺延到 0.4.x。**0.4.0 已打包**（zip 15.7 MiB + MSI 14.1 MiB + SHA256SUMS；package/verify/demo 全 PASS；dist 内 exe 图标与 ICO 32px 帧逐像素一致），tag `v0.4.0`。
-- 下一步：W5 继续（lifter/AAPCS64），W6 的 UI 现代化与图标迭代排在其后。
+- 六波全部收口（2026-11-14）：W1 → 0.2.0、W3/W4/W5 → 0.3.0、W6 → 0.4.0；W2 的两项随
+  0.2.0 发布。P 线的 DecBench 与签名见上，签名正式申请待用户提供仓库地址与组织信息。
 
 规则：
 

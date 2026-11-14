@@ -235,7 +235,7 @@ impl A64Lifter {
                 Some(Flow::Fallthrough)
             }
             "stp" | "ldp" => {
-                // Store/load pair: the two values sit at ase and ase + 8. A pre/post
+                // Store/load pair: the two values sit at base and base + 8. A pre/post
                 // index write-back of the base register is not modelled yet.
                 let size = match ops.first() {
                     Some(DecodedOperand::Register { size, .. }) => *size,

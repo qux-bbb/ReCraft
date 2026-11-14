@@ -1595,7 +1595,7 @@ pub struct ReCraftApp {
     ai_agent_trace: Vec<String>,
     /// Conversation with the agent, kept so a follow-up question continues it.
     ai_agent_history: Vec<recraft_ai::ChatMessage>,
-    /// Character offset in i_explanation where the current model turn started; a turn
+    /// Character offset in ai_explanation where the current model turn started; a turn
     /// that ends in tool calls retracts the narration it streamed.
     ai_agent_turn_mark: Option<usize>,
     ai_job: Option<AiJob>,

@@ -306,7 +306,7 @@ impl Loader for PeLoader {
 
     fn load(bytes: &[u8]) -> Result<LoadedImage> {
         let image = load_pe(bytes)?;
-        // The COFF machine decides:  xAA64 is ARM64, which is also 64-bit but must not be
+        // The COFF machine decides: 0xAA64 is ARM64, which is also 64-bit but must not be
         // labelled x64 (the decoder and the register namespace differ).
         let machine = pe_offset(bytes)
             .and_then(|offset| read_u16(bytes, offset + 4).ok())
@@ -579,7 +579,7 @@ struct ImageParser<'a> {
     bytes: &'a [u8],
     image_base: u64,
     is_64: bool,
-    /// Machine reported by the COFF header ( xAA64 selects the ARM64 .pdata layout).
+    /// Machine reported by the COFF header (0xAA64 selects the ARM64 .pdata layout).
     arch: Arch,
     size_of_headers: u64,
     file_size: u64,
