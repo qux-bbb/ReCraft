@@ -22,6 +22,18 @@ use recraft_ir::{BinOp, Expr, ExprId, Lifter, Reg, RegView, Stmt};
 /// Windows x64 integer argument registers, in declaration order.
 pub const X64_ARG_REGS: [Reg; 4] = [Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9];
 
+/// System V AMD64 (ELF64) integer argument registers, in ABI order.
+pub const SYSV_ARG_REGS: [Reg; 6] = [Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9];
+
+/// Integer argument registers for this image's x64 ABI: ELF64 passes in `rdi`/`rsi`, PE in
+/// `rcx`/`rdx`. Everything downstream (naming, gap filling, call arity) follows this list.
+fn argument_registers(session: &dyn SessionView) -> &'static [Reg] {
+    match (session.format(), session.image().is_64) {
+        (recraft_core::Format::Elf, true) => &SYSV_ARG_REGS,
+        _ => &X64_ARG_REGS,
+    }
+}
+
 /// x64 scalar floating-point argument registers (`float`/`double`).
 pub const X64_FLOAT_ARG_REGS: [Reg; 4] = [Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3];
 
@@ -31,6 +43,9 @@ const MAX_ARG_SCAN_INSNS: usize = 4096;
 #[derive(Debug, Clone, Default)]
 pub struct ArgNames {
     names: BTreeMap<Reg, String>,
+    /// Integer argument registers in ABI order (Win64 or SysV x64), so `argN` numbering and
+    /// the gap-filling in the signature follow the image, not one hard-coded ABI.
+    registers: Vec<Reg>,
     /// x86 stack arguments keyed by `(base register, byte offset)`.
     stack: BTreeMap<(Reg, i64), String>,
     /// Inferred parameter types for register arguments (defaults to `int64`).
@@ -186,9 +201,18 @@ impl ArgNames {
         })
     }
 
+    /// The ABI register list in use; `Default` (and old callers) mean Win64.
+    fn register_list(&self) -> &[Reg] {
+        if self.registers.is_empty() {
+            &X64_ARG_REGS
+        } else {
+            &self.registers
+        }
+    }
+
     /// Calling-convention slot (0-based) of a register argument: `argN` -> `N - 1`.
     pub fn slot_of(&self, reg: Reg) -> Option<u8> {
-        X64_ARG_REGS
+        self.register_list()
             .iter()
             .position(|candidate| *candidate == reg)
             .map(|index| index as u8)
@@ -202,7 +226,7 @@ impl ArgNames {
     pub fn count(&self) -> usize {
         self.names
             .keys()
-            .filter(|reg| X64_ARG_REGS.contains(reg))
+            .filter(|reg| self.register_list().contains(reg))
             .count()
             + self.stack.len()
     }
@@ -241,6 +265,7 @@ impl ArgNames {
             .collect();
         ArgNames {
             names,
+            registers: X64_ARG_REGS.to_vec(),
             stack: BTreeMap::new(),
             types,
             stack_types: BTreeMap::new(),
@@ -268,7 +293,7 @@ impl ArgNames {
     }
 
     fn ordered_regs(&self) -> Vec<(Reg, &str)> {
-        X64_ARG_REGS
+        self.register_list()
             .iter()
             .filter_map(|reg| self.names.get(reg).map(|name| (*reg, name.as_str())))
             .collect()
@@ -306,11 +331,12 @@ impl ArgNames {
         }
         // Fill gaps between recovered x64 argument registers: a function that reads rcx
         // and r8 still has the rdx parameter in its ABI, even if the body never uses it.
-        if let Some(highest) = X64_ARG_REGS
+        if let Some(highest) = self
+            .register_list()
             .iter()
             .rposition(|reg| self.names.contains_key(reg))
         {
-            for (index, reg) in X64_ARG_REGS.iter().enumerate().take(highest + 1) {
+            for (index, reg) in self.register_list().iter().enumerate().take(highest + 1) {
                 let name = self
                     .names
                     .get(reg)
@@ -589,10 +615,36 @@ fn recover_x64(
     ranges: &HashMap<u64, (Address, Address)>,
 ) -> Result<ArgNames> {
     let scan = scan_incoming_args(session, start, end, depth, memo, ranges)?;
+    let registers = argument_registers(session);
     let mut names = BTreeMap::new();
-    for (index, reg) in X64_ARG_REGS.iter().enumerate() {
+    for (index, reg) in registers.iter().enumerate() {
         if scan.incoming.contains(reg) {
             names.insert(*reg, format!("arg{}", index + 1));
+        }
+    }
+    // Unoptimised builds spill a parameter to a frame slot in the prologue and only read the
+    // slot afterwards (`mov [rbp-0x18], rdi`). The value flow still records the register read,
+    // so a store in the first instructions is the evidence that it was an incoming argument.
+    let (prologue, prologue_exprs) = lift_function(session, start, end)?;
+    for item in prologue.iter().take(8) {
+        for stmt in &item.stmts {
+            let Stmt::Store { value, .. } = stmt else {
+                continue;
+            };
+            for (index, reg) in registers.iter().enumerate() {
+                if names.contains_key(reg) {
+                    continue;
+                }
+                let mut found = false;
+                walk_live_reads(&prologue_exprs, *value, &mut |view| {
+                    if view.base == *reg {
+                        found = true;
+                    }
+                });
+                if found {
+                    names.insert(*reg, format!("arg{}", index + 1));
+                }
+            }
         }
     }
     let mut types = infer_pointer_types(session, start, end, &names)?;
@@ -630,6 +682,7 @@ fn recover_x64(
     }
     Ok(ArgNames {
         names,
+        registers: registers.to_vec(),
         stack: BTreeMap::new(),
         types,
         stack_types: BTreeMap::new(),
@@ -681,7 +734,7 @@ fn scan_incoming_args(
     ranges: &HashMap<u64, (Address, Address)>,
 ) -> Result<IncomingScan> {
     let (lifted, exprs) = lift_function(session, start, end)?;
-    let arg_registers: BTreeSet<Reg> = X64_ARG_REGS.into_iter().collect();
+    let arg_registers: BTreeSet<Reg> = argument_registers(session).iter().copied().collect();
     let mut written: BTreeSet<Reg> = BTreeSet::new();
     let mut incoming: BTreeSet<Reg> = BTreeSet::new();
     let mut widths: BTreeMap<Reg, BTreeSet<u8>> = BTreeMap::new();
@@ -755,7 +808,10 @@ fn scan_incoming_args(
                         Some(count) => count,
                         None => call_arity(session, *target, depth, memo, ranges)?,
                     };
-                for reg in X64_ARG_REGS.iter().take(count.min(args.len())) {
+                for reg in argument_registers(session)
+                    .iter()
+                    .take(count.min(args.len()))
+                {
                     if !written.contains(reg) {
                         incoming.insert(*reg);
                     }
@@ -1246,6 +1302,7 @@ fn recover_x86(session: &dyn SessionView, start: Address, end: Address) -> Resul
     }
     let mut args = ArgNames {
         names: BTreeMap::new(),
+        registers: X64_ARG_REGS.to_vec(),
         stack: stack.clone(),
         types: BTreeMap::new(),
         stack_types: BTreeMap::new(),
