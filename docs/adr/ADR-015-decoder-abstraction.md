@@ -58,6 +58,40 @@ yaxpeax-arm 在分支目标/操作数元数据上缺口大到需要大量补丁�
 `DecodedInsn` 适配层，代价可控。bad64 不选：它绑定的是 Binary Ninja 的 C 插件，构建链
 与 FFI 风险最高，覆盖面还只有 AArch64。
 
+## 对照实验：capstone vs yaxpeax-arm（2026-11-14）
+
+用户提出「yaxpeax-arm 的 star 太少」（GitHub 51 star，capstone 9,187）。这是维护风险而非
+质量问题，所以先做了一次对照实验再决定（capstone-rs 0.13 + capstone 5，`full` feature）：
+
+**样本**：Go linux/arm64 样例的 `.text` 段，154,029 个 4 字节字；另一个是仓库里的
+32 函数 ELF 夹具（104 条指令，纯代码）。
+
+| 指标 | yaxpeax-arm | capstone |
+|---|---|---|
+| 解码成功（raw `.text`，含数据） | **99.9%** | 97.3% |
+| 解码成功（纯代码夹具） | 100% | 100% |
+| 助记符一致（两者都解出） | 97.58%（3,626 处是 `mov` vs `orr` 别名命名） | — |
+| 规范化后整句一致 | 47.86% | — |
+| 依赖形态 | 纯 Rust / 0BSD | C 构建 + unsafe FFI / BSD-3 |
+
+**顺带查出并修掉我们适配层的三个真 bug**（对照实验的主要收获）：
+
+1. `xsp` / `wsp`：栈指针被拼成 `xsp`，正确应为 `sp` / `wsp`；
+2. SIMD 寄存器只输出一个裸 `v`，丢掉编号与元素宽度，现在输出 `v3`、`v3.4s`、`v3.s[1]`、
+   `{v2.2d, v3.2d, v4.2d}`；
+3. `movk`（以及 `movz`/`movn`）的 16 位 lane 与 `lsl #0/16/32/48` 被折叠：lifter 把**每一段
+   都当成 `<< 16`**，Go 二进制里常见的 64 位常量重建因此全错。现在按编码字恢复
+   `imm16` 与 `hw*16`，伪 C 变成 `x6 = ((x6 | (0x38e3 << 0x20)) | (0xe38e << 0x30))`。
+
+另外记录两处 capstone 的代价：capstone-rs 的 `Insn::mnemonic()/op_str()` 被
+`cfg!(feature = "full")` 门控（即必须把所有架构一起编进来），且 0.14.0 开 `full` 会编译失败
+（`ArchDetail` 的 E0392），只能退 0.13。
+
+**结论：保留 yaxpeax-arm**。理由：在同一份代码上两者的**识别能力等价**（纯代码 100% 一致），
+差异集中在文本格式与别名；yaxpeax-arm 的原始覆盖率更高，且纯 Rust 与
+`forbid(unsafe_code)` 一致。降低维护风险的做法是：精确 pin `yaxpeax-arm = "=0.5.0"`、
+对拍测试留在仓库、capstone 仍作为记录在案的备选（切换只动适配层）。
+
 ## Consequences
 
 - 0.3.0 的 ARM64 支持不碰 x86 的 lifter；x86 输出保持逐字节一致（golden 守门）。

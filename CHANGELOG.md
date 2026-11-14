@@ -21,6 +21,14 @@
 
 ### 修复
 
+- **AArch64 操作数三处修正（由 capstone 对照实验发现）。** 一是栈指针被拼成 `xsp`/`wsp`，
+  正确是 `sp`/`wsp`；二是 SIMD 寄存器只输出一个裸 `v`，现在保留编号、元素宽度与车道
+  （`v3`、`v3.4s`、`v3.s[1]`、`{v2.2d, v3.2d, v4.2d}`）；三是 `movk`/`movz`/`movn` 的 16 位
+  lane 与 `lsl #0/16/32/48` 被折叠，lifter 把每一段都当作 `<< 16`，Go 二进制里常见的 64 位
+  常量重建因此全错——现在按编码字恢复 `imm16` 与 `hw*16`，伪 C 输出
+  `x6 = ((x6 | (0x38e3 << 0x20)) | (0xe38e << 0x30))`。新增三条回归测试
+  （`a_movk_keeps_its_lane_and_shift`、`the_stack_pointer_is_spelled_sp` 等）。
+
 - **AArch64 上 `--l1`/`--l2` 回退到 L0，而不是报错。** 块结构化器仍只吃 iced 指令，
   `pseudocode_l1`/`pseudocode_l2` 在 AArch64 上会走到 `insn_at` 拿到空指令并报
   `internal error: no basic blocks`。现在两者在 AArch64 上直接回退到 A64 L0 渲染器

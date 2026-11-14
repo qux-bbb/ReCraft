@@ -96,6 +96,16 @@ impl A64Lifter {
             "movz" | "movn" => {
                 let dest = Self::view(ops.first()?)?;
                 let mut value = self.imm(ops.get(1)?)?;
+                if let Some(DecodedOperand::Immediate(shift)) = ops.get(2)
+                    && *shift != 0
+                {
+                    let shift = self.constant(*shift as u64);
+                    value = self.push(Expr::Bin {
+                        op: BinOp::Shl,
+                        lhs: value,
+                        rhs: shift,
+                    });
+                }
                 if insn.mnemonic == "movn" {
                     let not = self.push(Expr::Un {
                         op: crate::expr::UnOp::Not,
@@ -107,15 +117,20 @@ impl A64Lifter {
                 Some(Flow::Fallthrough)
             }
             "movk" => {
-                // `movk` replaces one 16-bit lane; model it as an or of the shifted halfword.
+                // `movk` replaces the 16-bit lane selected by `hw`, i.e. shifts by `0/16/32/48`.
                 let dest = Self::view(ops.first()?)?;
                 let imm = self.imm(ops.get(1)?)?;
-                let shift = self.constant(16);
-                let shifted = self.push(Expr::Bin {
-                    op: BinOp::Shl,
-                    lhs: imm,
-                    rhs: shift,
-                });
+                let shifted = match ops.get(2) {
+                    Some(DecodedOperand::Immediate(shift)) if *shift != 0 => {
+                        let shift = self.constant(*shift as u64);
+                        self.push(Expr::Bin {
+                            op: BinOp::Shl,
+                            lhs: imm,
+                            rhs: shift,
+                        })
+                    }
+                    _ => imm,
+                };
                 let previous = self.reg(dest);
                 let value = self.push(Expr::Bin {
                     op: BinOp::Or,
