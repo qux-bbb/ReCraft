@@ -22,7 +22,7 @@
 | 10 | AI | 原生 MCP；LLM 命名、解释、自然语言查询 |
 | 11 | 许可证 | AGPL-3.0-only；贡献 inbound = outbound（DCO），无 CLA |
 | 12 | 大样本 | 目标 1 GB |
-| 13 | 语言 | UI 英文 + 简中；代码/文档英文 |
+| 13 | 语言 | UI 简中默认 + 英文可选；代码/文档英文 |
 | 14 | 分发 | GitHub 公开仓库 + Actions；Windows 绿色版 zip + 安装包 |
 | 15 | 仓库 | GitHub 公开：`qux-bbb/ReCraft`（本轮已 `git init`） |
 | 16 | 评审状态 | v0.1 已通过（2026-10-22），进入 M0 |
@@ -416,9 +416,10 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 - 实现：**Fluent**（`fluent` + `unic-langid`，Apache-2.0/MIT）；资源
   `crates/recraft-ui/locales/en-US.ftl`、`zh-CN.ftl` 通过 `include_str!` 编译进二进制
 - 字符串外置：UI 构造器使用 `t("message.id")` / `t_args("message.id", ...)`，禁止新增
-  `t(en, zh)` 内联对；英文默认，zh-CN 与 en 的 message id 必须一致（单测校验）
+  `t(en, zh)` 内联对；**首次启动默认简中**（`Lang::default()` = `Zh`），zh-CN 与 en 的
+  message id 必须一致（单测校验）
 - 缺失消息回退：当前语言 → 另一语言 → key 本身；参数用 Fluent `{ $name }`
-- 语言切换：顶部菜单 / 命令面板；选择写入 `layout.json`，重启后恢复
+- 语言切换：顶部菜单 / 命令面板；选择写入 `layout.json`，重启后恢复（已保存的选择优先于默认）
 - 文档双语（README 英文 + 中文）；字体仍用系统 CJK 回退
 
 ---

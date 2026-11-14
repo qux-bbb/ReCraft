@@ -15,8 +15,10 @@ use unic_langid::LanguageIdentifier;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Lang {
-    #[default]
     En,
+    /// Default for a fresh install: the product and its documentation are Chinese-first.
+    /// The user's choice is persisted in `layout.json` (DESIGN §8.4).
+    #[default]
     Zh,
 }
 
@@ -107,6 +109,11 @@ fn bundle_for(lang: Lang, source: &'static str) -> Bundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fresh_install_starts_in_simplified_chinese() {
+        assert_eq!(Lang::default(), Lang::Zh);
+    }
 
     #[test]
     fn toggles_between_two_languages() {

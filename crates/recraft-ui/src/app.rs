@@ -1566,7 +1566,9 @@ impl Default for ReCraftApp {
             session: None,
             project: None,
             data_version: 0,
-            lang: Lang::En,
+            // Fresh installs open in Simplified Chinese; the language toggle writes the
+            // choice into layout.json and it wins on the next start (DESIGN §8.4).
+            lang: Lang::default(),
             i18n: I18n::new(),
             tab: Tab::Disasm,
             dock: None,
@@ -12908,6 +12910,8 @@ mod tests {
         let result = recraft_analysis::analyze(&mut session).unwrap();
         recraft_analysis::persist(&mut session, &result).unwrap();
         let mut app = ReCraftApp {
+            // The status assertion spells the English copy, so pin the locale.
+            lang: Lang::En,
             session: Some(session),
             ..ReCraftApp::default()
         };
@@ -13025,6 +13029,15 @@ mod tests {
             "collapsing the sidebar must not switch the document tab"
         );
         assert!(state.find_tab(&Pane::Ai).is_none());
+    }
+
+    #[test]
+    fn a_fresh_app_starts_in_simplified_chinese() {
+        assert_eq!(
+            ReCraftApp::default().lang,
+            Lang::Zh,
+            "a fresh install opens in 简中; layout.json still wins once the user toggles"
+        );
     }
 
     #[test]
@@ -14177,6 +14190,8 @@ mod tests {
             .send(AiMessage::Done(Ok("int main(void) {}".to_owned())))
             .unwrap();
         let mut app = ReCraftApp {
+            // The status assertion spells the English copy, so pin the locale.
+            lang: Lang::En,
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),

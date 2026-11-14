@@ -69,7 +69,8 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 - **MCP-native AI**: one read-only **analysis agent** (the same implementation in the GUI
   sidebar and `recraft-cli ai ask`); the model calls 13 query tools itself and answers. It never
   writes — renames/comments still go through manual edits or the MCP write tools.
-- **Native egui UI**, dense IDA-like layout, modern look, English + 简体中文
+- **Native egui UI**, dense IDA-like layout, modern look, Simplified Chinese by default
+  (switchable to English)
   (Fluent `.ftl` resources under `crates/recraft-ui/locales/`).
 
 ## Architecture

@@ -133,6 +133,13 @@
   此前只认 `gs`，Linux ELF 的 `mov rax, fs:[0x28]` 整条落进 `__asm`。现在按段前缀分派到
   同一个 lifter，新增 `Builtin::ReadFsqword`。
 
+- **新装默认简体中文。** `Lang` 的默认值从英文改为简中（`#[default] Zh`），
+  `ReCraftApp::default()` 改用 `Lang::default()`，因此首次启动、以及 `layout.json` 里缺
+  `lang` 字段时界面是中文（产品与文档本来就是中文优先）。已切换过语言的用户不受影响：
+  `layout.json` 里保存的选择仍然优先；英文照旧在 Options 菜单 / 命令面板里一键切回。
+  `DESIGN §8.4`、README 双语表述同步更新，新增单测
+  `a_fresh_install_starts_in_simplified_chinese` 钉住默认值。
+
 ## [0.4.1] - 2026-11-14
 
 0.4.1 是 0.4.0 之后的修正版：AArch64 解码器换成 capstone、A64 操作数与 movk 修正、图标回到 v1。
