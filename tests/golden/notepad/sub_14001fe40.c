@@ -40,12 +40,12 @@ void sub_14001fe40_l1(void) {
             GetWindowTextLengthW(qword_ADDR);
             rcx = &var_70;
             eax -= edi;
-            var_20 = rcx;
+            var_10 = rcx;
             sub_14001f8d8(rbx, eax, off_140036540);
             rbx = rax;
             if (byte_ADDR != r12b && rax == 0) {
                 rax = &var_70;
-                var_20 = rax;
+                var_10 = rax;
                 sub_14001f8d8(r14, (rdi + rsi), off_140036540);
                 r12d = 1;
                 rbx = rax;
@@ -55,7 +55,7 @@ void sub_14001fe40_l1(void) {
                 edi -= 1;
             }
             rax = &var_70;
-            var_20 = rax;
+            var_10 = rax;
             sub_14001fdc8(r14, edi);
             rbx = rax;
             if (byte_ADDR != r12b && rax == 0) {
@@ -68,7 +68,7 @@ void sub_14001fe40_l1(void) {
                 eax = esi;
                 rcx -= rax;
                 rax = &var_70;
-                var_20 = rax;
+                var_10 = rax;
                 rcx = (r14 + (rcx * 2));
                 sub_14001fdc8(rcx, rdx);
                 r12d = 1;
@@ -106,7 +106,7 @@ void sub_14001fe40_l1(void) {
             rcx = qword_ADDR;
             rbx = rax;
             rcx = ((r8 != 0) ? r8 : rcx);
-            var_20 = 0xADDR;
+            var_10 = 0xADDR;
             sub_14000c3a4(rcx, qword_ADDR, qword_ADDR, off_140036540, 0xADDR);
             SetCursor(rbx);
         }

@@ -643,7 +643,7 @@ void sub_140013154_l1(void) {
                 eax = r14d;
                 esi = r14d;
                 __asm("xchg [0xADDR], eax");
-                __asm("mov rax, gs:[0xADDR]");
+                rax = __readgsqword(0xADDR);
                 ebx = r14d;
                 var_1d0 = r14;
                 edi = 0xADDR;
@@ -859,8 +859,8 @@ void sub_140013154_l1(void) {
                             edi = r12d;
                             if (r13d >= 0 /* signed */) {
                                 loc_ADDR:
-                                __asm("rdtsc");
-                                rdx <<= 0xADDR;
+                                rax = __rdtsc();
+                                rdx = ((rax >> 0xADDR) << 0xADDR);
                                 rax |= rdx;
                                 var_b8 = rax;
                                 ecx = var_a8;
@@ -1168,8 +1168,8 @@ void sub_140013154_l1(void) {
                                                                                                                                                                         var_e0 = r13;
                                                                                                                                                                         var_e8 = r13;
                                                                                                                                                                         var_128 = r13;
-                                                                                                                                                                        __asm("rdtsc");
-                                                                                                                                                                        rdx <<= 0xADDR;
+                                                                                                                                                                        rax = __rdtsc();
+                                                                                                                                                                        rdx = ((rax >> 0xADDR) << 0xADDR);
                                                                                                                                                                         rax |= rdx;
                                                                                                                                                                         var_c8 = rax;
                                                                                                                                                                         ecx += 8;
@@ -2768,7 +2768,9 @@ void sub_140013154_l1(void) {
                                                                     } while (*(u16*)((rdi + (rcx * 2))) != r10w);
                                                                     rcx = ((rcx * 2) + 2);
                                                                     eax = 0;
-                                                                    __asm("rep stosb [rdi]");
+                                                                    memset(rdi, al, rcx);
+                                                                    rdi += rcx;
+                                                                    rcx = 0;
                                                                     sub_140024e2c(*(u64*)(rbx));
                                                                     rcx = var_b8;
                                                                     r10d = 0;
@@ -2795,7 +2797,9 @@ void sub_140013154_l1(void) {
                                             var_90 = r8;
                                             if (rdi != 0) {
                                                 eax = 0;
-                                                __asm("rep stosb [rdi]");
+                                                memset(rdi, al, rcx);
+                                                rdi += rcx;
+                                                rcx = 0;
                                             }
                                             rdi = var_68;
                                             var_68 = rdi;
@@ -4696,7 +4700,9 @@ void sub_140013154_l1(void) {
                                             rdi = var_818;
                                             rcx = ((rcx * 2) + 2);
                                             eax = 0;
-                                            __asm("rep stosb [rdi]");
+                                            memset(rdi, al, rcx);
+                                            rdi += rcx;
+                                            rcx = 0;
                                             sub_140024e2c(var_818);
                                             var_818 = r12;
                                         }
@@ -4709,7 +4715,9 @@ void sub_140013154_l1(void) {
                                             rdi = var_820;
                                             rcx = ((rcx * 2) + 2);
                                             eax = 0;
-                                            __asm("rep stosb [rdi]");
+                                            memset(rdi, al, rcx);
+                                            rdi += rcx;
+                                            rcx = 0;
                                             sub_140024e2c(var_820);
                                             var_820 = r12;
                                         }
@@ -4721,7 +4729,9 @@ void sub_140013154_l1(void) {
                                             } while (*(u16*)((rdi + (rcx * 2))) != r12w);
                                             rcx = ((rcx * 2) + 2);
                                             eax = 0;
-                                            __asm("rep stosb [rdi]");
+                                            memset(rdi, al, rcx);
+                                            rdi += rcx;
+                                            rcx = 0;
                                             sub_140024e2c(var_828);
                                             var_828 = r12;
                                         }
@@ -5331,8 +5341,8 @@ void sub_140013154_l1(void) {
                                         rcx = qword_ADDR;
                                         r12d = 8;
                                         *(u64*)(rax) = rcx;
-                                        __asm("rdtsc");
-                                        rdx <<= 0xADDR;
+                                        rax = __rdtsc();
+                                        rdx = ((rax >> 0xADDR) << 0xADDR);
                                         rax |= rdx;
                                         var_b0 = rax;
                                         rax = var_70;
@@ -5444,8 +5454,8 @@ void sub_140013154_l1(void) {
                                                                                                                         var_d0 = r12;
                                                                                                                         var_110 = r12;
                                                                                                                         var_100 = r12;
-                                                                                                                        __asm("rdtsc");
-                                                                                                                        rdx <<= 0xADDR;
+                                                                                                                        rax = __rdtsc();
+                                                                                                                        rdx = ((rax >> 0xADDR) << 0xADDR);
                                                                                                                         rax |= rdx;
                                                                                                                         var_70 = rax;
                                                                                                                         r8d += 8;

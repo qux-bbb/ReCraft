@@ -19,5 +19,5 @@ void sub_140001de4_l1(void) {
     }
     eax = var_30;
     ecx = eax;
-    __asm("int 0xADDR");
+    __fastfail(ecx);
 }

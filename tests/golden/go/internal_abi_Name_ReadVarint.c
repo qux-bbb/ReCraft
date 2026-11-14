@@ -10,11 +10,11 @@ void internal/abi.Name.ReadVarint_l1(void) {
                 rcx = (rdx + 1);
                 rdx = rbx;
                 loc_ADDR:
-                var_20 = rdx;
-                var_28 = rcx;
+                var_18 = rdx;
+                var_10 = rcx;
                 rbx += rcx;
                 internal/abi.Name.DataChecked(off_1400dbe94);
-                rdx = var_28;
+                rdx = var_10;
                 rsi = (rdx + (rdx * 2));
                 rcx = (rdx + (rsi * 2));
                 if (rcx < 0 /* signed */) goto loc_ADDR;
@@ -24,7 +24,7 @@ void internal/abi.Name.ReadVarint_l1(void) {
                 rsi <<= cl;
                 r9 = ((rcx < 0xADDR) ? -1 : 0);
                 rsi &= r9;
-                r9 = var_20;
+                r9 = var_18;
                 rbx = (rsi + r9);
             } while ((r8b & 0xADDR) != 0);
             rax = (rdx + 1);

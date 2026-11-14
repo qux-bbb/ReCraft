@@ -13,9 +13,9 @@ void sub_14002346c_l1(void) {
                     qword_ADDR = rax;
                     var_a0 = rax;
                     var_a8 = off_140036178;
-                    var_28 = &var_a0;
+                    var_58 = &var_a0;
                     rax = &var_a8;
-                    var_20 = rax;
+                    var_60 = rax;
                     sub_140001008(rcx);
                 }
             }
@@ -28,19 +28,19 @@ void sub_14002346c_l1(void) {
                 var_a0 = *(u32*)((rcx + 4));
                 eax = *(u32*)(rcx);
                 var_a8 = rax;
-                var_60 = *(u64*)((rcx + 8));
-                var_68 = (rcx + 0xADDR);
+                var_20 = *(u64*)((rcx + 8));
+                var_18 = (rcx + 0xADDR);
                 rax = (qword_ADDR + 1);
                 qword_ADDR = rax;
-                var_70 = rax;
-                var_78 = off_140036178;
+                var_10 = rax;
+                var_8 = off_140036178;
                 *(u64*)((r11 - 0xADDR)) = &var_98;
                 *(u64*)((r11 - 0xADDR)) = &var_a0;
                 *(u64*)((r11 - 0xADDR)) = &var_a8;
-                *(u64*)((r11 - 0xADDR)) = &var_60;
-                *(u64*)((r11 - 0xADDR)) = &var_68;
-                *(u64*)((r11 - 0xADDR)) = &var_70;
-                rax = &var_78;
+                *(u64*)((r11 - 0xADDR)) = &var_20;
+                *(u64*)((r11 - 0xADDR)) = &var_18;
+                *(u64*)((r11 - 0xADDR)) = &var_10;
+                rax = &var_8;
                 *(u64*)((r11 - 0xADDR)) = rax;
                 sub_140001094(rcx, off_14002eb62);
             }

@@ -8,13 +8,13 @@ void internal/abi.Name.Tag_l1(void) {
         internal/abi.Name.HasTag();
         if (al == 0) break;
         internal/abi.Name.ReadVarint();
-        var_30 = rax;
-        var_28 = 1;
+        var_10 = rax;
+        var_18 = 1;
         rbx += rax;
         rbx += 1;
         internal/abi.Name.ReadVarint();
-        rcx = var_30;
-        rcx += var_28;
+        rcx = var_10;
+        rcx += var_18;
         rbx = ((rcx + rax) + 1);
         internal/abi.Name.DataChecked(off_1400dd27c);
         if (rbx < 0 /* signed */) {
@@ -31,6 +31,8 @@ void internal/abi.Name.Tag_l1(void) {
             }
             runtime.panicunsafestringnilptr();
             runtime.panicunsafestringlen();
+        } else {
+            return;
         }
     }
     eax = 0;

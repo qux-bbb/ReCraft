@@ -24,6 +24,8 @@ void internal/abi.Name.Name_l1(void) {
             }
             runtime.panicunsafestringnilptr();
             runtime.panicunsafestringlen();
+        } else {
+            return;
         }
     }
     eax = 0;

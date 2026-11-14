@@ -12,16 +12,16 @@ void sub_14000717c_l1(void) {
         xmm0 = 0;
         r8 = *(u64*)((rcx + 0xADDR));
         rdi += 0xADDR;
-        var_38 = ax;
+        var_48 = ax;
         al = *(u8*)((rcx + 4));
-        var_3a = al;
-        var_3c = r13d;
+        var_46 = al;
+        var_44 = r13d;
         var_40 = r13w;
-        var_48 = xmm0;
+        var_38 = xmm0;
         var_c0 = r13b;
         while (1) {
-            var_30 = rdi;
-            sub_1400068f0(&var_38, &var_30, r8);
+            var_50 = rdi;
+            sub_1400068f0(&var_48, &var_50, r8);
             r10d = 0;
             sil = al;
             if (al == 0) break;
@@ -32,39 +32,39 @@ void sub_14000717c_l1(void) {
                 ecx -= eax;
             } else {
                 r8 = r15;
-                sub_1400274a0(r12, var_50);
+                sub_1400274a0(r12, var_30);
                 ecx = eax;
                 r10d = 0;
             }
             if (ecx >= 0 /* signed */ && ecx != 0) {
-                rdi = var_30;
-                var_30 = rdi;
+                rdi = var_50;
+                var_50 = rdi;
                 if (*(u64*)((rbx + 0xADDR)) <= r10) {
                     eax = (uint32)(*(u16*)((rbx + 6)));
                     xmm0 = 0;
-                    r14d = var_3c;
+                    r14d = var_44;
                     esi = r10d;
-                    var_58 = ax;
+                    var_28 = ax;
                     al = *(u8*)((rbx + 8));
-                    var_5a = al;
-                    var_5c = r10d;
-                    var_60 = r10w;
-                    var_68 = xmm0;
+                    var_26 = al;
+                    var_24 = r10d;
+                    var_20 = r10w;
+                    var_18 = xmm0;
                     if (r14d != 0) {
                         r13d = 0;
                         do {
-                            sub_1400068f0(&var_58, &var_30, *(u64*)((rbx + 0xADDR)));
+                            sub_1400068f0(&var_28, &var_50, *(u64*)((rbx + 0xADDR)));
                             if (al == 0) break;
                             esi += 1;
                         } while (esi < r14d);
-                        rdi = var_30;
+                        rdi = var_50;
                     }
                     if (r14d != esi) {
-                        al = var_3a;
-                        var_3c = esi;
+                        al = var_46;
+                        var_44 = esi;
                         if (al != 1) {
                             if (al == 2) {
-                                rax = var_48;
+                                rax = var_38;
                                 if (rax == 0) {
                                     _o__errno();
                                     *(u32*)(rax) = 0xADDR;
@@ -74,7 +74,7 @@ void sub_14000717c_l1(void) {
                                 }
                             }
                         } else {
-                            rax = var_48;
+                            rax = var_38;
                             if (rax != 0) {
                                 *(u16*)(rax) = si;
                             }
@@ -85,14 +85,14 @@ void sub_14000717c_l1(void) {
                     edx = 0;
                     rax -= *(u64*)((rbx + 0xADDR));
                     __asm("div qword ptr [rbx+0xADDR]");
-                    esi = var_3c;
+                    esi = var_44;
                     if (rsi > rax && esi != eax) {
                         esi = eax;
-                        var_3c = eax;
-                        al = var_3a;
+                        var_44 = eax;
+                        al = var_46;
                         if (al != 1) {
                             if (al == 2) {
-                                rax = var_48;
+                                rax = var_38;
                                 if (rax == 0) {
                                     _o__errno();
                                     *(u32*)(rax) = 0xADDR;
@@ -102,7 +102,7 @@ void sub_14000717c_l1(void) {
                                 }
                             }
                         } else {
-                            rax = var_48;
+                            rax = var_38;
                             if (rax != 0) {
                                 *(u16*)(rax) = si;
                             }
@@ -115,21 +115,21 @@ void sub_14000717c_l1(void) {
                 r8 = *(u64*)((rbx + 0xADDR));
             }
         }
-        rdi = var_30;
+        rdi = var_50;
         *(u64*)((rbx + 0xADDR)) = rdi;
-        r14b = var_3a;
+        r14b = var_46;
         rcx = r10;
         if (r13b != 0) {
-            rsi = var_48;
-            r13d = var_3c;
+            rsi = var_38;
+            r13d = var_44;
         } else {
-            eax = (uint32)(var_38);
+            eax = (uint32)(var_48);
             r13d = 1;
-            var_3c = 1;
+            var_44 = 1;
             rsi = r10;
             var_40 = r15w;
-            var_48 = r10;
-            var_50 = r12;
+            var_38 = r10;
+            var_30 = r12;
             if (ax != 0) {
                 rcx = rax;
             } else {
@@ -147,13 +147,13 @@ void sub_14000717c_l1(void) {
         r8d = var_e8;
         eax = (uint32)(*(u16*)((rbx + 6)));
         dl = *(u8*)((rbx + 8));
-        var_5c = r8d;
+        var_24 = r8d;
         r8 = var_e0;
-        var_60 = r8w;
-        var_58 = ax;
-        var_5a = dl;
-        var_68 = r10;
-        var_70 = r9;
+        var_20 = r8w;
+        var_28 = ax;
+        var_26 = dl;
+        var_18 = r10;
+        var_10 = r9;
         if (ax == 0) {
             eax = (uint32)(r8w);
             rax += 2;
@@ -217,7 +217,7 @@ void sub_14000717c_l1(void) {
                         _o__errno();
                         *(u32*)(rax) = 0xADDR;
                         sub_140002934();
-                        sub_1400090c8(&var_58, &var_30, *(u64*)((rbx + 0xADDR)));
+                        sub_1400090c8(&var_28, &var_50, *(u64*)((rbx + 0xADDR)));
                         *(u8*)((rbx + 0xADDR)) = 1;
                         al = 1;
                         return;
@@ -226,9 +226,9 @@ void sub_14000717c_l1(void) {
                 }
             }
         } else {
-            sub_1400090c8(&var_38, &var_30, r8);
+            sub_1400090c8(&var_48, &var_50, r8);
         }
-        sub_1400090c8(&var_58, &var_30, *(u64*)((rbx + 0xADDR)));
+        sub_1400090c8(&var_28, &var_50, *(u64*)((rbx + 0xADDR)));
         *(u8*)((rbx + 0xADDR)) = 1;
         al = 1;
     }

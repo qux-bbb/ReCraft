@@ -43,5 +43,5 @@ void sub_140002100_l1(void) {
         return;
     }
     ecx = ebx;
-    __asm("int 0xADDR");
+    __fastfail(ecx);
 }

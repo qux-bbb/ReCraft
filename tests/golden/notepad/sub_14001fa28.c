@@ -8,9 +8,9 @@ void sub_14001fa28_l1(void) {
     if (((esi >> 0xADDR) & 1) != 0) {
         sub_14000cbc8(1);
     }
-    var_24 = 0;
-    var_20 = 0;
-    SendMessageW(qword_ADDR, 0xADDR, &var_24, &var_20, 0);
+    var_2c = 0;
+    var_30 = 0;
+    SendMessageW(qword_ADDR, 0xADDR, &var_2c, &var_30, 0);
     SendMessageW(qword_ADDR, 0xADDR, 0, 0);
     SendMessageW(qword_ADDR, 0xADDR, 0, 0);
     eax += 1;
@@ -40,7 +40,7 @@ void sub_14001fa28_l1(void) {
                 qword_ADDR = rax;
                 ShowWindow(qword_ADDR, 5);
                 SendMessageW(qword_ADDR, 0xADDR, 0xADDR, 0);
-                SendMessageW(qword_ADDR, 0xADDR, var_24, var_20);
+                SendMessageW(qword_ADDR, 0xADDR, var_2c, var_30);
                 SetFocus(qword_ADDR);
                 SetCursor(rdi);
                 if (dword_ADDR != 0) {

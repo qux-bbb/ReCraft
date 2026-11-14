@@ -4,6 +4,5 @@ void sub_14000909c_l1(void) {
         edx = 0;
         sub_140028010();
     }
-    ecx = 7;
-    __asm("int 0xADDR");
+    __fastfail(7);
 }

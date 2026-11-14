@@ -36,35 +36,35 @@ void sub_140026c44_l1(void) {
                 *(u64*)(rbx) = off_1400294b0;
             }
             WindowsDeleteString(rdi);
-            var_20 = rsi;
+            var_40 = rsi;
             hstring = rsi;
             WindowsCreateStringReference("Windows.Security.EnterpriseData.ProtectionPolicyManager", 0xADDR, &hstringHeader, &hstring, rsi);
             if (eax < 0 /* signed */) {
                 ecx = eax;
                 sub_14000b320(eax);
             }
-            rcx = var_20;
+            rcx = var_40;
             rdi = hstring;
             if (rcx != 0) {
                 rax = *(u64*)(rcx);
                 rax = *(u64*)((rax + 0xADDR));
                 sub_140028010(rcx, rdx, r8);
             }
-            RoGetActivationFactory(rdi, off_14002e110, &var_20);
+            RoGetActivationFactory(rdi, off_14002e110, &var_40);
             edi = eax;
             if (eax >= 0 /* signed */) {
                 if (rbx == 0) {
                     edi = 0xADDR;
                 } else {
-                    rcx = var_20;
+                    rcx = var_40;
                     rax = *(u64*)(rcx);
                     rax = *(u64*)((rax + 0xADDR));
-                    sub_140028010(var_20, rbx, off_140036400);
+                    sub_140028010(var_40, rbx, off_140036400);
                     edi = eax;
                 }
-                rcx = var_20;
+                rcx = var_40;
                 if (rcx != 0) {
-                    var_20 = rsi;
+                    var_40 = rsi;
                     rax = *(u64*)(rcx);
                     rax = *(u64*)((rax + 0xADDR));
                     sub_140028010(rcx, rdx, r8);
@@ -80,9 +80,9 @@ void sub_140026c44_l1(void) {
             } else {
                 r9d = eax;
                 sub_140007cf0(var_68, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
-                rcx = var_20;
+                rcx = var_40;
                 if (rcx != 0) {
-                    var_20 = rsi;
+                    var_40 = rsi;
                     rax = *(u64*)(rcx);
                     rax = *(u64*)((rax + 0xADDR));
                     sub_140028010(rcx, rdx, r8);
@@ -152,35 +152,35 @@ void sub_140026c44_l1(void) {
             *(u64*)(rbx) = off_1400294b0;
         }
         WindowsDeleteString(rdi);
-        var_20 = rsi;
+        var_40 = rsi;
         hstring = rsi;
         WindowsCreateStringReference("Windows.Security.EnterpriseData.ProtectionPolicyManager", 0xADDR, &hstringHeader, &hstring, rsi);
         if (eax < 0 /* signed */) {
             ecx = eax;
             sub_14000b320(eax);
         }
-        rcx = var_20;
+        rcx = var_40;
         rdi = hstring;
         if (rcx != 0) {
             rax = *(u64*)(rcx);
             rax = *(u64*)((rax + 0xADDR));
             sub_140028010(rcx, rdx, r8);
         }
-        RoGetActivationFactory(rdi, off_14002e110, &var_20);
+        RoGetActivationFactory(rdi, off_14002e110, &var_40);
         edi = eax;
         if (eax >= 0 /* signed */) {
             if (rbx == 0) {
                 edi = 0xADDR;
             } else {
-                rcx = var_20;
+                rcx = var_40;
                 rax = *(u64*)(rcx);
                 rax = *(u64*)((rax + 0xADDR));
-                sub_140028010(var_20, rbx, off_140036400);
+                sub_140028010(var_40, rbx, off_140036400);
                 edi = eax;
             }
-            rcx = var_20;
+            rcx = var_40;
             if (rcx != 0) {
-                var_20 = rsi;
+                var_40 = rsi;
                 rax = *(u64*)(rcx);
                 rax = *(u64*)((rax + 0xADDR));
                 sub_140028010(rcx, rdx, r8);
@@ -196,9 +196,9 @@ void sub_140026c44_l1(void) {
         } else {
             r9d = eax;
             sub_140007cf0(var_68, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
-            rcx = var_20;
+            rcx = var_40;
             if (rcx != 0) {
-                var_20 = rsi;
+                var_40 = rsi;
                 rax = *(u64*)(rcx);
                 rax = *(u64*)((rax + 0xADDR));
                 sub_140028010(rcx, rdx, r8);

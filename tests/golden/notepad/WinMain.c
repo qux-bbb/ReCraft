@@ -107,7 +107,7 @@ void WinMain_l1(void) {
         return;
     }
     ecx = (r15 + 5);
-    __asm("int 0xADDR");
+    __fastfail(ecx);
     rcx = qword_ADDR;
     if (rcx != 0) {
         IsDialogMessageW(qword_ADDR, &msg);

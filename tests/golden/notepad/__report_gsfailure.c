@@ -1,5 +1,5 @@
 // L1 structure recovery (3 blocks)
-void sub_140001cf0_l1(void) {
+void __report_gsfailure_l1(void) {
     var_40 = rcx;
     IsProcessorFeaturePresent(0xADDR);
     if (eax == 0) {
@@ -20,6 +20,5 @@ void sub_140001cf0_l1(void) {
         sub_140001cb4(off_140029000);
         return;
     }
-    ecx = 2;
-    __asm("int 0xADDR");
+    __fastfail(2);
 }

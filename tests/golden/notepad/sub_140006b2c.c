@@ -11,7 +11,7 @@ void sub_140006b2c_l1(void) {
         while (rbx != rsi) {
             r9 = *(u64*)((rbx + 8));
             r10d = *(u32*)(rbx);
-            __asm("prefetchw [r9]");
+            prefetchw(r9);
             eax = *(u32*)(r9);
             do {
                 ecx = (eax & 0xADDR);
@@ -22,7 +22,7 @@ void sub_140006b2c_l1(void) {
             ecx >>= 1;
             ecx &= 0xADDR;
             if (ecx != 0) {
-                __asm("prefetchw [r9+0xADDR]");
+                prefetchw((r9 + 4));
                 eax = *(u32*)((r9 + 4));
                 do {
                     r8d = eax;

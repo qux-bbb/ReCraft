@@ -5,16 +5,16 @@ void sub_14001ea18_l1(void) {
     var_50 &= 0;
     rbx = rdx;
     hKey &= 0;
-    var_30 = 0;
+    var_10 = 0;
     var_68 = 4;
     if (rcx == 0) {
         var_60 = eax;
         RegCreateKeyW(0xADDR, "Software\\Microsoft\\Notepad", &hKey);
         if (eax == 0) {
-            rax = &var_30;
-            var_28 = 4;
+            rax = &var_10;
+            var_18 = 4;
             var_20 = rax;
-            RegSetValueExW(hKey, rbx, 0, 4, &var_30, 4);
+            RegSetValueExW(hKey, rbx, 0, 4, &var_10, 4);
             RegCloseKey(hKey);
         }
     } else {
@@ -23,7 +23,7 @@ void sub_14001ea18_l1(void) {
         *(u64*)((r11 - 0xADDR)) = rax;
         RegQueryValueExW(rcx, rdx, 0, &var_50);
         if (eax != 0) {
-            eax = var_30;
+            eax = var_10;
         }
     }
     eax = var_60;

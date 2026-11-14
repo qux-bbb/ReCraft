@@ -1,12 +1,12 @@
 // L1 structure recovery (35 blocks)
 void internal/abi.NewName_l1(void) {
     while (1) {
-        if (&var_80 <= *(u64*)((r14 + 0xADDR))) {
-            var_28 = sil;
-            var_29 = r8b;
+        if (&var_8 <= *(u64*)((r14 + 0xADDR))) {
+            var_60 = sil;
+            var_5f = r8b;
             runtime.morestack_noctxt();
-            esi = (uint32)(var_28);
-            r8d = (uint32)(var_29);
+            esi = (uint32)(var_60);
+            r8d = (uint32)(var_5f);
             continue;
         }
         var_98 = rax;
@@ -37,20 +37,20 @@ void internal/abi.NewName_l1(void) {
         var_98 = rax;
         var_b0 = rdi;
         var_a8 = rcx;
-        var_45 = 0;
-        var_4d = 0;
-        var_3b = 0;
         var_43 = 0;
-        rax = &var_45;
+        var_3b = 0;
+        var_4d = 0;
+        var_45 = 0;
+        rax = &var_43;
         rbx = 0xADDR;
         internal/abi.writeVarint(0xADDR, rdx, r8);
-        var_58 = rax;
-        rax = &var_3b;
+        var_30 = rax;
+        rax = &var_4d;
         ebx = 0xADDR;
         rdi = var_b0;
         internal/abi.writeVarint(rbx, rdx, r8);
         rdx = var_a0;
-        rsi = var_58;
+        rsi = var_30;
         r8 = ((rsi + rdx) + 1);
         r9 = (rdx + rsi);
         r10 = var_b0;
@@ -63,39 +63,39 @@ void internal/abi.NewName_l1(void) {
             r11d = (uint32)(var_b8);
             r11d |= 2;
         }
-        var_50 = rax;
-        var_60 = r8;
-        var_70 = r9;
+        var_38 = rax;
+        var_28 = r8;
+        var_18 = r9;
         r12d = (uint32)(var_b9);
         if (r12b != 0) {
             r11d |= 8;
         }
-        var_4f = r11b;
-        var_68 = rdi;
+        var_39 = r11b;
+        var_20 = rdi;
         rax = off_1400bd760;
         rbx = rdi;
         runtime.makeslice();
-        rcx = var_68;
+        rcx = var_20;
         __asm("if (jbe 0xADDR /* unmodelled flags */) goto 0xADDR");
-        edx = (uint32)(var_4f);
+        edx = (uint32)(var_39);
         byte_ADDR = dl;
         rsi = (rcx - 1);
         rdx = (-(rdx) >> 0xADDR);
         edx &= 1;
         rdx += rax;
-        rdi = var_58;
+        rdi = var_30;
         if (rdi > 0xADDR) {
             runtime.panicBounds(rcx, rdx, r8, r9);
             runtime.panicBounds(rcx, rdx, r8, r9);
         }
-        var_80 = rax;
+        var_8 = rax;
         rsi = ((rdi < rsi /* signed */) ? rdi : rsi);
-        rbx = &var_45;
+        rbx = &var_43;
         if (rbx != rdx) {
             runtime.memmove(rsi);
-            rax = var_80;
-            rcx = var_68;
-            rdi = var_58;
+            rax = var_8;
+            rcx = var_20;
+            rdi = var_30;
         }
         rdx = (rdi + 1);
         if (rcx < rdx) {
@@ -114,38 +114,38 @@ void internal/abi.NewName_l1(void) {
         if (rbx != rdx) {
             runtime.memmove(rdi);
             rdx = var_b0;
-            rax = var_80;
-            rcx = var_68;
+            rax = var_8;
+            rcx = var_20;
         } else {
             rdx = var_b0;
         }
         __asm("if (je 0xADDR /* unmodelled flags */) goto 0xADDR");
-        rsi = var_60;
+        rsi = var_28;
         if (rcx < rsi) {
             runtime.panicBounds(rcx, rdx, r8, r9);
         } else {
-            rdi = var_70;
+            rdi = var_18;
             rcx -= rdi;
             r8 = (rcx - 1);
             rdi = (-(rdi) >> 0xADDR);
             rsi &= rdi;
             rsi += rax;
-            rdi = var_50;
+            rdi = var_38;
             if (rdi > 0xADDR) {
                 loc_ADDR:
                 runtime.panicBounds(rcx, rdx, r8, r9);
             } else {
                 r9 = r8;
                 r8 = ((rdi < r8 /* signed */) ? rdi : r8);
-                rbx = &var_3b;
+                rbx = &var_4d;
                 if (rbx != rsi) {
-                    var_70 = r9;
-                    var_68 = rcx;
+                    var_18 = r9;
+                    var_20 = rcx;
                     runtime.memmove(r8);
-                    rdx = var_50;
-                    rsi = var_70;
-                    rax = var_80;
-                    rcx = var_68;
+                    rdx = var_38;
+                    rsi = var_18;
+                    rax = var_8;
+                    rcx = var_20;
                     rdi = rdx;
                     r9 = rsi;
                     rdx = var_b0;

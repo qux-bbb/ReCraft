@@ -41,7 +41,7 @@ void sub_140025a60_l1(void) {
                     rbx = rax;
                     WindowsGetStringRawBuffer(hstring, 0);
                     r9d = -1;
-                    var_20 = 1;
+                    var_10 = 1;
                     edx |= -1;
                     CompareStringOrdinal(rax, (edx | r9d), rbx, (r9d | -1), 1);
                     if (eax != 2) {

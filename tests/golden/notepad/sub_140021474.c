@@ -174,9 +174,9 @@ void sub_140021474_l1(void) {
     r9 -= rcx;
     do {
         rax = (rdx + r8);
-        if (rax == 0) goto loc_ADDR;
+        if (rax == 0) break;
         eax = (uint32)(*(u16*)((rcx + r9)));
-        if (ax == 0) goto loc_ADDR;
+        if (ax == 0) break;
         *(u16*)(rcx) = ax;
         rcx += 2;
         rdx -= 1;

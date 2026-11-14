@@ -1,5 +1,5 @@
 // L1 structure recovery (6 blocks)
-void sub_140002384_l1(void) {
+void _RTC_Initialize_l1(void) {
     rbx = off_14002f2e8;
     rdi = off_14002f2e8;
     while (rbx < rdi) {

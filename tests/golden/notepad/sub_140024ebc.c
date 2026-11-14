@@ -50,14 +50,14 @@ void sub_140024ebc_l1(void) {
             rcx = rbx;
             if (eax >= 0 /* signed */) {
                 rax = *(u64*)((rbx + 0xADDR));
-                var_38 = 0;
+                var_8 = 0;
                 r8d = 1;
                 var_70 = 0;
                 edx = -1;
-                var_30 = rax;
+                var_10 = rax;
                 rax = &var_70;
                 var_20 = rax;
-                CoWaitForMultipleHandles((r8 + 7), (edx | -1), 1, &var_30, &var_70);
+                CoWaitForMultipleHandles((r8 + 7), (edx | -1), 1, &var_10, &var_70);
                 var_68 = eax;
                 if (eax < 0 /* signed */) {
                     var_60 = 0;

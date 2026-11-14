@@ -100,7 +100,7 @@ void sub_140007570_l1(void) {
                 r15 = var_78;
                 do {
                     sub_1400068f0(&var_d0, &var_50, *(u64*)((rdi + 0xADDR)));
-                    if (al == 0) goto loc_ADDR;
+                    if (al == 0) break;
                     eax = var_d4;
                     rcx = var_180;
                     var_40 = eax;
@@ -123,7 +123,6 @@ void sub_140007570_l1(void) {
                     if (al == 0) goto loc_ADDR;
                     ebx += 1;
                 } while (ebx < r14d);
-                loc_ADDR:
                 r15d = 0;
             }
             loc_ADDR:
@@ -144,7 +143,7 @@ void sub_140007570_l1(void) {
             var_30 = 1;
             var_28 = eax;
             sub_140009a5c(rsi, var_98, r8);
-            if (eax != 0xADDR) goto loc_ADDR;
+            if (eax != 0xADDR) break;
             r12 += 1;
             bl = r15b;
             goto loc_ADDR;
@@ -158,7 +157,6 @@ void sub_140007570_l1(void) {
             }
             bl = r15b;
         }
-        loc_ADDR:
         if (eax != 0) {
             r8d = var_a0;
             r8d -= var_98;

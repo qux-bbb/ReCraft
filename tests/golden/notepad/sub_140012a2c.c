@@ -3,7 +3,7 @@ void sub_140012a2c_l1(void) {
     edx = 0;
     sub_1400029dc(&var_40, 0, (rdx + 0xADDR));
     eax = *(u32*)("le");
-    xmm0 = *(__m128*)("Lucida Console");
+    xmm0 = *(__m128*)("Lucida C");
     var_30 = 0;
     hKey = 0;
     var_b8 = eax;
@@ -84,7 +84,7 @@ void sub_140012a2c_l1(void) {
     RegOpenKeyExW(0xADDR, "Software\\Microsoft\\Notepad\\DefaultFonts", 0, 0xADDR, &hKey);
     if (eax == 0) {
         r9 = &var_a0;
-        r8 = "Lucida Console";
+        r8 = "Lucida C";
         var_20 = 0xADDR;
         sub_14001eaf4(hKey, "lfFaceName");
         rdx = "iPointSize";

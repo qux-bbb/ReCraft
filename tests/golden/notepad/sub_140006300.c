@@ -4,22 +4,22 @@ void sub_140006300_l1(void) {
     esi = 0;
     rdi = qword_ADDR;
     rbx = rcx;
-    var_20 = eax;
-    var_30 = *(u8*)(rcx);
-    var_32 = ax;
+    var_30 = eax;
+    var_20 = *(u8*)(rcx);
+    var_1e = ax;
     eax = (uint32)(*(u16*)((rcx + 0xADDR)));
-    var_38 = ax;
+    var_18 = ax;
     rax = *(u64*)((rcx + 0xADDR));
-    var_24 = 0;
-    var_31 = sil;
-    var_34 = 0;
-    var_3a = si;
-    var_3c = 0;
+    var_2c = 0;
+    var_1f = sil;
+    var_1c = 0;
+    var_16 = si;
+    var_14 = 0;
     var_60 = rsi;
     if (rdi != 0) {
         ecx = 0;
         rax = rdi;
-        sub_140028010(0, &var_20, &var_60);
+        sub_140028010(0, &var_30, &var_60);
     } else {
         rax = qword_ADDR;
         edi = esi;

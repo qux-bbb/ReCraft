@@ -5,14 +5,14 @@ void sub_14001eee0_l1(void) {
     rbx = qword_ADDR;
     eax = 0;
     rcx = -1;
-    var_28 = 0xADDR;
-    var_38 = xmm0;
-    var_48 = 0;
+    var_38 = 0xADDR;
+    var_28 = xmm0;
+    var_18 = 0;
     esi = 0;
-    var_50 = 0;
+    var_10 = 0;
     SetThreadDpiAwarenessContext((rcx | -1));
     rdi = 0;
-    GetWindowPlacement(rbx, &var_28);
+    GetWindowPlacement(rbx, &var_38);
     ebx = eax;
     SetThreadDpiAwarenessContext(rdi);
     if (ebx == 0) {
@@ -84,19 +84,19 @@ void sub_14001eee0_l1(void) {
                     sub_14001eb80(hKey);
                 }
                 if (esi != 0) {
-                    r8d = var_44;
+                    r8d = var_1c;
                     rdx = "iWindowPosX";
                     sub_14001eb80(hKey);
-                    r8d = var_48;
+                    r8d = var_18;
                     rdx = "iWindowPosY";
                     sub_14001eb80(hKey);
-                    r8d = var_4c;
+                    r8d = var_14;
                     rdx = "iWindowPosDX";
-                    r8d -= var_44;
+                    r8d -= var_1c;
                     sub_14001eb80(hKey);
-                    r8d = var_50;
+                    r8d = var_10;
                     rdx = "iWindowPosDY";
-                    r8d -= var_48;
+                    r8d -= var_18;
                     sub_14001eb80(hKey);
                 }
                 if (dword_ADDR != 0) {
@@ -118,7 +118,7 @@ void sub_14001eee0_l1(void) {
         }
     } else {
         rax = qword_ADDR;
-        if (rax != var_44) {
+        if (rax != var_1c) {
             esi = 1;
             RegCreateKeyW(0xADDR, "Software\\Microsoft\\Notepad", &hKey);
             if (eax == 0) {
@@ -187,19 +187,19 @@ void sub_14001eee0_l1(void) {
                     sub_14001eb80(hKey);
                 }
                 if (esi != 0) {
-                    r8d = var_44;
+                    r8d = var_1c;
                     rdx = "iWindowPosX";
                     sub_14001eb80(hKey);
-                    r8d = var_48;
+                    r8d = var_18;
                     rdx = "iWindowPosY";
                     sub_14001eb80(hKey);
-                    r8d = var_4c;
+                    r8d = var_14;
                     rdx = "iWindowPosDX";
-                    r8d -= var_44;
+                    r8d -= var_1c;
                     sub_14001eb80(hKey);
-                    r8d = var_50;
+                    r8d = var_10;
                     rdx = "iWindowPosDY";
-                    r8d -= var_48;
+                    r8d -= var_18;
                     sub_14001eb80(hKey);
                 }
                 if (dword_ADDR != 0) {

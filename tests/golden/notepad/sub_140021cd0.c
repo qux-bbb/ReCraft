@@ -29,7 +29,7 @@ void sub_140021cd0_l1(void) {
         edx -= var_68;
         rcx = (rsi + (rax * 2));
         rax = &var_78;
-        var_20 = rax;
+        var_10 = rax;
         sub_14001f8d8((0 + (rax * 2)), rdx, qword_ADDR);
         rdx = rax;
         eax = var_68;

@@ -20,26 +20,26 @@ void sub_140026734_l1(void) {
         xmm0 = xmmword_ADDR;
         rax = &var_a8;
         var_a8 = 0;
-        var_40 = rax;
+        var_30 = rax;
         rax = &var_b0;
         var_b0 = r14d;
-        var_48 = rax;
+        var_28 = rax;
         eax = *(u32*)("\"");
-        var_30 = eax;
+        var_40 = eax;
         rax = *(u64*)(rbx);
-        var_50 = 1;
-        var_20 = xmm0;
-        var_58 = r14w;
+        var_20 = 1;
+        var_50 = xmm0;
+        var_18 = r14w;
         rax = *(u64*)((rax + 0xADDR));
-        sub_140028010(rbx, &var_20, &var_58);
+        sub_140028010(rbx, &var_50, &var_18);
         edi = eax;
         if (eax >= 0 /* signed */) {
-            PropVariantToStringVectorAlloc(&var_58, &var_a8, &var_b0);
+            PropVariantToStringVectorAlloc(&var_18, &var_a8, &var_b0);
             edi = eax;
         }
-        PropVariantClear(&var_58);
+        PropVariantClear(&var_18);
         if (edi < 0 /* signed */) {
-            sub_1400253cc(&var_40);
+            sub_1400253cc(&var_30);
             rax = *(u64*)(rbx);
             rcx = rbx;
             rax = *(u64*)((rax + 0xADDR));
@@ -55,7 +55,7 @@ void sub_140026734_l1(void) {
             r8 = var_a8;
             r8 = *(u64*)(r8);
             sub_140008384(rsi, 0xADDR);
-            sub_1400253cc(&var_40);
+            sub_1400253cc(&var_30);
             rcx = *(u64*)(rbx);
             rax = *(u64*)((rcx + 0xADDR));
             rcx = rbx;

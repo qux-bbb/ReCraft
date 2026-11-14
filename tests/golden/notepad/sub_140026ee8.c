@@ -18,35 +18,35 @@ void sub_140026ee8_l1(void) {
         *(u64*)((rbx + 0xADDR)) = 0xADDR;
         *(u64*)(rbx) = 0xADDR;
     }
-    var_20 = 0;
+    var_30 = 0;
     hstring = 0;
     WindowsCreateStringReference("Windows.Security.EnterpriseData.ProtectionPolicyManager", 0xADDR, &hstringHeader, &hstring, 0);
     if (eax < 0 /* signed */) {
         ecx = eax;
         sub_14000b320(eax);
     }
-    rcx = var_20;
+    rcx = var_30;
     rdi = hstring;
     if (rcx != 0) {
         rax = *(u64*)(rcx);
         rax = *(u64*)((rax + 0xADDR));
         sub_140028010(rcx, rdx, r8);
     }
-    RoGetActivationFactory(rdi, 0xADDR, &var_20);
+    RoGetActivationFactory(rdi, 0xADDR, &var_30);
     edi = eax;
     if (eax >= 0 /* signed */) {
         if (rbx == 0) {
             edi = 0xADDR;
         } else {
-            rcx = var_20;
+            rcx = var_30;
             rax = *(u64*)(rcx);
             rax = *(u64*)((rax + 0xADDR));
-            sub_140028010(var_20, rbx, 0xADDR);
+            sub_140028010(var_30, rbx, 0xADDR);
             edi = eax;
         }
-        rcx = var_20;
+        rcx = var_30;
         if (rcx != 0) {
-            var_20 = 0;
+            var_30 = 0;
             rax = *(u64*)(rcx);
             rax = *(u64*)((rax + 0xADDR));
             sub_140028010(rcx, rdx, r8);
@@ -54,9 +54,9 @@ void sub_140026ee8_l1(void) {
     } else {
         r9d = eax;
         sub_140007cf0(var_58, 0xADDR, "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp");
-        rcx = var_20;
+        rcx = var_30;
         if (rcx != 0) {
-            var_20 = 0;
+            var_30 = 0;
             rdx = *(u64*)(rcx);
             rax = *(u64*)((rdx + 0xADDR));
             sub_140028010(rcx, rdx, r8);

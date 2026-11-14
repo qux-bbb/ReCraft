@@ -1,34 +1,34 @@
 // L1 structure recovery (19 blocks)
 void sub_14000f610_l1(void) {
     r14d = 0;
-    var_30 = rcx;
+    var_50 = rcx;
     rsi = rcx;
-    var_20 = r14b;
-    var_28 = 0;
+    var_60 = r14b;
+    var_58 = 0;
     hstring = 0;
     WindowsCreateStringReference("Windows.Security.EnterpriseData.ProtectionPolicyManager", (r14 + 0xADDR), &hstringHeader, &hstring, 0, 0, rcx);
     if (eax < 0 /* signed */) {
         ecx = eax;
         sub_14000b320(eax);
     }
-    RoGetActivationFactory(hstring, off_14002e110, &var_28);
+    RoGetActivationFactory(hstring, off_14002e110, &var_58);
     eax >>= 0xADDR;
     al ^= 1;
     hstring = 0;
     if (al != 0) {
-        rbx = var_28;
+        rbx = var_58;
         rax = *(u64*)(rbx);
         rdi = *(u64*)((rax + 0xADDR));
-        sub_140009b18(&var_58, &var_30);
+        sub_140009b18(&var_28, &var_50);
         rdx = *(u64*)((rax + 0xADDR));
         rax = rdi;
-        sub_140028010(rbx, *(u64*)((rax + 0xADDR)), &var_20);
-        var_70 = r14;
+        sub_140028010(rbx, *(u64*)((rax + 0xADDR)), &var_60);
+        var_10 = r14;
     }
-    rcx = var_28;
-    ebx = (uint32)(var_20);
+    rcx = var_58;
+    ebx = (uint32)(var_60);
     if (rcx != 0) {
-        var_28 = r14;
+        var_58 = r14;
         rax = *(u64*)(rcx);
         rax = *(u64*)((rax + 0xADDR));
         sub_140028010(rcx, rdx, r8);

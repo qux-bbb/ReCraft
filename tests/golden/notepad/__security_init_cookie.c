@@ -1,5 +1,5 @@
 // L1 structure recovery (3 blocks)
-void sub_140001f98_l1(void) {
+void __security_init_cookie_l1(void) {
     rax = qword_ADDR;
     rbx = 0xADDR;
     if (rax == 0xADDR) {
@@ -7,17 +7,17 @@ void sub_140001f98_l1(void) {
         var_40 = 0;
         GetSystemTimeAsFileTime(&var_48);
         rax = var_48;
-        var_20 = rax;
+        var_10 = rax;
         GetCurrentThreadId();
-        var_20 ^= rax;
+        var_10 ^= rax;
         GetCurrentProcessId();
-        var_20 ^= rax;
+        var_10 ^= rax;
         QueryPerformanceCounter(&var_40);
         eax = var_40;
-        rcx = &var_20;
+        rcx = &var_10;
         rax <<= 0xADDR;
         rax ^= var_40;
-        rax ^= var_20;
+        rax ^= var_10;
         rax ^= rcx;
         rax &= 0xADDR;
         rcx = 0xADDR;

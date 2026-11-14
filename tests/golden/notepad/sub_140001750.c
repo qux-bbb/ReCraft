@@ -12,8 +12,8 @@ void sub_140001750_l1(void) {
     if (al == 0) {
         sub_140002100(7);
     }
-    sub_140002384();
-    sub_140001c64(sub_1400023d0);
+    _RTC_Initialize();
+    atexit(sub_1400023d0);
     sub_140002050();
     ecx = eax;
     sub_1400028ec(eax);

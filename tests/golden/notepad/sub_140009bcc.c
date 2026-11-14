@@ -50,11 +50,11 @@ void sub_140009bcc_l1(void) {
                     rax = *(u64*)((rbx + 0xADDR));
                     var_78 = 0;
                     r8d = 1;
-                    var_30 = rax;
+                    var_10 = rax;
                     edx = -1;
                     rax = &var_78;
                     var_20 = rax;
-                    CoWaitForMultipleHandles((r8 + 7), (edx | -1), 1, &var_30, &var_78);
+                    CoWaitForMultipleHandles((r8 + 7), (edx | -1), 1, &var_10, &var_78);
                     edi = eax;
                     if (eax >= 0 /* signed */) {
                         eax = *(u32*)((rbx + 0xADDR));

@@ -6,8 +6,8 @@ void sub_140020314_l1(void) {
     if (eax != 0) {
         rax = &var_40;
         r9d = 0;
-        var_28 = rax;
-        var_20 = 0;
+        var_8 = rax;
+        var_10 = 0;
         edi = (r9 + 1);
         GetPrinterDriverW(var_48, 0, edi, 0, 0, &var_40);
         LocalAlloc((rdi + 0xADDR), var_40);
@@ -15,9 +15,9 @@ void sub_140020314_l1(void) {
         rbx = rax;
         if (rax != 0) {
             rax = &var_40;
-            var_28 = rax;
+            var_8 = rax;
             eax = var_40;
-            var_20 = eax;
+            var_10 = eax;
             GetPrinterDriverW(*(u64*)((rbp + 0xADDR)), 0, edi, rbx, var_40, &var_40);
             if (eax != 0) {
                 dword_ADDR |= 0xADDR;
