@@ -55,27 +55,27 @@
    对 preview 收益有限；当前先以 SSA-lite + 可见噪声清理为主，列为预览后增强）。
 4. 自动更新、MSIX 打包（签名流水线已废弃，见 [SIGNING.md](SIGNING.md)）。
 
-## 待办编排：0.2.0–0.4.0（2026-11-14 定）
+## 待办编排：0.2.0 一次收口（2026-11-14 定，11-15 合并发版）
 
-16 项 open 待办按 6 个波次收口；**0.2.0 只装第一波**，每波结束都过一次发布链。
+16 项 open 待办按 6 个波次收口，**全部装进 0.2.0**，每波结束都过一次发布链。开发中期按波次
+给过中间版本号（0.3.x / 0.4.x），发布前统一收回：对外只发一个 0.2.0。
 
 | 波次 | 内容 | 人日 | 版本 |
 |---|---|---|---|
 | W0 | 第 2 行定“删整行”、图标出 3 个方向、排期落库 | 0.5 | — |
 | W1 | 字符串识别、ELF crackme 质量、签名库扩容、提示词可调、图标、第 2 行 | 14 | **0.2.0** |
-| W2 | AI 自动命名、AI 对话（选中汇编/伪 C/数据） | 11 | 0.3.0 |
-| W3 | 多入口循环（10 天硬停）、inline asm 收敛 | 15 | 0.3.0 |
-| W4 | 中立解码抽象、ADR-015 | 5.5 | 0.3.0 |
-| W5 | ARM64（先定 kill criteria） | 30 | **0.3.0** |
-| W6 | UI 现代化、图标迭代（签名申请已废弃） | 15 | **0.4.0** |
+| W2 | AI 自动命名、AI 对话（选中汇编/伪 C/数据） | 11 | **0.2.0** |
+| W3 | 多入口循环（10 天硬停）、inline asm 收敛 | 15 | **0.2.0** |
+| W4 | 中立解码抽象、ADR-015 | 5.5 | **0.2.0** |
+| W5 | ARM64（先定 kill criteria） | 30 | **0.2.0** |
+| W6 | UI 现代化、图标迭代（签名申请已废弃） | 15 | **0.2.0** |
 | P | decbench 收口（W1 顺手） | 1 | — |
 
 总量 ≈ 92 人日；按 DESIGN §14 的 3 天/周 ≈ 30 周，加 20% 缓冲 ≈ 37 周。
 
 进度：
 
-- **W1**：✅ 2026-11-14 收口，**0.2.0 已打包**（zip 15.5 MiB + MSI 13.9 MiB +
-  `SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 全 PASS）。
+- **W1**：✅ 2026-11-14 收口（波次结束时的快照包 15.5 MiB 已被最终 0.2.0 取代，见下）。
 - **W2**：两项（AI 自动命名、选中内容对话）已实现并提交待确认。
 - **W3**：✅ 两项提交（多入口循环按时间盒收在 11 处并记录结论；inline asm 104 → 84）。
 - **W4**：✅ 两项提交（ADR-015 选型 + 中立 `DecodedInsn` 边界，x86 输出零变化）。
@@ -106,7 +106,7 @@
   `*(u8*)(xzr)`），`mov xD, xzr, #imm` 的 orr 别名此前取错操作数。新增 1 条索引寻址单测，
   IR 41 项全绿。
   2026-11-14 收口：**PE-ARM64** 落地——
-ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 字节条目（BeginAddress + 打包的函数长度）解析，`analyze_aarch64` 用它作为函数种子；新增 1.5 KB 的 PE32+ 夹具 `tests/fixtures/aarch64/tiny-arm64.exe` 与两条端到端测试（加载器 + 分析），`recraft-cli info` 显示 `PE32+ (arm64)`。A64 上 `lint` 也是 0 findings。至此验收全部满足：反汇编 100/100、指令覆盖 96.3%、golden 32 份、lint 0、无 panic。SIMD（`stp/ldp v`、`mrs`、`smulh`、`br`）按待办「SIMD 后补」仍走 `__asm`。
+`recraft-format` 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 字节条目（BeginAddress + 打包的函数长度）解析，`analyze_aarch64` 用它作为函数种子；新增 1.5 KB 的 PE32+ 夹具 `tests/fixtures/aarch64/tiny-arm64.exe` 与两条端到端测试（加载器 + 分析），`recraft-cli info` 显示 `PE32+ (arm64)`。A64 上 `lint` 也是 0 findings。至此验收全部满足：反汇编 100/100、指令覆盖 96.3%、golden 32 份、lint 0、无 panic。SIMD（`stp/ldp v`、`mrs`、`smulh`、`br`）按待办「SIMD 后补」仍走 `__asm`。
   2026-11-14 第五轮：**A64 golden 落地**——`scripts/make-aarch64-fixture.py` 生成 6 KB 的
   ELF64-AArch64 夹具（32 个带符号的小函数），`tests/golden/aarch64/` 存 32 份快照，测试
   `the_aarch64_fixture_matches_its_snapshots` 走「导入 → 分析 → 反编译 → 快照比对」全链路，
@@ -116,7 +116,7 @@ ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 
   「覆盖率 ≥60%」按指令口径达标。
   **口径修正（2026-11-14）**：A64 目前只有 **L0**（线性 + 标签 + `goto`），不是结构化 L2——
   块结构化器仍只吃 iced 指令，`--l1/--l2` 在 A64 上已改为回退到 L0（不再报
-  "no basic blocks"）。因此 0.3.0 对 ARM64 的承诺应表述为「反汇编 + 函数/调用图 + 字符串 +
+  "no basic blocks"）。因此 0.2.0 对 ARM64 的承诺应表述为「反汇编 + 函数/调用图 + 字符串 +
   L0 伪 C」，结构化 L2 需要中立 CFG，列为后续项；PE-ARM64、A64 lint 与 SIMD 命名已完成/已记录。
 - 下一步：条件分支与块划分（把 A64 分支落成真正的 `if`/`goto` 而不是尾调用）、AAPCS64
   参数/返回、`stp`/`ldp`、然后是反编译覆盖率的正式测量与 golden。
@@ -124,12 +124,13 @@ ecraft-format 按 COFF machine `0xAA64` 识别架构，`.pdata` 按 ARM64 的 8 
   决定暂不公开提交）；`.github/workflows/release.yml` 就绪（tag 触发打包/校验/可选发布）。
   **代码签名已废弃（2026-11-14，用户决定）**：不申请 SignPath / Certum / Azure，发布物保持
   未签名，`SHA256SUMS.txt` 作为完整性凭据，归档见 [SIGNING.md](SIGNING.md)。
-- **0.3.0 已打包（2026-11-14）**：`dist/recraft-v0.3.0-windows-x64.zip` 15.7 MiB、`.msi` 14.1 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `demo.ps1` 均 PASS，tag `v0.3.0`。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
-0.3.0。本版含 W3（质量时间盒）/ W4（解码抽象）/ W5（ARM64），以及 W6 的第一批界面改动（主题令牌、欢迎页、顶栏/状态栏、标签页）；W6 剩余项在 0.4.0。
-- **W6**（✅ 2026-11-14 收口）：界面现代化第一遍（docs/UI.md 设计基线、主题令牌、欢迎页空状态、顶栏/状态栏发丝边框、标签页表面阶梯、对比度回归）、图标 v3 双变体、演示脚本改用 release；命令区收敛与侧栏卡片化顺延到 0.4.x。**0.4.0 已打包**（zip 15.7 MiB + MSI 14.1 MiB + SHA256SUMS；package/verify/demo 全 PASS；dist 内 exe 图标与 ICO 32px 帧逐像素一致），tag `v0.4.0`。
-- **0.4.1 已打包（2026-11-14）**：`dist/recraft-v0.4.1-windows-x64.zip` 17.6 MiB、`.msi` 15.6 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1` / `verify-msi.ps1`（结构+载荷）/ `demo.ps1` 全 PASS，tag `v0.4.1`。内容：AArch64 解码器切到 capstone（覆盖率 96.3% 不变、100/100 对拍）、A64 的 sp/SIMD/movk 修正、图标回到 v1。
-- 六波全部收口（2026-11-14）：W1 → 0.2.0、W3/W4/W5 → 0.3.0、W6 → 0.4.0；W2 的两项随
-  0.2.0 发布。P 线的 DecBench 见上，签名已废弃。
+- **0.2.0 已打包（2026-11-15）**：`dist/recraft-v0.2.0-windows-x64.zip` 17.3 MiB、
+  `.msi` 15.4 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1`（506 函数）/
+  `verify-msi.ps1`（21 项表断言 + 载荷与 dist 逐字节一致）/ `demo.ps1`（MCP
+  `serverInfo.version` = 0.2.0）全 PASS，tag `v0.2.0`。内容为 W1–W6 全部，含 AArch64
+  解码器切到 capstone、A64 的 sp/SIMD/movk 修正与图标回到 v1。
+- 六波全部收口（2026-11-14）：W1–W6 全部并入 0.2.0 发布；开发中期按波次打的 0.3.x/0.4.x
+  标签与产物在发布前作废。P 线的 DecBench 见上，签名已废弃。
 
 规则：
 

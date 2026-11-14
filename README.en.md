@@ -4,7 +4,8 @@
 
 [简体中文](README.md) | **English**
 
-> **Status: 0.4.1 (technical preview) is out** — the W6 UI modernization is complete; build artifacts are on
+> **Status: 0.2.0 (technical preview) is out** — everything after 0.1.0 (W1–W6, ARM64, the
+> capstone decoder) is in one release; build artifacts are on
 > [Releases](https://github.com/qux-bbb/ReCraft/releases). Import/analyze PE32/PE32+ and
 > ELF32/ELF64 (x64 + Win32 + i386 + x86-64), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type/stack-variable/string writes through a journaled command bus with undo, an MCP server
@@ -214,9 +215,9 @@ command that would run it.
 
 ```powershell
 pwsh -File scripts/package.ps1 -NoMsi         # release build + green zip + SHA256SUMS
-# dist/recraft-v0.4.1-windows-x64.zip, dist/ReCraft-0.4.1/, dist/SHA256SUMS.txt
+# dist/recraft-v0.2.0-windows-x64.zip, dist/ReCraft-0.2.0/, dist/SHA256SUMS.txt
 pwsh -File scripts/package.ps1                # also builds the MSI when the WiX toolchain is there
-# dist/recraft-v0.4.1-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+# dist/recraft-v0.2.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
 pwsh -File scripts/verify-msi.ps1             # MSI: structure + payload + install/uninstall (elevated)
 ```
 
@@ -231,11 +232,11 @@ v0.1 preview binaries are **not code-signed** (a deliberate decision; see
 [`docs/RELEASE.md`](docs/RELEASE.md)). Windows SmartScreen will show "Unknown publisher"
 because signing is out of scope (dropped 2026-11-14):
 
-1. Download `recraft-v0.4.1-windows-x64.zip` or `recraft-v0.4.1-windows-x64.msi` together
+1. Download `recraft-v0.2.0-windows-x64.zip` or `recraft-v0.2.0-windows-x64.msi` together
    with `SHA256SUMS.txt`.
 2. Verify the download before running:
    ```powershell
-   Get-FileHash .\recraft-v0.4.1-windows-x64.msi -Algorithm SHA256
+   Get-FileHash .\recraft-v0.2.0-windows-x64.msi -Algorithm SHA256
    # compare with the matching line in SHA256SUMS.txt
    ```
 3. If SmartScreen appears: **More info → Run anyway**. The MSI installs per-machine into

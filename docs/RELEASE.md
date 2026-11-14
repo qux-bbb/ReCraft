@@ -245,10 +245,14 @@ Certum 开源证书或 Azure Artifact Signing，也不购买 OV/EV 证书。发�
 5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
 6. 干净机的安装→启动 UI→卸载已复验（见上节 2026-11-12：Win10 22H2 虚机 + Win11 25H2 本机）；
    签名已废弃：发布物保持未签名，无需为签名重打产物。
-7. 打附注标签并推送：`git tag -a v0.1.0 -m "ReCraft 0.1.0"` +
-   `git push origin main v0.1.0`；用 CHANGELOG 的 0.1.0 节作为 Release notes
-   （`gh release create v0.1.0 --notes-file <utf8 临时文件> <zip> <msi> SHA256SUMS.txt`）。
+7. 打附注标签并推送：`git tag -a v0.2.0 -m "ReCraft 0.2.0"` +
+   `git push origin main v0.2.0`；用 CHANGELOG 的 0.2.0 节作为 Release notes
+   （`gh release create v0.2.0 --notes-file <utf8 临时文件> <zip> <msi> SHA256SUMS.txt`）。
    发布后把 README / ROADMAP / M4 里“公开预览待…”的状态行改成已发布版本。
+
+**版本号由用户拍板**：`Cargo.toml` 的 `version` 每次改动、每个标签、每次 GitHub Release 前
+都必须先得到用户的明确同意，不得自行推进版本号（2026-11-15 约定；此前的 0.2.0→0.4.1 中间
+版本号因此被收回成单一的 0.2.0）。
 
 ## 限制
 

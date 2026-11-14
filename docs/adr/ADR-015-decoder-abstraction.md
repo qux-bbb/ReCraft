@@ -10,7 +10,7 @@
 
 `recraft-decode` 目前直接 `pub use iced_x86`，公开 API 返回 iced 的 `Mnemonic` /
 `Register` / `OpKind` / `MemorySize`；`recraft-ir` 的 `lift.rs` 里有 29 处 iced 类型引用。
-也就是说 **iced 已经是解码层的公开契约**：换掉它等于重写 lifter 的输入层，而 0.3.0 的
+也就是说 **iced 已经是解码层的公开契约**：换掉它等于重写 lifter 的输入层，而 0.2.0 的
 ARM64 本来就要写一个新的 lifter。
 
 于是问题拆成两个：
@@ -56,7 +56,7 @@ lifter 逐条依赖的东西。capstone 对 x86 没有功能收益，却要引�
 
 **结论：ARM64 用 yaxpeax-arm**，理由按权重排序——纯 Rust 与现有 `forbid(unsafe_code)`
 策略一致、0BSD 与 AGPL-3.0-only 分发无冲突、解码结果足够我们自己的 lifter 用（flags
-本来就要在我们这边建模）、依赖面小。**capstone 作为备选**：如果 0.3.0 的 spike 发现
+本来就要在我们这边建模）、依赖面小。**capstone 作为备选**：如果 0.2.0 的 spike 发现
 yaxpeax-arm 在分支目标/操作数元数据上缺口大到需要大量补丁，再切 capstone——切换点就是
 `DecodedInsn` 适配层，代价可控。bad64 不选：它绑定的是 Binary Ninja 的 C 插件，构建链
 与 FFI 风险最高，覆盖面还只有 AArch64。
@@ -119,7 +119,7 @@ API 要求 `full` feature，把所有架构一起编进来。
 
 ## Consequences
 
-- 0.3.0 的 ARM64 支持不碰 x86 的 lifter；x86 输出保持逐字节一致（golden 守门）。
+- 0.2.0 的 ARM64 支持不碰 x86 的 lifter；x86 输出保持逐字节一致（golden 守门）。
 - `DecodedInsn` 是唯一需要同时满足两个后端的地方；适配层的每个字段都要有 x86 侧的单测。
 - 选型结论可回退：换解码器只需重写适配层，不动 lifter 与反编译器（这次切换就是这么做的）。
 - 代价：多一层转换（每条指令一次）；capstone 另加 C 构建与静态链接体积。

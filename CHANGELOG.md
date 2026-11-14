@@ -9,217 +9,13 @@
 开发记录（每条修复、每次指标变化、每个负结果）归档在
 [docs/CHANGELOG-0.1.0.md](docs/CHANGELOG-0.1.0.md)。
 
-## [未发布]
+## [0.2.0] - 2026-11-15
 
-### 修复
-
-- **旧工程打开时会刷新字符串列表。** 字符串的抽取规则带一个 `strings.rev` 版本号，写入工程
-  元数据；打开工程时若版本不符就按当前规则重新抽取并保存。否则升级后旧工程里仍显示升级前
-  抽出的文本——比如 banner 前多出的那个 `O`，反编译视图是对的、Strings 面板却是旧的。
-
-
-- **可以拿 IDA 的字符串列表对拍了。** 新增 `scripts/ida-strings-dump.py`（`ida64.exe -A -S`
-  调用，`idautils.Strings()` → JSON）与 `scripts/compare-ida-strings.ps1`（自动 import/analyze
-  目标、跑 IDA、按地址比对并打印差异）。默认 IDA 路径是
-  `D:\sec_tools\IDA_Pro_v8.3_Portable\ida64.exe`，可用 `-Ida` 覆盖。
-  crackme 实测：616 个共有地址文本 **全部一致**；仅 ReCraft 多 8 条（PE 头里的
-  `!This program cannot be run in DOS mode.`、各节名，以及修正后的 banner）；仅 IDA 多 468 条
-  （都在代码段里，是 x86 操作码被当成可打印串，我们在扫描时跳过已解码代码）。
-- `recraft strings --json` 不再 `trim()` 文本：`"Enter flag: "` 这种尾随空格与
-  `"  Simple Crackme…"` 的前导空格现在与字节、与 IDA 一致（UI 原本就不裁剪）。
-
-
-- **字符串从代码引用的位置开始，不再多带一个前导字节。** crackme 里的乱序表以 `O` 结尾，
-  紧接着就是 `"=========================================="` 且中间没有 NUL，线性扫描于是一次把
-  那段报成 43 个字符的 `O====…`。现在提取后会用数据引用把候选串“吸附”到真正被引用的地址
-  （`0x1400183c0`，42 个 `=`，与 IDA 的 Strings 窗口一致）；前缀只有在自身长度达到阈值时才
-  单独保留。
-
-- **Strings 面板加了可见的“编辑字符串…”按钮。** 以前只能右键行 → 编辑，不容易发现；按钮在
-  选中一行后可用（右键菜单仍在）。新增 i18n 键 `ui_edit_string_hint` 并补了
-  `a_string_that_starts_mid_run_begins_at_its_reference` 回归测试（用仓库里的 crackme 语料，
-  断言 banner 恰好 42 个 `=` 且没有 `O====` 候选）。
-
-
-- **“打开”对话框也能直接选二进制了。** 以前 `File → Open` 只列 `.rcraft`，ELF/PE 只能走
-  `Import` 或拖进窗口；很多人会先点 Open，看不到 `tiny.elf` 就以为导入失败。现在对话框同时
-  提供工程、可执行文件与全部文件三个过滤器——`open_path` 本来就会按扩展名分派，选中的二进制
-  会走导入流程。新增回归测试 `the_aarch64_elf_fixture_imports_from_the_open_path`：把
-  `tests/fixtures/aarch64/tiny.elf` 拷到临时目录后调用 `open_path`，断言不报错且拿到工程。
-
-
-- **栈槽按 rbp 深度命名（IDA 风格）。** `[rbp-0x18]` 现在叫 `var_18`、`[rbp-8]` 叫
-  `var_8`，与 IDA 一致。此前打印器在 `stack_layout` 证明不了帧时（prologue 里有 `pop`、有
-  碰 rsp 的 intrinsic 等）会退化成 rsp 相对命名，同一函数里两个槽的名字正好反过来。
-  做法：从 `push rbp; mov rbp, rsp; sub rsp, N` 读出帧大小（`sub rsp, 0x20` 的立即数种类
-  是 `Immediate8to64`），结构化结束后把 `var_<rsp 偏移>` 重命名成 `var_<帧深度>`；两阶段
-  替换避免 `var_8 ↔ var_18` 互相吃掉，只改帧内槽。crackme 的 `verify` 现在是
-  `var_18 = rdi;`（参数槽）+ `var_8 = 0;`（计数器）；160 张快照里 5 张按新命名更新，
-  diff 只有槽名；结构化率与测试全绿。
-
-
-- **单次拷贝的参数直接内联，段前缀读取与栈守卫也不再是 `__asm`。**
-  - 拷贝传播：`v1 = arg1; v2 = strlen(v1);` 这种“只有一个定义、只使用一次”的参数拷贝
-    内联到使用点，声明与赋值一起消失（crackme 的 `verify` 现在直接 `strlen(arg1)`）；
-  - `fs:[disp]` / `gs:[disp]` 的 8 字节读取在 `read_operand` 里识别为
-    `__readfsqword` / `__readgsqword`，`sub rdx, fs:[0x28]` 因此是真实的减法而不是
-    `__asm`，后续条件也能建模；
-  - 新增 `hide_stack_guard_typed`：识别 GCC 内联的 canary 检查
-    （`vX = __readfsqword(0x28)` + `reg -= __readfsqword(0x28)` + `if (…) { __stack_chk_fail(); }`）
-    并整体删除，函数尾声恢复成干净的 `return 1;`。
-  实测（ctf-simple-crackme）：intrinsic 指令 4 → 2（覆盖率 98.2% → 99.1%），inline asm
-  13 → 11；crackme-real 93.3%、notepad 97.8% 的结构化率不变。
-
-### 修复
-
-- **循环内“早退到函数尾声”的分支不再被丢弃。** 有些函数的循环体里有一条失败路径直接跳到
-  函数尾声（`mov eax, 0; jmp <epilogue>`）。结构化器把这种条件分支的汇合点算成尾声块后，
-  另一条臂落在 stop 集里、既不是 break/continue 也不是 loop-exit，于是被静默丢掉——按输出
-  会死循环而不是返回失败值（`ctf-simple-crackme` 的 `verify` 就是这样）。新增
-  `escape_to_return()` / `emit_escape_chain()`：这类短链离开当前区域且终点是返回块时，发成
-  `else { …; return; }`（两条臂的极性分别处理）。真实 crackme 语料的结构化率 93.1% → 93.3%，
-  notepad 保持 97.8%，`lint` 0 findings；`crackme` golden 更新 2 张。
-
-### 变更
-
-- **AI 只剩一个功能：分析助手；CLI 与界面完全一致。** GUI 侧栏曾经是一排按钮（解释 / 深挖 /
-  润色 / 重新润色 / 查询数据库 / 建议命名 / 应用 / 清空 + 变量命名结果 + 思考模式），CLI 的
-  `recraft ai` 又有 11 个子命令（explain / suggest / triage / apply / query / polish / prompt /
-  provider / ask / eval / eval-names）——同一件事有三四种做法，两边还各有一套。收成一个：
-
-  - **GUI**：侧栏只剩「分析助手」卡片（问题输入 / 分析 / 新对话 / 附带选中内容 / 工具调用轨迹
-    / 流式答案 / 可点地址）。
-  - **CLI**：只剩 `ai ask <project> "问题" [--json] [--rounds N]` 与 `ai provider`——同一个
-    agent、同样的 13 个只读工具、同样的轮数上限（`AGENT_MAX_ROUNDS=10`）。`--llm` / `--out` /
-    `--yes` 这套“离线证据 → propose → apply”的开关随之消失。
-
-  删掉的入口与原因：
-  - **解释**：问 Agent 即可，还会顺带给出调用者与数据引用。
-  - **润色 / 重新润色**：只显示、从不写回，等于把伪代码复制到任意聊天窗口，还带一套会话缓存与
-    状态机。
-  - **离线查询（`ai query`）**：只有 urls / api callers / text 四种意图，被 Agent 严格覆盖。
-  - **批量命名建议（`ai suggest` + `ai apply`）**：32 个候选一次性交给模型，结果是一屏看不出来
-    该不该应用的名字——启发式回退名（`network_1400012dc`，只是“类别 + 地址”）与模型名混排，
-    置信度还能到 0.9 把回退名顶到 0.7 的模型名前面；review 成本高于直接在 Functions 里按 `N`
-    改名。改名仍可手工做，或走 MCP 的写工具。
-  - **样本初筛（`ai triage`）**：问助手“这个样本可疑在哪”即可。
-  - **AI 变量命名**：栈槽证据弱、收益低。
-  - **「深挖」按钮**：只是把当前函数名/地址预填成问题，模型照样要自己找调用者；直接问
-    “sub_1400xxxx 做了什么”即可。
-  - **思考模式开关**：它只作用于“一次请求直答”的解释/润色/命名（`PromptRequest::with_thinking`），
-    助手的工具循环自己组装请求、从不带 thinking 标志，留着等于一个不起作用的开关。
-  - **结果缓存 / 审计日志 / prompt 评测 / 命名基准**：都是给直答类功能或批量命名服务的，没有
-    调用方。
-
-  `recraft-ai` 随之只剩助手路径：删除 `explain` / `suggest_names` / `triage` / `Proposal` 与
-  `apply_proposals` / `answer_query` / 三个直答 prompt 构建器 / `redact` / `PromptCache` /
-  `AuditLog` / `eval` / `eval_names` / `tests/prompt_eval.rs`，`PromptKind` 收成单变体 `Agent`
-  （`ai-settings.json` 里旧的 `en:explain` 之类键仍能加载，新键 `en:agent` 生效），并去掉不再
-  使用的 `recraft-decompile` 依赖。`crates/recraft-ai/src` 从 **6459 行降到 3173 行**，
-  `crates/recraft-ui/src/app.rs` 净减 **1512 行**，两域各删约 58 条 i18n 消息。
-
-  脚本与 CI 同步：删掉 `scripts/ai-cache-smoke.ps1`、`ai-polish-mock.ps1`、`ai_mock_server.py`
-  和 CI 里的缓存冒烟步骤；`e2e.ps1` 改为断言“未配置 provider 时 `ai ask` 拒绝执行”，
-  `demo.ps1` 第 7 步改成一次真实提问。`docs/AI.md` 重写为「一个助手 + provider + 系统提示词 +
-  限制」，README / DEMO / FAQ / DESIGN 同步。UI 138 个、AI 44 个单测全绿。
-
-- **参数恢复跟随 ABI。** `ArgNames` 记录整数参数寄存器表（Win64：rcx/rdx/r8/r9；ELF64：
-  rdi/rsi/rdx/rcx/r8/r9），`signature()`/`slot_of()`/`count()`/补中间参数全部按这张表走。
-  之前是 Win64 常量硬编码，ELF64 函数即使读了 `rdi` 也恢复成 `void`。同时识别优化构建的
-  入口栈溢出（`mov [rbp-0x18], rdi`）：入口前 8 条里出现“把参数寄存器存进栈槽”即视为入参。
-  效果：ELF64 的 `verify` 变为 `int32 verify(int64 arg1)`，PE 的 `sub_140001fcc` 也拿到 `arg1`。
-
-- **`fs:` 段读取渲染成 `__readfsqword`。** SysV 的栈 canary 在 `fs:0x28`（PE 在 `gs:0x28`），
-  此前只认 `gs`，Linux ELF 的 `mov rax, fs:[0x28]` 整条落进 `__asm`。现在按段前缀分派到
-  同一个 lifter，新增 `Builtin::ReadFsqword`。
-
-- **新装默认简体中文。** `Lang` 的默认值从英文改为简中（`#[default] Zh`），
-  `ReCraftApp::default()` 改用 `Lang::default()`，因此首次启动、以及 `layout.json` 里缺
-  `lang` 字段时界面是中文（产品与文档本来就是中文优先）。已切换过语言的用户不受影响：
-  `layout.json` 里保存的选择仍然优先；英文照旧在 Options 菜单 / 命令面板里一键切回。
-  `DESIGN §8.4`、README 双语表述同步更新，新增单测
-  `a_fresh_install_starts_in_simplified_chinese` 钉住默认值。
-
-## [0.4.1] - 2026-11-14
-
-0.4.1 是 0.4.0 之后的修正版：AArch64 解码器换成 capstone、A64 操作数与 movk 修正、图标回到 v1。
-
-### 变更
-
-- **图标回到 v1（用户决定）。** 2026-11-14 先用 v2「字母 + 扫描线」替换，随后试了 v3 双变体，
-  用户认为都不如原版，于是恢复 v1：六边形里的几何 R、六个电路节点与一条走线、深海底渐变
-  底（`#071B26 → #0C3A46`）+ 薄荷青光晕。`assets/generate_icon.py` 回退到 v1 版本（Pillow +
-  numpy，重跑逐字节可复现），ICO 仍是 16/24/32/48/64/128/256 七帧；exe 内嵌图标与 ICO 32px
-  帧逐像素一致（maxdiff 0）。安装器向导 art 的配色回到 v1 的 `#0C3A46` / `#1EB5CD`，
-  `docs/ICON.md` 改回 v1 的设计说明并记录这次来回。v2/v3 的脚本与产物保留在 git 历史
-  （`0874a32`、`966b9a1`）。
-
-### 修复
-
-- **AArch64 解码器从 yaxpeax-arm 换成 capstone。** 理由是可维护性：yaxpeax-arm 只有 51 个
-  GitHub star、单一维护者，而 capstone 有 9,187 star、被主流逆向工具长期使用。落地：移除
-  `yaxpeax-arm`/`yaxpeax-arch`，改用 `capstone = "=0.13.0"`（`full` feature，C 构建由
-  `capstone-sys` 完成），A64 适配层重写为 capstone operand detail → `DecodedInsn`，handle
-  按线程复用；capstone 的别名寄存器（`lr`/`fp`/`ip0`/`ip1`）在适配层规范化回 `x30`/`x29`/
-  `x16`/`x17`；capstone 拒绝解码的 `udf #imm` 按编码补回。x86 仍是 iced，lifter 与反编译器
-  零改动。验证：与 `go tool objdump` 对拍仍是 **100/100 函数逐指令一致**，覆盖率仍是
-  **96.3%**（2223/2308），32 份 A64 golden 与全部测试不变。代价：C 工具链构建、静态链接
-  体积与 unsafe FFI 面（隔离在 capstone crate 内，本仓库仍 `forbid(unsafe_code)`）。
-
-### 修复
-
-- **代码签名废弃（2026-11-14，用户决定）。** 不再申请 SignPath Foundation、Certum 开源证书
-  或 Azure Trusted Signing，也不购买 OV/EV 证书；发布物保持未签名，`SHA256SUMS.txt` 是
-  完整性凭据，README 保留 SmartScreen 操作说明。`docs/SIGNING.md` 改为废弃记录（含当初的
-  成本/资格调研与重启方法），`docs/RELEASE.md` 的签名章节同步；`.github/workflows/release.yml`
-  保留打包/校验/可选发布能力，只移除 SignPath 占位。
-
-### 修复
-
-- **AArch64 操作数三处修正（由 capstone 对照实验发现）。** 一是栈指针被拼成 `xsp`/`wsp`，
-  正确是 `sp`/`wsp`；二是 SIMD 寄存器只输出一个裸 `v`，现在保留编号、元素宽度与车道
-  （`v3`、`v3.4s`、`v3.s[1]`、`{v2.2d, v3.2d, v4.2d}`）；三是 `movk`/`movz`/`movn` 的 16 位
-  lane 与 `lsl #0/16/32/48` 被折叠，lifter 把每一段都当作 `<< 16`，Go 二进制里常见的 64 位
-  常量重建因此全错——现在按编码字恢复 `imm16` 与 `hw*16`，伪 C 输出
-  `x6 = ((x6 | (0x38e3 << 0x20)) | (0xe38e << 0x30))`。新增三条回归测试
-  （`a_movk_keeps_its_lane_and_shift`、`the_stack_pointer_is_spelled_sp` 等）。
-
-- **AArch64 上 `--l1`/`--l2` 回退到 L0，而不是报错。** 块结构化器仍只吃 iced 指令，
-  `pseudocode_l1`/`pseudocode_l2` 在 AArch64 上会走到 `insn_at` 拿到空指令并报
-  `internal error: no basic blocks`。现在两者在 AArch64 上直接回退到 A64 L0 渲染器
-  （线性 + 标签），命令行不再失败；新增回归测试 `aarch64_l2_falls_back_to_l0`。
-  同时把 ROADMAP 里「承诺 L2」的口径改为如实描述：0.3.0 对 ARM64 的承诺是
-  反汇编 + 函数/调用图 + 字符串 + L0 伪 C，结构化 L2 需要中立 CFG，列为后续项。
-
-## [0.4.0] - 2026-11-14
-
-0.4.0 收 W6：界面现代化第一遍（主题令牌、空状态、框架条、标签页、图标 v3、对比度回归）；
-命令区收敛与侧栏卡片化顺延到 0.4.x。
-
-### 界面
-
-- **主题令牌与现代化外观。** `docs/UI.md` 定下设计基线（三层近黑表面 surface_0/1/2、
-  1px 发丝边框、单一青色强调 `#40CDE0`、间距 4/8/12/16、圆角 6/10/12、交互态与可访问性
-  要求）；`Palette` 扩展 surface/border/muted/accent（暗/亮各一套），`apply_theme` 把它们
-  写进 egui Visuals（三层表面、控件 6 / 菜单 10 / 窗口 12 圆角、强调色选择态、超链接与
-  焦点统一、仅弹层有柔和阴影）。欢迎页改为 24px 大标题 + 青色主操作 + 最近项目卡片；
-  顶栏与状态栏改为带发丝边框的 surface_1 条；标签页并入表面阶梯；次级文字统一用 muted。
-  渲染回归由 `the_modern_theme_lands_the_documented_tokens` 钉住，可访问性由
-  `the_palette_meets_the_documented_contrast_floor`（正文/次级 ≥4.5:1、强调色 ≥3:1）守住。
-
-- **应用图标 v3：按尺寸双变体。** 16/24/32 px 改为 5×7 位图 **R** + 加粗青色扫描带 + 3 个
-  刻度（硬像素落位，任务栏里仍读得出"字母 + 扫描线"）；48–256 px 保留几何 R、光晕、圆角
-  描边、投影与 7 个刻度。顺带修掉几何 R 骨架越界（x 到 1270 而画布只有 1024）导致的右侧
-  裁切。`assets/generate_icon.py` 现在手工拼装 ICO 的 PNG 帧，每个尺寸独立绘制；exe 嵌入
-  图标与 ICO 32px 帧逐像素一致。`docs/ICON.md` 记录 v3 设计与生成方式。
-
-- **演示脚本默认用 release 二进制。** `scripts/demo.ps1` 以前固定 `target/debug`，发布会
-  后演示里的 MCP `serverInfo.version` 还是旧版本；现在优先 `target/release`，缺失才回退
-  debug 并构建。
-
-## [0.3.0] - 2026-11-14
-
-0.3.0 收 W3（质量时间盒）、W4（解码抽象）、W5（ARM64）；0.2.0 之后的其余变更一并在此。
+0.2.0 把 0.1.0 之后的全部工作一次收口：W1 工作台（字符串可编辑、IDA 字符串对拍、
+图标、工具栏收敛）、W2 分析助手统一、W3 结构化时间盒、W4 中立解码抽象、W5 ARM64 支持、
+W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复。开发中期版本号一度推到
+0.3.x / 0.4.x，发布前统一收回：对外只发布这一个 0.2.0，0.1.0 → 0.2.0 是唯一受支持的
+升级路径（MSI `MajorUpgrade` 按 0.2.0 > 0.1.0 生效）。
 
 ### 新增
 
@@ -231,7 +27,7 @@
   capstone 作为可回退备选（FFI 边界只在适配层）、bad64 不选。附带 6 条单测与 DESIGN §5
   的边界说明。
 
-- **ARM64（AArch64）支持（0.3.0 主线）。** 解码走 yaxpeax-arm（0BSD，纯 Rust），
+- **ARM64（AArch64）支持（0.2.0 主线）。** 解码走 yaxpeax-arm（0BSD，纯 Rust），
   产出中立的 `DecodedInsn`；导入、反汇编、函数发现（ELF 符号表 / PE `.pdata` 的 8 字节
   ARM64 条目）、调用图、字符串与 L0 伪 C 全部打通。A64 lifter 覆盖整数运算、访存
   （含 `ldrb/strh/ldur` 等宽度变体与索引寻址）、移位/位域、条件选择（`cset/csel/csinc`）、
@@ -243,40 +39,6 @@
   ELF/PE 夹具（6 KB / 1.5 KB）由 `scripts/make-aarch64-fixture.py` 与
   `scripts/make-arm64-pe-fixture.py` 生成。SIMD 的 `stp/ldp v`、`mrs`、`smulh`、`br`
   仍以 `__asm` 输出（约 3% 行）。
-
-### 修复
-
-- **`__asm` 收敛：系统指令与内存填充改用带类型的名字。** IR 新增
-  `Stmt::PseudoCall`（名字 + 带类型实参）与 `Expr::Builtin`（`__rdtsc`、`__readgsqword`），
-  lifter 现在把 `int 0x29` 渲染成 `__fastfail(ecx)`、`prefetch*` 渲染成
-  `prefetch*(&x)`、`rep stosb` 渲染成 `memset(dst, byte, count)` 并写回 `rdi += rcx;
-  rcx = 0;`、`rdtsc` 渲染成 `rax = __rdtsc(); rdx = rax >> 32;`、`mov r64, gs:[disp]`
-  渲染成 `__readgsqword(disp)`。notepad 的 `__asm` **104 → 84**（intrinsic 覆盖率
-  99.6% → 99.7%），lint 两套 0 findings，golden 只改 4 张（都是同一类替换，语义等价）。
-  双输出的 `div`/`mul` 与原子 `xchg` 未动：它们需要 IR 临时量，32 位 `div` 的尝试已作为
-  负结果记录在 W3 待办里。
-
-- **共享尾声不再让冷路径跨着 `return` 跳回去。** 有些函数的冷路径算完结果后跳回函数中段
-  的共享尾声（`xor eax,eax` + 收尾 + `ret`），旧输出会在主路径的 `return;` 之后再写一段
-  `goto loc_…`。发射层新增 `copy_return_tail`：向后的无条件/条件跳转若指向已发射的短尾声
-  （≤4 块、≤16 条语句、纯直线链、无跳转表、非循环头、以 `return` 结束），就把尾声复制到
-  跳转点并去掉 `goto`。crackme 结构化 460→**461（93.1%）**、回退 35→**34**、标签
-  196→**191**；notepad 标签 258→257。两套 lint 0 findings，golden 仅 1 张按新输出更新
-  （语义等价，分支极性随复制对调）。
-
-- **循环出口的守卫跳转改写成 `break`。** `fold_backward_gotos_into_loops` 折叠出的
-  `do { … } while (…);` 后面紧跟 `loc_X:` 时，循环体内跳向该标签的 `if (c) goto loc_X;`
-  现在写成 `if (c) break;`（有嵌套循环则拒绝，避免 `break` 绑到内层）。notepad 结构化
-  **494 → 495（97.8%）**、回退 **12 → 11**、标签 258 → **254**：其中 `sub_140012f38`
-  从 3 处 goto 降到 **0**，不再计入回退；crackme 标签 196 → **187**。这是 W3「多入口循环」
-  时间盒的第二步，剩余形状（公共失败处理器、前向跨区域 join、未建模标志跳）仍待区域模型。
-
-## [0.2.0] - 2026-11-14
-
-W1 波次（14 人日，见 [docs/ROADMAP.md](docs/ROADMAP.md)）：字符串可编辑、ELF crackme
-对照、CRT 签名库扩容、AI 提示词可调、图标重设计、顶部工具栏收敛。下面是本版的全部变更。
-
-### 新增
 
 - **应用图标重设计（v2）：字母 + 扫描线。** 去掉 v1 的六边形外框与电路节点（16–32px 会糊成
   噪点），只保留几何 **R**、青色扫描线与 7 个字节刻度，配深色圆角底；R 放大 8% 并上移，字面更满。
@@ -481,11 +243,13 @@ W1 波次（14 人日，见 [docs/ROADMAP.md](docs/ROADMAP.md)）：字符串可
   `recraft-cli lines <project> [--addr] [--json]` 打印映射。ELF 语料新增 `-g` 构建
   （`libcorpus-debug.so`），CI 的 Linux 作业验证行表能指回 `functions.c`。
   类型信息（`.debug_info`）未做——行表只给位置，不给类型。
+
 - **DecBench 对照可用。** 新增 `recraft-cli decbench <kit> -o <dir>`：读 DecBench 评测套件的
   `functions.json`，逐二进制 import/analyze 后按目标地址渲染 L2 伪 C，写成套件要求的
   `results/<bin>.c` + `results.json`。sample-set（223 个二进制、250 个函数）实测 161 个
   二进制/函数产出（11-09 首跑为 147，ELF64 现为 158/158 全覆盖）、`package.py` 校验通过，
   耗时约 168 秒（debug 构建）；指标含义、实测数字与差距见 `docs/DECBENCH.md`。
+
 - **Itanium C++ 名字可读了。** `recraft-common::demangle` 在 MSVC 与 Rust 之后新增 Itanium
   ABI 分支（`cpp_demangle`，MIT/Apache）：ELF 上的 `_Z…`、Mach-O 的 `__Z…` 现在显示为
   `recraft::square(int)` 这样的名字，并随符号名进入名字表。配套加了
@@ -501,7 +265,244 @@ W1 波次（14 人日，见 [docs/ROADMAP.md](docs/ROADMAP.md)）：字符串可
   长度按字符计、不含终止符，存进项目 `meta`（`strings.min_len`），重建在后台线程重新抽取并写回，
   列表与伪代码里的字面量一起刷新；`analyze --min-string-len N` 使用同一设置。
 
+### 变更
+
+- **AI 只剩一个功能：分析助手；CLI 与界面完全一致。** GUI 侧栏曾经是一排按钮（解释 / 深挖 /
+  润色 / 重新润色 / 查询数据库 / 建议命名 / 应用 / 清空 + 变量命名结果 + 思考模式），CLI 的
+  `recraft ai` 又有 11 个子命令（explain / suggest / triage / apply / query / polish / prompt /
+  provider / ask / eval / eval-names）——同一件事有三四种做法，两边还各有一套。收成一个：
+
+  - **GUI**：侧栏只剩「分析助手」卡片（问题输入 / 分析 / 新对话 / 附带选中内容 / 工具调用轨迹
+    / 流式答案 / 可点地址）。
+  - **CLI**：只剩 `ai ask <project> "问题" [--json] [--rounds N]` 与 `ai provider`——同一个
+    agent、同样的 13 个只读工具、同样的轮数上限（`AGENT_MAX_ROUNDS=10`）。`--llm` / `--out` /
+    `--yes` 这套“离线证据 → propose → apply”的开关随之消失。
+
+  删掉的入口与原因：
+  - **解释**：问 Agent 即可，还会顺带给出调用者与数据引用。
+  - **润色 / 重新润色**：只显示、从不写回，等于把伪代码复制到任意聊天窗口，还带一套会话缓存与
+    状态机。
+  - **离线查询（`ai query`）**：只有 urls / api callers / text 四种意图，被 Agent 严格覆盖。
+  - **批量命名建议（`ai suggest` + `ai apply`）**：32 个候选一次性交给模型，结果是一屏看不出来
+    该不该应用的名字——启发式回退名（`network_1400012dc`，只是“类别 + 地址”）与模型名混排，
+    置信度还能到 0.9 把回退名顶到 0.7 的模型名前面；review 成本高于直接在 Functions 里按 `N`
+    改名。改名仍可手工做，或走 MCP 的写工具。
+  - **样本初筛（`ai triage`）**：问助手“这个样本可疑在哪”即可。
+  - **AI 变量命名**：栈槽证据弱、收益低。
+  - **「深挖」按钮**：只是把当前函数名/地址预填成问题，模型照样要自己找调用者；直接问
+    “sub_1400xxxx 做了什么”即可。
+  - **思考模式开关**：它只作用于“一次请求直答”的解释/润色/命名（`PromptRequest::with_thinking`），
+    助手的工具循环自己组装请求、从不带 thinking 标志，留着等于一个不起作用的开关。
+  - **结果缓存 / 审计日志 / prompt 评测 / 命名基准**：都是给直答类功能或批量命名服务的，没有
+    调用方。
+
+  `recraft-ai` 随之只剩助手路径：删除 `explain` / `suggest_names` / `triage` / `Proposal` 与
+  `apply_proposals` / `answer_query` / 三个直答 prompt 构建器 / `redact` / `PromptCache` /
+  `AuditLog` / `eval` / `eval_names` / `tests/prompt_eval.rs`，`PromptKind` 收成单变体 `Agent`
+  （`ai-settings.json` 里旧的 `en:explain` 之类键仍能加载，新键 `en:agent` 生效），并去掉不再
+  使用的 `recraft-decompile` 依赖。`crates/recraft-ai/src` 从 **6459 行降到 3173 行**，
+  `crates/recraft-ui/src/app.rs` 净减 **1512 行**，两域各删约 58 条 i18n 消息。
+
+  脚本与 CI 同步：删掉 `scripts/ai-cache-smoke.ps1`、`ai-polish-mock.ps1`、`ai_mock_server.py`
+  和 CI 里的缓存冒烟步骤；`e2e.ps1` 改为断言“未配置 provider 时 `ai ask` 拒绝执行”，
+  `demo.ps1` 第 7 步改成一次真实提问。`docs/AI.md` 重写为「一个助手 + provider + 系统提示词 +
+  限制」，README / DEMO / FAQ / DESIGN 同步。UI 138 个、AI 44 个单测全绿。
+
+- **参数恢复跟随 ABI。** `ArgNames` 记录整数参数寄存器表（Win64：rcx/rdx/r8/r9；ELF64：
+  rdi/rsi/rdx/rcx/r8/r9），`signature()`/`slot_of()`/`count()`/补中间参数全部按这张表走。
+  之前是 Win64 常量硬编码，ELF64 函数即使读了 `rdi` 也恢复成 `void`。同时识别优化构建的
+  入口栈溢出（`mov [rbp-0x18], rdi`）：入口前 8 条里出现“把参数寄存器存进栈槽”即视为入参。
+  效果：ELF64 的 `verify` 变为 `int32 verify(int64 arg1)`，PE 的 `sub_140001fcc` 也拿到 `arg1`。
+
+- **`fs:` 段读取渲染成 `__readfsqword`。** SysV 的栈 canary 在 `fs:0x28`（PE 在 `gs:0x28`），
+  此前只认 `gs`，Linux ELF 的 `mov rax, fs:[0x28]` 整条落进 `__asm`。现在按段前缀分派到
+  同一个 lifter，新增 `Builtin::ReadFsqword`。
+
+- **新装默认简体中文。** `Lang` 的默认值从英文改为简中（`#[default] Zh`），
+  `ReCraftApp::default()` 改用 `Lang::default()`，因此首次启动、以及 `layout.json` 里缺
+  `lang` 字段时界面是中文（产品与文档本来就是中文优先）。已切换过语言的用户不受影响：
+  `layout.json` 里保存的选择仍然优先；英文照旧在 Options 菜单 / 命令面板里一键切回。
+  `DESIGN §8.4`、README 双语表述同步更新，新增单测
+  `a_fresh_install_starts_in_simplified_chinese` 钉住默认值。
+
+- **图标回到 v1（用户决定）。** 2026-11-14 先用 v2「字母 + 扫描线」替换，随后试了 v3 双变体，
+  用户认为都不如原版，于是恢复 v1：六边形里的几何 R、六个电路节点与一条走线、深海底渐变
+  底（`#071B26 → #0C3A46`）+ 薄荷青光晕。`assets/generate_icon.py` 回退到 v1 版本（Pillow +
+  numpy，重跑逐字节可复现），ICO 仍是 16/24/32/48/64/128/256 七帧；exe 内嵌图标与 ICO 32px
+  帧逐像素一致（maxdiff 0）。安装器向导 art 的配色回到 v1 的 `#0C3A46` / `#1EB5CD`，
+  `docs/ICON.md` 改回 v1 的设计说明并记录这次来回。v2/v3 的脚本与产物保留在 git 历史
+  （`0874a32`、`966b9a1`）。
+
+- **删除顶部工具栏行。** 第二行（◀▶、Graph/Text、Analyze、AI、主题、语言、项目路径、×）的每个
+  入口都在别处：后退/前进入 **Jump** 菜单，Graph/Text 用空格或命令面板，分析重跑在
+  **Options → Analyze functions**（运行期间同一位置显示“分析中… Ns”与「取消」，补回原先只存在于
+  工具栏的进度/取消入口），主题 `Ctrl+T`，语言与 AI 在 Options/命令面板，项目路径在窗口标题。
+  删掉后顶部只剩菜单栏 + 导航带，省约 30px；DEMO 走查同步改写。截图等 0.4 的 UI 现代化统一重拍
+  （现有 `docs/images/` 仍是旧工具栏）。
+
+- **Strings 视图改用 IDA 同款的 `Shift+F12`。** IDA 的 Strings 窗口就是 `Shift+F12`，ReCraft
+  此前把 Strings 绑在 `F4`。现在 `Shift+F12` 打开/聚焦 Strings（页签关掉时重新停靠），Views
+  菜单的工具提示同步为该组合；`F4` 不再响应（IDA 的 F4 属于调试器，ReCraft 没有对应命令）。
+  新增无头测试：关掉 Strings 页签后按 `Shift+F12` 能重新停靠并置于前台。
+
+- **最短字符串长度默认 4 → 5。** 与 IDA 8.3 的 *Minimal string length* 默认值一致（实测：把
+  `strwinsetup_t.minlen` 设成 4 会多出 `.bss` 这类 4 字符串，设成 8 只剩 28 条；IDA 的 Length
+  列含终止符，但最小长度不含）。该值现在是项目设置 `strings.min_len`，`analyze` 时读取、GUI
+  的 `设置… → 重建` 时写回；代码里 `4` 的硬编码全部换成该设置或
+  `DEFAULT_MIN_STRING_LEN`。notepad 的 golden 快照因此更新 17 份（同时包含上一条宽字面量修复），
+  crackme/corpus/corpus86/go 与 `lint`、`metrics` 不变（notepad 仍是 494/506 结构化、覆盖 99.6%）。
+
+- **`recraft-ai` 依赖 `recraft-analysis`。** triage 要与 `analyze` 共用同一份 API 与
+  `/proc` 分类规则，不再复制一份；依赖方向仍单向（`recraft-analysis` 不反向依赖
+  `recraft-ai`），构建依赖图无环。
+
+- **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`
+  与 `Arch`，`Loader` trait 返回带格式与架构的 `LoadedImage`，`load()` 按魔术字分派（PE 是
+  唯一实现，其他格式报 `unrecognised executable format`）。项目把 `format` 与新增的 `arch`
+  写进 `meta`，镜像 JSON 的键从 `pe_meta` 改为 `image_meta`，旧项目仍从 `pe_meta` 读取，
+  不需要重新导入。这是一次零输出变化的重构：789 个 golden 快照、`lint` 与反编译文本不变。
+
+- **CI 增加 Linux 作业。** `core crates (Linux)` 在 `ubuntu-24.04` 上跑 11 个可移植 crate 的
+  测试，用来持续证明 ADR-009 的可移植性；它也是 ELF 语料（只能在 Linux 上编译）的前置条件。
+
+- **调用约定改为按架构查表。** `recover_l2` 不再用 `image().is_64` 二分，而是按
+  `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与将来的
+  AArch64 用无关键字约定。`recraft-core` 重导出 `Arch`/`Format`/`Image`/`LoadedImage`，
+  反编译器因此不必直接依赖加载层。
+
+- **lint/渲染改为只读快照 + 按函数并行。** 反编译渲染现在只依赖只读的 `SessionView`
+  （`Session` 与新增的 `SessionSnapshot` 各实现一次；快照预读段字节、名字、原型、字符串
+  元数据并实现 `Sync`），`recraft lint` 用 rayon 按函数并行。同时把 `DecodeCache` 命中时
+  O(缓存大小) 的 LRU 扫描改成 O(1) 查找 + FIFO 淘汰。Go 3261 个函数的全量 L1 自检
+  **19 分 39 秒 → 约 2.7 秒**，L1+L2 约 14 秒；notepad 54.8 s → 8.5 s、crackme 40.5 s →
+  0.5 s；五套 lint 输出逐字节不变，789 份 golden 快照不变。
+
+- **CI 动作升到 Node 24，Linux 作业固定镜像。** `actions/checkout` v4 → v7、
+  `actions/upload-artifact` v4 → v7，消掉 GitHub Actions 报的 Node.js 20 弃用警告（这些动作从
+  v5 起声明 `node24`，要求 runner ≥ 2.327.1，GitHub 托管 runner 已满足；v6/v7 的其余改动——
+  凭据写独立文件、`pull_request_target` 禁止检出 fork——与本仓库无关）。`core` 与 `licenses`
+  两个作业改用 `ubuntu-24.04`：`ubuntu-latest` 从 2026-10-19 起迁往 Ubuntu 26，而提交的
+  `tests/golden/elf{,-cpp}` 依赖镜像里的 gcc/glibc，静默换镜像会让快照抖动；升级镜像要在
+  同一个 PR 里用 `RECRAFT_REGEN_ELF_SNAPSHOTS=1` 重建快照。
+
 ### 修复
+
+- **旧工程打开时会刷新字符串列表。** 字符串的抽取规则带一个 `strings.rev` 版本号，写入工程
+  元数据；打开工程时若版本不符就按当前规则重新抽取并保存。否则升级后旧工程里仍显示升级前
+  抽出的文本——比如 banner 前多出的那个 `O`，反编译视图是对的、Strings 面板却是旧的。
+
+- **可以拿 IDA 的字符串列表对拍了。** 新增 `scripts/ida-strings-dump.py`（`ida64.exe -A -S`
+  调用，`idautils.Strings()` → JSON）与 `scripts/compare-ida-strings.ps1`（自动 import/analyze
+  目标、跑 IDA、按地址比对并打印差异）。默认 IDA 路径是
+  `D:\sec_tools\IDA_Pro_v8.3_Portable\ida64.exe`，可用 `-Ida` 覆盖。
+  crackme 实测：616 个共有地址文本 **全部一致**；仅 ReCraft 多 8 条（PE 头里的
+  `!This program cannot be run in DOS mode.`、各节名，以及修正后的 banner）；仅 IDA 多 468 条
+  （都在代码段里，是 x86 操作码被当成可打印串，我们在扫描时跳过已解码代码）。
+
+- `recraft strings --json` 不再 `trim()` 文本：`"Enter flag: "` 这种尾随空格与
+  `"  Simple Crackme…"` 的前导空格现在与字节、与 IDA 一致（UI 原本就不裁剪）。
+
+- **字符串从代码引用的位置开始，不再多带一个前导字节。** crackme 里的乱序表以 `O` 结尾，
+  紧接着就是 `"=========================================="` 且中间没有 NUL，线性扫描于是一次把
+  那段报成 43 个字符的 `O====…`。现在提取后会用数据引用把候选串“吸附”到真正被引用的地址
+  （`0x1400183c0`，42 个 `=`，与 IDA 的 Strings 窗口一致）；前缀只有在自身长度达到阈值时才
+  单独保留。
+
+- **Strings 面板加了可见的“编辑字符串…”按钮。** 以前只能右键行 → 编辑，不容易发现；按钮在
+  选中一行后可用（右键菜单仍在）。新增 i18n 键 `ui_edit_string_hint` 并补了
+  `a_string_that_starts_mid_run_begins_at_its_reference` 回归测试（用仓库里的 crackme 语料，
+  断言 banner 恰好 42 个 `=` 且没有 `O====` 候选）。
+
+- **“打开”对话框也能直接选二进制了。** 以前 `File → Open` 只列 `.rcraft`，ELF/PE 只能走
+  `Import` 或拖进窗口；很多人会先点 Open，看不到 `tiny.elf` 就以为导入失败。现在对话框同时
+  提供工程、可执行文件与全部文件三个过滤器——`open_path` 本来就会按扩展名分派，选中的二进制
+  会走导入流程。新增回归测试 `the_aarch64_elf_fixture_imports_from_the_open_path`：把
+  `tests/fixtures/aarch64/tiny.elf` 拷到临时目录后调用 `open_path`，断言不报错且拿到工程。
+
+- **栈槽按 rbp 深度命名（IDA 风格）。** `[rbp-0x18]` 现在叫 `var_18`、`[rbp-8]` 叫
+  `var_8`，与 IDA 一致。此前打印器在 `stack_layout` 证明不了帧时（prologue 里有 `pop`、有
+  碰 rsp 的 intrinsic 等）会退化成 rsp 相对命名，同一函数里两个槽的名字正好反过来。
+  做法：从 `push rbp; mov rbp, rsp; sub rsp, N` 读出帧大小（`sub rsp, 0x20` 的立即数种类
+  是 `Immediate8to64`），结构化结束后把 `var_<rsp 偏移>` 重命名成 `var_<帧深度>`；两阶段
+  替换避免 `var_8 ↔ var_18` 互相吃掉，只改帧内槽。crackme 的 `verify` 现在是
+  `var_18 = rdi;`（参数槽）+ `var_8 = 0;`（计数器）；160 张快照里 5 张按新命名更新，
+  diff 只有槽名；结构化率与测试全绿。
+
+- **单次拷贝的参数直接内联，段前缀读取与栈守卫也不再是 `__asm`。**
+  - 拷贝传播：`v1 = arg1; v2 = strlen(v1);` 这种“只有一个定义、只使用一次”的参数拷贝
+    内联到使用点，声明与赋值一起消失（crackme 的 `verify` 现在直接 `strlen(arg1)`）；
+  - `fs:[disp]` / `gs:[disp]` 的 8 字节读取在 `read_operand` 里识别为
+    `__readfsqword` / `__readgsqword`，`sub rdx, fs:[0x28]` 因此是真实的减法而不是
+    `__asm`，后续条件也能建模；
+  - 新增 `hide_stack_guard_typed`：识别 GCC 内联的 canary 检查
+    （`vX = __readfsqword(0x28)` + `reg -= __readfsqword(0x28)` + `if (…) { __stack_chk_fail(); }`）
+    并整体删除，函数尾声恢复成干净的 `return 1;`。
+  实测（ctf-simple-crackme）：intrinsic 指令 4 → 2（覆盖率 98.2% → 99.1%），inline asm
+  13 → 11；crackme-real 93.3%、notepad 97.8% 的结构化率不变。
+
+- **循环内“早退到函数尾声”的分支不再被丢弃。** 有些函数的循环体里有一条失败路径直接跳到
+  函数尾声（`mov eax, 0; jmp <epilogue>`）。结构化器把这种条件分支的汇合点算成尾声块后，
+  另一条臂落在 stop 集里、既不是 break/continue 也不是 loop-exit，于是被静默丢掉——按输出
+  会死循环而不是返回失败值（`ctf-simple-crackme` 的 `verify` 就是这样）。新增
+  `escape_to_return()` / `emit_escape_chain()`：这类短链离开当前区域且终点是返回块时，发成
+  `else { …; return; }`（两条臂的极性分别处理）。真实 crackme 语料的结构化率 93.1% → 93.3%，
+  notepad 保持 97.8%，`lint` 0 findings；`crackme` golden 更新 2 张。
+
+- **AArch64 解码器从 yaxpeax-arm 换成 capstone。** 理由是可维护性：yaxpeax-arm 只有 51 个
+  GitHub star、单一维护者，而 capstone 有 9,187 star、被主流逆向工具长期使用。落地：移除
+  `yaxpeax-arm`/`yaxpeax-arch`，改用 `capstone = "=0.13.0"`（`full` feature，C 构建由
+  `capstone-sys` 完成），A64 适配层重写为 capstone operand detail → `DecodedInsn`，handle
+  按线程复用；capstone 的别名寄存器（`lr`/`fp`/`ip0`/`ip1`）在适配层规范化回 `x30`/`x29`/
+  `x16`/`x17`；capstone 拒绝解码的 `udf #imm` 按编码补回。x86 仍是 iced，lifter 与反编译器
+  零改动。验证：与 `go tool objdump` 对拍仍是 **100/100 函数逐指令一致**，覆盖率仍是
+  **96.3%**（2223/2308），32 份 A64 golden 与全部测试不变。代价：C 工具链构建、静态链接
+  体积与 unsafe FFI 面（隔离在 capstone crate 内，本仓库仍 `forbid(unsafe_code)`）。
+
+- **代码签名废弃（2026-11-14，用户决定）。** 不再申请 SignPath Foundation、Certum 开源证书
+  或 Azure Trusted Signing，也不购买 OV/EV 证书；发布物保持未签名，`SHA256SUMS.txt` 是
+  完整性凭据，README 保留 SmartScreen 操作说明。`docs/SIGNING.md` 改为废弃记录（含当初的
+  成本/资格调研与重启方法），`docs/RELEASE.md` 的签名章节同步；`.github/workflows/release.yml`
+  保留打包/校验/可选发布能力，只移除 SignPath 占位。
+
+- **AArch64 操作数三处修正（由 capstone 对照实验发现）。** 一是栈指针被拼成 `xsp`/`wsp`，
+  正确是 `sp`/`wsp`；二是 SIMD 寄存器只输出一个裸 `v`，现在保留编号、元素宽度与车道
+  （`v3`、`v3.4s`、`v3.s[1]`、`{v2.2d, v3.2d, v4.2d}`）；三是 `movk`/`movz`/`movn` 的 16 位
+  lane 与 `lsl #0/16/32/48` 被折叠，lifter 把每一段都当作 `<< 16`，Go 二进制里常见的 64 位
+  常量重建因此全错——现在按编码字恢复 `imm16` 与 `hw*16`，伪 C 输出
+  `x6 = ((x6 | (0x38e3 << 0x20)) | (0xe38e << 0x30))`。新增三条回归测试
+  （`a_movk_keeps_its_lane_and_shift`、`the_stack_pointer_is_spelled_sp` 等）。
+
+- **AArch64 上 `--l1`/`--l2` 回退到 L0，而不是报错。** 块结构化器仍只吃 iced 指令，
+  `pseudocode_l1`/`pseudocode_l2` 在 AArch64 上会走到 `insn_at` 拿到空指令并报
+  `internal error: no basic blocks`。现在两者在 AArch64 上直接回退到 A64 L0 渲染器
+  （线性 + 标签），命令行不再失败；新增回归测试 `aarch64_l2_falls_back_to_l0`。
+  同时把 ROADMAP 里「承诺 L2」的口径改为如实描述：0.2.0 对 ARM64 的承诺是
+  反汇编 + 函数/调用图 + 字符串 + L0 伪 C，结构化 L2 需要中立 CFG，列为后续项。
+
+- **`__asm` 收敛：系统指令与内存填充改用带类型的名字。** IR 新增
+  `Stmt::PseudoCall`（名字 + 带类型实参）与 `Expr::Builtin`（`__rdtsc`、`__readgsqword`），
+  lifter 现在把 `int 0x29` 渲染成 `__fastfail(ecx)`、`prefetch*` 渲染成
+  `prefetch*(&x)`、`rep stosb` 渲染成 `memset(dst, byte, count)` 并写回 `rdi += rcx;
+  rcx = 0;`、`rdtsc` 渲染成 `rax = __rdtsc(); rdx = rax >> 32;`、`mov r64, gs:[disp]`
+  渲染成 `__readgsqword(disp)`。notepad 的 `__asm` **104 → 84**（intrinsic 覆盖率
+  99.6% → 99.7%），lint 两套 0 findings，golden 只改 4 张（都是同一类替换，语义等价）。
+  双输出的 `div`/`mul` 与原子 `xchg` 未动：它们需要 IR 临时量，32 位 `div` 的尝试已作为
+  负结果记录在 W3 待办里。
+
+- **共享尾声不再让冷路径跨着 `return` 跳回去。** 有些函数的冷路径算完结果后跳回函数中段
+  的共享尾声（`xor eax,eax` + 收尾 + `ret`），旧输出会在主路径的 `return;` 之后再写一段
+  `goto loc_…`。发射层新增 `copy_return_tail`：向后的无条件/条件跳转若指向已发射的短尾声
+  （≤4 块、≤16 条语句、纯直线链、无跳转表、非循环头、以 `return` 结束），就把尾声复制到
+  跳转点并去掉 `goto`。crackme 结构化 460→**461（93.1%）**、回退 35→**34**、标签
+  196→**191**；notepad 标签 258→257。两套 lint 0 findings，golden 仅 1 张按新输出更新
+  （语义等价，分支极性随复制对调）。
+
+- **循环出口的守卫跳转改写成 `break`。** `fold_backward_gotos_into_loops` 折叠出的
+  `do { … } while (…);` 后面紧跟 `loc_X:` 时，循环体内跳向该标签的 `if (c) goto loc_X;`
+  现在写成 `if (c) break;`（有嵌套循环则拒绝，避免 `break` 绑到内层）。notepad 结构化
+  **494 → 495（97.8%）**、回退 **12 → 11**、标签 258 → **254**：其中 `sub_140012f38`
+  从 3 处 goto 降到 **0**，不再计入回退；crackme 标签 196 → **187**。这是 W3「多入口循环」
+  时间盒的第二步，剩余形状（公共失败处理器、前向跨区域 join、未建模标志跳）仍待区域模型。
 
 - **ELF（gcc）反编译的两个编译器簿记问题。** 一是字符串字面量：GCC 把一个地址存在寄存器里复用，
   L2 曾输出 `v5 = "===="; v6 = v5; puts(v6);`，现在只被赋值为字面量的局部量会在使用点展开并删掉
@@ -574,74 +575,51 @@ W1 波次（14 人日，见 [docs/ROADMAP.md](docs/ROADMAP.md)）：字符串可
   （含 CET 的 `endbr64`/`bnd` 前缀），把 `call <桩>` 解析成导入名并在调用点打标签：样本上的
   API 标签从个位数升到数千，`suspicious` 能正确归到 `main` 等具体函数；PE 的 IAT 路径不受
   影响，L2 输出不变。
+
 - **`Reg` 前缀不再把无关符号判成注册表。** 旧规则是 `contains("REG")`，ELF 的
   `_ITM_deregisterTMCloneTable`、`__register_frame_info` 都被标成 registry，`RegisterClassW`
   也永远到不了 ui 规则；现在按 `RegOpen`/`RegSet`/`RegQuery`/`RegClose` 这类动词匹配，
   ELF 样本上的假 registry 标签归零，真正的 `Reg*` API 不受影响。
+
 - **冷片段合并只对 PE 生效。** `merge_pdata_functions` 是 `.pdata` 的概念（把落到下一段里的
   冷片段接回原函数）；ELF 的范围来自 `.symtab`/`.eh_frame`，本来就精确，`analyze` 现在对
   非 PE 格式直接按原样使用，不再套用 PE 的合并启发式。
+
 - **重叠段不再撞 UNIQUE 约束。** 真实 ELF 里 `.tbss` 与 `.bss` 同址（PE 也可能重叠），
   `Segments::from_image` 现在按地址排序后丢弃落在前一段内部的段（相邻段保留），修复了
   `UNIQUE constraint failed: segment.start` 导致整个二进制打不开的问题；DecBench 套件里
   另有 5 个 ELF64 因此从跳过变可用。
+
 - **`recraft-cli … | head` 不再 panic。** Rust 默认忽略 `SIGPIPE`，管道被消费方提前关闭时
   `println!` 会以 broken pipe 失败并 panic（退出码 101）。现在 Unix 恢复 `SIGPIPE` 的默认
   行为（安静退出，状态 141），Windows 把 `os error 109/232` 的 stdout 写失败转成安静退出
   （状态 0）。CI 的 Linux 作业加了对应的回归检查。
+
 - **`endbr64`/`endbr32` 不再算未建模指令。** Ubuntu 的 gcc 默认开 `-fcf-protection`，在
   每个函数入口插一条 CET 落点；提升器此前把它当 `__asm`，于是第一版 Linux 语料的
   覆盖率只有 **84.8%**（43 个函数几乎每个一条）。现在与 `nop` 一样只产生 fallthrough，
   并补了单元测试。
 
-### 变更
+### 界面
 
-- **删除顶部工具栏行。** 第二行（◀▶、Graph/Text、Analyze、AI、主题、语言、项目路径、×）的每个
-  入口都在别处：后退/前进入 **Jump** 菜单，Graph/Text 用空格或命令面板，分析重跑在
-  **Options → Analyze functions**（运行期间同一位置显示“分析中… Ns”与「取消」，补回原先只存在于
-  工具栏的进度/取消入口），主题 `Ctrl+T`，语言与 AI 在 Options/命令面板，项目路径在窗口标题。
-  删掉后顶部只剩菜单栏 + 导航带，省约 30px；DEMO 走查同步改写。截图等 0.4 的 UI 现代化统一重拍
-  （现有 `docs/images/` 仍是旧工具栏）。
+- **主题令牌与现代化外观。** `docs/UI.md` 定下设计基线（三层近黑表面 surface_0/1/2、
+  1px 发丝边框、单一青色强调 `#40CDE0`、间距 4/8/12/16、圆角 6/10/12、交互态与可访问性
+  要求）；`Palette` 扩展 surface/border/muted/accent（暗/亮各一套），`apply_theme` 把它们
+  写进 egui Visuals（三层表面、控件 6 / 菜单 10 / 窗口 12 圆角、强调色选择态、超链接与
+  焦点统一、仅弹层有柔和阴影）。欢迎页改为 24px 大标题 + 青色主操作 + 最近项目卡片；
+  顶栏与状态栏改为带发丝边框的 surface_1 条；标签页并入表面阶梯；次级文字统一用 muted。
+  渲染回归由 `the_modern_theme_lands_the_documented_tokens` 钉住，可访问性由
+  `the_palette_meets_the_documented_contrast_floor`（正文/次级 ≥4.5:1、强调色 ≥3:1）守住。
 
-- **Strings 视图改用 IDA 同款的 `Shift+F12`。** IDA 的 Strings 窗口就是 `Shift+F12`，ReCraft
-  此前把 Strings 绑在 `F4`。现在 `Shift+F12` 打开/聚焦 Strings（页签关掉时重新停靠），Views
-  菜单的工具提示同步为该组合；`F4` 不再响应（IDA 的 F4 属于调试器，ReCraft 没有对应命令）。
-  新增无头测试：关掉 Strings 页签后按 `Shift+F12` 能重新停靠并置于前台。
+- **应用图标 v3：按尺寸双变体。** 16/24/32 px 改为 5×7 位图 **R** + 加粗青色扫描带 + 3 个
+  刻度（硬像素落位，任务栏里仍读得出"字母 + 扫描线"）；48–256 px 保留几何 R、光晕、圆角
+  描边、投影与 7 个刻度。顺带修掉几何 R 骨架越界（x 到 1270 而画布只有 1024）导致的右侧
+  裁切。`assets/generate_icon.py` 现在手工拼装 ICO 的 PNG 帧，每个尺寸独立绘制；exe 嵌入
+  图标与 ICO 32px 帧逐像素一致。`docs/ICON.md` 记录 v3 设计与生成方式。
 
-- **最短字符串长度默认 4 → 5。** 与 IDA 8.3 的 *Minimal string length* 默认值一致（实测：把
-  `strwinsetup_t.minlen` 设成 4 会多出 `.bss` 这类 4 字符串，设成 8 只剩 28 条；IDA 的 Length
-  列含终止符，但最小长度不含）。该值现在是项目设置 `strings.min_len`，`analyze` 时读取、GUI
-  的 `设置… → 重建` 时写回；代码里 `4` 的硬编码全部换成该设置或
-  `DEFAULT_MIN_STRING_LEN`。notepad 的 golden 快照因此更新 17 份（同时包含上一条宽字面量修复），
-  crackme/corpus/corpus86/go 与 `lint`、`metrics` 不变（notepad 仍是 494/506 结构化、覆盖 99.6%）。
-
-- **`recraft-ai` 依赖 `recraft-analysis`。** triage 要与 `analyze` 共用同一份 API 与
-  `/proc` 分类规则，不再复制一份；依赖方向仍单向（`recraft-analysis` 不反向依赖
-  `recraft-ai`），构建依赖图无环。
-- **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`
-  与 `Arch`，`Loader` trait 返回带格式与架构的 `LoadedImage`，`load()` 按魔术字分派（PE 是
-  唯一实现，其他格式报 `unrecognised executable format`）。项目把 `format` 与新增的 `arch`
-  写进 `meta`，镜像 JSON 的键从 `pe_meta` 改为 `image_meta`，旧项目仍从 `pe_meta` 读取，
-  不需要重新导入。这是一次零输出变化的重构：789 个 golden 快照、`lint` 与反编译文本不变。
-- **CI 增加 Linux 作业。** `core crates (Linux)` 在 `ubuntu-24.04` 上跑 11 个可移植 crate 的
-  测试，用来持续证明 ADR-009 的可移植性；它也是 ELF 语料（只能在 Linux 上编译）的前置条件。
-- **调用约定改为按架构查表。** `recover_l2` 不再用 `image().is_64` 二分，而是按
-  `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与将来的
-  AArch64 用无关键字约定。`recraft-core` 重导出 `Arch`/`Format`/`Image`/`LoadedImage`，
-  反编译器因此不必直接依赖加载层。
-- **lint/渲染改为只读快照 + 按函数并行。** 反编译渲染现在只依赖只读的 `SessionView`
-  （`Session` 与新增的 `SessionSnapshot` 各实现一次；快照预读段字节、名字、原型、字符串
-  元数据并实现 `Sync`），`recraft lint` 用 rayon 按函数并行。同时把 `DecodeCache` 命中时
-  O(缓存大小) 的 LRU 扫描改成 O(1) 查找 + FIFO 淘汰。Go 3261 个函数的全量 L1 自检
-  **19 分 39 秒 → 约 2.7 秒**，L1+L2 约 14 秒；notepad 54.8 s → 8.5 s、crackme 40.5 s →
-  0.5 s；五套 lint 输出逐字节不变，789 份 golden 快照不变。
-- **CI 动作升到 Node 24，Linux 作业固定镜像。** `actions/checkout` v4 → v7、
-  `actions/upload-artifact` v4 → v7，消掉 GitHub Actions 报的 Node.js 20 弃用警告（这些动作从
-  v5 起声明 `node24`，要求 runner ≥ 2.327.1，GitHub 托管 runner 已满足；v6/v7 的其余改动——
-  凭据写独立文件、`pull_request_target` 禁止检出 fork——与本仓库无关）。`core` 与 `licenses`
-  两个作业改用 `ubuntu-24.04`：`ubuntu-latest` 从 2026-10-19 起迁往 Ubuntu 26，而提交的
-  `tests/golden/elf{,-cpp}` 依赖镜像里的 gcc/glibc，静默换镜像会让快照抖动；升级镜像要在
-  同一个 PR 里用 `RECRAFT_REGEN_ELF_SNAPSHOTS=1` 重建快照。
+- **演示脚本默认用 release 二进制。** `scripts/demo.ps1` 以前固定 `target/debug`，发布会
+  后演示里的 MCP `serverInfo.version` 还是旧版本；现在优先 `target/release`，缺失才回退
+  debug 并构建。
 
 ## [0.1.0] - 2026-11-08
 
