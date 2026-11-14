@@ -965,6 +965,18 @@ mod tests {
         Some((session, dir))
     }
 
+    /// --l2 on AArch64 must not fail: the structurer is x86-only, so L1/L2 fall back to the
+    /// A64 L0 renderer until the neutral CFG lands.
+    #[test]
+    fn aarch64_l2_falls_back_to_l0() {
+        let Some((session, _dir)) = aarch64_fixture() else {
+            return;
+        };
+        let text = crate::pseudocode_l2(&session, Address::new(0x1000))
+            .expect("aarch64 L2 falls back instead of erroring")
+            .text();
+        assert!(!text.trim().is_empty(), "{text}");
+    }
     #[test]
     fn the_aarch64_fixture_matches_its_snapshots() {
         let Some((session, _dir)) = aarch64_fixture() else {

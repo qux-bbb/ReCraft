@@ -25,12 +25,22 @@ use crate::l2::{ReturnKind, X64_ARG_REGS, parse_prototype};
 use crate::{ArgNames, BlockLift, L2Info, PseudoLine, Pseudocode, lift_block};
 
 /// Render structured pseudo-C (L1) for a function produced by automatic analysis.
+///
+/// AArch64 has no iced instructions, so the block structurer (which walks `insn_at`) is not
+/// available yet: L1/L2 fall back to the A64 L0 renderer instead of failing.
 pub fn pseudocode_l1(session: &dyn SessionView, start: Address) -> Result<Pseudocode> {
+    if session.arch() == recraft_core::Arch::Aarch64 {
+        return crate::pseudocode_l0(session, start, 4096);
+    }
     structure(session, start, None)
 }
 
 /// Render structured pseudo-C with L2 signature, argument naming and stack slots.
 pub fn pseudocode_l2(session: &dyn SessionView, start: Address) -> Result<Pseudocode> {
+    // Same fallback as L1: the structurer and the L2 signature recovery are x86-only for now.
+    if session.arch() == recraft_core::Arch::Aarch64 {
+        return crate::pseudocode_l0(session, start, 4096);
+    }
     let functions = session.functions()?;
     let Some(function) = functions.iter().find(|function| function.start == start) else {
         return pseudocode_l1(session, start);

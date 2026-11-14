@@ -9,6 +9,17 @@
 开发记录（每条修复、每次指标变化、每个负结果）归档在
 [docs/CHANGELOG-0.1.0.md](docs/CHANGELOG-0.1.0.md)。
 
+## [未发布]
+
+### 修复
+
+- **AArch64 上 `--l1`/`--l2` 回退到 L0，而不是报错。** 块结构化器仍只吃 iced 指令，
+  `pseudocode_l1`/`pseudocode_l2` 在 AArch64 上会走到 `insn_at` 拿到空指令并报
+  `internal error: no basic blocks`。现在两者在 AArch64 上直接回退到 A64 L0 渲染器
+  （线性 + 标签），命令行不再失败；新增回归测试 `aarch64_l2_falls_back_to_l0`。
+  同时把 ROADMAP 里「承诺 L2」的口径改为如实描述：0.3.0 对 ARM64 的承诺是
+  反汇编 + 函数/调用图 + 字符串 + L0 伪 C，结构化 L2 需要中立 CFG，列为后续项。
+
 ## [0.4.0] - 2026-11-14
 
 0.4.0 收 W6：界面现代化第一遍（主题令牌、空状态、框架条、标签页、图标 v3、对比度回归）；
