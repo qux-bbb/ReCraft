@@ -9,8 +9,8 @@
 //! function parses the command line? what calls CreateFileW?* — need the model to choose
 //! what to look at. This module gives it the same evidence the MCP server exposes
 //! ([`agent_tools`]) and runs the tool loop; nothing here writes to the project, so a
-//! wrong answer can mislead the reader but never corrupt the database. Renames still go
-//! through proposals and an explicit apply.
+//! wrong answer can mislead the reader but never corrupt the database. 改名等写操作仍由用户
+//! 通过 CLI/GUI 的显式命令完成，这里只给出建议。
 //!
 //! The caller owns the [`Session`]: the CLI passes its open session, the desktop opens a
 //! second connection inside the worker thread so the UI never blocks on HTTP or decoding.

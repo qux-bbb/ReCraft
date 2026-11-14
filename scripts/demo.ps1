@@ -107,12 +107,12 @@ try {
         Write-Host '[skip] sample has no field_probe; struct demo needs the corpus fixture'
     }
 
-    Step '7. AI assist (requires a configured provider)'
+    Step '7. AI assistant (one feature: ask; needs a configured provider)'
     $providerStatus = (Run-Recraft @('ai', 'provider') -join "`n")
     if ($providerStatus -match 'state=disabled') {
-        Write-Host '[skip] AI provider is disabled; configure it in the AI panel and re-run.'
+        Write-Host '[skip] AI provider is disabled; configure it in the AI sidebar and re-run.'
     } else {
-        # The corpus fixture has no imports/strings, so run the AI demo on a real sample.
+        # The corpus fixture has no imports/strings, so ask about a real sample instead.
         $realProject = $project
         $notepad = Join-Path $env:SystemRoot 'System32\notepad.exe'
         if (Test-Path -LiteralPath $notepad) {
@@ -121,12 +121,9 @@ try {
             Run-Recraft @('analyze', $realProject) | Out-Null
             Write-Host "AI demo project: $notepad"
         }
-        (Run-Recraft @('ai', 'triage', $realProject) | Select-Object -First 14) | ForEach-Object { Write-Host $_ }
-        Run-Recraft @('ai', 'suggest', $realProject, '--limit', '3', '--out', $proposals) | ForEach-Object { Write-Host $_ }
-        $lines = (Get-Content -Raw -LiteralPath $proposals) -split "`r?`n"
-        ($lines | Select-Object -First 22) | ForEach-Object { Write-Host $_ }
-        (Run-Recraft @('ai', 'apply', $realProject, $proposals, '--yes') | Select-Object -First 5) | ForEach-Object { Write-Host $_ }
-        (Run-Recraft @('undo', $realProject)) | ForEach-Object { Write-Host ("undo: " + $_) }
+        # The same assistant the GUI sidebar runs: read-only tools, then a prose answer.
+        Run-Recraft @('ai', 'ask', $realProject, 'which functions write to the registry?') |
+            ForEach-Object { Write-Host $_ }
     }
 
     Step '8. MCP server (newline-delimited JSON-RPC over stdio)'

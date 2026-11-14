@@ -16,16 +16,16 @@ corpus 基准：语义覆盖 97.4%、结构化成功率 100%；真实样本（no
 ## 3. AI 会把我的样本/伪代码发到云端吗？
 
 默认**不联网**：只有真正调用模型的路径才需要先显式配置 provider（DeepSeek / OpenCode Go /
-自定义 OpenAI 兼容端点）、endpoint 和 API key——GUI 的**解释**/**建议命名**/**润色**三个按钮，
-以及 CLI 的 `ai explain --llm`、`ai suggest --llm`、`ai polish`；未配置时会提示先配置。
-CLI 不带 `--llm` 的 `ai explain`/`ai suggest` 与 `ai query`/`ai triage` 全程本地。
-配置后发送前仍会经过脱敏（URL/IP/邮箱）与 token 预算裁剪，并且可以用
-`recraft-cli ai prompt` 先审阅。详见 [docs/AI.md](AI.md)。
+自定义 OpenAI 兼容端点）、endpoint 和 API key——也就是**分析助手**：GUI 的 AI 侧栏，以及 CLI 的
+`recraft-cli ai ask`；未配置时会直接报错并提示配置。其它命令（import/analyze/decompile/strings/
+xrefs/MCP 查询等）全程本地，不碰网络。
+配置后只把问题与工具取到的函数/字符串发给模型，不发送整个样本。详见 [docs/AI.md](AI.md)。
 
 ## 4. AI 能直接改我的数据库吗？
 
-不能静默修改。LLM/启发式只能产出带证据地址和置信度的 `Proposal`；用户 review 后
-`ai apply`/UI 勾选，经 journaled Command 总线写入，可 `Ctrl+Z` 撤销（DESIGN §9.1）。
+不能。分析助手只有**只读**工具，答案里的改名/注释建议只是文字；要改库得自己按 `N`/`;`，
+或使用 MCP 的写工具（`serve-mcp --write`），每一步经 journaled Command 总线，可 `Ctrl+Z` 撤销
+（DESIGN §9.1）。
 
 ## 5. 支持哪些格式？
 

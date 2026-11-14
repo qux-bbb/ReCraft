@@ -82,6 +82,47 @@
 
 ### 变更
 
+- **AI 只剩一个功能：分析助手；CLI 与界面完全一致。** GUI 侧栏曾经是一排按钮（解释 / 深挖 /
+  润色 / 重新润色 / 查询数据库 / 建议命名 / 应用 / 清空 + 变量命名结果 + 思考模式），CLI 的
+  `recraft ai` 又有 11 个子命令（explain / suggest / triage / apply / query / polish / prompt /
+  provider / ask / eval / eval-names）——同一件事有三四种做法，两边还各有一套。收成一个：
+
+  - **GUI**：侧栏只剩「分析助手」卡片（问题输入 / 分析 / 新对话 / 附带选中内容 / 工具调用轨迹
+    / 流式答案 / 可点地址）。
+  - **CLI**：只剩 `ai ask <project> "问题" [--json] [--rounds N]` 与 `ai provider`——同一个
+    agent、同样的 13 个只读工具、同样的轮数上限（`AGENT_MAX_ROUNDS=10`）。`--llm` / `--out` /
+    `--yes` 这套“离线证据 → propose → apply”的开关随之消失。
+
+  删掉的入口与原因：
+  - **解释**：问 Agent 即可，还会顺带给出调用者与数据引用。
+  - **润色 / 重新润色**：只显示、从不写回，等于把伪代码复制到任意聊天窗口，还带一套会话缓存与
+    状态机。
+  - **离线查询（`ai query`）**：只有 urls / api callers / text 四种意图，被 Agent 严格覆盖。
+  - **批量命名建议（`ai suggest` + `ai apply`）**：32 个候选一次性交给模型，结果是一屏看不出来
+    该不该应用的名字——启发式回退名（`network_1400012dc`，只是“类别 + 地址”）与模型名混排，
+    置信度还能到 0.9 把回退名顶到 0.7 的模型名前面；review 成本高于直接在 Functions 里按 `N`
+    改名。改名仍可手工做，或走 MCP 的写工具。
+  - **样本初筛（`ai triage`）**：问助手“这个样本可疑在哪”即可。
+  - **AI 变量命名**：栈槽证据弱、收益低。
+  - **「深挖」按钮**：只是把当前函数名/地址预填成问题，模型照样要自己找调用者；直接问
+    “sub_1400xxxx 做了什么”即可。
+  - **思考模式开关**：它只作用于“一次请求直答”的解释/润色/命名（`PromptRequest::with_thinking`），
+    助手的工具循环自己组装请求、从不带 thinking 标志，留着等于一个不起作用的开关。
+  - **结果缓存 / 审计日志 / prompt 评测 / 命名基准**：都是给直答类功能或批量命名服务的，没有
+    调用方。
+
+  `recraft-ai` 随之只剩助手路径：删除 `explain` / `suggest_names` / `triage` / `Proposal` 与
+  `apply_proposals` / `answer_query` / 三个直答 prompt 构建器 / `redact` / `PromptCache` /
+  `AuditLog` / `eval` / `eval_names` / `tests/prompt_eval.rs`，`PromptKind` 收成单变体 `Agent`
+  （`ai-settings.json` 里旧的 `en:explain` 之类键仍能加载，新键 `en:agent` 生效），并去掉不再
+  使用的 `recraft-decompile` 依赖。`crates/recraft-ai/src` 从 **6459 行降到 3173 行**，
+  `crates/recraft-ui/src/app.rs` 净减 **1512 行**，两域各删约 58 条 i18n 消息。
+
+  脚本与 CI 同步：删掉 `scripts/ai-cache-smoke.ps1`、`ai-polish-mock.ps1`、`ai_mock_server.py`
+  和 CI 里的缓存冒烟步骤；`e2e.ps1` 改为断言“未配置 provider 时 `ai ask` 拒绝执行”，
+  `demo.ps1` 第 7 步改成一次真实提问。`docs/AI.md` 重写为「一个助手 + provider + 系统提示词 +
+  限制」，README / DEMO / FAQ / DESIGN 同步。UI 138 个、AI 44 个单测全绿。
+
 - **参数恢复跟随 ABI。** `ArgNames` 记录整数参数寄存器表（Win64：rcx/rdx/r8/r9；ELF64：
   rdi/rsi/rdx/rcx/r8/r9），`signature()`/`slot_of()`/`count()`/补中间参数全部按这张表走。
   之前是 Win64 常量硬编码，ELF64 函数即使读了 `rdi` 也恢复成 `void`。同时识别优化构建的

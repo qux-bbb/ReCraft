@@ -83,7 +83,7 @@ recraft-ai（LLM 客户端/提示/脱敏/预算）供 app/mcp/ui 使用
 | `recraft-mcp` | MCP server（stdio/HTTP）、传输、写工具、资源 | core, query |
 | `recraft-cli` | headless：analyze/strings/imports/decompile/search/export/serve-mcp | core, analysis, decompile, ai, mcp |
 | `recraft-ui` | egui 应用、视图、自绘控件、i18n | core, analysis, decompile, ai |
-| `recraft-ai` | provider 抽象、提示模板、脱敏、token 预算、缓存、项目级 agent、样本 triage | common, core, analysis, query |
+| `recraft-ai` | provider 抽象、agent（工具循环）、提示模板、token 预算 | common, core, analysis, query |
 
 依赖方向必须单向，`core` 不得依赖 `analysis/decompile/ir`。新增 crate 需在本文档 ADR 中登记。
 
@@ -433,7 +433,7 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 - 资源：`recraft://project/{id}/functions|strings|imports|pseudocode/{func}`
 - 提示模板：`triage_sample`、`explain_function`、`propose_names`、`ctf_outline`
 
-写操作协议：写工具直接经 Command 总线应用并写 journal（可 undo），进程级 `--write` 即人工授权；AI 的批量命名建议仍然走 `Proposal`（含证据地址 + 置信度）→ UI 展示 diff → 人工确认的两段式，二者共用同一条命令总线。
+写操作协议：写工具直接经 Command 总线应用并写 journal（可 undo），进程级 `--write` 即人工授权；内置 AI 助手只有只读工具，它给出的改名/注释只是正文建议，写库仍需人确认后走同一条命令总线。
 
 ### 9.2 AI 功能（v1）
 
@@ -445,12 +445,17 @@ decode → LIR → 基本块/CFG → SSA(phi) → 优化 → 结构恢复 → �
 | 自然语言查询 | "找所有引用 URL 的函数" → 转 MCP 工具调用 |
 | 伪代码润色 | L1 输出后处理（标注为 AI 修改，不覆盖原始输出） |
 
+> 2026-11-14 精简：上表是 v1 的设计范围，实装后只保留了**分析助手**（项目级 agent，只读工具 +
+> 多轮对话），GUI 侧栏与 `recraft-cli ai ask` 是同一套实现。其余四类（解释、批量命名、离线查询、
+> 润色）作为“助手能回答的问题”的子集不再单独存在：批量改名/注释建议 review 成本高于收益，
+> 解释与查询直接问助手更快。设计动机与删除记录见 [AI.md](AI.md) 与 [CHANGELOG](../CHANGELOG.md)。
+
 ### 9.3 隐私与安全
 
 - 默认 **不联网**、无遥测；AI 需显式配置 provider
 - provider 可插拔：OpenAI 兼容 / 本地 Ollama；样本默认不出网
 - 发送最小上下文（仅函数 + 相关名/字符串），支持字符串脱敏
-- 审计日志（谁改了什么、AI 提案来源）、token 预算、速率限制、结果缓存
+- journal 审计（谁改了什么）、token 预算、速率限制；AI 助手不留结果缓存
 - 评测：用 PDB 符号做命名准确率回归；固定样本 + 固定 prompt 的回归集
 
 ---

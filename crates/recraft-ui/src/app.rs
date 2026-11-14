@@ -931,8 +931,6 @@ struct StringsJob {
 enum AiMessage {
     /// Assistant text (the answer shown in the result pane).
     Chunk(String),
-    /// Chain-of-thought delta (`reasoning_content`), shown in a collapsible section.
-    Reasoning(String),
     /// One tool call the agent made (shown in the tool trace).
     AgentTool(String),
     /// A model turn started (deltas after it belong to the same turn).
@@ -944,32 +942,12 @@ enum AiMessage {
     Done(std::result::Result<String, String>),
 }
 
-/// Which request a background AI job runs; the completion path differs per kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AiJobKind {
-    /// Prose explanation shown in the result pane.
-    Explain,
-    /// Rename proposals merged into the suggestions list.
-    Suggest,
-    /// Reconstructed C shown (and syntax-coloured) in the result pane.
-    Polish,
-    /// Project-level agent: the model calls read-only tools, then answers in prose.
-    Agent,
-    /// Stack-variable names for one function, merged into the variable suggestions list.
-    VarSuggest,
-}
-
+/// A running project-level agent turn: the model calls read-only tools, then answers in
+/// prose. It is the sidebar's only job — renames and everything else it suggests stay
+/// advisory text.
 struct AiJob {
     receiver: mpsc::Receiver<AiMessage>,
     started: Instant,
-    kind: AiJobKind,
-    prompt: Option<recraft_ai::PromptRequest>,
-    /// Function the answer describes (Explain/Polish); the result pane keeps showing it
-    /// so an answer never silently follows the cursor to another function.
-    target: Option<Address>,
-    /// Evidence-based rename proposals a [`AiJobKind::Suggest`] job merges the model's
-    /// names into when the reply arrives.
-    suggestions: Vec<recraft_ai::Proposal>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1269,14 +1247,9 @@ enum AiMode {
     Custom,
 }
 
-/// What the AI result pane holds. Polished C is coloured like the Decompile view;
-/// explanation reports are prose and stay plain text.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-enum AiResultKind {
-    #[default]
-    Prose,
-    Code,
-}
+/// The system prompts the AI panel still uses, in settings-editor order. The agent is the only
+/// prompt kind left, and the CLI and the panel share it.
+const PANEL_PROMPT_KINDS: [recraft_ai::PromptKind; 1] = [recraft_ai::PromptKind::Agent];
 
 impl AiMode {
     fn from_settings(settings: &recraft_ai::ProviderSettings) -> Self {
@@ -1331,7 +1304,6 @@ const PALETTE_COMMANDS: &[(&str, Action)] = &[
         Action::EditPseudoComment { addr: None },
     ),
     ("palette_cross_references", Action::ShowXrefs),
-    ("palette_ai_suggest", Action::AiSuggest),
     ("palette_toggle_language", Action::ToggleLang),
 ];
 
@@ -1370,28 +1342,14 @@ enum Action {
     Page(i32),
     Back,
     Navigate(Address),
-    AiSuggest,
-    /// Name the stack variables of `func` (Decompile context menu).
-    AiRenameVars {
-        func: Address,
-    },
-    AiApply,
-    AiClear,
     TogglePalette,
     PaletteCommand(usize),
     Follow,
     OpenRecent(usize),
-    AiExplain,
-    AiPolish,
-    /// Run the polish request again for the current function, ignoring the session cache.
-    AiRepolish,
-    AiQuery,
     /// Run the project-level agent on the question in the agent box.
     AiAgent,
     /// Forget the agent conversation (next question starts from scratch).
     AiAgentReset,
-    /// Ask the agent to dig into the function under the cursor.
-    AiAgentDig,
     NavigateToDisasm(Address),
     /// Centre a block in the graph view without leaving graph mode (Graph overview click).
     GraphGoTo(Address),
@@ -1552,40 +1510,13 @@ pub struct ReCraftApp {
     /// Block the graph view should centre on its next frame (set by an overview click).
     graph_center_on: Option<Address>,
     analysis: Option<AnalysisJob>,
-    /// AI rename suggestions (never applied implicitly).
-    ai_proposals: Vec<recraft_ai::Proposal>,
-    /// Proposals the user ticked for a batched apply (targets, not list indices: the list
-    /// is re-sorted when a suggestion is applied and would shift indices).
-    ai_checked: BTreeSet<Address>,
-    /// AI stack-variable names for one function (never applied implicitly).
-    ai_var_proposals: Vec<recraft_ai::VarProposal>,
-    /// Offsets the user ticked for a batched variable apply.
-    ai_var_checked: BTreeSet<i64>,
-    /// Function the variable proposals belong to.
-    ai_var_function: Option<Address>,
-    /// Function the explanation/polish result belongs to, so a stale answer cannot be
-    /// mistaken for the function now under the cursor.
-    ai_result_target: Option<Address>,
     ai_status: String,
     ai_mode: AiMode,
     ai_api_key: String,
     ai_show_key: bool,
     ai_settings: recraft_ai::ProviderSettings,
     ai_key_id: String,
-    ai_cache: recraft_ai::PromptCache,
-    ai_cache_fingerprint: Option<String>,
     ai_explanation: Option<String>,
-    /// Whether [`Self::ai_explanation`] holds polished C (syntax-coloured) or a plain
-    /// explanation report.
-    ai_result_kind: AiResultKind,
-    /// Streamed chain-of-thought (`reasoning_content`) for the running or last AI call.
-    ai_reasoning: String,
-    /// Whether the thinking section is expanded; collapsed automatically when a call ends.
-    ai_reasoning_open: bool,
-    /// UI toggle: request the provider's thinking mode and stream its reasoning.
-    ai_thinking: bool,
-    ai_query: String,
-    ai_answer: Option<recraft_ai::QueryAnswer>,
     /// Question typed into the agent box.
     ai_agent_question: String,
     /// Send the current selection (pseudo-C text or the selected listing row) with the
@@ -1699,27 +1630,13 @@ impl Default for ReCraftApp {
             graph_center_on: None,
             cfg_dirty: false,
             analysis: None,
-            ai_proposals: Vec::new(),
-            ai_checked: BTreeSet::new(),
-            ai_var_proposals: Vec::new(),
-            ai_var_checked: BTreeSet::new(),
-            ai_var_function: None,
-            ai_result_target: None,
             ai_status: String::new(),
             ai_mode: AiMode::Custom,
             ai_api_key: String::new(),
             ai_key_id: String::new(),
             ai_show_key: false,
             ai_settings: recraft_ai::ProviderSettings::default(),
-            ai_cache: recraft_ai::PromptCache::new(),
-            ai_cache_fingerprint: None,
             ai_explanation: None,
-            ai_result_kind: AiResultKind::Prose,
-            ai_reasoning: String::new(),
-            ai_reasoning_open: false,
-            ai_thinking: false,
-            ai_query: String::new(),
-            ai_answer: None,
             ai_agent_question: String::new(),
             ai_agent_use_selection: true,
             ai_agent_trace: Vec::new(),
@@ -1999,21 +1916,11 @@ impl ReCraftApp {
         self.edit = None;
         self.goto = None;
 
-        self.ai_proposals.clear();
-        self.ai_checked.clear();
-        self.ai_result_target = None;
         self.ai_status.clear();
-        self.ai_query.clear();
-        self.ai_answer = None;
         self.ai_agent_question.clear();
         self.ai_agent_trace.clear();
         self.ai_agent_history.clear();
         self.ai_explanation = None;
-        self.ai_result_kind = AiResultKind::Prose;
-        self.ai_reasoning.clear();
-        self.ai_reasoning_open = false;
-        self.ai_cache = recraft_ai::PromptCache::new();
-        self.ai_cache_fingerprint = None;
 
         self.struct_name.clear();
         self.struct_size = 16;
@@ -3157,32 +3064,20 @@ impl ReCraftApp {
         }
     }
 
-    /// Poll the running AI request (explain / suggest names / polish).
+    /// Poll the running agent turn.
     fn poll_ai_job(&mut self) {
         let Some(job) = self.ai_job.take() else {
             return;
         };
-        // A suggest reply is a list of rename lines, so its stream is not shown as prose.
-        let mut received = false;
         loop {
             match job.receiver.try_recv() {
                 Ok(AiMessage::Chunk(chunk)) => {
-                    received = true;
-                    if job.kind != AiJobKind::Suggest {
-                        self.ai_explanation
-                            .get_or_insert_with(String::new)
-                            .push_str(&chunk);
-                    }
+                    self.ai_explanation
+                        .get_or_insert_with(String::new)
+                        .push_str(&chunk);
                     self.ai_status = self.t("ui_streaming").to_owned();
                 }
-                Ok(AiMessage::Reasoning(chunk)) => {
-                    received = true;
-                    self.ai_reasoning.push_str(&chunk);
-                    self.ai_reasoning_open = true;
-                    self.ai_status = self.t("ui_thinking").to_owned();
-                }
                 Ok(AiMessage::AgentTool(line)) => {
-                    received = true;
                     self.ai_agent_trace.push(line);
                     self.ai_status = self.t_args(
                         "ui_agent_tool",
@@ -3190,7 +3085,6 @@ impl ReCraftApp {
                     );
                 }
                 Ok(AiMessage::AgentTurnStart) => {
-                    received = true;
                     self.ai_agent_turn_mark = Some(
                         self.ai_explanation
                             .as_ref()
@@ -3198,7 +3092,6 @@ impl ReCraftApp {
                     );
                 }
                 Ok(AiMessage::AgentRetract) => {
-                    received = true;
                     if let Some(mark) = self.ai_agent_turn_mark.take()
                         && let Some(text) = self.ai_explanation.clone()
                     {
@@ -3214,100 +3107,20 @@ impl ReCraftApp {
                 }
                 Ok(AiMessage::AgentHistory(history)) => {
                     self.ai_agent_history = history;
-                    received = true;
                 }
                 Ok(AiMessage::Done(Ok(text))) => {
                     let elapsed = job.started.elapsed().as_millis();
-                    // Fold the chain-of-thought once the answer is complete.
-                    self.ai_reasoning_open = false;
-                    match job.kind {
-                        AiJobKind::Polish => {
-                            if let Some(prompt) = job.prompt.as_ref() {
-                                self.ai_cache.insert(prompt, &text);
-                            }
-                            self.ai_explanation = Some(text);
-                            self.ai_result_kind = AiResultKind::Code;
-                            self.ai_result_target = job.target;
-                            self.ai_status =
-                                self.t_args("ui_polish_done", &[("ms", &elapsed.to_string())]);
-                        }
-                        AiJobKind::Explain => {
-                            self.ai_explanation = Some(text);
-                            // The model answers with prose, not pseudo-C: no syntax colours.
-                            self.ai_result_kind = AiResultKind::Prose;
-                            self.ai_result_target = job.target;
-                            self.ai_status =
-                                self.t_args("ui_explain_done", &[("ms", &elapsed.to_string())]);
-                        }
-                        AiJobKind::Agent => {
-                            self.ai_explanation = Some(text);
-                            self.ai_result_kind = AiResultKind::Prose;
-                            self.ai_result_target = None;
-                            self.ai_status =
-                                self.t_args("ui_agent_done", &[("ms", &elapsed.to_string())]);
-                        }
-                        AiJobKind::Suggest => {
-                            let mut proposals = job.suggestions;
-                            let updated = recraft_ai::apply_rename_reply(&mut proposals, &text);
-                            let total = proposals.len();
-                            self.ai_proposals = proposals;
-                            self.ai_checked.clear();
-                            self.ai_status = if updated == 0 {
-                                self.t("ui_suggest_unparsed").to_owned()
-                            } else {
-                                self.t_args(
-                                    "ui_suggest_done",
-                                    &[
-                                        ("named", &updated.to_string()),
-                                        ("total", &total.to_string()),
-                                        ("ms", &elapsed.to_string()),
-                                    ],
-                                )
-                            };
-                        }
-                        AiJobKind::VarSuggest => {
-                            let proposals = recraft_ai::parse_var_reply(&text);
-                            let total = proposals.len();
-                            self.ai_var_checked =
-                                proposals.iter().map(|proposal| proposal.offset).collect();
-                            self.ai_var_function = job.target;
-                            self.ai_var_proposals = proposals;
-                            self.ai_status = if total == 0 {
-                                self.t("ui_var_suggest_unparsed").to_owned()
-                            } else {
-                                self.t_args(
-                                    "ui_var_suggest_done",
-                                    &[("named", &total.to_string()), ("ms", &elapsed.to_string())],
-                                )
-                            };
-                        }
-                    }
+                    self.ai_explanation = Some(text);
+                    self.ai_status = self.t_args("ui_agent_done", &[("ms", &elapsed.to_string())]);
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Ok(AiMessage::Done(Err(error))) => {
-                    self.ai_reasoning_open = false;
-                    let key = match job.kind {
-                        AiJobKind::Polish => "ui_polish_failed",
-                        AiJobKind::Explain => "ui_explain_failed",
-                        AiJobKind::Suggest => "ui_suggest_failed",
-                        AiJobKind::Agent => "ui_agent_failed",
-                        AiJobKind::VarSuggest => "ui_var_suggest_failed",
-                    };
-                    self.ai_status = self.t_args(key, &[("error", &error)]);
+                    self.ai_status = self.t_args("ui_agent_failed", &[("error", &error)]);
                     self.set_status(self.ai_status.clone());
                     return;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    if !received
-                        && job.kind != AiJobKind::Agent
-                        && job.started.elapsed().as_secs() >= 3
-                    {
-                        self.ai_status = self.t_args(
-                            "ui_waiting_for_first_token",
-                            &[("seconds", &job.started.elapsed().as_secs().to_string())],
-                        );
-                    }
                     self.ai_job = Some(job);
                     return;
                 }
@@ -3319,222 +3132,13 @@ impl ReCraftApp {
         }
     }
 
-    /// Provider settings for one request. The direct-answer path keeps a token ceiling so a
-    /// reasoning endpoint does not spend a minute of budget before its first content token;
-    /// an explicit thinking request keeps the configured budget.
+    /// Provider settings for one request. A reasoning endpoint spends most of its budget on
+    /// hidden reasoning, so the completion ceiling is capped to keep the first content token
+    /// from taking a minute.
     fn ai_request_settings(&self) -> recraft_ai::ProviderSettings {
         let mut settings = self.ai_settings.clone();
-        if !self.ai_thinking {
-            settings.max_tokens =
-                direct_answer_token_limit(&settings.endpoint, settings.max_tokens);
-        }
+        settings.max_tokens = direct_answer_token_limit(&settings.endpoint, settings.max_tokens);
         settings
-    }
-
-    /// Stream one prompt on a worker thread (HTTP never runs on the UI thread).
-    fn spawn_ai_job(
-        &mut self,
-        ctx: &egui::Context,
-        settings: recraft_ai::ProviderSettings,
-        prompt: recraft_ai::PromptRequest,
-        kind: AiJobKind,
-        target: Option<Address>,
-        suggestions: Vec<recraft_ai::Proposal>,
-    ) {
-        let (sender, receiver) = mpsc::channel();
-        // Only polished C is cached for the session; explanations and names are cheap to
-        // re-request and a rename makes an older answer misleading.
-        let job_prompt = (kind == AiJobKind::Polish).then(|| prompt.clone());
-        std::thread::spawn(move || {
-            let mut provider = recraft_ai::provider_from_settings(&settings);
-            let result = provider.complete_stream_with_reasoning(
-                &prompt,
-                &mut |chunk| {
-                    let _ = sender.send(AiMessage::Chunk(chunk.to_owned()));
-                },
-                &mut |reasoning| {
-                    let _ = sender.send(AiMessage::Reasoning(reasoning.to_owned()));
-                },
-            );
-            let _ = sender.send(AiMessage::Done(result.map_err(|error| error.to_string())));
-        });
-        self.ai_job = Some(AiJob {
-            receiver,
-            started: Instant::now(),
-            kind,
-            prompt: job_prompt,
-            target,
-            suggestions,
-        });
-        self.ai_status = self.t("ui_calling_provider").to_owned();
-        self.set_status(self.ai_status.clone());
-        ctx.request_repaint();
-    }
-
-    /// Build the explanation prompt for the function under the cursor and stream the model's
-    /// answer into the result pane.
-    fn start_explain(&mut self, ctx: &egui::Context) {
-        if self.ai_job.is_some() {
-            return;
-        }
-        if !self.require_ai_provider() {
-            return;
-        }
-        let Some((start, _)) = self.current_function() else {
-            self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
-            return;
-        };
-        let settings = self.ai_request_settings();
-        let Some(session) = self.session.as_mut() else {
-            self.set_status(self.t("ui_open_a_project_first").to_owned());
-            return;
-        };
-        let prompt = match recraft_ai::build_explain_prompt(session, start, &settings) {
-            Ok(prompt) => prompt,
-            Err(error) => {
-                self.set_error(error);
-                return;
-            }
-        };
-        let prompt = if self.ai_thinking {
-            prompt.with_thinking()
-        } else {
-            prompt
-        };
-        self.ai_explanation = None;
-        // The model answers with prose: the result pane must not colour it as C.
-        self.ai_result_kind = AiResultKind::Prose;
-        self.ai_reasoning.clear();
-        self.ai_reasoning_open = self.ai_thinking;
-        self.spawn_ai_job(
-            ctx,
-            settings,
-            prompt,
-            AiJobKind::Explain,
-            Some(start),
-            Vec::new(),
-        );
-    }
-
-    /// Ask the model to name the evidence-backed `sub_*` functions.
-    ///
-    /// The local `suggest_names` proposals supply the candidates, their evidence and their
-    /// fallback names; the reply only replaces names and rationales, so a partial answer
-    /// still leaves applicable proposals on screen.
-    fn start_suggest(&mut self, ctx: &egui::Context) {
-        if self.ai_job.is_some() {
-            return;
-        }
-        if !self.require_ai_provider() {
-            return;
-        }
-        let settings = self.ai_request_settings();
-        let Some(session) = self.session.as_mut() else {
-            self.set_status(self.t("ui_open_a_project_first").to_owned());
-            return;
-        };
-        let proposals = match recraft_ai::suggest_names(session, 50) {
-            Ok(proposals) => proposals,
-            Err(error) => {
-                self.set_error(error);
-                return;
-            }
-        };
-        if proposals.is_empty() {
-            self.ai_status = self
-                .t("ui_no_suggestions_yet_run_analyze_then_press_suggest_names")
-                .to_owned();
-            return;
-        }
-        let candidates: Vec<Address> = proposals.iter().map(|proposal| proposal.target).collect();
-        let prompt = match recraft_ai::build_rename_prompt(session, &candidates, &settings) {
-            Ok(prompt) => prompt,
-            Err(error) => {
-                self.set_error(error);
-                return;
-            }
-        };
-        let prompt = if self.ai_thinking {
-            prompt.with_thinking()
-        } else {
-            prompt
-        };
-        self.ai_checked.clear();
-        self.spawn_ai_job(ctx, settings, prompt, AiJobKind::Suggest, None, proposals);
-    }
-
-    /// Ask the model to name the stack variables of `func`.
-    fn start_var_suggest(&mut self, ctx: &egui::Context, func: Address) {
-        if self.ai_job.is_some() {
-            return;
-        }
-        if !self.require_ai_provider() {
-            return;
-        }
-        let settings = self.ai_request_settings();
-        let Some(session) = self.session.as_mut() else {
-            self.set_status(self.t("ui_open_a_project_first").to_owned());
-            return;
-        };
-        let prompt = match recraft_ai::build_var_prompt(session, func, &settings) {
-            Ok(prompt) => prompt,
-            Err(error) => {
-                self.set_error(error);
-                return;
-            }
-        };
-        let prompt = if self.ai_thinking {
-            prompt.with_thinking()
-        } else {
-            prompt
-        };
-        self.ai_var_proposals.clear();
-        self.ai_var_checked.clear();
-        self.ai_var_function = Some(func);
-        self.spawn_ai_job(
-            ctx,
-            settings,
-            prompt,
-            AiJobKind::VarSuggest,
-            Some(func),
-            Vec::new(),
-        );
-    }
-
-    /// Apply every ticked variable proposal through the command bus (journaled/undoable).
-    fn apply_var_selection(&mut self) -> bool {
-        let Some(func) = self.ai_var_function else {
-            return false;
-        };
-        let proposals: Vec<recraft_ai::VarProposal> = self
-            .ai_var_proposals
-            .iter()
-            .filter(|proposal| self.ai_var_checked.contains(&proposal.offset))
-            .cloned()
-            .collect();
-        let Some(session) = self.session.as_mut() else {
-            return false;
-        };
-        let mut applied = 0;
-        for proposal in &proposals {
-            match session.execute(Command::RenameVar {
-                func,
-                offset: proposal.offset,
-                name: Some(proposal.value.clone()),
-            }) {
-                Ok(_) => applied += 1,
-                Err(error) => {
-                    self.set_error(error);
-                    break;
-                }
-            }
-        }
-        if applied > 0 {
-            self.pseudo_dirty = true;
-            self.ai_status = self.t_args("ui_var_applied", &[("count", &applied.to_string())]);
-            self.set_status(self.ai_status.clone());
-        }
-        applied > 0
     }
 
     /// The user's current selection as agent context, if there is one.
@@ -3595,36 +3199,6 @@ impl ReCraftApp {
             .map(|(_, tab)| *tab)
     }
 
-    /// Question the "dig deeper" button asks about the function under the cursor.
-    ///
-    /// The agent already knows how to look things up, so the question only has to name the
-    /// starting point; the function's callers/callees are its job to find.
-    fn agent_dig_question(&self) -> Option<String> {
-        let (start, _) = self.current_function()?;
-        let name = self
-            .session
-            .as_ref()
-            .and_then(|session| session.name_at(start).ok().flatten())
-            .unwrap_or_else(|| format!("sub_{:x}", start.get()));
-        Some(self.t_args(
-            "ui_agent_dig_question",
-            &[("name", &name), ("addr", &format!("{:#x}", start.get()))],
-        ))
-    }
-
-    /// Prefill the agent box with the current function and run the loop (history kept).
-    fn start_agent_dig(&mut self, ctx: &egui::Context) {
-        if self.ai_job.is_some() {
-            return;
-        }
-        let Some(question) = self.agent_dig_question() else {
-            self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
-            self.set_status(self.ai_status.clone());
-            return;
-        };
-        self.ai_agent_question = question;
-        self.start_agent(ctx);
-    }
     /// Run the project-level agent: the model chooses which read-only tools to call.
     ///
     /// The worker opens its own SQLite connection so the UI thread never waits on HTTP or
@@ -3696,89 +3270,13 @@ impl ReCraftApp {
         });
         self.ai_agent_trace.clear();
         self.ai_explanation = None;
-        self.ai_result_kind = AiResultKind::Prose;
-        self.ai_result_target = None;
-        self.ai_reasoning.clear();
-        self.ai_reasoning_open = false;
         self.ai_job = Some(AiJob {
             receiver,
             started: Instant::now(),
-            kind: AiJobKind::Agent,
-            prompt: None,
-            target: None,
-            suggestions: Vec::new(),
         });
         self.ai_status = self.t("ui_agent_running").to_owned();
         self.set_status(self.ai_status.clone());
         ctx.request_repaint();
-    }
-
-    /// Build the polish prompt for the function under the cursor and start the model
-    /// request on a background thread.
-    ///
-    /// `use_cache` reuses this session's answer for an identical prompt. **Re-polish**
-    /// passes `false`: clicking the button again on the same function is an explicit
-    /// request for another suggestion, so serving the cached text silently would make
-    /// the action look broken. A fresh answer replaces the cached one when it arrives.
-    fn start_polish(&mut self, ctx: &egui::Context, use_cache: bool) {
-        if self.ai_job.is_some() {
-            return;
-        }
-        self.ai_settings.refresh_enabled();
-        if !self.ai_settings.enabled {
-            self.ai_status = self.t("ui_enable_provider_for_polish").to_owned();
-            return;
-        }
-        let Some((start, _)) = self.current_function() else {
-            self.ai_status = self.t("ui_put_cursor_inside_function").to_owned();
-            return;
-        };
-        let settings = self.ai_request_settings();
-        let fingerprint = format!(
-            "{}|{}|{}",
-            settings.endpoint, settings.model, settings.max_tokens
-        );
-        if self.ai_cache_fingerprint.as_deref() != Some(fingerprint.as_str()) {
-            self.ai_cache = recraft_ai::PromptCache::new();
-            self.ai_cache_fingerprint = Some(fingerprint);
-        }
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        let prompt = match recraft_ai::build_polish_prompt(session, start, &settings) {
-            Ok(prompt) => prompt,
-            Err(error) => {
-                self.set_error(error);
-                return;
-            }
-        };
-        // The toggle opts into the model's reasoning pass and streams it into the
-        // collapsible thinking section; off keeps the fast direct-answer path.
-        let prompt = if self.ai_thinking {
-            prompt.with_thinking()
-        } else {
-            prompt
-        };
-        self.ai_explanation = None;
-        // Polish answers are pseudo-C: colour them like the Decompile view.
-        self.ai_result_kind = AiResultKind::Code;
-        self.ai_reasoning.clear();
-        self.ai_reasoning_open = self.ai_thinking;
-        if use_cache && let Some(cached) = self.ai_cache.get(&prompt) {
-            let text = cached.to_owned();
-            self.ai_explanation = Some(text);
-            self.ai_status = self.t_args("ui_polish_cached", &[("ms", "0")]);
-            self.set_status(self.ai_status.clone());
-            return;
-        }
-        self.spawn_ai_job(
-            ctx,
-            settings,
-            prompt,
-            AiJobKind::Polish,
-            Some(start),
-            Vec::new(),
-        );
     }
 
     /// Data row for the stored string at `index`, starting at `addr`.
@@ -6260,25 +5758,11 @@ impl ReCraftApp {
             .show(ui, |ui| self.ai_panel_inner(ui, action));
     }
 
+    /// The AI sidebar is one feature, not a button menu: the read-only analysis agent. It
+    /// answers questions over the project by calling the query tools itself and never
+    /// modifies the database.
     fn ai_panel_inner(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
-        let suggest = self.t("ui_suggest_names");
-        let apply_label = self.t("ui_apply_selected");
-        let explain_label = self.t("ui_explain");
-        let dig_label = self.t("ui_agent_dig");
-        let dig_hint = self.t("ui_agent_dig_hint");
-        let polish_label = self.t("ui_polish");
-        let repolish_label = self.t("ui_repolish");
-        let repolish_hint = self.t("ui_repolish_hint");
-        let clear = self.t("ui_clear");
-        let thinking_mode = self.t("ui_thinking_mode");
-        let thinking_hint = self.t("ui_thinking_hint");
-        let has_selection = !self.ai_checked.is_empty();
-        let apply_text = if has_selection {
-            format!("{apply_label} ({})", self.ai_checked.len())
-        } else {
-            apply_label.clone()
-        };
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("AI").size(19.0).strong().color(pal.mnemonic));
@@ -6334,79 +5818,8 @@ impl ReCraftApp {
             ui.add_space(8.0);
         }
 
-        card_frame(pal).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(self.t("ai_actions"))
-                    .strong()
-                    .size(13.0)
-                    .color(pal.text),
-            );
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(suggest).clicked() {
-                    *action = Action::AiSuggest;
-                }
-                if ui.button(explain_label).clicked() {
-                    *action = Action::AiExplain;
-                }
-                // Explain stays the fast one-request path; this hands the same function to
-                // the agent when the reader wants callers/behaviour, with history kept.
-                if ui
-                    .add_enabled(
-                        self.ai_job.is_none() && self.current_function().is_some(),
-                        egui::Button::new(RichText::new(dig_label).size(11.0)),
-                    )
-                    .on_hover_text(dig_hint)
-                    .clicked()
-                {
-                    *action = Action::AiAgentDig;
-                }
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(polish_label).strong().color(pal.text))
-                            .fill(pal.selected_row),
-                    )
-                    .clicked()
-                {
-                    *action = Action::AiPolish;
-                }
-                // A polish answer can be cached, so pressing Polish again may return the
-                // same text. Offer an explicit re-run that skips the cache once a polish
-                // result is on screen (an explanation is prose and has nothing to redo).
-                if self.ai_result_kind == AiResultKind::Code
-                    && self.ai_explanation.is_some()
-                    && ui
-                        .add_enabled(
-                            self.ai_job.is_none(),
-                            egui::Button::new(repolish_label.as_str()),
-                        )
-                        .on_hover_text(repolish_hint.as_str())
-                        .clicked()
-                {
-                    *action = Action::AiRepolish;
-                }
-                if ui
-                    .add_enabled(has_selection, egui::Button::new(apply_text.as_str()))
-                    .clicked()
-                {
-                    *action = Action::AiApply;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(clear).clicked() {
-                        *action = Action::AiClear;
-                    }
-                });
-            });
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.ai_thinking, thinking_mode.as_str())
-                    .on_hover_text(thinking_hint.as_str());
-            });
-        });
-
-        // Project-level agent: unlike the one-shot buttons above, the model decides which
-        // read-only tools to call (list functions, read a function, follow xrefs, ...).
+        // The whole sidebar is one feature: the read-only analysis agent.
+        // (The batch rename list that used to sit here is gone — see docs/AI.md.)
         card_frame(pal).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
@@ -6484,49 +5897,6 @@ impl ReCraftApp {
             }
         });
 
-        // Chain-of-thought stream (only when the toggle asked for thinking). Expanded while
-        // the model reasons, folded as soon as the answer completes.
-        if !self.ai_reasoning.is_empty() {
-            // Long reasoning passes can reach tens of thousands of characters; render only
-            // the tail so live text layout stays cheap while the count shows the full size.
-            const THINKING_DISPLAY_CHARS: usize = 12_000;
-            let total = self.ai_reasoning.chars().count();
-            let reasoning = if total > THINKING_DISPLAY_CHARS {
-                self.ai_reasoning
-                    .chars()
-                    .skip(total - THINKING_DISPLAY_CHARS)
-                    .collect::<String>()
-            } else {
-                self.ai_reasoning.clone()
-            };
-            let title = self.t_args("ui_thinking_process", &[("chars", &total.to_string())]);
-            let open = self.ai_reasoning_open;
-            let streaming = self.ai_job.is_some();
-            let response =
-                egui::CollapsingHeader::new(RichText::new(title).size(12.0).color(pal.comment))
-                    .id_salt("ai_reasoning")
-                    .open(Some(open))
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("ai_reasoning_scroll")
-                            .max_height(160.0)
-                            .auto_shrink([false, false])
-                            .stick_to_bottom(streaming)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(&reasoning)
-                                        .monospace()
-                                        .size(10.0)
-                                        .color(pal.comment),
-                                );
-                            });
-                    });
-            if response.header_response.clicked() {
-                self.ai_reasoning_open = !open;
-            }
-            ui.add_space(8.0);
-        }
-
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(
@@ -6545,37 +5915,9 @@ impl ReCraftApp {
                 });
             }
         });
-        // Which function this answer belongs to. Without it an explanation kept looking
-        // current after the cursor moved to another function.
-        if let Some(target) = self.ai_result_target {
-            let name = self
-                .session
-                .as_ref()
-                .and_then(|session| session.name_at(target).ok().flatten())
-                .unwrap_or_else(|| format!("sub_{:x}", target.get()));
-            let label = format!("{name} ({:#x})", target.get());
-            let stale = self.current_function().map(|(start, _)| start) != Some(target);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(self.t_args("ui_ai_result_for", &[("target", &label)]))
-                        .size(11.0)
-                        .color(pal.comment),
-                );
-                if ui.link(self.t("ui_jump_to_function")).clicked() {
-                    *action = Action::Navigate(target);
-                }
-                if stale {
-                    ui.label(
-                        RichText::new(self.t("ui_ai_result_stale"))
-                            .size(11.0)
-                            .color(Color32::from_rgb(0xc0, 0x90, 0x40)),
-                    );
-                }
-            });
-            ui.add_space(4.0);
-        }
+        // The answer is the agent's: it has no single target function of its own, and the
+        // addresses it quotes are listed as links below the text.
         ui.add_space(4.0);
-        let result_kind = self.ai_result_kind;
         match self.ai_explanation.clone() {
             Some(text) => {
                 card_frame(pal).show(ui, |ui| {
@@ -6586,12 +5928,7 @@ impl ReCraftApp {
                         .auto_shrink([false, false])
                         .stick_to_bottom(self.ai_job.is_some())
                         .show(ui, |ui| {
-                            let mono = FontId::monospace(11.0);
-                            let mut job = LayoutJob::default();
-                            append_ai_result(&mut job, &text, result_kind, pal, &mono);
-                            // Wrap long lines at the pane width, like the plain label did.
-                            job.wrap.max_width = ui.available_width();
-                            ui.label(job);
+                            ui.label(RichText::new(&text).monospace().size(11.0).color(pal.text));
                         });
                 });
                 // Addresses quoted in the answer are the evidence: make them clickable so
@@ -6629,242 +5966,6 @@ impl ReCraftApp {
                     ui.set_min_width(ui.available_width());
                     ui.weak(self.t("ai_no_result"));
                 });
-            }
-        }
-
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(self.t("ai_ask_database"))
-                .strong()
-                .size(13.0)
-                .color(pal.text),
-        );
-        ui.add_space(4.0);
-        let query_hint = self.t("ui_ask_urls_callers_of_createfilew_text_http");
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.ai_query)
-                    .desired_width((ui.available_width() - 80.0).max(80.0))
-                    .hint_text(query_hint),
-            );
-            if ui.button(self.t("ui_query")).clicked() {
-                *action = Action::AiQuery;
-            }
-        });
-        if let Some(answer) = self.ai_answer.clone() {
-            ui.add_space(4.0);
-            let count = answer.items.len().to_string();
-            let truncated = if answer.truncated {
-                self.t("ui_truncated_suffix")
-            } else {
-                String::new()
-            };
-            ui.weak(self.t_args(
-                "ui_query_matches",
-                &[
-                    ("intent", &answer.intent),
-                    ("count", &count),
-                    ("truncated", &truncated),
-                ],
-            ));
-            card_frame(pal).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                egui::ScrollArea::vertical()
-                    .id_salt("ai_answer")
-                    .max_height(160.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for item in answer.items.iter().take(20) {
-                            let label = format!("[{}] {}  {}", item.kind, item.addr, item.text);
-                            let response = ui.selectable_label(false, label);
-                            if response.clicked()
-                                && let Some(addr) = parse_query_addr(&item.addr)
-                            {
-                                *action = Action::NavigateToDisasm(addr);
-                            }
-                            if !item.functions.is_empty() {
-                                ui.weak(format!("  {}", item.functions.join(", ")));
-                            }
-                        }
-                    });
-            });
-        }
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "{} ({})",
-                    self.t("ai_suggestions"),
-                    self.ai_proposals.len()
-                ))
-                .strong()
-                .size(13.0)
-                .color(pal.text),
-            );
-        });
-        ui.add_space(4.0);
-        if self.ai_proposals.is_empty() {
-            card_frame(pal).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.weak(self.t("ui_no_suggestions_yet_run_analyze_then_press_suggest_names"));
-            });
-        } else {
-            card_frame(pal).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                // Review first, apply later: a local heuristic fallback name is labelled as
-                // such, so "the model named 12 of 50" cannot be read as a model failure.
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button(self.t("ui_check_all")).clicked() {
-                        self.ai_checked = self
-                            .ai_proposals
-                            .iter()
-                            .map(|proposal| proposal.target)
-                            .collect();
-                    }
-                    if ui.button(self.t("ui_check_none")).clicked() {
-                        self.ai_checked.clear();
-                    }
-                    if ui.button(self.t("ui_auto_apply")).clicked() {
-                        // One-click naming: check everything, then let the normal apply path
-                        // journal each rename (undo takes them back one at a time).
-                        self.ai_checked = self
-                            .ai_proposals
-                            .iter()
-                            .map(|proposal| proposal.target)
-                            .collect();
-                        *action = Action::AiApply;
-                    }
-                });
-                for (index, proposal) in self.ai_proposals.iter().enumerate() {
-                    let mut checked = self.ai_checked.contains(&proposal.target);
-                    let source = match proposal.source {
-                        recraft_ai::ProposalSource::Model => self.t("ui_source_model"),
-                        recraft_ai::ProposalSource::Heuristic => self.t("ui_source_heuristic"),
-                        recraft_ai::ProposalSource::External => self.t("ui_source_external"),
-                    };
-                    let label = format!(
-                        "{:.0}%  {:#012x}  →  {}",
-                        proposal.confidence * 100.0,
-                        proposal.target.get(),
-                        proposal.value
-                    );
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut checked, "").clicked() {
-                            if checked {
-                                self.ai_checked.insert(proposal.target);
-                            } else {
-                                self.ai_checked.remove(&proposal.target);
-                            }
-                        }
-                        let response = ui.add_sized(
-                            [ui.available_width(), 20.0],
-                            egui::Button::selectable(
-                                false,
-                                RichText::new(label).monospace().color(pal.text),
-                            ),
-                        );
-                        if response.clicked() {
-                            if self.ai_checked.contains(&proposal.target) {
-                                self.ai_checked.remove(&proposal.target);
-                            } else {
-                                self.ai_checked.insert(proposal.target);
-                            }
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(format!("[{}]", source))
-                                .size(10.0)
-                                .color(pal.mnemonic),
-                        );
-                        ui.label(
-                            RichText::new(&proposal.rationale)
-                                .size(11.0)
-                                .color(pal.muted),
-                        );
-                    });
-                    if let Some(evidence) = proposal.evidence.first()
-                        && ui
-                            .link(format!(
-                                "{} {:#x}",
-                                self.t("ai_evidence"),
-                                evidence.addr.get()
-                            ))
-                            .clicked()
-                    {
-                        *action = Action::Navigate(evidence.addr);
-                    }
-                    if index + 1 < self.ai_proposals.len() {
-                        ui.separator();
-                    }
-                }
-            });
-        }
-
-        if !self.ai_var_proposals.is_empty() {
-            let mut apply_now = false;
-            let rows: Vec<(i64, String, String)> = self
-                .ai_var_proposals
-                .iter()
-                .map(|proposal| {
-                    (
-                        proposal.offset,
-                        proposal.value.clone(),
-                        proposal.rationale.clone(),
-                    )
-                })
-                .collect();
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(format!("{} ({})", self.t("ui_var_suggestions"), rows.len()))
-                    .strong()
-                    .size(13.0)
-                    .color(pal.text),
-            );
-            ui.add_space(4.0);
-            card_frame(pal).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                if let Some(func) = self.ai_var_function {
-                    ui.weak(format!("{:#x}", func.get()));
-                }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button(self.t("ui_check_all")).clicked() {
-                        self.ai_var_checked = rows.iter().map(|row| row.0).collect();
-                    }
-                    if ui.button(self.t("ui_check_none")).clicked() {
-                        self.ai_var_checked.clear();
-                    }
-                    if ui.button(self.t("ui_apply")).clicked() {
-                        apply_now = true;
-                    }
-                });
-                for (offset, value, rationale) in &rows {
-                    let mut checked = self.ai_var_checked.contains(offset);
-                    let slot = if *offset < 0 {
-                        format!("var_n{:x}", -offset)
-                    } else {
-                        format!("var_{offset:x}")
-                    };
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut checked, "").clicked() {
-                            if checked {
-                                self.ai_var_checked.insert(*offset);
-                            } else {
-                                self.ai_var_checked.remove(offset);
-                            }
-                        }
-                        ui.label(
-                            RichText::new(format!("{slot}  →  {value}"))
-                                .monospace()
-                                .color(pal.text),
-                        );
-                    });
-                    ui.label(RichText::new(rationale).size(11.0).color(pal.muted));
-                }
-            });
-            if apply_now {
-                self.apply_var_selection();
             }
         }
 
@@ -7044,8 +6145,6 @@ impl ReCraftApp {
         self.ai_settings.api_key = key;
         self.ai_settings.api_key_env = recraft_ai::ProviderSettings::default().api_key_env;
         self.ai_settings.refresh_enabled();
-        self.ai_cache = recraft_ai::PromptCache::new();
-        self.ai_cache_fingerprint = None;
         self.ai_key_id = self.ai_settings.provider_key_id();
         self.ai_status = if self.ai_settings.api_key_present() {
             self.t("ui_provider_switched_key_restored").to_owned()
@@ -7073,8 +6172,6 @@ impl ReCraftApp {
         self.ai_settings.api_key = key;
         self.ai_settings.refresh_enabled();
         self.ai_key_id = id;
-        self.ai_cache = recraft_ai::PromptCache::new();
-        self.ai_cache_fingerprint = None;
         self.ai_status = if self.ai_settings.api_key_present() {
             self.t("ui_provider_switched_key_restored").to_owned()
         } else {
@@ -7228,9 +6325,9 @@ impl ReCraftApp {
         self.prompt_section(ui);
     }
 
-    /// Fill the prompt editors from the settings: one per kind, in [`PromptKind::ALL`] order.
+    /// Fill the prompt editors from the settings: one per panel prompt kind.
     fn reload_prompt_drafts(&mut self) {
-        self.prompt_drafts = recraft_ai::PromptKind::ALL
+        self.prompt_drafts = PANEL_PROMPT_KINDS
             .iter()
             .map(|kind| (*kind, recraft_ai::system_prompt(&self.ai_settings, *kind)))
             .collect();
@@ -7238,7 +6335,7 @@ impl ReCraftApp {
         self.prompt_drafts_ready = true;
     }
 
-    /// Built-in system prompts: pick the prompt language, edit any of the four, save the
+    /// Built-in system prompts: pick the prompt language, edit the agent prompt, save the
     /// override or restore the shipped text. Edits are user data in `ai-settings.json`; the
     /// cache key hashes the system text, so a changed prompt never hits an old reply.
     fn prompt_section(&mut self, ui: &mut egui::Ui) {
@@ -7247,13 +6344,8 @@ impl ReCraftApp {
         let hint = self.t("ui_prompt_language_hint");
         let save_label = self.t("ui_save_prompt");
         let reset_label = self.t("ui_reset_prompt");
-        let labels = [
-            self.t("ui_prompt_explain"),
-            self.t("ui_prompt_rename"),
-            self.t("ui_prompt_polish"),
-            self.t("ui_prompt_agent"),
-            self.t("ui_prompt_vars"),
-        ];
+        let kinds = PANEL_PROMPT_KINDS;
+        let labels = [self.t("ui_prompt_agent")];
         if !self.prompt_drafts_ready
             || self.prompt_drafts_language != self.ai_settings.prompt_language
         {
@@ -7286,7 +6378,7 @@ impl ReCraftApp {
                         });
                 });
                 ui.weak(hint.as_str());
-                for (index, kind) in recraft_ai::PromptKind::ALL.iter().copied().enumerate() {
+                for (index, kind) in kinds.iter().copied().enumerate() {
                     let overridden =
                         self.ai_settings
                             .prompt_overrides
@@ -7343,59 +6435,6 @@ impl ReCraftApp {
     }
 
     /// Apply every ticked AI proposal through the command bus (journaled/undoable).
-    ///
-    /// Each rename is its own journal record, so undo takes them back one at a time; the
-    /// status says how many landed when a later proposal is refused (e.g. a duplicate
-    /// name), instead of pretending the whole batch succeeded.
-    fn apply_ai_selection(&mut self) -> bool {
-        let proposals: Vec<recraft_ai::Proposal> = self
-            .ai_proposals
-            .iter()
-            .filter(|proposal| self.ai_checked.contains(&proposal.target))
-            .cloned()
-            .collect();
-        if proposals.is_empty() {
-            return false;
-        }
-        let mut applied: Vec<Address> = Vec::new();
-        let mut failure = None;
-        if let Some(session) = self.session.as_mut() {
-            for proposal in &proposals {
-                match recraft_ai::apply_proposals(session, std::slice::from_ref(proposal)) {
-                    Ok(_) => applied.push(proposal.target),
-                    Err(error) => {
-                        failure = Some(error.to_string());
-                        break;
-                    }
-                }
-            }
-        }
-        if applied.is_empty() {
-            if let Some(error) = failure {
-                self.ai_status = self.t_args("ui_ai_apply_failed", &[("error", &error)]);
-                self.set_status(self.ai_status.clone());
-            }
-            return false;
-        }
-        self.functions_dirty = true;
-        self.disasm_dirty = true;
-        self.ai_proposals
-            .retain(|proposal| !applied.contains(&proposal.target));
-        self.ai_checked.clear();
-        self.ai_status = match failure {
-            Some(error) => self.t_args(
-                "ui_ai_applied_partial",
-                &[("count", &applied.len().to_string()), ("error", &error)],
-            ),
-            None => self.t_args(
-                "ui_ai_applied_many",
-                &[("count", &applied.len().to_string())],
-            ),
-        };
-        self.set_status(self.ai_status.clone());
-        true
-    }
-
     /// IDA-style graph view: basic-block nodes with teal frames and headers, curved
     /// coloured edges with arrowheads, entry marker, zoom controls and a status line.
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -7635,7 +6674,7 @@ impl ReCraftApp {
         let pal = self.palette();
         ui.add_space(28.0);
         ui.label(
-            RichText::new(self.t("ui_recraft_reassembly_decompilation_workbench"))
+            RichText::new(self.t("ui_recraft_binary_reverse_engineering_workbench"))
                 .size(24.0)
                 .strong()
                 .color(pal.text),
@@ -8373,7 +7412,6 @@ impl ReCraftApp {
         let copy_menu = self.t("ui_copy");
         let comment_menu = self.t("ui_edit_pseudo_comment");
         let rename_var_menu = self.t("ui_rename_variable");
-        let ai_var_menu = self.t("ui_var_suggest");
         // Editor-style text selection over the pseudo-C rows (the gutter stays out of it).
         let mut text_sel = self.pseudo_sel;
         let mut dragging = self.pseudo_drag;
@@ -8573,12 +7611,6 @@ impl ReCraftApp {
                             && ui.button(rename_var_menu.as_str()).clicked()
                         {
                             *action = Action::RenameVar { func, offset };
-                            ui.close();
-                        }
-                        if let Some(func) = current_function
-                            && ui.button(ai_var_menu.as_str()).clicked()
-                        {
-                            *action = Action::AiRenameVars { func };
                             ui.close();
                         }
                     });
@@ -9606,66 +8638,14 @@ impl ReCraftApp {
                     self.set_status(self.t("ui_cancelling").to_owned());
                 }
             }
-            Action::AiSuggest => self.start_suggest(ctx),
-            Action::AiRenameVars { func } => self.start_var_suggest(ctx, func),
             Action::AiAgent => self.start_agent(ctx),
-            Action::AiAgentDig => self.start_agent_dig(ctx),
             Action::AiAgentReset => {
                 self.ai_agent_history.clear();
                 self.ai_agent_trace.clear();
                 self.ai_explanation = None;
-                self.ai_result_kind = AiResultKind::Prose;
-                self.ai_result_target = None;
                 self.ai_status = self.t("ui_agent_new").to_owned();
                 self.set_status(self.ai_status.clone());
             }
-            Action::AiApply => {
-                self.apply_ai_selection();
-            }
-            Action::AiClear => {
-                self.ai_proposals.clear();
-                self.ai_checked.clear();
-                self.ai_result_target = None;
-                self.ai_status.clear();
-                self.ai_explanation = None;
-                self.ai_result_kind = AiResultKind::Prose;
-                self.ai_reasoning.clear();
-                self.ai_reasoning_open = false;
-                self.ai_answer = None;
-                self.ai_agent_trace.clear();
-            }
-            Action::AiQuery => {
-                if !self.require_ai_provider() {
-                    return;
-                }
-                let text = self.ai_query.trim().to_owned();
-                if text.is_empty() {
-                    self.ai_status = self.t("ui_type_a_question_first").to_owned();
-                    return;
-                }
-                let Some(session) = self.session.as_mut() else {
-                    self.set_status(self.t("ui_open_a_project_first").to_owned());
-                    return;
-                };
-                match recraft_ai::answer_query(session, &text) {
-                    Ok(answer) => {
-                        let count = answer.items.len().to_string();
-                        self.ai_status = self.t_args(
-                            "ui_query_matches",
-                            &[
-                                ("intent", &answer.intent),
-                                ("count", &count),
-                                ("truncated", ""),
-                            ],
-                        );
-                        self.ai_answer = Some(answer);
-                    }
-                    Err(error) => self.set_error(error),
-                }
-            }
-            Action::AiExplain => self.start_explain(ctx),
-            Action::AiPolish => self.start_polish(ctx, true),
-            Action::AiRepolish => self.start_polish(ctx, false),
             Action::TogglePalette => {
                 self.palette = if self.palette.is_some() {
                     None
@@ -10324,21 +9304,6 @@ fn append_pseudo_line(job: &mut LayoutJob, text: &str, pal: Palette, mono: &Font
     }
 }
 
-/// Lay out the AI result pane. A polish answer is pseudo-C and gets the same syntax
-/// colours as the Decompile view; an explanation report is prose and stays plain text.
-fn append_ai_result(
-    job: &mut LayoutJob,
-    text: &str,
-    kind: AiResultKind,
-    pal: Palette,
-    mono: &FontId,
-) {
-    match kind {
-        AiResultKind::Code => append_pseudo_line(job, text, pal, mono),
-        AiResultKind::Prose => append(job, text, pal.text, mono),
-    }
-}
-
 /// Default screen position/size for detached tool windows.
 /// Parse `offset:name:kind` (hex offsets) for the structures editor.
 fn parse_struct_field_spec(spec: &str) -> std::result::Result<StructField, String> {
@@ -10359,16 +9324,6 @@ fn parse_struct_field_spec(spec: &str) -> std::result::Result<StructField, Strin
         name: name.trim().to_owned(),
         kind: kind.trim().to_owned(),
     })
-}
-
-/// Parse the `addr` string of an offline query result (`0x...` hex or decimal).
-fn parse_query_addr(raw: &str) -> Option<Address> {
-    let raw = raw.trim();
-    if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).ok().map(Address::new)
-    } else {
-        raw.parse::<u64>().ok().map(Address::new)
-    }
 }
 
 /// Function-list filter: match name or address hex substring (case-insensitive input).
@@ -11051,10 +10006,6 @@ mod tests {
             ..ReCraftApp::default()
         };
         app.after_open();
-        // Exercise the collapsible thinking section in the AI pane.
-        app.ai_thinking = true;
-        app.ai_reasoning_open = true;
-        app.ai_reasoning = "check the loop bound and the buffer size".to_owned();
 
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
@@ -11152,93 +10103,6 @@ mod tests {
                     || line.text.starts_with("int64 "))),
             "structured signature missing"
         );
-
-        // AI proposal diff panel: render suggestions, then apply one through the bus.
-        let target = app.functions.first().expect("functions").start;
-        app.ai_proposals = vec![recraft_ai::Proposal {
-            kind: recraft_ai::ProposalKind::Rename,
-            target,
-            value: "ai_suggested_name".to_owned(),
-            confidence: 0.5,
-            rationale: "unit test evidence".to_owned(),
-            evidence: vec![recraft_ai::Evidence {
-                addr: target,
-                kind: "api_tag",
-                text: "test".to_owned(),
-            }],
-            source: recraft_ai::ProposalSource::External,
-        }];
-        app.ai_checked.insert(target);
-        app.focus_pane(Pane::Ai);
-        for frame in 0..2 {
-            input.time = Some(frame as f64 / 60.0);
-            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
-            output.textures_delta.clear();
-        }
-        assert_eq!(app.ai_proposals.len(), 1, "AI panel lost the proposal");
-        assert!(app.apply_ai_selection(), "AI apply failed");
-        let session = app.session.as_ref().unwrap();
-        assert_eq!(
-            session.name_at(target).unwrap().as_deref(),
-            Some("ai_suggested_name")
-        );
-        assert!(app.ai_proposals.is_empty(), "applied proposal not removed");
-    }
-
-    /// Ticking several proposals applies all of them, and the panel reports the count
-    /// instead of pretending only one landed.
-    #[test]
-    fn ai_apply_batch_renames_every_checked_proposal() {
-        let Some(bytes) = sample_pe() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("ai-batch.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let mut app = ReCraftApp {
-            session: Some(session),
-            ..ReCraftApp::default()
-        };
-        app.after_open();
-        app.refresh_functions();
-        let targets: Vec<Address> = app
-            .functions
-            .iter()
-            .take(2)
-            .map(|function| function.start)
-            .collect();
-        if targets.len() < 2 {
-            return;
-        }
-        app.ai_proposals = targets
-            .iter()
-            .enumerate()
-            .map(|(index, target)| recraft_ai::Proposal {
-                kind: recraft_ai::ProposalKind::Rename,
-                target: *target,
-                value: format!("batch_name_{index}"),
-                confidence: 0.8,
-                rationale: "batch test".to_owned(),
-                evidence: Vec::new(),
-                source: recraft_ai::ProposalSource::Model,
-            })
-            .collect();
-        for target in &targets {
-            app.ai_checked.insert(*target);
-        }
-        assert!(app.apply_ai_selection(), "batch apply failed");
-        let session = app.session.as_ref().unwrap();
-        for (index, target) in targets.iter().enumerate() {
-            assert_eq!(
-                session.name_at(*target).unwrap().as_deref(),
-                Some(format!("batch_name_{index}").as_str())
-            );
-        }
-        assert!(app.ai_proposals.is_empty(), "applied proposals not removed");
-        assert!(app.ai_checked.is_empty(), "checks not cleared");
-        assert!(app.ai_status.contains('2'), "{}", app.ai_status);
     }
 
     #[test]
@@ -11656,15 +10520,6 @@ mod tests {
         app.cfg_for = Some(app.disasm_start);
         app.history.push(Address::new(0x140001234));
         app.ai_explanation = Some("stale answer".to_owned());
-        app.ai_proposals = vec![recraft_ai::Proposal {
-            kind: recraft_ai::ProposalKind::Rename,
-            target: app.disasm_start,
-            value: "stale".to_owned(),
-            confidence: 1.0,
-            rationale: "old project".to_owned(),
-            evidence: Vec::new(),
-            source: recraft_ai::ProposalSource::External,
-        }];
         assert!(!app.disasm_rows.is_empty());
         assert!(!app.history.is_empty());
 
@@ -11679,7 +10534,6 @@ mod tests {
         assert_eq!(app.history_pos, 0);
         assert!(app.cfg_for.is_none());
         assert!(app.ai_explanation.is_none());
-        assert!(app.ai_proposals.is_empty());
         assert!(!app.is_error, "closing is not an error");
         assert!(
             app.status.contains(&project.display().to_string()),
@@ -13005,14 +11859,13 @@ mod tests {
     }
 
     #[test]
-    fn ai_panel_renders_a_coloured_polish_result() {
-        // Exercises the code path that lays out a long, wrapped, syntax-coloured result
-        // (a panic here would only show up at runtime, not in the tokenizer tests).
+    fn ai_panel_renders_a_long_answer() {
+        // Exercises the code path that lays out a long, wrapped agent answer (a panic here
+        // would only show up at runtime, not in the tokenizer tests).
         let mut app = ReCraftApp {
             ai_explanation: Some(
                 "if (rcx != 0) {\n    sub_140001000(\"name\", 0x10);\n}\nreturn 0;".to_owned(),
             ),
-            ai_result_kind: AiResultKind::Code,
             ..ReCraftApp::default()
         };
         app.focus_pane(Pane::Ai);
@@ -13026,156 +11879,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
         output.textures_delta.clear();
-        assert_eq!(app.ai_result_kind, AiResultKind::Code);
-    }
-
-    #[test]
-    fn ai_actions_require_a_provider() {
-        let Some(bytes) = sample_pe() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("ai.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let mut app = ReCraftApp {
-            session: Some(session),
-            ..ReCraftApp::default()
-        };
-        app.after_open();
-        app.refresh_disasm();
-        app.refresh_functions();
-        app.tick();
-        if app.functions.is_empty() || app.disasm_rows.is_empty() {
-            return;
-        }
-        let ctx = egui::Context::default();
-        app.apply_action(&ctx, Action::AiExplain);
-        assert!(
-            app.ai_explanation.is_none()
-                && (app.ai_status.to_lowercase().contains("provider")
-                    || app.ai_status.to_lowercase().contains("configure")),
-            "explain should ask for a provider: {:?} / {}",
-            app.ai_explanation,
-            app.ai_status
-        );
-        app.apply_action(&ctx, Action::AiPolish);
-        assert!(
-            app.ai_status.to_lowercase().contains("provider")
-                || app.ai_status.to_lowercase().contains("enable")
-                || app.ai_status.to_lowercase().contains("configure"),
-            "polish should ask for a provider: {}",
-            app.ai_status
-        );
-        app.apply_action(&ctx, Action::AiSuggest);
-        assert!(
-            app.ai_status.to_lowercase().contains("provider")
-                || app.ai_status.to_lowercase().contains("configure"),
-            "suggest names should ask for a provider: {}",
-            app.ai_status
-        );
-        assert!(app.ai_job.is_none());
-    }
-
-    #[test]
-    fn ai_explain_and_suggest_ask_the_model() {
-        let Some(bytes) = sample_pe() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("ai-jobs.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let mut app = ReCraftApp {
-            session: Some(session),
-            ..ReCraftApp::default()
-        };
-        app.after_open();
-        app.refresh_disasm();
-        app.refresh_functions();
-        app.tick();
-        if app.functions.is_empty() || app.disasm_rows.is_empty() {
-            return;
-        }
-        // A closed local port fails fast, so a job can be observed without a model.
-        app.ai_settings.endpoint = "http://127.0.0.1:1".to_owned();
-        app.ai_settings.model = "test-model".to_owned();
-        app.ai_settings.api_key = Some("test-key".to_owned());
-        app.ai_settings.refresh_enabled();
-        assert!(app.ai_settings.enabled);
-        let ctx = egui::Context::default();
-
-        // Explain asks the model instead of formatting the local report.
-        app.apply_action(&ctx, Action::AiExplain);
-        assert!(app.ai_job.is_some(), "explain must call the provider");
-        assert_eq!(app.ai_result_kind, AiResultKind::Prose);
-        assert!(
-            app.ai_explanation.is_none(),
-            "the explanation streams in later"
-        );
-        app.ai_job = None;
-
-        // Suggest names asks for names shaped like the local proposals (same targets).
-        let candidates = recraft_ai::suggest_names(app.session.as_mut().unwrap(), 50).unwrap();
-        if candidates.is_empty() {
-            return;
-        }
-        app.apply_action(&ctx, Action::AiSuggest);
-        assert!(
-            app.ai_job.is_some(),
-            "suggest names must call the provider: {}",
-            app.ai_status
-        );
-        assert!(
-            app.ai_proposals.is_empty(),
-            "proposals appear with the model's reply"
-        );
-        app.ai_job = None;
-    }
-
-    #[test]
-    fn ai_explain_job_result_is_prose() {
-        let (sender, receiver) = mpsc::channel();
-        let target = Address::new(0x140001234);
-        let mut app = ReCraftApp {
-            ai_job: Some(AiJob {
-                receiver,
-                started: Instant::now(),
-                kind: AiJobKind::Explain,
-                prompt: None,
-                target: Some(target),
-                suggestions: Vec::new(),
-            }),
-            ..ReCraftApp::default()
-        };
-        sender
-            .send(AiMessage::Done(Ok(
-                "This function reads a configuration file.".to_owned(),
-            )))
-            .unwrap();
-        app.tick();
-        assert_eq!(
-            app.ai_explanation.as_deref(),
-            Some("This function reads a configuration file.")
-        );
-        assert_eq!(
-            app.ai_result_kind,
-            AiResultKind::Prose,
-            "an explanation is prose, not pseudo-C"
-        );
-        assert!(
-            app.ai_status.starts_with("explanation"),
-            "{}",
-            app.ai_status
-        );
-        assert_eq!(
-            app.ai_result_target,
-            Some(target),
-            "the answer must stay attached to the function it describes"
-        );
-        assert!(app.ai_job.is_none());
+        assert!(app.ai_explanation.is_some(), "the answer stays on screen");
     }
 
     /// Narration streamed before a tool call is dropped from the answer and kept as trace
@@ -13187,10 +11891,6 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
-                kind: AiJobKind::Agent,
-                prompt: None,
-                target: None,
-                suggestions: Vec::new(),
             }),
             ..ReCraftApp::default()
         };
@@ -13225,10 +11925,6 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
-                kind: AiJobKind::Agent,
-                prompt: None,
-                target: None,
-                suggestions: Vec::new(),
             }),
             ..ReCraftApp::default()
         };
@@ -13257,116 +11953,8 @@ mod tests {
             app.ai_explanation.as_deref(),
             Some("这些函数负责注册表访问。")
         );
-        assert_eq!(app.ai_result_kind, AiResultKind::Prose);
         assert!(app.ai_job.is_none());
     }
-    #[test]
-    fn ai_suggest_job_merges_model_names() {
-        let (sender, receiver) = mpsc::channel();
-        let target = Address::new(0x140001000);
-        let mut app = ReCraftApp {
-            ai_job: Some(AiJob {
-                receiver,
-                started: Instant::now(),
-                kind: AiJobKind::Suggest,
-                prompt: None,
-                target: None,
-                suggestions: vec![recraft_ai::Proposal {
-                    kind: recraft_ai::ProposalKind::Rename,
-                    target,
-                    value: "file_140001000".to_owned(),
-                    confidence: 0.5,
-                    rationale: "calls CreateFileW".to_owned(),
-                    evidence: Vec::new(),
-                    source: recraft_ai::ProposalSource::Heuristic,
-                }],
-            }),
-            ..ReCraftApp::default()
-        };
-        sender
-            .send(AiMessage::Done(Ok(format!(
-                "{:#x} open_config -- opens the configuration file",
-                target.get()
-            ))))
-            .unwrap();
-        app.tick();
-        assert_eq!(app.ai_proposals.len(), 1);
-        assert_eq!(app.ai_proposals[0].value, "open_config");
-        assert!(app.ai_proposals[0].confidence >= 0.7);
-        assert_eq!(
-            app.ai_proposals[0].source,
-            recraft_ai::ProposalSource::Model
-        );
-        assert!(!app.ai_status.is_empty(), "no completion status");
-        assert!(
-            !app.ai_status.to_lowercase().contains("failed"),
-            "{}",
-            app.ai_status
-        );
-        assert!(
-            app.ai_explanation.is_none(),
-            "a rename reply is not shown as the result"
-        );
-        assert!(app.ai_job.is_none());
-    }
-
-    #[test]
-    fn repolish_bypasses_the_session_cache() {
-        let Some(bytes) = sample_pe() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("repolish.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let mut app = ReCraftApp {
-            session: Some(session),
-            ..ReCraftApp::default()
-        };
-        app.after_open();
-        app.refresh_disasm();
-        app.refresh_functions();
-        app.tick();
-        if app.functions.is_empty() || app.disasm_rows.is_empty() {
-            return;
-        }
-        // Any cache miss spawns a worker for this endpoint, so the cache decision is
-        // observable without a real provider round trip.
-        app.ai_settings.endpoint = "http://127.0.0.1:1".to_owned();
-        app.ai_settings.model = "test-model".to_owned();
-        app.ai_settings.api_key = Some("test-key".to_owned());
-        app.ai_settings.max_tokens = 4096;
-        app.ai_settings.refresh_enabled();
-        assert!(app.ai_settings.enabled);
-        app.ai_cache_fingerprint = Some(format!(
-            "{}|{}|{}",
-            app.ai_settings.endpoint, app.ai_settings.model, app.ai_settings.max_tokens
-        ));
-        let (start, _) = app.current_function().expect("cursor inside a function");
-        let prompt =
-            recraft_ai::build_polish_prompt(app.session.as_mut().unwrap(), start, &app.ai_settings)
-                .unwrap();
-        app.ai_cache.insert(&prompt, "cached polish");
-        let ctx = egui::Context::default();
-        app.apply_action(&ctx, Action::AiPolish);
-        assert_eq!(app.ai_explanation.as_deref(), Some("cached polish"));
-        assert!(
-            app.ai_job.is_none(),
-            "a repeated polish may reuse the cache"
-        );
-        app.apply_action(&ctx, Action::AiRepolish);
-        assert!(
-            app.ai_explanation.is_none(),
-            "a fresh answer streams from scratch"
-        );
-        assert!(
-            app.ai_job.is_some(),
-            "re-polish must ask the provider again"
-        );
-        app.ai_job = None;
-    }
-
     #[test]
     fn function_filter_matches_names_and_addresses() {
         let start = Address::new(0x140001000);
@@ -13405,46 +11993,6 @@ mod tests {
         app.apply_action(&ctx, Action::NavigateToDisasm(target));
         assert!(matches!(app.tab, Tab::Disasm));
         assert_eq!(app.disasm_start, target);
-    }
-
-    #[test]
-    fn query_ui_answers_and_links_addresses() {
-        assert_eq!(
-            parse_query_addr("0x140001000").map(|addr| addr.get()),
-            Some(0x140001000)
-        );
-        assert_eq!(
-            parse_query_addr("4198400").map(|addr| addr.get()),
-            Some(4198400)
-        );
-        assert_eq!(parse_query_addr("nope"), None);
-
-        let Some(bytes) = sample_pe() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("query.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let mut app = ReCraftApp {
-            session: Some(session),
-            ..ReCraftApp::default()
-        };
-        app.after_open();
-        app.ai_settings.endpoint = "https://example.test".to_owned();
-        app.ai_settings.api_key = Some("test-key".to_owned());
-        app.ai_settings.refresh_enabled();
-        app.ai_query = "urls".to_owned();
-        let ctx = egui::Context::default();
-        app.apply_action(&ctx, Action::AiQuery);
-        assert!(
-            app.ai_answer.is_some(),
-            "offline query should answer, status: {}",
-            app.ai_status
-        );
-        app.apply_action(&ctx, Action::AiClear);
-        assert!(app.ai_answer.is_none());
     }
 
     #[test]
@@ -15013,7 +13561,9 @@ mod tests {
             log: vec![
                 "已加载 D:\\files\\projects\\ctf-simple-crackme\\challenge\\crackme_win_x64.rcraft"
                     .to_owned(),
-                "把 .rcraft 项目或 PE 文件拖进窗口。".to_owned(),
+                // Deliberately not a UI string: the welcome tab paints its own Chinese
+                // hint, and a shared wording would be counted twice below.
+                "这是输出窗格的第二行中文日志。".to_owned(),
             ],
             ..ReCraftApp::default()
         };
@@ -15035,7 +13585,7 @@ mod tests {
             .filter_map(|clipped| match &clipped.shape {
                 egui::Shape::Text(text)
                     if text.galley.text().starts_with("已加载")
-                        || text.galley.text().starts_with("把 .rcraft") =>
+                        || text.galley.text().starts_with("这是输出窗格的第二行") =>
                 {
                     Some((text, clipped.clip_rect))
                 }
@@ -15630,22 +14180,13 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
-                kind: AiJobKind::Polish,
-                prompt: None,
-                target: None,
-                suggestions: Vec::new(),
             }),
             ..ReCraftApp::default()
         };
         app.tick();
         assert_eq!(app.ai_explanation.as_deref(), Some("int main(void) {}"));
-        assert_eq!(
-            app.ai_result_kind,
-            AiResultKind::Code,
-            "a polish answer is coloured as code"
-        );
         assert!(
-            app.ai_status.starts_with("polish done"),
+            app.ai_status.starts_with("analysis done"),
             "{}",
             app.ai_status
         );
@@ -15653,11 +14194,11 @@ mod tests {
     }
 
     #[test]
-    fn ai_result_colours_polished_code_but_not_prose() {
+    fn pseudo_line_colouring_keeps_the_text() {
         let mono = FontId::monospace(11.0);
         let code = "if (rcx != 0) sub_140001000(\"x\", 0x10); // note";
         let mut job = LayoutJob::default();
-        append_ai_result(&mut job, code, AiResultKind::Code, Palette::DARK, &mono);
+        append_pseudo_line(&mut job, code, Palette::DARK, &mono);
         assert_eq!(job.text, code, "colour sections must not change the text");
         let color = |needle: &str| {
             job.sections
@@ -15674,14 +14215,6 @@ mod tests {
         assert_eq!(color("sub_140001000"), Palette::DARK.name);
         assert_eq!(color("0x10"), Palette::DARK.number);
         assert_eq!(color("// note"), Palette::DARK.comment);
-
-        // An explanation report is prose: colouring it as C would tint random words.
-        let prose = "This function opens a file.";
-        let mut job = LayoutJob::default();
-        append_ai_result(&mut job, prose, AiResultKind::Prose, Palette::DARK, &mono);
-        assert_eq!(job.text, prose);
-        assert_eq!(job.sections.len(), 1, "prose stays one plain section");
-        assert_eq!(job.sections[0].format.color, Palette::DARK.text);
     }
 
     #[test]
@@ -15691,10 +14224,6 @@ mod tests {
             ai_job: Some(AiJob {
                 receiver,
                 started: Instant::now(),
-                kind: AiJobKind::Polish,
-                prompt: None,
-                target: None,
-                suggestions: Vec::new(),
             }),
             ..ReCraftApp::default()
         };
@@ -15710,51 +14239,6 @@ mod tests {
             .unwrap();
         app.poll_ai_job();
         assert_eq!(app.ai_explanation.as_deref(), Some("int main(void)"));
-        assert!(app.ai_job.is_none());
-    }
-
-    #[test]
-    fn ai_reasoning_streams_expands_and_folds_when_done() {
-        let (sender, receiver) = mpsc::channel();
-        let mut app = ReCraftApp {
-            ai_job: Some(AiJob {
-                receiver,
-                started: Instant::now(),
-                kind: AiJobKind::Polish,
-                prompt: None,
-                target: None,
-                suggestions: Vec::new(),
-            }),
-            ai_thinking: true,
-            ..ReCraftApp::default()
-        };
-        sender
-            .send(AiMessage::Reasoning("plan ".to_owned()))
-            .unwrap();
-        app.poll_ai_job();
-        assert_eq!(app.ai_reasoning, "plan ");
-        assert!(
-            app.ai_reasoning_open,
-            "thinking stays expanded while the model reasons"
-        );
-        assert!(app.ai_explanation.is_none(), "no answer yet");
-
-        sender
-            .send(AiMessage::Reasoning("first".to_owned()))
-            .unwrap();
-        sender
-            .send(AiMessage::Chunk("int main".to_owned()))
-            .unwrap();
-        sender
-            .send(AiMessage::Done(Ok("int main".to_owned())))
-            .unwrap();
-        app.poll_ai_job();
-        assert_eq!(app.ai_reasoning, "plan first");
-        assert!(
-            !app.ai_reasoning_open,
-            "thinking folds once the answer completes"
-        );
-        assert_eq!(app.ai_explanation.as_deref(), Some("int main"));
         assert!(app.ai_job.is_none());
     }
 
@@ -15827,21 +14311,26 @@ mod tests {
         let mut app = ReCraftApp::default();
         app.ai_settings.prompt_language = recraft_ai::PromptLanguage::En;
         app.reload_prompt_drafts();
-        assert_eq!(app.prompt_drafts.len(), 5);
         assert_eq!(
-            app.prompt_drafts[2].1,
-            recraft_ai::POLISH_SYSTEM,
-            "the editor starts from the built-in English prompt"
+            app.prompt_drafts.len(),
+            PANEL_PROMPT_KINDS.len(),
+            "the panel only exposes the prompts it runs"
         );
+        assert_eq!(
+            app.prompt_drafts[0].0,
+            recraft_ai::PromptKind::Agent,
+            "the agent is the panel's only prompt"
+        );
+        assert_eq!(app.prompt_drafts[0].1, recraft_ai::AGENT_SYSTEM);
 
         app.ai_settings.prompt_language = recraft_ai::PromptLanguage::Zh;
         app.reload_prompt_drafts();
-        assert_eq!(app.prompt_drafts[2].1, recraft_ai::POLISH_SYSTEM_ZH);
+        assert_eq!(app.prompt_drafts[0].1, recraft_ai::AGENT_SYSTEM_ZH);
 
         app.ai_settings
-            .set_prompt_override(recraft_ai::PromptKind::Polish, Some("自定义".to_owned()));
+            .set_prompt_override(recraft_ai::PromptKind::Agent, Some("自定义".to_owned()));
         app.reload_prompt_drafts();
-        assert_eq!(app.prompt_drafts[2].1, "自定义");
+        assert_eq!(app.prompt_drafts[0].1, "自定义");
     }
 
     #[test]
@@ -17295,36 +15784,5 @@ mod tests {
         let values: Vec<u64> = links.iter().map(|addr| addr.get()).collect();
         assert_eq!(values, vec![0x1400019c0, 0x140001840]);
         assert!(address_links("没有地址").is_empty());
-    }
-    /// "Dig deeper" hands the function under the cursor to the agent by name and address.
-    #[test]
-    fn dig_question_names_the_function_under_the_cursor() {
-        let Some(bytes) = sample_pe() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("dig.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let mut app = ReCraftApp {
-            session: Some(session),
-            ..ReCraftApp::default()
-        };
-        app.after_open();
-        app.refresh_functions();
-        app.refresh_disasm();
-        if app.disasm_rows.is_empty() {
-            return;
-        }
-        app.selected = 0;
-        let question = app.agent_dig_question().expect("question");
-        let entry = app.disasm_rows[0].addr;
-        assert!(question.contains("0x"), "{question}");
-        assert!(
-            question.contains(&format!("{:#x}", entry.get())),
-            "{question}"
-        );
-        assert!(question.contains("start"), "{question}");
     }
 }

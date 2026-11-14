@@ -27,7 +27,7 @@ pwsh -File scripts/demo.ps1 -PEFile C:\Windows\System32\notepad.exe
 | 4 structured pseudocode | `decompile --l2`：签名、参数名、结构（if/while） |
 | 5 rename + prototype | 命令总线写入，`// prototype:` 与解析后的签名/参数名 |
 | 6 struct layout + apply_type | `define-struct`/`apply-type` 后 `arg1->value` |
-| 7 AI assist | 真实样本（notepad）上 triage、suggest 生成 Proposal、apply（journal），undo |
+| 7 AI assistant | 真实样本（notepad）上 `ai ask`：模型自己调只读工具取证后作答 |
 | 8 MCP | stdio JSON-RPC：`initialize` + `list_functions` 资源返回 |
 | 9 metrics | 覆盖率/结构化成功率门禁指标 |
 
@@ -44,11 +44,11 @@ int32 __stdcall demo_entry(char* text, int32 count) {
 AI 片段：
 
 ```text
-0.65  0x01400012dc -> interesting_1400012dc
-      calls api-ms-win-eventing-provider-l1-1-0.dll!EventWriteTransfer; 1 string ref(s)
-      evidence 0x0140001368 api_tag: ...
-$ recraft-cli ai apply ... --yes
-applied 3 proposal(s) through the command bus (undoable)
+$ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
+  → find_api_callers {"api":"Reg"}
+  → list_strings {"filter":"Software\\"}
+  → function_summary {"addr":"0x140001fcc"}
+答案：有三个函数在操作注册表……（工具调用轨迹在 stderr，答案在 stdout）
 ```
 
 ## GUI 走查（1–2 分钟）
@@ -117,12 +117,11 @@ applied 3 proposal(s) through the command bus (undoable)
    引用出去）、Type（`c` call、`j` jump、`o` offset、`r` read、`w` write）、Address
    （`main:loc_1400010b9`）、Text（引用处指令，字符串以 `; 'flag{…}'` 附在行尾）**；
    单击选中、双击或 `OK`/Enter 跟随并关闭、`Cancel`/Esc 关闭，`Search` 过滤，`Help` 显示类型图例。
-5. 左侧 **AI** 页签 → **Suggest names**：把有证据的 `sub_*` 候选交给模型命名，列出
-   `置信度 地址 → 名称` 与证据地址；选中一条 → **Apply selected**（journaled，`Ctrl+Z` 撤销），
-   证据链接可跳转。
-   **Query** 可输入 `urls` / `callers of CreateFileW` / `text http` 做离线检索（点击结果跳转）；
-   **Explain** 走模型解释当前函数；**Provider settings** 可配 endpoint/model/密钥环境变量
-   （保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`），启用后 **Polish** 也在后台线程润色。
+5. 左侧 **AI** 侧栏只有一个入口：**分析助手**。直接提问（例如“哪些函数在操作注册表？”），
+   模型自己调只读工具取证后作答，工具调用轨迹可展开核对；选中伪代码/字节后还可以「附带
+   选中内容」追问。右上角 **⚙ Provider settings** 可配
+   endpoint/model/密钥（保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`）。
+   助手只读：它给出的改名建议是正文里的文字，要改库仍按 `N`（或走 MCP 写工具）。
 6. **Strings/Imports** 页签与 **`X`** 交叉引用对话框展示引用与 API 分类；UI 支持 EN/zh-CN 切换。
 
 ## 对接 MCP 客户端
@@ -169,8 +168,7 @@ $env:RECRAFT_AI_ENDPOINT = 'http://127.0.0.1:11434'
 $env:RECRAFT_AI_MODEL = 'qwen2.5-coder'
 $env:RECRAFT_AI_API_KEY = 'local'      # Ollama 不校验，但启用条件要求存在
 recraft-cli ai provider                     # state=enabled
-recraft-cli ai prompt demo.rcraft --addr entry   # 发送前 review 脱敏 prompt
-recraft-cli ai explain demo.rcraft --addr entry --llm
+recraft-cli ai ask demo.rcraft "main 做了什么？"
 ```
 
 ## 演示话术（对外 10 分钟）

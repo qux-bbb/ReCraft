@@ -9,8 +9,8 @@
 > 支持导入/分析 PE32/PE32+（x64 + Win32）、ELF32/ELF64（i386 + x86-64）与
 > **ARM64（ELF/PE，AArch64）**；带签名、ABI 和类型的结构化伪 C（“带签名”指函数签名，不是代码签名）；通过带撤销的
 > 日志命令总线执行重命名/注释/原型/结构体类型/栈变量命名/字符串编辑；MCP 服务器（默认只读，
-> `--write` 开写工具）；AI 辅助（解释 / 重命名建议 / 变量命名 / 选中内容对话 / 初筛）及
-> propose-apply UI，内置 CRT 签名 43 条，系统提示词中英文可改。
+> `--write` 开写工具）；AI 辅助（只读分析助手：GUI 侧栏与 `ai ask` 同一实现，可附带选中内容
+> 追问），内置 CRT 签名 43 条，系统提示词中英文可改。
 > 质量门禁：语料语义覆盖率 **97.4%**、结构化率 **100%**；真实样本 notepad 覆盖率
 > **99.6%**、结构化 **97.6%**（494/506）；crackme **92.9%**（460/495）、Go
 > **91.9%**（2,998/3,261）；1 GiB 样本：导入约 4 秒，
@@ -29,10 +29,10 @@ ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的�
 - **原生，不是 Electron**：Rust + egui 桌面应用；没有 webview，也没有 Python 运行时。
 - **反编译器完全公开**：LIR → SSA-lite → 结构化伪 C；每个 token 都能映射回指令地址；
   每一处改动都有黄金快照守护。
-- **AI 只提议，绝不静默写入**：提议携带证据地址和置信度；写入与手工修改走同一条
-  日志命令总线（可撤销）。
-- **AI 需先配置 provider**：只有配好端点/模型/密钥才会向模型发请求，prompt 会脱敏并
-  限制预算，结果本地缓存和审计。
+- **AI 只读，绝不静默写入**：助手只有只读工具，给出的改名/注释只是正文建议；写库与手工
+  修改走同一条日志命令总线（可撤销）。
+- **AI 需先配置 provider**：只有配好端点/模型/密钥才会向模型发请求，发送前脱敏并受
+  token 预算限制；每次提问都重新走一遍，不做结果缓存。
 - **MCP 原生**：OpenCode 等 agent 可以通过 MCP 服务器查询函数、伪代码、
   交叉引用、字符串、导入和调用图；`--write` 还能直接重命名、写注释和原型（每步可 undo）。
 - **为初筛而生**：API 行为标记、字符串/交叉引用、运行时符号恢复（Go/Rust/C++）、
@@ -64,8 +64,8 @@ ReCraft 是一个 AI 原生的逆向工程平台：面向 Windows 二进制的�
 - **可扩展到 1 GB 样本**并保持交互流畅（分页存储、后台分析）。
 - **恶意样本初筛优先**：字符串、导入、交叉引用、API 行为标记、“查找 `main`”、
   “跟踪网络回调”。
-- **MCP 原生 AI**：函数解释、命名建议、样本摘要、数据库自然语言查询。AI 只能
-  *提议*修改，由人确认应用。
+- **MCP 原生 AI**：一个只读的**分析助手**（GUI 侧栏与 `recraft-cli ai ask` 同一套实现），
+  模型自己调 13 个查询工具取证后作答；它只读，不写库，改名/注释仍走手工或 MCP 写工具。
 - **原生 egui 界面**，紧凑的 IDA 风格布局，现代观感，支持英文 + 简体中文
   （Fluent `.ftl` 资源位于 `crates/recraft-ui/locales/`）。
 
@@ -283,20 +283,17 @@ cargo run -p recraft-cli -- serve-mcp notepad.rcraft   # 可选：预开一个�
 
 ### AI 辅助
 
-CLI 的 `ai explain`/`ai suggest` 默认离线（无网络）生成证据报告与命名建议，加 `--llm` 才把
-脱敏 prompt 交给模型；样本初筛始终离线。提议携带证据地址，并且只能通过日志命令总线应用。
-GUI 的 **AI 侧栏**配置 provider（endpoint/model/API-key，持久化到
-`%LOCALAPPDATA%\ReCraft\ai-settings.json`）后，**解释**/**建议命名**/**润色** 三个动作都走
-模型：
+只有一个功能：**分析助手**——模型自己调用只读工具（函数、伪代码、xref、字符串、API 调用者）
+取证后作答。GUI 侧栏和 CLI 是同一套实现、同一组工具与预算：
 
 ```powershell
-cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry
-cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry --llm   # 走模型
-cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json
-cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json --llm
-cargo run -p recraft-cli -- ai triage notepad.rcraft
-cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # undoable
+cargo run -p recraft-cli -- ai ask notepad.rcraft "哪些函数在操作注册表？"
+cargo run -p recraft-cli -- ai ask notepad.rcraft "谁解析命令行？" --json
+cargo run -p recraft-cli -- ai provider        # 解析后的 provider 配置（不含密钥）
 ```
+
+先在侧栏 ⚙（或环境变量）配置 provider：endpoint / model / API-key，存到
+`%LOCALAPPDATA%\ReCraft\ai-settings.json`。助手只读，不改库；改名/注释仍走手工或 MCP 写工具。
 
 ## 贡献
 

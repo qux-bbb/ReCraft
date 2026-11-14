@@ -8,9 +8,9 @@
 > [Releases](https://github.com/qux-bbb/ReCraft/releases). Import/analyze PE32/PE32+ and
 > ELF32/ELF64 (x64 + Win32 + i386 + x86-64), structured pseudo-C with signatures/ABI/types, rename/comment/prototype/
 > struct-type/stack-variable/string writes through a journaled command bus with undo, an MCP server
-> (read-only by default, `--write` enables the write tools), and provider-backed AI (explain /
-> rename proposals / variable naming / selection-aware chat / triage) with a propose-apply UI,
-> 43 built-in CRT signatures and editable English/Chinese system prompts.
+> (read-only by default, `--write` enables the write tools), and provider-backed AI (one
+> read-only analysis agent shared by the GUI sidebar and `ai ask`, plus selection-aware
+> questions), 43 built-in CRT signatures and editable English/Chinese system prompts.
 > Quality gates: corpus semantic coverage **97.4%**, structured rate **100%**; notepad
 > **99.6%** coverage and **97.6%** structured (494/506); crackme **92.9%** (460/495),
 > Go **91.9%** (2,998/3,261); 1 GiB
@@ -29,10 +29,11 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 - **Native, not Electron**: Rust + egui desktop app; no webview, no Python runtime.
 - **Decompiler in the open**: LIR → SSA-lite → structured pseudo-C; every token maps back
   to an instruction address; golden snapshots guard every change.
-- **AI that proposes, never silently writes**: proposals carry evidence addresses and a
-  confidence; writes go through the same journaled command bus as manual edits (undoable).
-- **AI needs a configured provider**: explain/rename/polish go to the model you configure,
-  with prompts redacted + budgeted and results cached and audited locally.
+- **AI that reads, never silently writes**: the agent only has read-only tools; the names and
+  comments it suggests are prose, and writes go through the same journaled command bus as
+  manual edits (undoable).
+- **AI needs a configured provider**: the analysis agent calls the model you configure, with
+  prompts redacted + budgeted and no result cache.
 - **MCP-native**: OpenCode and other agents can query functions, pseudocode, xrefs,
   strings, imports and call graphs through an MCP server; `--write` also renames, comments
   and sets prototypes, each step undoable.
@@ -65,8 +66,9 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 - **Scales to 1 GB samples**, stays interactive (paged storage, background analysis).
 - **Malware-triage first**: strings, imports, cross-references, API behaviour tagging,
   "find `main`", "follow the network callback".
-- **MCP-native AI**: function explanation, naming proposals, sample summaries,
-  natural-language queries over the database. AI can only *propose* changes; a human applies them.
+- **MCP-native AI**: one read-only **analysis agent** (the same implementation in the GUI
+  sidebar and `recraft-cli ai ask`); the model calls 13 query tools itself and answers. It never
+  writes — renames/comments still go through manual edits or the MCP write tools.
 - **Native egui UI**, dense IDA-like layout, modern look, English + 简体中文
   (Fluent `.ftl` resources under `crates/recraft-ui/locales/`).
 
@@ -294,21 +296,19 @@ cargo run -p recraft-cli -- serve-mcp                  # empty registry; open_pr
 
 ### AI assist
 
-The CLI builds explanations and rename proposals offline by default and only sends the
-redacted prompt with `--llm`; sample triage is always offline. Proposals carry evidence
-addresses and are only applied through the journaled command bus. After the GUI's **AI**
-sidebar configures a provider (endpoint/model/API-key, persisted to
-`%LOCALAPPDATA%\ReCraft\ai-settings.json`), **Explain**, **Suggest names** and **Polish** all
-call the model:
+One feature only: the **analysis agent**. The model calls read-only tools itself — functions,
+pseudo-C, xrefs, strings, API callers — and answers. The GUI sidebar and the CLI run the same
+implementation, tools and budget:
 
 ```powershell
-cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry
-cargo run -p recraft-cli -- ai explain notepad.rcraft --addr entry --llm
-cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json
-cargo run -p recraft-cli -- ai suggest notepad.rcraft --out proposals.json --llm
-cargo run -p recraft-cli -- ai triage notepad.rcraft
-cargo run -p recraft-cli -- ai apply notepad.rcraft proposals.json --yes   # undoable
+cargo run -p recraft-cli -- ai ask notepad.rcraft "which functions touch the registry?"
+cargo run -p recraft-cli -- ai ask notepad.rcraft "who parses the command line?" --json
+cargo run -p recraft-cli -- ai provider        # resolved provider settings, never secrets
 ```
+
+Configure a provider once in the sidebar's ⚙ (endpoint / model / API-key, persisted to
+`%LOCALAPPDATA%\ReCraft\ai-settings.json`). The agent is read-only; renames/comments still go
+through manual edits or the MCP write tools.
 
 ## Contributing
 

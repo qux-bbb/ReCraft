@@ -11,7 +11,7 @@
 | [QUALITY.md](QUALITY.md) | 指标定义、基线、golden 流程 |
 | [PERF.md](PERF.md) | 1 GiB 性能门禁方法与结果 |
 | [MCP.md](MCP.md) | MCP 工具/资源协议 |
-| [AI.md](AI.md) | AI 能力、Proposal 协议、provider/prompt 安全、缓存审计 |
+| [AI.md](AI.md) | 分析助手、只读工具、provider/prompt 安全、预算 |
 | [DEMO.md](DEMO.md) | 10 分钟演示脚本（CLI + GUI + MCP + 本地 LLM） |
 | [RELEASE.md](RELEASE.md) | 打包/发布/安装器检查清单 |
 | [FAQ.md](FAQ.md) | 十问十答 |

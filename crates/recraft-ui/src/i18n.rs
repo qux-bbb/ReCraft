@@ -149,18 +149,10 @@ mod tests {
     #[test]
     fn formats_arguments_in_the_selected_locale() {
         let i18n = I18n::new();
-        let en = i18n.text_args(
-            Lang::En,
-            "ui_query_matches",
-            &[("intent", "strings"), ("count", "3"), ("truncated", "")],
-        );
-        let zh = i18n.text_args(
-            Lang::Zh,
-            "ui_query_matches",
-            &[("intent", "strings"), ("count", "3"), ("truncated", "")],
-        );
-        assert!(en.contains("strings") && en.contains('3'), "{en}");
-        assert!(zh.contains("strings") && zh.contains('3'), "{zh}");
+        let en = i18n.text_args(Lang::En, "ui_agent_done", &[("ms", "1200")]);
+        let zh = i18n.text_args(Lang::Zh, "ui_agent_done", &[("ms", "1200")]);
+        assert!(en.contains("1200"), "{en}");
+        assert!(zh.contains("1200"), "{zh}");
         assert_ne!(en, zh);
     }
 }

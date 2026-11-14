@@ -1,28 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 ReCraft contributors
 
-//! LLM provider abstraction + prompt safety layer (DESIGN §9.3).
+//! LLM 供应商抽象与提示词配置（DESIGN §9.3）。
 //!
-//! Nothing here performs network I/O: this milestone makes the *contract* explicit and
-//! testable so an HTTP transport can be added without touching the call sites.
+//! 网络 I/O 只发生在 `OpenAiCompatibleProvider` / `OllamaProvider` 里，且都经过
+//! `transport`，因此测试可以用 mock 传输离线跑完整条链路。
 //!
-//! - [`ProviderSettings`] is disabled until an endpoint, model and API key are configured.
-//!   provider requires `RECRAFT_AI_PROVIDER` **and** an API key in the configured env
-//!   var; otherwise the settings report `enabled = false`.
-//! - [`build_explain_prompt`] / [`build_rename_prompt`] assemble minimal context
-//!   (function metadata, API tags, referenced strings, pseudo-C), run [`redact`], and
-//!   fit the result into a [`TokenBudget`].
-//! - [`PromptCache`] and [`AuditLog`] are offline-safe bookkeeping structures used by
-//!   the future transport.
+//! - [`ProviderSettings`] 在配置了 endpoint、model 与 API 密钥之前保持禁用（`enabled = false`）；
+//!   设置既可从 `ai-settings.json` 读取，也可从 `RECRAFT_AI_*` 环境变量推导。
+//! - 内置提示词只剩智能体这一个 [`PromptKind`]；[`system_prompt`] 返回用户的覆盖文本或内置文本，
+//!   覆盖值按 [`prompt_key`] 存在设置文件里。
+//! - [`PromptRequest`] / [`ChatMessage`] 与 SSE 解码器把模型回复拆成可直接渲染的增量。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use recraft_common::{Address, Error, Result};
-use recraft_core::Session;
+use recraft_common::{Error, Result};
 use serde_json::Value;
-
-use crate::Proposal;
 
 /// Which provider backend a session is configured to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,95 +486,29 @@ impl PromptRequest {
     }
 }
 
-/// Version of the built-in prompt templates (bump whenever wording changes; the eval
-/// baseline and audit entries reference it).
+/// 内置提示词模板的版本号：措辞一改就递增，便于把用户保存的覆盖文本与之对应起来。
 pub const PROMPT_TEMPLATE_VERSION: &str = "rc-ai-2026-11-v1";
 
-/// System prompt for function explanation (template `explain-v1`).
-pub const EXPLAIN_SYSTEM: &str = "You are ReCraft's reverse-engineering assistant. \
-Explain what the given function does in plain language. Use only the supplied evidence \
-(API calls, strings, pseudo-code); never invent behaviour. Mention uncertainty explicitly.";
-
-/// System prompt for rename proposals (template `rename-v2`). The reply contract is strict
-/// because [`parse_rename_reply`] turns it straight into rename proposals.
-pub const RENAME_SYSTEM: &str = "You are ReCraft's symbol-naming assistant. Propose concise \
-snake_case names for the listed functions. Base every suggestion only on the supplied API \
-calls, strings and pseudo-code; never invent evidence. Reply with exactly one line per \
-function, in the order given, in the form `<address> <name> -- <rationale>`: copy the address \
-verbatim from the input (`0x140001000`), write a bare lowercase C identifier for the name (no \
-quotes, no `sub_` prefix, no address suffix), and give a one-sentence rationale naming the \
-calls or strings that justify it. Output nothing else: no headings, no markdown, no \
-numbering, no blank lines.";
-
-/// System prompt for pseudo-code polishing (DESIGN §9.2: post-processing, never stored).
-pub const POLISH_SYSTEM: &str = "You are a reverse-engineering decompiler. Reconstruct the \
-most likely original C source from the supplied pseudo-C and disassembly. The disassembly \
-and its branch targets are AUTHORITATIVE: the pseudo-code may flatten or mis-order blocks. \
-Keep every reachable block on the correct path; never move a check outside the loop that \
-contains it, and never merge an early exit with the success path. You MUST preserve every \
-memory access, call, constant, comparison and control-flow edge; do not invent or delete \
-behavior, and do not substitute a different library function for one that appears in the \
-input. You MAY recover meaningful local variable names and types (e.g. a stack buffer passed \
-to fgets becomes `char input[0x100]`), fold argument setup into calls, replace goto labels \
-with while/for/if/else when the edges are equivalent, and remove prologue/epilogue register \
-saves. You MAY also replace a `sub_XXX` call with the canonical C runtime name when its \
-arguments and usage uniquely identify it (for example a buffer + size + stream passed to a \
-function whose result is tested is fgets; two strings whose result is compared to zero is \
-strcmp; one string whose length is compared to a constant is strlen). Keep `sub_XXX` when \
-the evidence is ambiguous, and never invent a non-standard function. \
-Output only the reconstructed C function(s), without markdown fences or commentary. \
-Declare every external array/global you reference (e.g. `extern unsigned char table[];`) \
-so the snippet is self-contained.";
-
-/// Which system prompt is being built or edited.
+/// 需要系统提示词的场景；产品只剩智能体一个，所以枚举只有一个变体。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PromptKind {
-    /// Why does this function exist (`build_explain_prompt`).
-    Explain,
-    /// What should this function be called (`build_rename_prompt`).
-    Rename,
-    /// Reconstruct the original C (`build_polish_prompt`).
-    Polish,
-    /// The project-level agent's tool-using loop.
+    /// 项目级智能体的工具调用循环。
     Agent,
-    /// Names for the stack variables of one function (`build_var_prompt`).
-    Vars,
 }
 
 impl PromptKind {
-    /// Stable iteration order for the settings UI and the built-in table.
-    pub const ALL: [PromptKind; 5] = [
-        PromptKind::Explain,
-        PromptKind::Rename,
-        PromptKind::Polish,
-        PromptKind::Agent,
-        PromptKind::Vars,
-    ];
-
     /// Identifier used by the settings file and the override keys.
     pub const fn key(self) -> &'static str {
         match self {
-            PromptKind::Explain => "explain",
-            PromptKind::Rename => "rename",
-            PromptKind::Polish => "polish",
             PromptKind::Agent => "agent",
-            PromptKind::Vars => "vars",
         }
     }
 
     /// The shipped prompt in `language`.
     pub fn builtin(self, language: PromptLanguage) -> &'static str {
         match (self, language) {
-            (PromptKind::Explain, PromptLanguage::En) => EXPLAIN_SYSTEM,
-            (PromptKind::Explain, PromptLanguage::Zh) => EXPLAIN_SYSTEM_ZH,
-            (PromptKind::Rename, PromptLanguage::En) => RENAME_SYSTEM,
-            (PromptKind::Rename, PromptLanguage::Zh) => RENAME_SYSTEM_ZH,
-            (PromptKind::Polish, PromptLanguage::En) => POLISH_SYSTEM,
-            (PromptKind::Polish, PromptLanguage::Zh) => POLISH_SYSTEM_ZH,
             (PromptKind::Agent, PromptLanguage::En) => crate::agent::AGENT_SYSTEM,
             (PromptKind::Agent, PromptLanguage::Zh) => crate::agent::AGENT_SYSTEM_ZH,
-            (PromptKind::Vars, PromptLanguage::En) => VARS_SYSTEM,
-            (PromptKind::Vars, PromptLanguage::Zh) => VARS_SYSTEM_ZH,
         }
     }
 }
@@ -618,48 +546,7 @@ impl PromptLanguage {
     }
 }
 
-/// Chinese system prompt for function explanation.
-pub const EXPLAIN_SYSTEM_ZH: &str = "你是 ReCraft 的反向工程助手。用平实的语言解释给定函数\
-的功能。只使用提供的证据（API 调用、字符串、伪代码），绝不臆造行为；不确定的地方要明确说明。";
-
-/// Chinese rename prompt. The reply contract is strict because [`parse_rename_reply`] turns
-/// it straight into rename proposals, so the translation keeps the exact line format.
-pub const RENAME_SYSTEM_ZH: &str = "你是 ReCraft 的符号命名助手。为列出的函数提出简洁的 \
-snake_case 名称。每个建议只能依据提供的 API 调用、字符串与伪代码，绝不臆造证据。每个函数恰好\
-输出一行，顺序与输入一致，格式为 `<地址> <名称> -- <理由>`：地址从输入原样复制\
-（`0x140001000`），名称写不带引号、不带 `sub_` 前缀、不带地址后缀的小写 C 标识符，理由用一句\
-话点明依据的调用或字符串。不要输出其它内容：没有标题、没有 Markdown、没有编号、没有空行。";
-
-/// Chinese pseudo-code polishing prompt (DESIGN §9.2: post-processing, never stored).
-pub const POLISH_SYSTEM_ZH: &str = "你是一名反向工程反编译器。根据提供的伪 C 与反汇编，重建\
-最可能的原始 C 源码。反汇编及其跳转目标是**权威**的：伪代码可能压平或错排基本块。保持每一个\
-可达基本块在正确的路径上；绝不把包含在循环里的检查移到循环外，也绝不把提前退出与成功路径合并。\
-必须保留每一次内存访问、调用、常量、比较与控制流边；不得臆造或删除行为，也不得把输入中出现的\
-库函数替换成别的函数。你可以：恢复有意义的局部变量名与类型（例如传给 fgets 的栈缓冲区写成 \
-`char input[0x100]`）、把实参准备折进调用、在边等价时把 goto 标签改写成 while/for/if/else、去掉\
-序言/收尾处的寄存器保存。你也可以：当实参和用法唯一确定某个 C 运行时函数时，把 `sub_XXX` 调用\
-换成规范名（例如缓冲区 + 大小 + 流、且结果被检测的是 fgets；两个字符串比较结果与零比较是 \
-strcmp；一个字符串长度与常量比较是 strlen）。证据不明确时保留 `sub_XXX`，绝不臆造非标准函数。\
-只输出重建的 C 函数，不要 Markdown 围栏或说明。声明你引用的每个外部数组/全局（例如 \
-`extern unsigned char table[];`），让片段自包含。";
-
-/// English prompt for stack-variable naming (the reply contract is [`crate::parse_var_reply`]).
-pub const VARS_SYSTEM: &str = "You are ReCraft's variable-naming assistant. Propose concise \
-snake_case names for the listed stack variables. Base every suggestion only on the supplied \
-pseudo-code; never invent evidence. Reply with exactly one line per variable, in the order \
-given, in the form `<slot> <name> -- <rationale>`: copy the slot token verbatim (`var_20`), \
-write a bare lowercase C identifier for the name (no quotes, no `var_` prefix), and give a \
-one-sentence rationale. Output nothing else: no headings, no markdown, no numbering, no blank \
-lines.";
-
-/// Chinese prompt for stack-variable naming.
-pub const VARS_SYSTEM_ZH: &str = "你是 ReCraft 的变量命名助手。为列出的栈变量提出简洁的 \
-snake_case 名称。每个建议只能依据提供的伪代码，绝不臆造证据。每个变量恰好输出一行，顺序与\
-输入一致，格式为 `<槽位> <名称> -- <理由>`：槽位原样复制（`var_20`），名称写不带引号、不带 \
-`var_` 前缀的小写 C 标识符，理由用一句话说明。不要输出其它内容：没有标题、没有 Markdown、\
-没有编号、没有空行。";
-
-/// The key a user override for `kind`/`language` is stored under (`"zh:polish"`).
+/// The key a user override for `kind`/`language` is stored under (`"zh:agent"`).
 pub fn prompt_key(kind: PromptKind, language: PromptLanguage) -> String {
     format!("{}:{}", language.as_str(), kind.key())
 }
@@ -672,482 +559,6 @@ pub fn system_prompt(settings: &ProviderSettings, kind: PromptKind) -> String {
         .get(&prompt_key(kind, language))
         .cloned()
         .unwrap_or_else(|| kind.builtin(language).to_owned())
-}
-
-/// Redact URLs, IPv4 addresses and e-mail addresses before context leaves the process.
-/// Line structure is preserved so the prompt stays readable for review.
-pub fn redact(text: &str) -> String {
-    text.lines()
-        .map(|line| {
-            line.split_whitespace()
-                .map(redact_word)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn redact_word(word: &str) -> String {
-    let lower = word.to_ascii_lowercase();
-    if lower.contains("http://") || lower.contains("https://") {
-        return "<url>".to_owned();
-    }
-    if let Some(at) = word.find('@')
-        && at > 0
-        && word[at + 1..].contains('.')
-        && !word[at + 1..].contains('\\')
-    {
-        return "<email>".to_owned();
-    }
-    // IPv4: four dot-separated decimal groups, ignoring trailing punctuation.
-    let cleaned = word.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '.');
-    let parts: Vec<&str> = cleaned.split('.').collect();
-    if parts.len() == 4
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
-    {
-        return "<ip>".to_owned();
-    }
-    word.to_owned()
-}
-
-/// Build the explanation prompt for one function.
-pub fn build_explain_prompt(
-    session: &mut Session,
-    addr: Address,
-    settings: &ProviderSettings,
-) -> Result<PromptRequest> {
-    let explanation = crate::explain(session, addr)?;
-    let budget = TokenBudget::new(settings.max_tokens);
-    let mut user = String::new();
-    user.push_str(&format!("function: {}\n", explanation.summary));
-    // Who calls this function is often the strongest semantic hint ("called from the
-    // command-line handler"), and it costs a few lines.
-    if !explanation.callers.is_empty() {
-        user.push_str("callers:\n");
-        for (site, name) in explanation.callers.iter().take(8) {
-            user.push_str(&format!("- {:#x} in {name}\n", site.get()));
-        }
-    }
-    if !explanation.calls.is_empty() {
-        user.push_str("calls:\n");
-        for (site, name) in explanation.calls.iter().take(16) {
-            user.push_str(&format!("- {:#x} {name}\n", site.get()));
-        }
-    }
-    user.push_str("api calls:\n");
-    for (site, rule, category) in explanation.apis.iter().take(24) {
-        user.push_str(&format!("- {:#x} {rule} [{category}]\n", site.get()));
-    }
-    if !explanation.strings.is_empty() {
-        user.push_str("strings:\n");
-        for (site, text) in explanation.strings.iter().take(16) {
-            user.push_str(&format!("- {:#x} {text}\n", site.get()));
-        }
-    }
-    let pseudo = recraft_decompile::pseudocode_l2(session, explanation.start)?;
-    user.push_str("pseudo-code:\n");
-    // The old 80-line cap showed 2% of a large function; the budget below is the real
-    // limit and reports truncation.
-    for line in pseudo.lines.iter().take(400) {
-        user.push_str(&line.text);
-        user.push('\n');
-    }
-    let user = redact(&user);
-    let system = system_prompt(settings, PromptKind::Explain);
-    Ok(PromptRequest::new(budget, &system, &user))
-}
-
-/// Upper bound on functions described in one naming request. Bodies make each block
-/// much larger than the old evidence-only text, so the budget does the real packing;
-/// this cap only keeps one click from decompiling an entire binary.
-const MAX_RENAME_CANDIDATES: usize = 32;
-
-/// Lines of pseudo-code shown per naming candidate.
-const RENAME_BODY_LINES: usize = 14;
-
-/// Functions larger than this are described by evidence only: decompiling a giant
-/// function for a 14-line excerpt costs more than the excerpt is worth.
-const RENAME_BODY_MAX_FUNCTION_BYTES: u64 = 16 * 1024;
-
-/// Build a naming prompt for up to `limit` candidate functions (typically `sub_*`).
-///
-/// Each candidate is described by its summary, API tags, referenced strings and a body
-/// excerpt, so the model names it from evidence rather than from the address. Candidates
-/// are packed until the token budget is 80% used: `TokenBudget::fit` would otherwise cut
-/// the list mid-candidate. The reply contract matches [`parse_rename_reply`].
-pub fn build_rename_prompt(
-    session: &mut Session,
-    candidates: &[Address],
-    settings: &ProviderSettings,
-) -> Result<PromptRequest> {
-    build_rename_prompt_impl(session, candidates, settings, false)
-}
-
-/// [`build_rename_prompt`] with each candidate's current symbol hidden. The
-/// naming-accuracy benchmark uses this so the model cannot read the answer it is
-/// being scored on.
-pub fn build_rename_prompt_blinded(
-    session: &mut Session,
-    candidates: &[Address],
-    settings: &ProviderSettings,
-) -> Result<PromptRequest> {
-    build_rename_prompt_impl(session, candidates, settings, true)
-}
-
-fn build_rename_prompt_impl(
-    session: &mut Session,
-    candidates: &[Address],
-    settings: &ProviderSettings,
-    blind: bool,
-) -> Result<PromptRequest> {
-    let budget = TokenBudget::new(settings.max_tokens);
-    // ~4 characters per token; keep a fifth of the budget for the reply.
-    let max_chars = budget.max_tokens.saturating_mul(4) / 5 * 4;
-    let mut user = String::from("propose names for these functions:\n");
-    for (included, addr) in candidates.iter().enumerate() {
-        if included >= MAX_RENAME_CANDIDATES {
-            break;
-        }
-        let explanation = crate::explain_with(session, *addr, blind)?;
-        // Decompiling every candidate happens on the caller's thread (the panel builds the
-        // prompt before spawning the request), so a 500 KB function would freeze the UI
-        // for half a second. Its API/string evidence still travels; the body does not.
-        let body = if explanation
-            .end
-            .get()
-            .saturating_sub(explanation.start.get())
-            <= RENAME_BODY_MAX_FUNCTION_BYTES
-        {
-            body_excerpt(session, explanation.start)
-        } else {
-            String::new()
-        };
-        let mut block = String::new();
-        block.push_str(&format!(
-            "\n- {:#x}: {}\n",
-            explanation.start.get(),
-            redact(&explanation.summary)
-        ));
-        for (site, rule, _) in explanation.apis.iter().take(8) {
-            block.push_str(&format!("  api {:#x} {rule}\n", site.get()));
-        }
-        for (site, text) in explanation.strings.iter().take(4) {
-            block.push_str(&format!("  str {:#x} {}\n", site.get(), redact(text)));
-        }
-        if !body.is_empty() {
-            block.push_str("  code:\n");
-            for line in body.lines() {
-                block.push_str("    ");
-                block.push_str(line);
-                block.push('\n');
-            }
-        }
-        if blind && let Some(name) = explanation.name.as_deref().filter(|name| !name.is_empty()) {
-            // Recursion prints the function's own name; scrub whole identifiers only so
-            // a string like "restart_service" is not mangled by the name "start".
-            let placeholder = format!("sub_{:x}", explanation.start.get());
-            block = scrub_identifier(&block, name, &placeholder);
-        }
-        if included > 0 && user.len() + block.len() > max_chars {
-            break;
-        }
-        user.push_str(&block);
-    }
-    user.push_str("\nreply with one line per function: 0xADDR new_name -- rationale\n");
-    let system = system_prompt(settings, PromptKind::Rename);
-    Ok(PromptRequest::new(budget, &system, &user))
-}
-
-/// Replace whole identifier tokens only (`start` must not touch `restart_service`).
-fn scrub_identifier(text: &str, from: &str, to: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut token = String::new();
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            token.push(ch);
-            continue;
-        }
-        if !token.is_empty() {
-            if token == from {
-                out.push_str(to);
-            } else {
-                out.push_str(&token);
-            }
-            token.clear();
-        }
-        out.push(ch);
-    }
-    if !token.is_empty() {
-        if token == from {
-            out.push_str(to);
-        } else {
-            out.push_str(&token);
-        }
-    }
-    out
-}
-
-/// First [`RENAME_BODY_LINES`] lines of the L2 body (the signature line is redundant
-/// with the summary and would leak the current symbol to the blinded benchmark).
-fn body_excerpt(session: &mut Session, start: Address) -> String {
-    let Ok(pseudo) = recraft_decompile::pseudocode_l2(session, start) else {
-        return String::new();
-    };
-    let mut body = String::new();
-    for line in pseudo.lines.iter().skip(1).take(RENAME_BODY_LINES) {
-        body.push_str(line.text.trim_end());
-        body.push('\n');
-    }
-    if pseudo.lines.len() > RENAME_BODY_LINES + 1 {
-        body.push_str("…\n");
-    }
-    body
-}
-
-/// One name the model proposed in reply to [`RENAME_SYSTEM`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenameSuggestion {
-    pub target: Address,
-    pub name: String,
-    pub rationale: String,
-}
-
-/// Parse a reply that follows the rename contract (`0xADDR name -- rationale`).
-///
-/// Tolerant on purpose: bullets, backticks, code fences, a trailing colon after the name
-/// and an omitted rationale are accepted, and a line without a parsable address or
-/// identifier is skipped rather than failing the whole answer. A name repeated for two
-/// functions is dropped the second time, so applying the reply cannot create twins.
-pub fn parse_rename_reply(reply: &str) -> Vec<RenameSuggestion> {
-    let mut seen = BTreeSet::new();
-    let mut suggestions = Vec::new();
-    for raw in reply.lines() {
-        let line = raw.trim();
-        let line = line.trim_start_matches(['-', '*', '•', '·']).trim();
-        let line = line.trim_matches('`').trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with("```") {
-            continue;
-        }
-        let (head, rationale) = match line.split_once("--") {
-            Some((head, rationale)) => (head.trim(), rationale.trim()),
-            None => (line, ""),
-        };
-        let mut parts = head.split_whitespace();
-        let Some(address) = parts.next() else {
-            continue;
-        };
-        let Some(name) = parts.next().and_then(normalize_identifier) else {
-            continue;
-        };
-        let Some(target) = crate::parse_address(address) else {
-            continue;
-        };
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        suggestions.push(RenameSuggestion {
-            target,
-            name,
-            rationale: rationale.to_owned(),
-        });
-    }
-    suggestions
-}
-
-/// Accept `name`, `` `name` ``, `name:` or `name,` and return a bare C identifier.
-fn normalize_identifier(word: &str) -> Option<String> {
-    let trimmed = word.trim_matches(|ch: char| {
-        matches!(ch, '`' | '"' | '\'' | ':' | ',' | '.' | ';' | '(' | ')')
-    });
-    if trimmed.is_empty() || trimmed.len() > 64 {
-        return None;
-    }
-    let mut chars = trimmed.chars();
-    let first = chars.next()?;
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return None;
-    }
-    if !trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return None;
-    }
-    Some(trimmed.to_owned())
-}
-
-/// Merge a model reply into locally built rename proposals and return how many changed.
-///
-/// Only the targets the model named are touched: its identifier replaces the heuristic
-/// one, its rationale replaces the padded evidence summary (the evidence addresses stay,
-/// so the panel still links into the listing), and confidence is lifted to at least 0.7
-/// because model and local evidence now agree. Unnamed proposals keep the heuristic name.
-pub fn apply_rename_reply(proposals: &mut [Proposal], reply: &str) -> usize {
-    let suggestions = parse_rename_reply(reply);
-    let mut updated = 0;
-    for proposal in proposals.iter_mut() {
-        let Some(suggestion) = suggestions
-            .iter()
-            .find(|suggestion| suggestion.target == proposal.target)
-        else {
-            continue;
-        };
-        proposal.value = suggestion.name.clone();
-        proposal.source = crate::ProposalSource::Model;
-        if !suggestion.rationale.is_empty() {
-            proposal.rationale = suggestion.rationale.clone();
-        }
-        proposal.confidence = proposal.confidence.max(0.7);
-        updated += 1;
-    }
-    updated
-}
-
-/// Build a pseudo-code polishing prompt from the function's L1 output. The result is a
-/// suggestion only: it is never written back to the project (DESIGN §9.2 / §9.3).
-pub fn build_polish_prompt(
-    session: &mut Session,
-    addr: Address,
-    settings: &ProviderSettings,
-) -> Result<PromptRequest> {
-    let budget = TokenBudget::new(settings.max_tokens);
-    let functions = session.functions()?;
-    let function = functions
-        .iter()
-        .find(|function| addr >= function.start && addr < function.end)
-        .copied();
-    let (start, end) = function
-        .map(|function| (function.start, function.end))
-        .unwrap_or((addr, addr));
-    let pseudo = recraft_decompile::pseudocode_l2(session, start)
-        .or_else(|_| recraft_decompile::pseudocode_l1(session, start))?;
-    let prototype = session.prototype_at(start)?;
-    let mut user = String::new();
-    user.push_str(&format!("function: {:#x}..{:#x}\n", start.get(), end.get()));
-    if let Some(prototype) = prototype {
-        user.push_str(&format!("known prototype: {prototype}\n"));
-    }
-    user.push_str(
-        "task: recover the original source. Name stack buffers from their use, reuse \
-         argument names, turn register moves into expressions, and structure branches/loops. \
-         Keep every external call and constant; do not add a flag or a different algorithm. \
-         The pseudo-code below may be structurally wrong; rebuild the flow from the \
-         disassembly branch targets and keep loop bodies inside the loop.\n",
-    );
-    user.push_str("disassembly (authoritative control flow):\n");
-    let rows = session.disasm(start, 256)?;
-    for line in rows.iter().filter(|line| line.addr < end) {
-        let bytes = line
-            .bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        user.push_str(&format!(
-            "{:#x}  {:<30} {:<8} {}\n",
-            line.addr.get(),
-            bytes,
-            line.mnemonic,
-            line.operands
-        ));
-    }
-    user.push_str("pseudo-code (L2, may be mis-structured):\n");
-    for line in pseudo.lines.iter().take(240) {
-        user.push_str(&line.text);
-        user.push('\n');
-    }
-    let user = redact(&user);
-    // DeepSeek V4 answers directly by default here: a reasoning pass would delay the first
-    // content token of this transformation task by about a minute.
-    let system = system_prompt(settings, PromptKind::Polish);
-    Ok(PromptRequest::new(budget, &system, &user))
-}
-
-/// In-memory prompt → response cache keyed by a stable hash of the request.
-#[derive(Debug, Default)]
-pub struct PromptCache {
-    entries: BTreeMap<u64, String>,
-    hits: usize,
-    misses: usize,
-}
-
-impl PromptCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn key(request: &PromptRequest) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        request.system.hash(&mut hasher);
-        request.user.hash(&mut hasher);
-        // Thinking changes the answer, so it must not share a cache entry with the fast path.
-        request.thinking.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    pub fn get(&mut self, request: &PromptRequest) -> Option<&str> {
-        let key = Self::key(request);
-        match self.entries.get(&key) {
-            Some(value) => {
-                self.hits += 1;
-                Some(value.as_str())
-            }
-            None => {
-                self.misses += 1;
-                None
-            }
-        }
-    }
-
-    pub fn insert(&mut self, request: &PromptRequest, response: &str) {
-        self.entries.insert(Self::key(request), response.to_owned());
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn stats(&self) -> (usize, usize) {
-        (self.hits, self.misses)
-    }
-}
-
-/// One AI interaction recorded for audit (who asked, which provider, how many tokens).
-#[derive(Debug, Clone)]
-pub struct AuditEntry {
-    pub provider: &'static str,
-    pub function: Option<Address>,
-    pub prompt_tokens: usize,
-    pub response_tokens: usize,
-    pub cached: bool,
-}
-
-/// Append-only in-memory audit log (DESIGN §9.3 requires traceability).
-#[derive(Debug, Default)]
-pub struct AuditLog {
-    entries: Vec<AuditEntry>,
-}
-
-impl AuditLog {
-    pub fn record(&mut self, entry: AuditEntry) {
-        self.entries.push(entry);
-    }
-
-    pub fn entries(&self) -> &[AuditEntry] {
-        &self.entries
-    }
-
-    pub fn total_prompt_tokens(&self) -> usize {
-        self.entries.iter().map(|entry| entry.prompt_tokens).sum()
-    }
 }
 
 /// One function the model may call (an OpenAI `tools` entry).
@@ -2051,7 +1462,7 @@ mod tests {
             http.body
         );
 
-        // The non-streaming path (CLI polish) honours the same toggle.
+        // 非流式路径同样遵守这个开关。
         let mut transport = crate::transport::MockTransport::new();
         let requests = transport.requests_handle();
         transport.push(
@@ -2268,25 +1679,30 @@ mod tests {
     #[test]
     fn prompts_switch_language_and_take_overrides() {
         let mut settings = ProviderSettings::default();
-        assert_eq!(system_prompt(&settings, PromptKind::Polish), POLISH_SYSTEM);
-        settings.prompt_language = PromptLanguage::Zh;
         assert_eq!(
-            system_prompt(&settings, PromptKind::Polish),
-            POLISH_SYSTEM_ZH
+            system_prompt(&settings, PromptKind::Agent),
+            crate::AGENT_SYSTEM
         );
-        assert!(system_prompt(&settings, PromptKind::Explain).contains("ReCraft"));
-
-        // An override only replaces the language it was written for.
-        settings.set_prompt_override(PromptKind::Polish, Some("自定义".to_owned()));
-        assert_eq!(system_prompt(&settings, PromptKind::Polish), "自定义");
-        settings.prompt_language = PromptLanguage::En;
-        assert_eq!(system_prompt(&settings, PromptKind::Polish), POLISH_SYSTEM);
-        // Empty text after trimming clears the override instead of sending a blank prompt.
         settings.prompt_language = PromptLanguage::Zh;
-        settings.set_prompt_override(PromptKind::Polish, Some("   ".to_owned()));
         assert_eq!(
-            system_prompt(&settings, PromptKind::Polish),
-            POLISH_SYSTEM_ZH
+            system_prompt(&settings, PromptKind::Agent),
+            crate::AGENT_SYSTEM_ZH
+        );
+
+        // 覆盖文本只替换它写入时对应的语言。
+        settings.set_prompt_override(PromptKind::Agent, Some("自定义".to_owned()));
+        assert_eq!(system_prompt(&settings, PromptKind::Agent), "自定义");
+        settings.prompt_language = PromptLanguage::En;
+        assert_eq!(
+            system_prompt(&settings, PromptKind::Agent),
+            crate::AGENT_SYSTEM
+        );
+        // 去掉空白后为空的文本等于清除覆盖，内置提示词重新生效。
+        settings.prompt_language = PromptLanguage::Zh;
+        settings.set_prompt_override(PromptKind::Agent, Some("   ".to_owned()));
+        assert_eq!(
+            system_prompt(&settings, PromptKind::Agent),
+            crate::AGENT_SYSTEM_ZH
         );
     }
 
@@ -2298,36 +1714,37 @@ mod tests {
             prompt_language: PromptLanguage::Zh,
             ..ProviderSettings::default()
         };
-        settings.set_prompt_override(PromptKind::Rename, Some("自定义命名提示".to_owned()));
+        settings.set_prompt_override(PromptKind::Agent, Some("自定义智能体提示".to_owned()));
         settings.save_to(&path).unwrap();
 
         let loaded = ProviderSettings::load_from(&path).expect("settings reload");
         assert_eq!(loaded.prompt_language, PromptLanguage::Zh);
-        assert_eq!(system_prompt(&loaded, PromptKind::Rename), "自定义命名提示");
         assert_eq!(
-            system_prompt(&loaded, PromptKind::Explain),
-            EXPLAIN_SYSTEM_ZH,
-            "kinds without an override keep their built-in text"
+            system_prompt(&loaded, PromptKind::Agent),
+            "自定义智能体提示"
+        );
+        assert!(
+            loaded.prompt_overrides.contains_key("zh:agent"),
+            "{:?}",
+            loaded.prompt_overrides
         );
     }
 
+    /// 旧版设置文件里的 `"en:agent"` 覆盖必须继续生效（键名格式没有变）。
     #[test]
-    fn a_changed_prompt_changes_the_cache_key() {
-        let mut settings = ProviderSettings::default();
-        let request = PromptRequest::new(
-            TokenBudget::new(128),
-            &system_prompt(&settings, PromptKind::Explain),
-            "user",
+    fn legacy_agent_prompt_override_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-settings.json");
+        std::fs::write(
+            &path,
+            r#"{"kind":"openai","endpoint":"https://api.deepseek.com","prompts":{"en:agent":"legacy agent prompt","en:polish":"retired kind"}}"#,
+        )
+        .unwrap();
+        let loaded = ProviderSettings::load_from(&path).expect("settings reload");
+        assert_eq!(
+            system_prompt(&loaded, PromptKind::Agent),
+            "legacy agent prompt"
         );
-        let before = crate::AiCache::key(&request, "provider", "model", PROMPT_TEMPLATE_VERSION);
-        settings.set_prompt_override(PromptKind::Explain, Some("different".to_owned()));
-        let request = PromptRequest::new(
-            TokenBudget::new(128),
-            &system_prompt(&settings, PromptKind::Explain),
-            "user",
-        );
-        let after = crate::AiCache::key(&request, "provider", "model", PROMPT_TEMPLATE_VERSION);
-        assert_ne!(before, after, "a cached reply must not outlive its prompt");
     }
 
     #[test]
@@ -2402,45 +1819,12 @@ mod tests {
     }
 
     #[test]
-    fn redacts_urls_ips_and_emails() {
-        let text = "GET https://evil.example/a?b=1 from 10.0.0.5 mail admin@example.com";
-        let redacted = redact(text);
-        assert!(redacted.contains("<url>"));
-        assert!(redacted.contains("<ip>"));
-        assert!(redacted.contains("<email>"));
-        assert!(!redacted.contains("evil.example"));
-        assert!(!redacted.contains("10.0.0.5"));
-    }
-
-    #[test]
     fn budget_truncates_long_prompts() {
         let budget = TokenBudget::new(32);
         let long = "a".repeat(10_000);
         let fitted = budget.fit(&long);
         assert!(TokenBudget::estimate(&fitted) <= budget.max_tokens + 8);
         assert!(fitted.ends_with("…[truncated]"));
-    }
-
-    #[test]
-    fn cache_and_audit_bookkeeping() {
-        let budget = TokenBudget::new(128);
-        let request = PromptRequest::new(budget, "system", "user");
-        let mut cache = PromptCache::new();
-        assert!(cache.get(&request).is_none());
-        cache.insert(&request, "answer");
-        assert_eq!(cache.get(&request), Some("answer"));
-        assert_eq!(cache.stats(), (1, 1));
-
-        let mut audit = AuditLog::default();
-        audit.record(AuditEntry {
-            provider: "test",
-            function: Some(Address::new(0x1000)),
-            prompt_tokens: request.estimated_tokens,
-            response_tokens: 2,
-            cached: true,
-        });
-        assert_eq!(audit.entries().len(), 1);
-        assert!(audit.total_prompt_tokens() > 0);
     }
 
     #[test]
@@ -2492,7 +1876,7 @@ mod tests {
         assert_eq!(settings.model, "deepseek-v4.1-flash");
         assert!(
             settings.max_tokens >= 65536,
-            "reasoning models need a large polish budget"
+            "reasoning models need a large token budget"
         );
     }
 
@@ -2657,119 +2041,6 @@ mod tests {
         assert_eq!(provider.name(), "unconfigured");
     }
 
-    #[test]
-    fn rename_reply_parses_the_documented_line_format() {
-        let reply = "0x140001000 read_config -- calls CreateFileW and reads a path\n\
-                     - 0x140001200 `send_beacon` -- posts to a URL\n\
-                     0x140001300 not-an-identifier -- skipped\n\
-                     garbage line\n";
-        let suggestions = parse_rename_reply(reply);
-        assert_eq!(suggestions.len(), 2, "{suggestions:?}");
-        assert_eq!(suggestions[0].target, Address::new(0x140001000));
-        assert_eq!(suggestions[0].name, "read_config");
-        assert!(suggestions[0].rationale.contains("CreateFileW"));
-        assert_eq!(suggestions[1].name, "send_beacon", "backticks are stripped");
-        assert_eq!(suggestions[1].target, Address::new(0x140001200));
-    }
-
-    #[test]
-    fn rename_reply_rejects_bad_identifiers_and_duplicate_names() {
-        let reply = "0x1000 9lives -- starts with a digit\n\
-                     0x1000 -- no name\n\
-                     0x2000 valid_name -- ok\n\
-                     0x3000 valid_name -- duplicate name\n";
-        let suggestions = parse_rename_reply(reply);
-        assert_eq!(suggestions.len(), 1, "{suggestions:?}");
-        assert_eq!(suggestions[0].target, Address::new(0x2000));
-    }
-
-    #[test]
-    fn rename_reply_merges_model_names_into_evidence_proposals() {
-        let mut proposals = vec![crate::Proposal {
-            kind: crate::ProposalKind::Rename,
-            target: Address::new(0x140001000),
-            value: "file_140001000".to_owned(),
-            confidence: 0.5,
-            rationale: "calls CreateFileW; 1 string ref(s)".to_owned(),
-            evidence: vec![crate::Evidence {
-                addr: Address::new(0x140001010),
-                kind: "api_tag",
-                text: "CreateFileW".to_owned(),
-            }],
-            source: crate::ProposalSource::Heuristic,
-        }];
-        let updated = apply_rename_reply(
-            &mut proposals,
-            "0x140001000 read_config_file -- opens the configuration path",
-        );
-        assert_eq!(updated, 1);
-        assert_eq!(proposals[0].value, "read_config_file");
-        assert_eq!(proposals[0].rationale, "opens the configuration path");
-        assert!(
-            proposals[0].confidence >= 0.7,
-            "model + evidence raises confidence: {}",
-            proposals[0].confidence
-        );
-        assert_eq!(proposals[0].evidence.len(), 1, "evidence addresses stay");
-
-        // A target the model skipped keeps its heuristic name.
-        let updated = apply_rename_reply(&mut proposals, "0xdead1234 unknown_name -- nope");
-        assert_eq!(updated, 0);
-        assert_eq!(proposals[0].value, "read_config_file");
-    }
-
-    #[test]
-    fn scrub_identifier_only_touches_whole_tokens() {
-        assert_eq!(
-            scrub_identifier("return recursive(n - 1);", "recursive", "sub_140"),
-            "return sub_140(n - 1);"
-        );
-        assert_eq!(
-            scrub_identifier("RestartService(start);", "start", "sub_140"),
-            "RestartService(sub_140);"
-        );
-        assert_eq!(
-            scrub_identifier("restart_service = 1;", "start", "sub_140"),
-            "restart_service = 1;"
-        );
-    }
-
-    /// The prompt must carry a body excerpt (naming from API names alone is guesswork)
-    /// and pack more than the old hard-coded 12 candidates.
-    #[test]
-    fn rename_prompt_packs_body_excerpts_beyond_twelve_candidates() {
-        use crate::suggest_names;
-        let bytes = std::fs::read("C:/Windows/System32/notepad.exe");
-        let Ok(bytes) = bytes else { return };
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("rename-prompt.rcraft");
-        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
-        let result = recraft_analysis::analyze(&mut session).unwrap();
-        recraft_analysis::persist(&mut session, &result).unwrap();
-        let strings = recraft_analysis::extract_strings(&mut session, 4, 200_000).unwrap();
-        recraft_analysis::persist_strings(&mut session, &strings).unwrap();
-
-        let proposals = suggest_names(&mut session, 40).unwrap();
-        if proposals.len() < 13 {
-            return;
-        }
-        let candidates: Vec<Address> = proposals.iter().map(|proposal| proposal.target).collect();
-        let settings = ProviderSettings {
-            max_tokens: 65_536,
-            ..ProviderSettings::default()
-        };
-        let prompt = build_rename_prompt(&mut session, &candidates, &settings).unwrap();
-        let blocks = prompt.user.matches("\n- 0x").count();
-        assert!(blocks > 12, "packed only {blocks} candidates");
-        assert!(
-            prompt.user.contains("  code:\n"),
-            "no body excerpt in the rename prompt"
-        );
-        assert!(
-            prompt.user.len() < settings.max_tokens * 4,
-            "prompt over the character budget"
-        );
-    }
     #[test]
     fn parse_tool_reply_reads_calls_and_text() {
         let calls = parse_tool_reply(

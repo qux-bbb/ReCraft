@@ -271,22 +271,17 @@ try {
         }
     }
 
-    Write-Host '[+] AI assist (offline explain/suggest/triage + propose-apply)'
-    $aiTriage = Invoke-Recraft @('ai', 'triage', $project, '--json')
-    Assert-Contains $aiTriage 'apis_by_category' 'AI triage categories'
-    $proposalFile = Join-Path $work 'proposals.json'
-    Invoke-Recraft @('ai', 'suggest', $project, '--limit', '3', '--out', $proposalFile) | Out-Null
-    Assert-Contains (Get-Content -Raw -LiteralPath $proposalFile) 'confidence' 'AI proposals JSON'
-    $aiApplied = Invoke-Recraft @('ai', 'apply', $project, $proposalFile, '--yes')
-    Assert-Contains $aiApplied 'applied' 'AI proposal apply'
+    Write-Host '[+] AI assist (one assistant: provider readout + ask)'
     $provider = Invoke-Recraft @('ai', 'provider')
     Assert-Contains $provider 'state=disabled' 'AI provider defaults offline'
-    $aiPrompt = Invoke-Recraft @('ai', 'prompt', $project, '--addr', 'entry', '--json')
-    Assert-Contains $aiPrompt 'estimated_tokens' 'AI prompt budget'
-    $aiQuery = Invoke-Recraft @('ai', 'query', $project, 'find every function that references a URL')
-    Assert-Contains $aiQuery 'intent: urls' 'AI natural-language query (URLs)'
-    $aiQueryJson = Invoke-Recraft @('ai', 'query', $project, 'which functions call CreateFileW', '--json')
-    Assert-Contains $aiQueryJson '"intent"' 'AI natural-language query JSON'
+    # `ai ask` is the only AI feature (same assistant as the GUI sidebar); without a
+    # provider it must refuse with a configuration hint instead of pretending to answer.
+    $ErrorActionPreference = 'Continue'
+    $askOut = & $Recraft @('ai', 'ask', $project, 'which functions write to the registry?') 2>&1
+    $askCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    Assert-Contains (($askOut | Out-String)) 'provider' 'AI ask requires a configured provider'
+    if ($askCode -eq 0) { throw 'ai ask must refuse to run without a configured provider' }
 
     if ($LargeOverlayMB -gt 0) {
         Write-Host "[+] large-sample smoke: $LargeOverlayMB MiB overlay"
