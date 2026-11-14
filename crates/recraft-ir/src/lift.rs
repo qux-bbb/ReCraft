@@ -415,6 +415,10 @@ impl Lifter {
             // CET landing pads: Ubuntu's gcc enables -fcf-protection by default, which puts
             // endbr64 at every function entry. It has no source-level effect.
             M::Nop | M::Endbr64 | M::Endbr32 => Flow::Fallthrough,
+            // Frame teardown (`mov rsp, rbp; pop rbp`) has no source-level effect: the frame is
+            // implicit in pseudo-C, and leaving it as `__asm("leave")` also used to stop the
+            // shared-return-tail copy from recognising a short tail.
+            M::Leave => Flow::Fallthrough,
             M::Int3 => self.intrinsic(insn, &mut stmts),
             mnemonic => {
                 if let Some(kind) = condition_of(mnemonic) {
@@ -1780,6 +1784,14 @@ mod tests {
     use super::*;
     use recraft_common::Address;
 
+    #[test]
+    fn a_frame_teardown_lifts_to_nothing() {
+        // leave (c9) is the compiler's frame teardown; pseudo-C has no frame, and keeping it
+        // as an intrinsic also hid the shared return tail from the structurer.
+        let (_lifter, lifted) = lift_one(&[0xc9], 0x1000);
+        assert!(lifted.stmts.is_empty(), "{:?}", lifted.stmts);
+        assert_eq!(lifted.flow, Flow::Fallthrough);
+    }
     #[test]
     fn endbr64_lifts_to_nothing() {
         // f3 0f 1e fa: the CET landing pad Ubuntu's gcc puts at every entry.
