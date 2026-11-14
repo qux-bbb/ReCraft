@@ -4,9 +4,11 @@ void sub_140001fcc_l1(void) {
     __vcrt_getptd(rcx);
     rdx = *(u64*)((rax + 0xADDR));
     while (rdx != 0) {
-        if (*(u64*)(rdx) != rbx) {
-            rdx = *(u64*)((rdx + 8));
+        if (*(u64*)(rdx) == rbx) {
+            eax = 0;
+            return;
         }
+        rdx = *(u64*)((rdx + 8));
     }
     eax = (rdx + 1);
     return;

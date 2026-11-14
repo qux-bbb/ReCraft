@@ -3803,6 +3803,63 @@ impl Structurer {
                             continue;
                         }
                     }
+                    // A conditional inside a loop whose *fall-through* leaves the loop and ends
+                    // at the function's return is not a diamond: the return block is the join
+                    // only because both paths stop there, and the join logic would then emit the
+                    // fall-through arm as nothing (it sits in the stop set). Emit it as an
+                    // explicit `else { …; return; }` instead — that is where the machine code
+                    // jumps, and dropping it silently loses a failure path (docs/NEXT.md §5).
+                    if !self.loop_stack.is_empty()
+                        && taken != not_taken
+                        && !self.emitted[taken]
+                        && !self.emitted[not_taken]
+                    {
+                        if let Some(escape) = self.escape_to_return(not_taken) {
+                            if self.escape_to_return(taken).is_none() {
+                                let mut then_lines = Vec::new();
+                                self.emit_linear(&mut then_lines, taken, level + 1, stop);
+                                let entry = self.blocks[current].entry;
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}if ({condition}) {{", indent(level)),
+                                });
+                                lines.extend(then_lines);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}} else {{", indent(level)),
+                                });
+                                self.emit_escape_chain(lines, &escape, level + 1);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
+                                return;
+                            }
+                        } else if let Some(escape) = self.escape_to_return(taken) {
+                            if self.escape_to_return(not_taken).is_none() {
+                                let mut else_lines = Vec::new();
+                                self.emit_linear(&mut else_lines, not_taken, level + 1, stop);
+                                let entry = self.blocks[current].entry;
+                                // The escape chain is the *taken* arm here, so the branch
+                                // keeps the condition as-is; only the arm order flips.
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}if ({condition}) {{", indent(level)),
+                                });
+                                self.emit_escape_chain(lines, &escape, level + 1);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}} else {{", indent(level)),
+                                });
+                                lines.extend(else_lines);
+                                lines.push(PseudoLine {
+                                    addr: entry,
+                                    text: format!("{}}}", indent(level)),
+                                });
+                                return;
+                            }
+                        }
+                    }
                     let join = self.ipdom[current].or_else(|| {
                         // Strict post-dominance failed: some path ends without continuing.
                         // When both arms still reconverge on a shared block, package them
@@ -4199,6 +4256,63 @@ impl Structurer {
     /// Only plain fallthrough/goto links are copied, the chain has to reach `target` (the
     /// loop's continuation) within a few blocks, and every block must be private to this
     /// path: one predecessor, not a loop header, not labelled or emitted yet.
+    /// Short acyclic chain that leaves the current region and ends at the function's return
+    /// (`None` when `start` does not escape that way).
+    ///
+    /// The chain stops at the return block; the caller emits `return;` itself so the value in
+    /// the return register stays the arm's own.
+    fn escape_to_return(&self, start: usize) -> Option<Vec<usize>> {
+        const MAX_BLOCKS: usize = 4;
+        let mut chain = Vec::new();
+        let mut current = start;
+        loop {
+            if chain.len() >= MAX_BLOCKS
+                || current >= self.blocks.len()
+                || self.emitted[current]
+                || self.labeled[current]
+                || self.loop_headers.contains(&current)
+                || self.blocks[current].has_table
+                || self.predecessors[current].len() > 1
+            {
+                return None;
+            }
+            match self.blocks[current].flow {
+                Flow::Return => return Some(chain),
+                Flow::Goto(_) => {
+                    let target = self.blocks[current].goto_target?;
+                    chain.push(current);
+                    if target < self.blocks.len()
+                        && matches!(self.blocks[target].flow, Flow::Return)
+                    {
+                        return Some(chain);
+                    }
+                    current = target;
+                }
+                Flow::Fallthrough => {
+                    let next = self.blocks[current].not_taken?;
+                    chain.push(current);
+                    current = next;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Emit an escape chain and its `return;`.
+    fn emit_escape_chain(&mut self, lines: &mut Vec<PseudoLine>, chain: &[usize], level: usize) {
+        for block in chain {
+            self.emitted[*block] = true;
+            self.emit_simple(lines, *block, level);
+        }
+        lines.push(PseudoLine {
+            addr: chain
+                .first()
+                .map(|block| self.blocks[*block].entry)
+                .unwrap_or_default(),
+            text: format!("{}return;", indent(level)),
+        });
+    }
+
     fn copy_linear_chain(
         &mut self,
         lines: &mut Vec<PseudoLine>,

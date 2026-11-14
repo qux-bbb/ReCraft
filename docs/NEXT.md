@@ -563,37 +563,24 @@ v14 = (v14 & 0xffffffffffffff00) | (uint8)(...);  // → uint8 v14; v14 ^= …�
   见 `crates/recraft-decompile/src/structuring.rs` 的 arch 判断。
 - 两者共用同一个前置条件：**中立 CFG**（用 `DecodedInsn` 而不是 iced 指令建块），
   做完之后 A64 才能同时拿到结构化 L2 与可统计的质量指标。
-## 5. 已定位但未修的控制流缺陷（2026-11-14，crackme 样本）
+## 5. 循环内“早退到函数尾声”的分支（2026-11-14 已修）
 
-`D:\files\projects\ctf-simple-crackme\challenge\crackme` 的 `verify` 暴露了一个**结构性丢块**：
+`D:\files\projects\ctf-simple-crackme\challenge\crackme` 的 `verify` 曾暴露一个**丢块**：
 循环体内的失败分支（`mov eax,0; jmp <epilogue>`，块 0x12c3）在 `emit_all` 阶段没有被排进循环体，
-而是被追加到函数末尾的 `loc_12db: return;` 之后，随后被 `drop_unreachable_tails` 当作死代码删除。
+而是被追加到函数末尾的 `loc_12db: return;` 之后，随后被 `drop_unreachable_tails` 当作死代码
+删除——按输出会死循环而不是返回 0。
 
-结果伪 C 变成"循环体里只有 `if (c) { i++; }`"——失败路径消失，按输出会**死循环**而不是返回 0。
-根因是 `emit_linear` 里那段已经写明的取舍（见本文件 §1.0）：从循环体跳向非 loop-exit 的路径
-不写 `goto`（会拉低结构化率），而这里的目标块根本没有留下任何落点，于是被丢掉了。
+根因：`emit_linear` 把这类条件分支的汇合点算成了函数尾声块；于是“另一条臂”落在 stop 集里，
+既不是 break/continue、也不是 loop-exit，就被直接 return 掉了。
 
-证据（`recraft-cli decompile <proj> --addr verify`，加临时 dump 后的 emit 阶段）：
+修法（`crates/recraft-decompile/src/structuring.rs`）：在 CondGoto 处理里新增
+`escape_to_return()` / `emit_escape_chain()`——当循环内的某个条件分支有一条“短链”离开当前
+区域、终点是函数的返回块时，把它发成 `else { …; return; }`（两条臂的极性按 `taken`/`not_taken`
+分别处理），而不是交给 join 逻辑。
 
-```
-        while (1) {
-            if ((var_18 > 0x1f)) break;
-            ...
-            if ((var_17 == al)) {
-                var_18 = (var_18 + 1);
-            }
-        }
-        eax = 1;
-    } else {
-        eax = 0;
-    }
-    loc_12db:
-    return;          <- 失败分支被排到 return 之后
-    loc_12c3:
-    eax = 0;
-    goto loc_12db;
-```
-
-修法方向：条件分支的 fall-through（0x12c3）在 CFG 里仍是循环体成员，但它的后继（0x12db）在循环外；
-`emit_linear` 应把它作为 `else` 分支发在 `if` 里（`else { eax = 0; goto loc_12db; }`），而不是
-留给 `emit_all` 的"未发射块"兜底。验证样本就是上面这个函数，期望输出两条返回路径都在。
+验证：
+- `verify` 现在两条返回路径都在：`if (…) { i++; } else { eax = 0; return; }`；
+- 真实 crackme 语料 `sub_140001fcc` 的搜索循环改成 `if (*rdx == rbx) { eax = 0; return; }`，
+  与反汇编一致（修前极性是反的）；
+- 结构化率：crackme 93.1% → **93.3%**（462/495），notepad 保持 **97.8%**（495/506）；
+  `lint` 0 findings；`cargo test --workspace` 全绿，`crackme` golden 更新 2 张。

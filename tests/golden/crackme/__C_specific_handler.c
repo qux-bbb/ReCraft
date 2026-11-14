@@ -20,7 +20,6 @@ void __C_specific_handler_l1(void) {
             r9 += r9;
             eax = *(u32*)(((rbx + (r9 * 8)) + 4));
             if (r14 < rax) {
-                loc_ADDR:
                 edi += 1;
             } else {
                 eax = *(u32*)(((rbx + (r9 * 8)) + 8));
@@ -43,7 +42,7 @@ void __C_specific_handler_l1(void) {
                             eax = *(u32*)((rbx + (rax * 8)));
                             if (rbp == rax) {
                                 if ((*(u8*)((rsi + 4)) & 0xADDR) != 0) break;
-                                goto loc_ADDR;
+                                edi += 1;
                             }
                             break;
                         }
@@ -90,7 +89,6 @@ void __C_specific_handler_l1(void) {
             ebp = edi;
             eax = *(u32*)(((rbx + (rcx * 8)) + 4));
             if (r14 < rax) {
-                loc_ADDR:
                 edi += 1;
             } else {
                 eax = *(u32*)(((rbx + (rcx * 8)) + 8));
@@ -125,8 +123,13 @@ void __C_specific_handler_l1(void) {
                         rax += r12;
                         rcx = &var_30;
                         (*rax)();
-                        if (eax >= 0 /* signed */) {
-                            if (eax <= 0 /* signed */) goto loc_ADDR;
+                        if (eax < 0 /* signed */) {
+                            eax = 0;
+                            return;
+                        } else if (eax <= 0 /* signed */) {
+                            edi += 1;
+                            r11 = &var_40;
+                            return;
                         }
                     }
                 }
