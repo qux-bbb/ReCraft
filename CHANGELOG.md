@@ -11,6 +11,20 @@
 
 ## [未发布]
 
+### 变更
+
+- **单次拷贝的参数直接内联，段前缀读取与栈守卫也不再是 `__asm`。**
+  - 拷贝传播：`v1 = arg1; v2 = strlen(v1);` 这种“只有一个定义、只使用一次”的参数拷贝
+    内联到使用点，声明与赋值一起消失（crackme 的 `verify` 现在直接 `strlen(arg1)`）；
+  - `fs:[disp]` / `gs:[disp]` 的 8 字节读取在 `read_operand` 里识别为
+    `__readfsqword` / `__readgsqword`，`sub rdx, fs:[0x28]` 因此是真实的减法而不是
+    `__asm`，后续条件也能建模；
+  - 新增 `hide_stack_guard_typed`：识别 GCC 内联的 canary 检查
+    （`vX = __readfsqword(0x28)` + `reg -= __readfsqword(0x28)` + `if (…) { __stack_chk_fail(); }`）
+    并整体删除，函数尾声恢复成干净的 `return 1;`。
+  实测（ctf-simple-crackme）：intrinsic 指令 4 → 2（覆盖率 98.2% → 99.1%），inline asm
+  13 → 11；crackme-real 93.3%、notepad 97.8% 的结构化率不变。
+
 ### 修复
 
 - **循环内“早退到函数尾声”的分支不再被丢弃。** 有些函数的循环体里有一条失败路径直接跳到
