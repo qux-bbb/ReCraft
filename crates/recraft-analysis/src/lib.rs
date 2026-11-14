@@ -39,7 +39,7 @@ pub use strings::{
     DEFAULT_MIN_STRING_LEN, ExtractedString, MIN_STRING_LEN_CEILING, MIN_STRING_LEN_FLOOR,
     MIN_STRING_LEN_META_KEY, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC,
     StringScanOptions, clamp_min_string_len, extract_strings, extract_strings_with,
-    persist_strings, set_string_min_len, string_min_len,
+    persist_strings, refresh_strings, set_string_min_len, string_min_len, strings_are_stale,
 };
 
 /// `xref.type` for a direct call.
@@ -1030,6 +1030,31 @@ mod tests {
                 .iter()
                 .any(|string| string.text.starts_with('O') && string.text.contains("====")),
             "no literal may start one byte early"
+        );
+    }
+
+    /// A project analyzed by an older build keeps the string list it stored back then. The
+    /// revision marker lets the GUI refresh it instead of showing stale text.
+    #[test]
+    fn a_stale_string_list_is_refreshed_with_the_current_rules() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/build/real/crackme/crackme.exe");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skipping: {} is missing", path.display());
+            return;
+        };
+        let (result, mut session, _dir) = analyze_bytes(&bytes);
+        persist(&mut session, &result).unwrap();
+        assert!(
+            strings_are_stale(&session),
+            "analysis alone does not store the list"
+        );
+        refresh_strings(&mut session).unwrap();
+        assert!(!strings_are_stale(&session));
+        let strings = session.strings().unwrap();
+        assert!(
+            strings.iter().any(|row| row.len == 42),
+            "the refreshed list holds the banner without the leading O"
         );
     }
 

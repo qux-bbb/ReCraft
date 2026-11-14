@@ -2145,6 +2145,13 @@ impl ReCraftApp {
     }
 
     fn after_open(&mut self) {
+        // A project analyzed by an older build keeps the strings it stored back then; the
+        // extraction rules have a revision so such a list is refreshed instead of shown.
+        if let Some(session) = self.session.as_mut()
+            && recraft_analysis::strings_are_stale(session)
+        {
+            let _ = recraft_analysis::refresh_strings(session);
+        }
         let entry = self
             .session
             .as_ref()

@@ -492,7 +492,35 @@ pub fn persist_strings(session: &mut Session, strings: &[ExtractedString]) -> Re
         .iter()
         .map(|string| (string.addr, string.len, string.enc, STRING_KIND_GENERIC))
         .collect();
-    session.replace_auto_strings(&rows)
+    session.replace_auto_strings(&rows)?;
+    session
+        .project_mut()
+        .set_meta_string(STRINGS_REV_META_KEY, &STRINGS_REV.to_string())
+}
+
+/// Revision of the extraction rules. Bump it whenever the scanner output changes so a
+/// project analyzed by an older build refreshes its stored list instead of showing stale
+/// text (the `O` glued to a banner was such a case).
+pub const STRINGS_REV: i64 = 2;
+
+const STRINGS_REV_META_KEY: &str = "strings.rev";
+
+/// Whether the stored list was produced by the current extraction rules.
+pub fn strings_are_stale(session: &Session) -> bool {
+    session
+        .project()
+        .meta_string(STRINGS_REV_META_KEY)
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        != Some(STRINGS_REV)
+}
+
+/// Re-extract the list with the current rules and store it.
+pub fn refresh_strings(session: &mut Session) -> Result<()> {
+    let min_len = string_min_len(session);
+    let strings = extract_strings(session, min_len, 50_000)?;
+    persist_strings(session, &strings)
 }
 
 /// Project `meta` key holding the minimum string length (IDA's *Minimal string length*,

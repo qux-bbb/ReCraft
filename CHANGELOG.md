@@ -11,7 +11,12 @@
 
 ## [未发布]
 
-### 变更
+### 修复
+
+- **旧工程打开时会刷新字符串列表。** 字符串的抽取规则带一个 `strings.rev` 版本号，写入工程
+  元数据；打开工程时若版本不符就按当前规则重新抽取并保存。否则升级后旧工程里仍显示升级前
+  抽出的文本——比如 banner 前多出的那个 `O`，反编译视图是对的、Strings 面板却是旧的。
+
 
 - **可以拿 IDA 的字符串列表对拍了。** 新增 `scripts/ida-strings-dump.py`（`ida64.exe -A -S`
   调用，`idautils.Strings()` → JSON）与 `scripts/compare-ida-strings.ps1`（自动 import/analyze
