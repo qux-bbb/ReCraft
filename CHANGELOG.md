@@ -9,6 +9,30 @@
 开发记录（每条修复、每次指标变化、每个负结果）归档在
 [docs/CHANGELOG-0.1.0.md](docs/CHANGELOG-0.1.0.md)。
 
+## [未发布]
+
+### 修复
+
+- **循环内“早退到函数尾声”的分支不再被丢弃。** 有些函数的循环体里有一条失败路径直接跳到
+  函数尾声（`mov eax, 0; jmp <epilogue>`）。结构化器把这种条件分支的汇合点算成尾声块后，
+  另一条臂落在 stop 集里、既不是 break/continue 也不是 loop-exit，于是被静默丢掉——按输出
+  会死循环而不是返回失败值（`ctf-simple-crackme` 的 `verify` 就是这样）。新增
+  `escape_to_return()` / `emit_escape_chain()`：这类短链离开当前区域且终点是返回块时，发成
+  `else { …; return; }`（两条臂的极性分别处理）。真实 crackme 语料的结构化率 93.1% → 93.3%，
+  notepad 保持 97.8%，`lint` 0 findings；`crackme` golden 更新 2 张。
+
+### 变更
+
+- **参数恢复跟随 ABI。** `ArgNames` 记录整数参数寄存器表（Win64：rcx/rdx/r8/r9；ELF64：
+  rdi/rsi/rdx/rcx/r8/r9），`signature()`/`slot_of()`/`count()`/补中间参数全部按这张表走。
+  之前是 Win64 常量硬编码，ELF64 函数即使读了 `rdi` 也恢复成 `void`。同时识别优化构建的
+  入口栈溢出（`mov [rbp-0x18], rdi`）：入口前 8 条里出现“把参数寄存器存进栈槽”即视为入参。
+  效果：ELF64 的 `verify` 变为 `int32 verify(int64 arg1)`，PE 的 `sub_140001fcc` 也拿到 `arg1`。
+
+- **`fs:` 段读取渲染成 `__readfsqword`。** SysV 的栈 canary 在 `fs:0x28`（PE 在 `gs:0x28`），
+  此前只认 `gs`，Linux ELF 的 `mov rax, fs:[0x28]` 整条落进 `__asm`。现在按段前缀分派到
+  同一个 lifter，新增 `Builtin::ReadFsqword`。
+
 ## [0.4.1] - 2026-11-14
 
 0.4.1 是 0.4.0 之后的修正版：AArch64 解码器换成 capstone、A64 操作数与 movk 修正、图标回到 v1。
