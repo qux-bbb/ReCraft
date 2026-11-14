@@ -13,6 +13,16 @@
 
 ### 变更
 
+- **栈槽按 rbp 深度命名（IDA 风格）。** `[rbp-0x18]` 现在叫 `var_18`、`[rbp-8]` 叫
+  `var_8`，与 IDA 一致。此前打印器在 `stack_layout` 证明不了帧时（prologue 里有 `pop`、有
+  碰 rsp 的 intrinsic 等）会退化成 rsp 相对命名，同一函数里两个槽的名字正好反过来。
+  做法：从 `push rbp; mov rbp, rsp; sub rsp, N` 读出帧大小（`sub rsp, 0x20` 的立即数种类
+  是 `Immediate8to64`），结构化结束后把 `var_<rsp 偏移>` 重命名成 `var_<帧深度>`；两阶段
+  替换避免 `var_8 ↔ var_18` 互相吃掉，只改帧内槽。crackme 的 `verify` 现在是
+  `var_18 = rdi;`（参数槽）+ `var_8 = 0;`（计数器）；160 张快照里 5 张按新命名更新，
+  diff 只有槽名；结构化率与测试全绿。
+
+
 - **单次拷贝的参数直接内联，段前缀读取与栈守卫也不再是 `__asm`。**
   - 拷贝传播：`v1 = arg1; v2 = strlen(v1);` 这种“只有一个定义、只使用一次”的参数拷贝
     内联到使用点，声明与赋值一起消失（crackme 的 `verify` 现在直接 `strlen(arg1)`）；
