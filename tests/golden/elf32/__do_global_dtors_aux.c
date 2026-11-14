@@ -13,6 +13,5 @@ void __do_global_dtors_aux_l1(void) {
         *(u8*)((ebx + 0xADDR)) = 1;
     }
     ebx = var_100000014;
-    __asm("leave");
     return;
 }
