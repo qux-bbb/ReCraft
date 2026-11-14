@@ -28,13 +28,17 @@
 
 ## 3. 落地步骤
 
-1. **补 `release.yml`**：`on: push: tags: ['v*']` → Windows runner 上 `package.ps1` →
-   上传 zip/MSI 为 artifact；这一步既是发版自动化，也是 SignPath 审核时看的"构建可复现"证据；
+1. **`release.yml` 已写好（2026-11-14）**：`.github/workflows/release.yml` 在 `v*` tag 推送或
+   手动 `workflow_dispatch` 时，于 Windows runner 上执行 `package.ps1 -RequireMsi` →
+   `verify-package.ps1` → `verify-msi.ps1`（静默安装/运行/卸载）→ `demo.ps1`，上传
+   zip/MSI/SHA256SUMS 为 artifact；只有显式 `publish=true`（或 tag 推送）才创建 GitHub
+   release。tag 推送默认**只构建不发布**，避免误打的 tag 直接变成下载。签名步骤的位置已在
+   文件里用注释标出（"verify MSI" 与 "publish" 之间）；
 2. 在 SignPath 注册组织 → 新建 project（选 GitHub Actions 集成）→ 提交 Foundation 申请；
-3. 审核通过后：在仓库 secrets 里配 `SIGNPATH_API_TOKEN`，把签名步骤加到 `release.yml`
-   （SignPath 的 `signpath/github-action-submit-signing-request`），签 `recraft.exe`、
-   `recraft-cli.exe` 与 MSI；
-4. 验证：`signtool verify /pa /v dist\...msi`；0.4.0 发版时确认 SmartScreen 不再提示。
+3. 审核通过后：在仓库 secrets 里配 `SIGNPATH_API_TOKEN` / `SIGNPATH_ORGANIZATION_ID`，把
+   `release.yml` 里的签名占位替换成 `signpath/github-action-submit-signing-request`，
+   签 `recraft.exe`、`recraft-cli.exe` 与 MSI，并让 release 上传签名后的文件；
+4. 验证：`signtool verify /pa /v dist\...msi`；下一个补丁版确认 SmartScreen 不再提示。
 
 ## 4. 风险与备选
 

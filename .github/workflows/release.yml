@@ -1,0 +1,95 @@
+name: Release
+
+# Builds the distributables (zip + MSI), verifies them, and — when asked — publishes a
+# GitHub release. The tag push path only *builds*; publishing stays a manual decision so a
+# mis-tagged commit cannot become a download by itself.
+#
+# Signing (docs/SIGNING.md) is intentionally not wired in yet: SignPath Foundation has to
+# approve the project first. When it does, add a `signpath` step between "verify MSI" and
+# "publish", sign `dist/*.exe` + `dist/*.msi`, then let the release upload the signed files
+# (the step is documented in docs/SIGNING.md §3 step 3).
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub release for this tag (requires the tag to exist)"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: windows package + optional release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: release build + package (zip + MSI)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/package.ps1 -RequireMsi
+
+      - name: verify package (hashes, entries, packaged binaries)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify-package.ps1
+
+      # The runner is elevated, so the per-machine MSI installs, runs and uninstalls
+      # silently; this is the last gate before anything becomes downloadable.
+      - name: verify MSI (structure + payload + install -> CLI -> uninstall)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify-msi.ps1
+
+      - name: demo (end-to-end CLI smoke on the packaged binaries)
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/demo.ps1
+
+      - name: upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: recraft-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.msi
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      # Signing goes here once SignPath approves the project (docs/SIGNING.md §3):
+      #   - uses: signpath/github-action-submit-signing-request@v1
+      #     with:
+      #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #       organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+      #       project-slug: recraft
+      #       signing-policy-slug: release-signing
+      #       artifact-configuration-slug: windows-msi
+      #       github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      #       wait-for-completion: true
+      #       output-artifact-directory: dist-signed
+
+      - name: publish GitHub release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $tag = "v$version"
+          if (-not (git tag --list $tag)) {
+            throw "tag $tag does not exist; push the tag before publishing"
+          }
+          gh release create $tag `
+            --title "ReCraft $version" `
+            --notes-file CHANGELOG.md `
+            dist/*.zip dist/*.msi dist/SHA256SUMS.txt
