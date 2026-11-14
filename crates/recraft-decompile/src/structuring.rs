@@ -3311,11 +3311,11 @@ impl Structurer {
         let count = self.blocks.len();
         let virtual_exit = count;
         let mut predecessors = vec![Vec::new(); count + 1];
-        for node in 0..count {
-            if self.successors[node].is_empty() {
+        for (node, successors) in self.successors.iter().enumerate() {
+            if successors.is_empty() {
                 predecessors[virtual_exit].push(node);
             }
-            for &next in &self.successors[node] {
+            for &next in successors {
                 predecessors[next].push(node);
             }
         }
