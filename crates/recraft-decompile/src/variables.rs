@@ -68,6 +68,7 @@ pub(crate) fn recover_variables(lines: &mut Vec<PseudoLine>, is_64: bool, sysv: 
     }
     strip_parameter_registers(lines);
     fold_copy_then_update(lines);
+    inline_single_use_parameter_copies(lines);
     drop_write_only_locals(lines);
     inline_literal_locals(lines);
     drop_redundant_signed_notes(lines);
@@ -278,6 +279,144 @@ fn drop_write_only_locals(lines: &mut Vec<PseudoLine>) {
         lines.remove(*index);
     }
 }
+/// Inline a local whose only definition is a copy of a parameter and which is used once.
+///
+/// Optimised code spills a parameter to a slot and reloads it (`v1 = arg1; v2 = strlen(v1)`).
+/// The value flow turns the slot into a local, but a single-use copy of a parameter adds
+/// nothing: spelling the parameter at the use site reads better and removes both the
+/// declaration and the assignment.
+fn inline_single_use_parameter_copies(lines: &mut Vec<PseudoLine>) {
+    let Some(signature) = lines.iter().position(|line| signature_line(&line.text)) else {
+        return;
+    };
+    let params = parameter_names(&lines[signature].text);
+    if params.is_empty() {
+        return;
+    }
+    loop {
+        let plan = plan_single_use_copy(lines, signature, &params);
+        let Some((use_site, definition, declaration, value)) = plan else {
+            return;
+        };
+        lines[use_site].text =
+            replace_word(&lines[use_site].text, &name_at(lines, declaration), &value);
+        lines.remove(definition);
+        let declaration = if definition < declaration {
+            declaration - 1
+        } else {
+            declaration
+        };
+        lines.remove(declaration);
+    }
+}
+
+fn name_at(lines: &[PseudoLine], declaration: usize) -> String {
+    declaration_name(lines[declaration].text.trim()).unwrap_or_default()
+}
+
+/// `(use_site, definition_line, declaration_line, value)` for one inlinable copy.
+fn plan_single_use_copy(
+    lines: &[PseudoLine],
+    signature: usize,
+    params: &[String],
+) -> Option<(usize, usize, usize, String)> {
+    let declarations: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .skip(signature + 1)
+        .filter_map(|(index, line)| declaration_name(line.text.trim()).map(|name| (index, name)))
+        .collect();
+    for (declaration, name) in declarations {
+        if params.contains(&name) {
+            continue;
+        }
+        let mut definition: Option<(usize, String)> = None;
+        let mut uses = 0usize;
+        let mut use_site: Option<usize> = None;
+        let mut address_taken = false;
+        for (index, line) in lines.iter().enumerate().skip(signature + 1) {
+            if index == declaration {
+                continue;
+            }
+            let text = line.text.as_str();
+            if !mentions_name(text, &name) {
+                continue;
+            }
+            if text.contains('&') {
+                address_taken = true;
+                break;
+            }
+            match plain_definition(text) {
+                Some((lhs, rhs)) if lhs == name => {
+                    definition = Some((index, rhs.trim().to_owned()));
+                }
+                _ => {
+                    uses += 1;
+                    use_site = Some(index);
+                }
+            }
+        }
+        if address_taken || uses != 1 {
+            continue;
+        }
+        let (definition, value) = definition?;
+        let use_site = use_site?;
+        if !params.contains(&value) {
+            continue;
+        }
+        return Some((use_site, definition, declaration, value));
+    }
+    None
+}
+
+/// Parameter names from a signature line: `int32 verify(int64 arg1, char* arg2)`.
+fn parameter_names(signature: &str) -> Vec<String> {
+    let Some(open) = signature.find('(') else {
+        return Vec::new();
+    };
+    let Some(close) = signature.rfind(')') else {
+        return Vec::new();
+    };
+    let list = &signature[open + 1..close];
+    if list.trim().is_empty() || list.trim() == "void" {
+        return Vec::new();
+    }
+    list.split(',')
+        .filter_map(|param| {
+            let name = param.split_whitespace().next_back()?;
+            let name = name.trim_matches(|ch: char| ch == '*' || ch == '&').trim();
+            (!name.is_empty()).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// Replace `name` as a whole word in `text`.
+fn replace_word(text: &str, name: &str, replacement: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    let flush = |token: &mut String, out: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        if token == name {
+            out.push_str(replacement);
+        } else {
+            out.push_str(token);
+        }
+        token.clear();
+    };
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+        } else {
+            flush(&mut token, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
 /// Inline a local whose only definition is a string literal.
 ///
 /// GCC keeps one address in a register and reuses it across calls (`rbx = "===="` … `puts(rbx)`),

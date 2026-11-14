@@ -452,6 +452,25 @@ impl Lifter {
                 Some(self.reg(view))
             }
             OpKind::Memory => {
+                // `fs:[disp]` / `gs:[disp]` is TLS, not an ordinary load: the base is not a
+                // register the code can name. The stack canary lives at `fs:0x28` (SysV) or
+                // `gs:0x28` (PE), and reading it through the segment keeps the subtraction and
+                // the comparison around it in the value flow instead of an opaque `__asm`.
+                let segment = insn.instruction().segment_prefix();
+                if matches!(segment, iced_x86::Register::FS | iced_x86::Register::GS)
+                    && memory_size_bytes(insn)? == 8
+                {
+                    let kind = if segment == iced_x86::Register::FS {
+                        Builtin::ReadFsqword
+                    } else {
+                        Builtin::ReadGsqword
+                    };
+                    let arg = self.constant(insn.instruction().memory_displacement64());
+                    return Some(self.push(Expr::Builtin {
+                        kind,
+                        arg: Some(arg),
+                    }));
+                }
                 let size = memory_size_bytes(insn)?;
                 let addr = self.memory_address(insn)?;
                 Some(self.push(Expr::Load { addr, size }))

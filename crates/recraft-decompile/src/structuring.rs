@@ -455,6 +455,8 @@ fn structure(
     // structural fold passes exposes the real return paths and call arguments. The cookie
     // setup has to be identified before `hide_callee_saves` treats its store as a spill.
     hide_security_cookies(&mut lines);
+    hide_stack_guard(&mut lines);
+    hide_stack_guard_typed(&mut lines);
     hide_callee_saves(&mut lines);
     // x86 passes arguments on the stack, so the register-based recovery is x64-only.
     if session.image().is_64 {
@@ -494,8 +496,9 @@ fn structure(
     collapse_nested_if_wrappers(&mut lines);
     strip_inline_condition_parentheses(&mut lines);
     // The stack-protector guard is bookkeeping like the epilogue restores: hiding it also
-    // lets `fold_return_values` see the assignment that produces the return value.
     hide_stack_guard(&mut lines);
+    hide_stack_guard_typed(&mut lines);
+    hide_stack_guard_typed(&mut lines);
     mark("  ifs");
     tidy_labels(&mut lines);
     drop_unreachable_tails(&mut lines);
@@ -5608,6 +5611,90 @@ fn is_cookie_slot(value: &str) -> bool {
 /// stores a global mixed with the stack pointer, and only a function with such a setup has
 /// its `frame-slot ^ rsp` calls removed, so an unrelated tail call cannot match. The setup
 /// goes too when nothing reads its slot any more.
+/// Drop the inlined stack-guard check.
+///
+/// GCC's `-fstack-protector` reads the canary from TLS (`fs:0x28`, `gs:0x28` on PE), stores it
+/// in the frame, and before returning compares it against the TLS value, calling
+/// `__stack_chk_fail` on mismatch. The lifter now renders those reads as `__readfsqword`, so
+/// the check is real pseudo-C instead of `__asm`; the guard is still bookkeeping and is removed
+/// here, which also restores the plain `return;` the function really has.
+fn hide_stack_guard_typed(lines: &mut Vec<PseudoLine>) {
+    if lines.len() < 3 {
+        return;
+    }
+    let mut drop = vec![false; lines.len()];
+    let is_tls_read =
+        |text: &str| text.contains("__readfsqword(0x28)") || text.contains("__readgsqword(0x28)");
+    let mut index = 0;
+    while index + 2 < lines.len() {
+        let head = lines[index].text.trim().to_owned();
+        let body = lines[index + 1].text.trim().to_owned();
+        let close = lines[index + 2].text.trim().to_owned();
+        let fail_call = body == "__stack_chk_fail();" || body == "return __stack_chk_fail();";
+        if head.starts_with("if (") && head.ends_with('{') && fail_call && close == "}" {
+            drop[index] = true;
+            drop[index + 1] = true;
+            drop[index + 2] = true;
+            // The comparison is set up on the lines directly before the `if`.
+            let mut back = index;
+            while back > 0 {
+                let previous = lines[back - 1].text.trim();
+                let setup = previous.ends_with(';')
+                    && !previous.starts_with("if (")
+                    && (is_tls_read(previous)
+                        || previous.ends_with("-= __readfsqword(0x28);")
+                        || previous.ends_with("-= __readgsqword(0x28);")
+                        || previous.split_once(" = ").is_some_and(|(_, rhs)| {
+                            rhs.ends_with(';') && is_stack_slot_name(rhs.trim_end_matches(';'))
+                        }));
+                if !setup {
+                    break;
+                }
+                drop[back - 1] = true;
+                back -= 1;
+            }
+            index += 3;
+            continue;
+        }
+        index += 1;
+    }
+    let mut kept = Vec::with_capacity(lines.len());
+    for (index, line) in lines.drain(..).enumerate() {
+        if !drop[index] {
+            kept.push(line);
+        }
+    }
+    *lines = kept;
+
+    // The guard store itself (`v12 = __readfsqword(0x28);`) is dead once the check is gone.
+    let stored: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let text = line.text.trim();
+            let name = text
+                .strip_suffix(" = __readfsqword(0x28);")
+                .or_else(|| text.strip_suffix(" = __readgsqword(0x28);"))?;
+            is_identifier(name).then(|| (index, name.to_owned()))
+        })
+        .collect();
+    for (index, name) in stored.iter().rev() {
+        let used = lines
+            .iter()
+            .enumerate()
+            .any(|(position, line)| position != *index && mention_of(&line.text, name));
+        if !used {
+            lines.remove(*index);
+        }
+    }
+}
+
+/// Whole-word occurrence check for identifiers.
+fn mention_of(text: &str, name: &str) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| token == name)
+}
+
 fn hide_security_cookies(lines: &mut Vec<PseudoLine>) {
     if lines.len() < 4 {
         return;
