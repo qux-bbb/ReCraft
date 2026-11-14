@@ -2167,16 +2167,6 @@ impl Printer<'_> {
     /// really is the frame base; a `rbp` that merely holds a pointer (`rbp = [rax + 8]`)
     /// addresses a structure, and `[rbp + 0x18]` must stay `*(u32*)((rbp + 0x18))`.
     fn stack_reference(&self, base: Reg, offset: i64) -> Option<String> {
-        if std::env::var_os("RECRAFT_DUMP").is_some() {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static SEEN: AtomicUsize = AtomicUsize::new(0);
-            if SEEN.fetch_add(1, Ordering::Relaxed) < 40 {
-                eprintln!(
-                    "stack_reference base={:?} offset={:#x} delta={:?} frame_base={:#x}",
-                    base, offset, self.stack_delta, self.frame_base
-                );
-            }
-        }
         if let Some(name) = self.args.and_then(|args| args.name_for_stack(base, offset)) {
             return Some(name.to_owned());
         }
