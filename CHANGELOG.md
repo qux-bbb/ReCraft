@@ -11,11 +11,10 @@
 
 ## [0.2.0] - 2026-11-15
 
-0.2.0 把 0.1.0 之后的全部工作一次收口：W1 工作台（字符串可编辑、IDA 字符串对拍、
-图标、工具栏收敛）、W2 分析助手统一、W3 结构化时间盒、W4 中立解码抽象、W5 ARM64 支持、
-W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复。开发中期版本号一度推到
-0.3.x / 0.4.x，发布前统一收回：对外只发布这一个 0.2.0，0.1.0 → 0.2.0 是唯一受支持的
-升级路径（MSI `MajorUpgrade` 按 0.2.0 > 0.1.0 生效）。
+0.2.0 是 0.1.0 之后的第一次正式更新，把这一阶段的工作按六个波次一次收口：W1 工作台
+（字符串可编辑、IDA 字符串对拍、工具栏收敛）、W2 分析助手统一、W3 结构化时间盒、W4 中立
+解码抽象、W5 ARM64 支持、W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复。
+0.1.0 → 0.2.0 的升级受 MSI `MajorUpgrade` 支持（0.2.0 > 0.1.0 生效）。
 
 ### 新增
 
@@ -23,11 +22,12 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   `DecodedInsn`/`DecodedOperand` 与 `Insn::neutral()`：地址、长度、助记符、操作数
   （寄存器名/立即数/`base + index*scale + disp`/直接分支目标）与**隐式**读写寄存器
   （`InstructionInfoFactory`，`div rcx` 会如实报告读写 rax/rdx）。x86 lifter 仍用 iced 的
-  类型化 API，输出逐字节不变；ADR-015 同时定下 ARM64 用 yaxpeax-arm（0BSD、纯 Rust）、
-  capstone 作为可回退备选（FFI 边界只在适配层）、bad64 不选。附带 6 条单测与 DESIGN §5
-  的边界说明。
+  类型化 API，输出逐字节不变；ADR-015 定下 ARM64 的解码器选型与回退点：先选 yaxpeax-arm
+  （0BSD、纯 Rust），capstone 作为可回退备选（FFI 边界只在适配层），bad64 不选——本版后来
+  就按这个回退点换成了 capstone（见修复节的「AArch64 解码器从 yaxpeax-arm 换成 capstone」）。
+  附带 6 条单测与 DESIGN §5 的边界说明。
 
-- **ARM64（AArch64）支持（0.2.0 主线）。** 解码走 yaxpeax-arm（0BSD，纯 Rust），
+- **ARM64（AArch64）支持。** 解码走 capstone（C 库，FFI 只隔离在适配层），
   产出中立的 `DecodedInsn`；导入、反汇编、函数发现（ELF 符号表 / PE `.pdata` 的 8 字节
   ARM64 条目）、调用图、字符串与 L0 伪 C 全部打通。A64 lifter 覆盖整数运算、访存
   （含 `ldrb/strh/ldur` 等宽度变体与索引寻址）、移位/位域、条件选择（`cset/csel/csinc`）、
@@ -40,31 +40,22 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   `scripts/make-arm64-pe-fixture.py` 生成。SIMD 的 `stp/ldp v`、`mrs`、`smulh`、`br`
   仍以 `__asm` 输出（约 3% 行）。
 
-- **应用图标重设计（v2）：字母 + 扫描线。** 去掉 v1 的六边形外框与电路节点（16–32px 会糊成
-  噪点），只保留几何 **R**、青色扫描线与 7 个字节刻度，配深色圆角底；R 放大 8% 并上移，字面更满。
-  `assets/generate_icon.py` 重写为纯 Pillow 图元（不再依赖 numpy/系统字体），一次生成 1024 PNG、
-  7 帧 ICO（16–256）与窗口图标用的 64×64 RGBA；exe 内嵌图标与 ICO 32px 帧逐像素一致。
-  接入面同步更新：README/README.en 顶部显示新图标，Help → About 改为真正的关于窗口（图标 +
-  版本 + 许可 + 项目链接），安装器向导配色改为新底/新青，`docs/ICON.md` 记录 v2 设计与生成方式。
+- **Help → About 改为真正的关于窗口。** 窗口里显示应用图标、版本、许可证与项目链接，
+  替代此前只有一行文本的对话框。
 
 - **分析助手可以带着“选中的那段”对话。** Decompile 里选中一段伪代码、或选中一条反汇编指令后，
   助手输入框下方出现「附带选中内容」（默认勾选）；发送时把选中文本作为围栏块（附行号与地址
   范围）拼在问题前面，并保留多轮追问的上下文，不用再把代码复制进问题。没有选中时提示行不出现。
 
-- **栈变量命名：手动改名 + AI 命名 + 函数一键命名。** Decompile 行右键可「重命名变量…」
-  （仅当该行含 `var_XX`），名字存 `var` 表、走命令总线，可撤销、重开保留，空名字恢复生成
-  槽名；L2 在局部量恢复后整 token 替换，字段后缀与取地址都保留，L1 golden 形态不变。
-  右键「AI：命名变量」把函数栈槽（使用次数 + 三行伪代码证据）发给模型，按
-  `<槽位> <名称> -- <理由>` 解析成可勾选建议，应用时逐个走命令总线；新增第五种内置提示词
-  `Vars`（中英文可改）。函数建议卡片新增「全部应用」，一键批量命名（每条一个撤销点）。
+- **栈变量可以手动改名。** Decompile 行右键「重命名变量…」（仅当该行含 `var_XX`）：名字存
+  `var` 表、走命令总线，可撤销、重开保留，空名字恢复生成的槽名；L2 在局部量恢复后整 token
+  替换，字段后缀与取地址都保留，L1 golden 形态不变。
 
-- **AI 的系统提示词可以改，并且内置中英文两套。** 四条系统提示词（函数解释、命名、润色、
-  项目级智能体）各自提供英文（原有文案）与中文（新增翻译）内置版本，语言与界面语言无关、
-  默认英文；`ai-settings.json` 记 `prompt_language` 与按 `"<语言>:<用途>"` 键的覆盖文本。
-  设置窗口新增「系统提示词」区：切换语言、查看/编辑任意一条、保存覆盖或恢复内置；空文本
-  等于恢复。`system_prompt` 同时供三个 `build_*_prompt` 与 `run_agent` 使用，提示词参与缓存
-  key（system 已哈希），改文案不会命中旧答案。新增单测覆盖语言切换、覆盖优先级、清空恢复、
-  设置文件往返、缓存 key 变化与请求里实际携带的系统提示。
+- **分析助手的系统提示词可以改，内置中英文两套。** `ai-settings.json` 记 `prompt_language`
+  与按 `"<语言>:agent"` 键的覆盖文本，语言与界面语言无关、默认英文；设置窗口的「系统提示词」
+  区可以切换语言、查看/编辑、保存覆盖或恢复内置，空文本等于恢复。提示词参与缓存 key
+  （system 已哈希），改文案不会命中旧答案。单测覆盖语言切换、覆盖优先级、清空恢复、设置文件
+  往返、缓存 key 变化与请求里实际携带的系统提示。
 
 - **内置 CRT 签名从 9 条扩到 43 条，`.map` 逐地址校验零误报。** 覆盖 MSVC 静态 CRT 的启动
   （`mainCRTStartup`、`__scrt_common_main_seh`）、异常与 RTC（`__C_specific_handler`、
@@ -325,20 +316,19 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   `DESIGN §8.4`、README 双语表述同步更新，新增单测
   `a_fresh_install_starts_in_simplified_chinese` 钉住默认值。
 
-- **图标回到 v1（用户决定）。** 2026-11-14 先用 v2「字母 + 扫描线」替换，随后试了 v3 双变体，
-  用户认为都不如原版，于是恢复 v1：六边形里的几何 R、六个电路节点与一条走线、深海底渐变
-  底（`#071B26 → #0C3A46`）+ 薄荷青光晕。`assets/generate_icon.py` 回退到 v1 版本（Pillow +
-  numpy，重跑逐字节可复现），ICO 仍是 16/24/32/48/64/128/256 七帧；exe 内嵌图标与 ICO 32px
-  帧逐像素一致（maxdiff 0）。安装器向导 art 的配色回到 v1 的 `#0C3A46` / `#1EB5CD`，
-  `docs/ICON.md` 改回 v1 的设计说明并记录这次来回。v2/v3 的脚本与产物保留在 git 历史
-  （`0874a32`、`966b9a1`）。
+- **应用图标保持 v1。** 这一版试过两轮重设计（v2「字母 + 扫描线」、v3「按尺寸双变体」），
+  比较后认为都不如原版，最终恢复 v1：六边形里的几何 R、六个电路节点与一条走线、深海底
+  渐变底（`#071B26 → #0C3A46`）+ 薄荷青光晕。`assets/generate_icon.py` 为 v1 版本
+  （Pillow + numpy，重跑逐字节可复现），ICO 仍是 16/24/32/48/64/128/256 七帧；exe 内嵌
+  图标与 ICO 32px 帧逐像素一致（maxdiff 0）。安装器向导 art 用 v1 的 `#0C3A46` /
+  `#1EB5CD`，`docs/ICON.md` 记录 v1 设计与生成方式。
 
 - **删除顶部工具栏行。** 第二行（◀▶、Graph/Text、Analyze、AI、主题、语言、项目路径、×）的每个
   入口都在别处：后退/前进入 **Jump** 菜单，Graph/Text 用空格或命令面板，分析重跑在
   **Options → Analyze functions**（运行期间同一位置显示“分析中… Ns”与「取消」，补回原先只存在于
   工具栏的进度/取消入口），主题 `Ctrl+T`，语言与 AI 在 Options/命令面板，项目路径在窗口标题。
-  删掉后顶部只剩菜单栏 + 导航带，省约 30px；DEMO 走查同步改写。截图等 0.4 的 UI 现代化统一重拍
-  （现有 `docs/images/` 仍是旧工具栏）。
+  删掉后顶部只剩菜单栏 + 导航带，省约 30px；DEMO 走查同步改写。截图待重拍（现有
+  `docs/images/` 仍是旧工具栏）。
 
 - **Strings 视图改用 IDA 同款的 `Shift+F12`。** IDA 的 Strings 窗口就是 `Shift+F12`，ReCraft
   此前把 Strings 绑在 `F4`。现在 `Shift+F12` 打开/聚焦 Strings（页签关掉时重新停靠），Views
@@ -352,13 +342,14 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   `DEFAULT_MIN_STRING_LEN`。notepad 的 golden 快照因此更新 17 份（同时包含上一条宽字面量修复），
   crackme/corpus/corpus86/go 与 `lint`、`metrics` 不变（notepad 仍是 494/506 结构化、覆盖 99.6%）。
 
-- **`recraft-ai` 依赖 `recraft-analysis`。** triage 要与 `analyze` 共用同一份 API 与
+- **`recraft-ai` 依赖 `recraft-analysis`。** 分析助手的工具与 `analyze` 共用同一份 API 与
   `/proc` 分类规则，不再复制一份；依赖方向仍单向（`recraft-analysis` 不反向依赖
   `recraft-ai`），构建依赖图无环。
 
 - **加载层不再假设「PE 即全部格式」。** `recraft-format` 现在有格式中立的 `Image`、`Format`
-  与 `Arch`，`Loader` trait 返回带格式与架构的 `LoadedImage`，`load()` 按魔术字分派（PE 是
-  唯一实现，其他格式报 `unrecognised executable format`）。项目把 `format` 与新增的 `arch`
+  与 `Arch`，`Loader` trait 返回带格式与架构的 `LoadedImage`，`load()` 按魔术字分派；
+  ELF64 与 ELF32 的加载器随后按同一接口接入（见上「ELF64（x86-64）支持」「ELF32（i386）
+  支持」）。项目把 `format` 与新增的 `arch`
   写进 `meta`，镜像 JSON 的键从 `pe_meta` 改为 `image_meta`，旧项目仍从 `pe_meta` 读取，
   不需要重新导入。这是一次零输出变化的重构：789 个 golden 快照、`lint` 与反编译文本不变。
 
@@ -366,8 +357,8 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   测试，用来持续证明 ADR-009 的可移植性；它也是 ELF 语料（只能在 Linux 上编译）的前置条件。
 
 - **调用约定改为按架构查表。** `recover_l2` 不再用 `image().is_64` 二分，而是按
-  `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与将来的
-  AArch64 用无关键字约定。`recraft-core` 重导出 `Arch`/`Format`/`Image`/`LoadedImage`，
+  `session.arch()` 查表：x86 仍靠尾声的 `ret imm16` 区分 cdecl/stdcall，x64 与 AArch64
+  （AAPCS64）用无关键字约定。`recraft-core` 重导出 `Arch`/`Format`/`Image`/`LoadedImage`，
   反编译器因此不必直接依赖加载层。
 
 - **lint/渲染改为只读快照 + 按函数并行。** 反编译渲染现在只依赖只读的 `SessionView`
@@ -384,6 +375,10 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   两个作业改用 `ubuntu-24.04`：`ubuntu-latest` 从 2026-10-19 起迁往 Ubuntu 26，而提交的
   `tests/golden/elf{,-cpp}` 依赖镜像里的 gcc/glibc，静默换镜像会让快照抖动；升级镜像要在
   同一个 PR 里用 `RECRAFT_REGEN_ELF_SNAPSHOTS=1` 重建快照。
+
+- **演示脚本默认用 release 二进制。** `scripts/demo.ps1` 以前固定 `target/debug`，发布会
+  后演示里的 MCP `serverInfo.version` 还是旧版本；现在优先 `target/release`，缺失才回退
+  debug 并构建。
 
 ### 修复
 
@@ -610,16 +605,6 @@ W6 界面现代化，以及发布前的 capstone 解码器切换与收尾修复�
   顶栏与状态栏改为带发丝边框的 surface_1 条；标签页并入表面阶梯；次级文字统一用 muted。
   渲染回归由 `the_modern_theme_lands_the_documented_tokens` 钉住，可访问性由
   `the_palette_meets_the_documented_contrast_floor`（正文/次级 ≥4.5:1、强调色 ≥3:1）守住。
-
-- **应用图标 v3：按尺寸双变体。** 16/24/32 px 改为 5×7 位图 **R** + 加粗青色扫描带 + 3 个
-  刻度（硬像素落位，任务栏里仍读得出"字母 + 扫描线"）；48–256 px 保留几何 R、光晕、圆角
-  描边、投影与 7 个刻度。顺带修掉几何 R 骨架越界（x 到 1270 而画布只有 1024）导致的右侧
-  裁切。`assets/generate_icon.py` 现在手工拼装 ICO 的 PNG 帧，每个尺寸独立绘制；exe 嵌入
-  图标与 ICO 32px 帧逐像素一致。`docs/ICON.md` 记录 v3 设计与生成方式。
-
-- **演示脚本默认用 release 二进制。** `scripts/demo.ps1` 以前固定 `target/debug`，发布会
-  后演示里的 MCP `serverInfo.version` 还是旧版本；现在优先 `target/release`，缺失才回退
-  debug 并构建。
 
 ## [0.1.0] - 2026-11-08
 
