@@ -182,8 +182,9 @@ pub(crate) fn attach_xref_comments(session: &Session, lines: &mut [DisasmLine]) 
     Ok(())
 }
 
-/// How IDA names the referencing instruction: its symbol, `function+offset`, or
-/// `segment:offset` for an address that is neither.
+/// How IDA names the referencing instruction: its symbol, `function+offset`,
+/// `function:loc_<hex>` for a location that is itself a jump target, or `segment:offset`
+/// for an address that is none of those.
 fn site_label(session: &Session, functions: &[FunctionInfo], xref: XrefEntry) -> Result<String> {
     let from = xref.from;
     if let Some(name) = session.name_at(from)? {
@@ -193,6 +194,15 @@ fn site_label(session: &Session, functions: &[FunctionInfo], xref: XrefEntry) ->
         let name = session
             .name_at(function.start)?
             .unwrap_or_else(|| format!("sub_{:x}", function.start.get()));
+        // IDA labels a jump target inside a function `loc_…` and writes the referencing
+        // site as `main:loc_140001130`; an unlabeled address stays `main+120`.
+        let labeled = session
+            .xrefs_to(from)?
+            .iter()
+            .any(|xref| xref.kind == XREF_JUMP);
+        if labeled && from != function.start {
+            return Ok(format!("{name}:loc_{:x}", from.get()));
+        }
         let offset = from.get().saturating_sub(function.start.get());
         return Ok(if offset == 0 {
             name

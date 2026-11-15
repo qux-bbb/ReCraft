@@ -37,17 +37,14 @@ const DATA_ROW_BYTES: u64 = 8;
 /// Cap on row-boundary steps when a data window is paged backwards, so a huge segment
 /// cannot stall the UI.
 const DATA_WALK_LIMIT: usize = 200_000;
-/// Column of the instruction text in the listing, in monospace cells. IDA prints the
-/// address (`segname:offset`) and then indents the instruction to this column; everything
-/// before it (address, optional opcode bytes) is padded.
-const DISASM_INSN_COL: usize = 39;
+/// Cells IDA leaves between the address column and the instruction column: a constant gap,
+/// so `.text:` (22 cells) starts its text at 39 and `.rdata:` (23) at 40.
+const DISASM_INSN_GAP: usize = 17;
 /// Cells IDA leaves between the instruction column and the comment column.
-const DISASM_COMMENT_GAP: usize = 17;
+const DISASM_COMMENT_GAP: usize = 24;
 /// Cells the opcode-bytes column takes when it is enabled: up to eight bytes, the most
 /// IDA shows with *Number of opcode bytes*.
 const DISASM_BYTES_CELLS: usize = 25;
-/// Which column the label line puts the name after the address.
-const DISASM_NAME_COL: usize = 23;
 const MONO_SIZE: f32 = 12.5;
 /// Fraction of the font size by which the monospace CJK fallback is lifted so its
 /// baseline lines up with Consolas (see [`ui_fonts`]). The gap is proportional to the
@@ -743,12 +740,15 @@ struct XrefDialog {
 }
 
 /// Lines IDA draws around an instruction that are not instructions themselves: the
-/// `public`/`proc near` header of a function, its `name:` label and the closing `endp`.
+/// `public`/`proc near` header of a function, its `name:` label, the type comment IDA puts
+/// above a string item, and the closing `endp`.
 struct DisasmChrome {
     /// `public <name>` / `proc near`, printed above the label of a function entry.
     directives: Vec<String>,
     /// `<name>:` label line (the entry point of a name).
     label: Option<String>,
+    /// `; const char <name>[]` above a string item, carrying its type the way IDA does.
+    leading: Vec<String>,
     /// `endp` printed under the function's last instruction.
     endp: bool,
 }
@@ -884,6 +884,40 @@ fn short_literal_len(bytes: &[u8]) -> Option<usize> {
         .iter()
         .all(|byte| matches!(*byte, b'\t' | b'\n' | b'\r') || (0x20..0x7f).contains(byte));
     printable.then_some(end + 1)
+}
+
+/// Turn a run of zero bytes that follows a literal into IDA's alignment line.
+///
+/// IDA knows which bytes are padding; the listing only sees bytes. The safe shape is a zero
+/// run right after a named string item that ends exactly on a 4/8/16-byte boundary — the
+/// same place IDA prints `align 4`, `align 8` or `align 10h`. A zero *item* (a null table
+/// entry) has no literal in front of it and keeps its `db 0,…` rows.
+fn align_padding_row(previous: &DisasmLine, row: &mut DisasmLine) {
+    if row.mnemonic != "db" || !row.flags.is_data() {
+        return;
+    }
+    let literal_before =
+        previous.name.is_some() && previous.mnemonic == "db" && previous.operands.ends_with(",0");
+    if !literal_before {
+        return;
+    }
+    let len = usize::from(row.len).min(row.raw.len());
+    if len == 0 || !row.raw[..len].iter().all(|byte| *byte == 0) {
+        return;
+    }
+    let next = row.addr.get() + u64::from(row.len);
+    let text = if next % 16 == 0 {
+        "10h"
+    } else if next % 8 == 0 {
+        "8"
+    } else if next % 4 == 0 {
+        "4"
+    } else {
+        return;
+    };
+    row.mnemonic = "align".to_owned();
+    row.operands = text.to_owned();
+    row.name = None;
 }
 
 /// `db …` operand text for `bytes` the way IDA prints a short literal: `'abc',0` while the
@@ -3919,9 +3953,12 @@ impl ReCraftApp {
                 rows.append(&mut lines);
                 continue;
             } else {
-                let Some(row) = self.raw_data_row(addr) else {
+                let Some(mut row) = self.raw_data_row(addr) else {
                     break;
                 };
+                if let Some(previous) = rows.last() {
+                    align_padding_row(previous, &mut row);
+                }
                 rows.push(row);
             }
             match self.next_row_start(addr) {
@@ -7589,19 +7626,21 @@ impl ReCraftApp {
         format!("{bytes:<DISASM_BYTES_CELLS$}")
     }
 
-    /// Column the instruction starts on: the address line plus, when enabled, opcode bytes.
-    fn disasm_insn_col(&self) -> usize {
+    /// Column the instruction starts on: IDA keeps a constant gap after the address, so a
+    /// `.rdata:` row starts one cell later than a `.text:` row.
+    fn disasm_insn_col(&self, line: &DisasmLine) -> usize {
+        let address = self.disasm_address(line).chars().count();
         if self.show_bytes {
-            24 + DISASM_BYTES_CELLS
+            24.max(address + 1) + DISASM_BYTES_CELLS
         } else {
-            DISASM_INSN_COL
+            address + DISASM_INSN_GAP
         }
     }
 
     /// Column `; comment` starts on (IDA moves a comment that would overrun it to the next
     /// line).
-    fn disasm_comment_col(&self) -> usize {
-        self.disasm_insn_col() + DISASM_COMMENT_GAP
+    fn disasm_comment_col(&self, line: &DisasmLine) -> usize {
+        self.disasm_insn_col(line) + DISASM_COMMENT_GAP
     }
 
     /// Address (and opcode bytes) padded up to the instruction column.
@@ -7611,34 +7650,48 @@ impl ReCraftApp {
             let width = 24.max(address.chars().count() + 1);
             format!("{address:<width$}")
         } else {
-            format!("{address:<DISASM_INSN_COL$}")
+            format!("{address:<width$}", width = self.disasm_insn_col(line))
         }
     }
 
-    /// Mnemonic in IDA's 8-cell field (`sub     rsp`).
+    /// Mnemonic in IDA's 8-cell field (`sub     rsp`). Data directives are not padded: IDA
+    /// writes `db '…',0` and `align 10h` with a single space.
     fn disasm_mnemonic_field(&self, line: &DisasmLine) -> String {
-        format!("{:<7} ", line.mnemonic)
+        if matches!(line.mnemonic.as_str(), "db" | "dw" | "dd" | "dq" | "align") {
+            format!("{} ", line.mnemonic)
+        } else {
+            format!("{:<7} ", line.mnemonic)
+        }
+    }
+
+    /// Address part of a row, the inline data name (if any), and the padding up to the
+    /// instruction column. The view paints the three with different colours; every text
+    /// builder concatenates them, so the painted row and the copied row cannot drift.
+    fn disasm_prefix_parts(&self, line: &DisasmLine) -> (String, Option<String>, String) {
+        let address = self.disasm_address(line);
+        if line.flags.is_data()
+            && !self.show_bytes
+            && let Some(name) = line.name.as_deref()
+        {
+            // IDA writes a data item's name between the address and the `db`/`dw`.
+            let column = address.chars().count() + 1;
+            let head = format!("{address:<column$}");
+            let cells = head.chars().count() + name.chars().count();
+            let pad = " ".repeat(self.disasm_insn_col(line).saturating_sub(cells).max(1));
+            return (head, Some(name.to_owned()), pad);
+        }
+        (self.disasm_address_field(line), None, String::new())
     }
 
     /// Instruction line up to the operand text: address (and opcode bytes) padded to the
     /// instruction column, then the mnemonic in IDA's 8-cell field.
     fn disasm_code_text(&self, line: &DisasmLine) -> String {
-        let address = self.disasm_address(line);
-        let mut text = if line.flags.is_data() && !self.show_bytes {
-            match line.name.as_deref() {
-                // IDA writes a data item's name between the address and the `db`/`dw`.
-                Some(name) => {
-                    let column = DISASM_NAME_COL.max(address.chars().count() + 1);
-                    let mut text = format!("{address:<column$}{name}");
-                    let cells = text.chars().count();
-                    text.push_str(&" ".repeat(DISASM_INSN_COL.saturating_sub(cells).max(1)));
-                    text
-                }
-                None => format!("{address:<DISASM_INSN_COL$}"),
-            }
-        } else {
-            self.disasm_address_field(line)
-        };
+        let (head, name, pad) = self.disasm_prefix_parts(line);
+        let mut text = head;
+        if let Some(name) = name {
+            text.push_str(&name);
+        }
+        text.push_str(&pad);
         text.push_str(&self.disasm_bytes(line));
         text.push_str(&self.disasm_mnemonic_field(line));
         text.push_str(line.operands.trim_end());
@@ -7670,7 +7723,7 @@ impl ReCraftApp {
     fn disasm_wrapped_comments(&self, line: &DisasmLine) -> Vec<String> {
         let mut comments = self.disasm_comments(line);
         if !comments.is_empty()
-            && self.disasm_code_text(line).chars().count() + 2 <= self.disasm_comment_col()
+            && self.disasm_code_text(line).chars().count() + 2 <= self.disasm_comment_col(line)
         {
             comments.remove(0);
         }
@@ -7695,8 +7748,8 @@ impl ReCraftApp {
         let mut text = self.disasm_code_text(line);
         if let Some(comment) = self.disasm_comments(line).first() {
             let cells = text.chars().count();
-            if cells + 2 <= self.disasm_comment_col() {
-                text.push_str(&" ".repeat(self.disasm_comment_col() - cells));
+            if cells + 2 <= self.disasm_comment_col(line) {
+                text.push_str(&" ".repeat(self.disasm_comment_col(line) - cells));
                 text.push_str(comment);
             }
         }
@@ -7750,7 +7803,7 @@ impl ReCraftApp {
                 let code = self.disasm_code_text(line);
                 let inline_comment = comments
                     .first()
-                    .filter(|_| code.chars().count() + 2 <= self.disasm_comment_col())
+                    .filter(|_| code.chars().count() + 2 <= self.disasm_comment_col(line))
                     .cloned();
                 let wrapped: Vec<String> = comments
                     .iter()
@@ -7762,6 +7815,7 @@ impl ReCraftApp {
                     + wrapped.len()
                     + chrome.directives.len()
                     + usize::from(chrome.label.is_some())
+                    + chrome.leading.len()
                     + usize::from(chrome.endp);
                 // One full-row hit area, like IDA: the whole line is selectable and
                 // double-click follows the operand instead of only the address cell. The
@@ -7775,7 +7829,9 @@ impl ReCraftApp {
                 // IDA's cursor band covers the instruction line only, not the wrapper lines
                 // that belong to the same item.
                 let instruction_top = rect.top()
-                    + (chrome.directives.len() + usize::from(chrome.label.is_some())) as f32
+                    + (chrome.directives.len()
+                        + usize::from(chrome.label.is_some())
+                        + chrome.leading.len()) as f32
                         * self.row_height();
                 let band = egui::Rect::from_min_size(
                     egui::pos2(rect.left(), instruction_top),
@@ -7787,6 +7843,31 @@ impl ReCraftApp {
                     ui.painter().rect_filled(band, 1.0, pal.hover_row);
                 }
                 let mut y = rect.top();
+                // `; const char aXxx[]` above a string item: IDA writes the item's type as a
+                // preceding comment, on the address line with the comment column aligned.
+                for leading in &chrome.leading {
+                    let address = self.disasm_address(line);
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 4.0, y),
+                        egui::Align2::LEFT_TOP,
+                        address.clone(),
+                        mono.clone(),
+                        pal.addr,
+                    );
+                    // IDA writes the type comment right after the address, not on the
+                    // listing's comment column.
+                    ui.painter().text(
+                        egui::pos2(
+                            rect.left() + 4.0 + (address.chars().count() + 1) as f32 * cell,
+                            y,
+                        ),
+                        egui::Align2::LEFT_TOP,
+                        leading,
+                        mono.clone(),
+                        pal.comment,
+                    );
+                    y += line_height;
+                }
                 // `public start` / `proc near`: IDA prints them in the instruction column,
                 // above the label, with the entry's address beside them.
                 for directive in &chrome.directives {
@@ -7798,7 +7879,10 @@ impl ReCraftApp {
                         pal.addr,
                     );
                     ui.painter().text(
-                        egui::pos2(rect.left() + 4.0 + self.disasm_insn_col() as f32 * cell, y),
+                        egui::pos2(
+                            rect.left() + 4.0 + self.disasm_insn_col(line) as f32 * cell,
+                            y,
+                        ),
                         egui::Align2::LEFT_TOP,
                         directive,
                         mono.clone(),
@@ -7815,8 +7899,9 @@ impl ReCraftApp {
                         mono.clone(),
                         pal.addr,
                     );
+                    let label_col = self.disasm_address(line).chars().count() + 1;
                     ui.painter().text(
-                        egui::pos2(rect.left() + 4.0 + DISASM_NAME_COL as f32 * cell, y),
+                        egui::pos2(rect.left() + 4.0 + label_col as f32 * cell, y),
                         egui::Align2::LEFT_TOP,
                         label,
                         mono.clone(),
@@ -7824,11 +7909,15 @@ impl ReCraftApp {
                     );
                     y += line_height;
                 }
-                let address_field = self.disasm_address_field(line);
+                let (address_field, name_field, pad_field) = self.disasm_prefix_parts(line);
                 let bytes_field = self.disasm_bytes(line);
                 let mnemonic_field = self.disasm_mnemonic_field(line);
                 let mut job = LayoutJob::default();
                 append(&mut job, &address_field, pal.addr, &mono);
+                if let Some(name) = name_field.as_deref() {
+                    append(&mut job, name, pal.name, &mono);
+                }
+                append(&mut job, &pad_field, pal.text, &mono);
                 append(&mut job, &bytes_field, pal.bytes, &mono);
                 append(&mut job, &mnemonic_field, pal.mnemonic, &mono);
                 append_operands(&mut job, &line.operands, pal, &mono);
@@ -7836,7 +7925,7 @@ impl ReCraftApp {
                     let cells = job.text.chars().count();
                     append(
                         &mut job,
-                        &" ".repeat(self.disasm_comment_col().saturating_sub(cells)),
+                        &" ".repeat(self.disasm_comment_col(line).saturating_sub(cells)),
                         pal.text,
                         &mono,
                     );
@@ -7981,12 +8070,20 @@ impl ReCraftApp {
                     }
                 });
                 // Comments IDA could not fit next to the instruction, then the function's
-                // closing `endp`. Both stay inside the row's allocated height.
+                // closing `endp`. Both stay inside the row's allocated height, and the
+                // comment lines repeat the address the way IDA's listing does.
                 y += line_height;
                 for comment in &wrapped {
                     ui.painter().text(
+                        egui::pos2(rect.left() + 4.0, y),
+                        egui::Align2::LEFT_TOP,
+                        self.disasm_address(line),
+                        mono.clone(),
+                        pal.addr,
+                    );
+                    ui.painter().text(
                         egui::pos2(
-                            rect.left() + 4.0 + self.disasm_comment_col() as f32 * cell,
+                            rect.left() + 4.0 + self.disasm_comment_col(line) as f32 * cell,
                             y,
                         ),
                         egui::Align2::LEFT_TOP,
@@ -8005,7 +8102,10 @@ impl ReCraftApp {
                         pal.addr,
                     );
                     ui.painter().text(
-                        egui::pos2(rect.left() + 4.0 + self.disasm_insn_col() as f32 * cell, y),
+                        egui::pos2(
+                            rect.left() + 4.0 + self.disasm_insn_col(line) as f32 * cell,
+                            y,
+                        ),
                         egui::Align2::LEFT_TOP,
                         "endp",
                         mono.clone(),
@@ -8081,12 +8181,24 @@ impl ReCraftApp {
         } else {
             line.name.as_ref().map(|name| format!("{name}:"))
         };
+        // A printable string item carries IDA's type comment above it; a control-byte run
+        // (`asc_… db 0Dh,0Ah,0`) does not.
+        let leading = if line.flags.is_data() && line.operands.starts_with('\'') {
+            line.name
+                .as_ref()
+                .map(|name| format!("; const char {name}[]"))
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let function =
             function_at(&self.functions, line.addr).and_then(|index| self.functions.get(index));
         let Some(function) = function else {
             return DisasmChrome {
                 directives: Vec::new(),
                 label,
+                leading,
                 endp: false,
             };
         };
@@ -8103,6 +8215,7 @@ impl ReCraftApp {
         DisasmChrome {
             directives,
             label,
+            leading,
             endp: function.end == next,
         }
     }
@@ -8115,6 +8228,7 @@ impl ReCraftApp {
             + self.disasm_wrapped_comments(line).len()
             + chrome.directives.len()
             + usize::from(chrome.label.is_some())
+            + chrome.leading.len()
             + usize::from(chrome.endp);
         self.row_height() * rows as f32 + ui.spacing().item_spacing.y
     }
@@ -16878,37 +16992,23 @@ mod tests {
                 "the {label} column header must be gone"
             );
         }
-        // The comment is parked on the comment column, not glued to the operand text: it is
-        // a separate text run, well right of the instruction, and every commented row shares
-        // the same column.
-        let other = "DATA XREF: .pdata:0000000140002500↑o".to_owned();
-        app.disasm_rows[1].xrefs = vec![other.clone()];
-        let output = step(&mut input, &mut app);
-        let comment_x = |text: &str| {
-            output
-                .shapes
-                .iter()
-                .find_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(shape) if shape.galley.text() == text => Some(shape.pos.x),
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("{text} is not painted"))
-        };
-        let first_comment = comment_x(&format!("; {xref}"));
-        let second_comment = comment_x(&format!("; {other}"));
-        let cell = row_galley.rows[0].glyphs[1].pos.x - row_galley.rows[0].glyphs[0].pos.x;
-        assert!(
-            first_comment - row_pos.x >= cell * 45.0,
-            "the comment starts at {first_comment}, right next to the operands at {}",
-            row_pos.x
+        // IDA's columns: a constant 17-cell gap after the address, then the comment column
+        // 24 cells right of the instruction. A comment that fits lands on that column.
+        let line = app.disasm_rows[0].clone();
+        let insn_col = app.disasm_insn_col(&line);
+        let comment_col = app.disasm_comment_col(&line);
+        assert_eq!(
+            insn_col,
+            app.disasm_address(&line).chars().count() + DISASM_INSN_GAP
         );
-        assert!(
-            (first_comment - second_comment).abs() < 0.5,
-            "comments must share one column ({first_comment} vs {second_comment})"
-        );
-        assert!(
-            !row.contains(';'),
-            "comments belong to the comment column, not the row text: {row:?}"
+        assert_eq!(comment_col - insn_col, DISASM_COMMENT_GAP);
+        let mut commented = line.clone();
+        commented.comment = Some("note".to_owned());
+        let text = app.disasm_line_text(&commented);
+        assert_eq!(
+            text.chars().position(|ch| ch == ';'),
+            Some(comment_col),
+            "a comment that fits starts on the comment column: {text:?}"
         );
     }
 
@@ -17289,13 +17389,12 @@ mod tests {
         let last = app.disasm_line_text(&app.disasm_rows[2]);
         // Start in the gap before the "mov" mnemonic (IDA's instruction column) and end on
         // the "ret" of the third row.
+        let insn_col = app.disasm_insn_col(&app.disasm_rows[0]);
         let last_end = last.chars().count().saturating_sub(1);
         let start = output
             .shapes
             .iter()
-            .find_map(|clipped| {
-                char_click_pos(&clipped.shape, &first, DISASM_INSN_COL.saturating_sub(4))
-            })
+            .find_map(|clipped| char_click_pos(&clipped.shape, &first, insn_col.saturating_sub(4)))
             .expect("the first row is on screen");
         let end = output
             .shapes
@@ -17749,5 +17848,30 @@ mod tests {
         assert_eq!(short_literal_len(&[0x0d, 0x0a, 0x00, 0x00]), Some(3));
         assert_eq!(short_literal_len(&[0x00, 0x41]), None, "empty run");
         assert_eq!(short_literal_len(&[0xff, 0x41, 0x00]), None, "not text");
+    }
+
+    /// A zero run after a string literal is alignment padding (`align 10h`); a zero item
+    /// with no literal in front of it keeps its `db` row.
+    #[test]
+    fn zero_padding_after_a_literal_becomes_an_align_line() {
+        let mut previous = synthetic_line(0x140018438, "db", "'Enter flag: ',0");
+        previous.name = Some("aEnterFlag".to_owned());
+        previous.flags = Flags::data();
+        let mut padding = synthetic_line(0x14001844B, "db", "0,0,0,0,0");
+        padding.raw = [0; 15];
+        padding.len = 5;
+        padding.name = None;
+        padding.flags = Flags::data();
+        align_padding_row(&previous, &mut padding);
+        assert_eq!(padding.mnemonic, "align");
+        assert_eq!(padding.operands, "10h", "0x1844B+5 = 0x18450, 16-aligned");
+
+        let mut data = synthetic_line(0x140002000, "db", "0,0,0,0,0,0,0,0");
+        data.raw = [0; 15];
+        data.len = 8;
+        data.flags = Flags::data();
+        let plain = synthetic_line(0x140001000, "mov", "rax, rbx");
+        align_padding_row(&plain, &mut data);
+        assert_eq!(data.mnemonic, "db", "no literal before it");
     }
 }
