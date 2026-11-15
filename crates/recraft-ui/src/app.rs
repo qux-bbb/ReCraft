@@ -32,8 +32,6 @@ const DISASM_ROWS: usize = 400;
 const DISASM_SCROLL_ROWS: usize = 50;
 /// Distance from a window edge (in rows) at which the wheel loads the next page.
 const DISASM_SCROLL_MARGIN_ROWS: f32 = 3.0;
-/// Bytes one raw data row covers in a data window (the listing's `raw` buffer holds 15).
-const DATA_ROW_BYTES: u64 = 8;
 /// Cap on row-boundary steps when a data window is paged backwards, so a huge segment
 /// cannot stall the UI.
 const DATA_WALK_LIMIT: usize = 200_000;
@@ -886,38 +884,37 @@ fn short_literal_len(bytes: &[u8]) -> Option<usize> {
     printable.then_some(end + 1)
 }
 
-/// Turn a run of zero bytes that follows a literal into IDA's alignment line.
-///
-/// IDA knows which bytes are padding; the listing only sees bytes. The safe shape is a zero
-/// run right after a named string item that ends exactly on a 4/8/16-byte boundary — the
-/// same place IDA prints `align 4`, `align 8` or `align 10h`. A zero *item* (a null table
-/// entry) has no literal in front of it and keeps its `db 0,…` rows.
-fn align_padding_row(previous: &DisasmLine, row: &mut DisasmLine) {
-    if row.mnemonic != "db" || !row.flags.is_data() {
-        return;
-    }
-    let literal_before =
-        previous.name.is_some() && previous.mnemonic == "db" && previous.operands.ends_with(",0");
-    if !literal_before {
-        return;
-    }
-    let len = usize::from(row.len).min(row.raw.len());
-    if len == 0 || !row.raw[..len].iter().all(|byte| *byte == 0) {
-        return;
-    }
-    let next = row.addr.get() + u64::from(row.len);
-    let text = if next % 16 == 0 {
-        "10h"
-    } else if next % 8 == 0 {
-        "8"
-    } else if next % 4 == 0 {
-        "4"
+/// `align` operand for a padding run that ends at `addr`: IDA writes `10h` for a 16-byte
+/// boundary, `8` for eight, `4` otherwise.
+fn align_operand(addr: Address) -> String {
+    if addr.get() % 16 == 0 {
+        "10h".to_owned()
+    } else if addr.get() % 8 == 0 {
+        "8".to_owned()
     } else {
-        return;
+        "4".to_owned()
+    }
+}
+
+/// Two-digit hex with IDA's `h` suffix, plus the leading zero IDA adds when the first digit
+/// is a letter (`0FFh`, `0Ah`).
+fn hex_byte(byte: u8) -> String {
+    if byte < 0xA0 {
+        format!("{byte:02X}h")
+    } else {
+        format!("0{byte:02X}h")
+    }
+}
+
+/// One undefined data byte the way IDA prints it: `0` or `0FFh`, right-aligned in the
+/// four-cell operand field (`db    0`, `db  54h`, `db 0FFh`).
+fn db_byte_operand(byte: u8) -> String {
+    let text = if byte == 0 {
+        "0".to_owned()
+    } else {
+        hex_byte(byte)
     };
-    row.mnemonic = "align".to_owned();
-    row.operands = text.to_owned();
-    row.name = None;
+    format!("{text:>4}")
 }
 
 /// `db …` operand text for `bytes` the way IDA prints a short literal: `'abc',0` while the
@@ -935,7 +932,7 @@ fn format_db_bytes(bytes: &[u8]) -> String {
             if *byte == 0 {
                 "0".to_owned()
             } else {
-                format!("{byte:02X}h")
+                hex_byte(*byte)
             }
         })
         .collect();
@@ -3782,9 +3779,9 @@ impl ReCraftApp {
 
     /// Next row boundary after `addr` in the listing's address walk.
     ///
-    /// The walk is the one [`Self::data_rows`] renders: one row per stored literal, raw
-    /// rows of at most [`DATA_ROW_BYTES`] for the bytes between literals, and instructions
-    /// in executable segments. Reaching the end of a segment continues at the next mapped
+    /// The walk is the one [`Self::data_rows`] renders: one row per stored literal, one row
+    /// per undefined data byte (or one `align` row for a padding run), and instructions in
+    /// executable segments. Reaching the end of a segment continues at the next mapped
     /// address, so the listing can scroll across section boundaries.
     /// Length (terminator included) of the *referenced* short literal at `addr`.
     ///
@@ -3800,6 +3797,41 @@ impl ReCraftApp {
             return None;
         }
         Some(len)
+    }
+
+    /// End of the alignment padding that starts at `addr`.
+    ///
+    /// IDA draws a whole run of zero padding as one `align 4/8/10h` line; a zero *item* (a
+    /// null table entry) keeps its `db 0` rows. The two are told apart by what follows the
+    /// run: padding ends right where a named item (literal, short literal or named address)
+    /// begins on an aligned boundary.
+    fn padding_run(&mut self, addr: Address) -> Option<Address> {
+        let (segment_end, run) = {
+            let session = self.session.as_ref()?;
+            let segment = session.segment_containing(addr)?;
+            let mut raw = [0u8; 16];
+            let read = session.read_at(addr, &mut raw).ok()?;
+            if read == 0 || raw[0] != 0 {
+                return None;
+            }
+            let run = raw[..read].iter().take_while(|byte| **byte == 0).count();
+            (segment.range.end, run)
+        };
+        let next = Address::new(addr.get() + run as u64);
+        if next >= segment_end || next.get() % 4 != 0 {
+            return None;
+        }
+        let item_here = string_row_at(&self.strings, next).is_some()
+            || self.literal_data_bytes(next).is_some()
+            || self.short_literal_len_at(next).is_some()
+            || self
+                .session
+                .as_ref()?
+                .name_at(next)
+                .ok()
+                .flatten()
+                .is_some();
+        item_here.then_some(next)
     }
 
     fn next_row_start(&mut self, addr: Address) -> Option<Address> {
@@ -3824,13 +3856,11 @@ impl ReCraftApp {
             // A referenced short literal (`"\r\n"`) is its own item; the bytes after its
             // terminator are padding, not part of the same raw row.
             addr.get() + len as u64
+        } else if let Some(padding) = self.padding_run(addr) {
+            padding.get()
         } else {
-            let next_literal = self
-                .strings
-                .get(self.strings.partition_point(|row| row.addr <= addr))
-                .map(|row| row.addr.get())
-                .unwrap_or(end.get());
-            (addr.get() + DATA_ROW_BYTES).min(next_literal)
+            // Undefined data is one byte per row, as in IDA's listing.
+            addr.get() + 1
         };
         if next >= end.get() {
             return self.next_segment_start(addr);
@@ -3862,7 +3892,8 @@ impl ReCraftApp {
         let mut raw = [0u8; 15];
         let read = session.read_at(addr, &mut raw).unwrap_or(0);
         let shown = read.min(usize::from(len));
-        // A referenced short literal (`"\r\n"`) is an item of its own, not a byte block.
+        // A referenced short literal (`"\r\n"`) is an item of its own; a multi-byte run of
+        // zero padding becomes IDA's `align` line; everything else is one byte per row.
         let (mnemonic, operands, name) = match literal_len.filter(|len| *len <= shown) {
             Some(len) => {
                 let text: String = raw[..len - 1].iter().map(|byte| *byte as char).collect();
@@ -3872,26 +3903,12 @@ impl ReCraftApp {
                     Some(ida_data_name(&text, addr)),
                 )
             }
-            None => {
-                let mut parts: Vec<String> = raw[..shown]
-                    .iter()
-                    .map(|byte| {
-                        if *byte == 0 {
-                            "0".to_owned()
-                        } else {
-                            format!("{byte:02X}h")
-                        }
-                    })
-                    .collect();
-                if parts.is_empty() {
-                    parts.push("0".to_owned());
-                }
-                (
-                    "db".to_owned(),
-                    parts.join(","),
-                    session.name_at(addr).ok().flatten(),
-                )
-            }
+            None if len > 1 => ("align".to_owned(), align_operand(next), None),
+            None => (
+                "db".to_owned(),
+                db_byte_operand(raw.first().copied().unwrap_or(0)),
+                session.name_at(addr).ok().flatten(),
+            ),
         };
         Some(DisasmLine {
             addr,
@@ -3953,12 +3970,9 @@ impl ReCraftApp {
                 rows.append(&mut lines);
                 continue;
             } else {
-                let Some(mut row) = self.raw_data_row(addr) else {
+                let Some(row) = self.raw_data_row(addr) else {
                     break;
                 };
-                if let Some(previous) = rows.last() {
-                    align_padding_row(previous, &mut row);
-                }
                 rows.push(row);
             }
             match self.next_row_start(addr) {
@@ -17854,24 +17868,14 @@ mod tests {
     /// with no literal in front of it keeps its `db` row.
     #[test]
     fn zero_padding_after_a_literal_becomes_an_align_line() {
-        let mut previous = synthetic_line(0x140018438, "db", "'Enter flag: ',0");
-        previous.name = Some("aEnterFlag".to_owned());
-        previous.flags = Flags::data();
-        let mut padding = synthetic_line(0x14001844B, "db", "0,0,0,0,0");
-        padding.raw = [0; 15];
-        padding.len = 5;
-        padding.name = None;
-        padding.flags = Flags::data();
-        align_padding_row(&previous, &mut padding);
-        assert_eq!(padding.mnemonic, "align");
-        assert_eq!(padding.operands, "10h", "0x1844B+5 = 0x18450, 16-aligned");
-
-        let mut data = synthetic_line(0x140002000, "db", "0,0,0,0,0,0,0,0");
-        data.raw = [0; 15];
-        data.len = 8;
-        data.flags = Flags::data();
-        let plain = synthetic_line(0x140001000, "mov", "rax, rbx");
-        align_padding_row(&plain, &mut data);
-        assert_eq!(data.mnemonic, "db", "no literal before it");
+        // One undefined byte per row, printed the way IDA prints it: right-aligned in the
+        // four-cell operand field.
+        assert_eq!(db_byte_operand(0), "   0");
+        assert_eq!(db_byte_operand(0xff), "0FFh");
+        assert_eq!(db_byte_operand(0x54), " 54h");
+        // `align` names the boundary the padding run ends on.
+        assert_eq!(align_operand(Address::new(0x140018450)), "10h");
+        assert_eq!(align_operand(Address::new(0x140018448)), "8");
+        assert_eq!(align_operand(Address::new(0x140018444)), "4");
     }
 }
