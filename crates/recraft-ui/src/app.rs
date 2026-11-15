@@ -884,16 +884,10 @@ fn short_literal_len(bytes: &[u8]) -> Option<usize> {
     printable.then_some(end + 1)
 }
 
-/// `align` operand for a padding run that ends at `addr`: IDA writes `10h` for a 16-byte
-/// boundary, `8` for eight, `4` otherwise.
-fn align_operand(addr: Address) -> String {
-    if addr.get() % 16 == 0 {
-        "10h".to_owned()
-    } else if addr.get() % 8 == 0 {
-        "8".to_owned()
-    } else {
-        "4".to_owned()
-    }
+/// `align` operand for a padding run: the number of bytes the run covers (`align 3`,
+/// `align 5`), which says more than IDA's power-of-two form (`align 8`, `align 10h`).
+fn align_operand(len: u64) -> String {
+    len.to_string()
 }
 
 /// Two-digit hex with IDA's `h` suffix, plus the leading zero IDA adds when the first digit
@@ -962,27 +956,25 @@ fn db_byte_operand(byte: u8) -> String {
     format!("{text:>4}")
 }
 
-/// `db …` operand text for `bytes` the way IDA prints a short literal: `'abc',0` while the
-/// bytes are readable, `0Dh,0Ah,0` when they are not (hex digits uppercase, `h` suffix,
-/// no spaces, a plain `0` for the terminator).
+/// `db …` operand text for a literal's bytes: always one escaped C string plus its NUL —
+/// `'Enter flag: ',0`, `'\r\n',0`, `'caf\xC3\xA9',0`.
+///
+/// IDA falls back to a `0Dh,0Ah,0` byte list when the text is not printable; the escaped
+/// literal keeps the string readable and one line.
 fn format_db_bytes(bytes: &[u8]) -> String {
-    if bytes.iter().all(|byte| (0x20..0x7f).contains(byte)) {
-        let text: String = bytes.iter().map(|byte| *byte as char).collect();
-        let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
-        return format!("'{escaped}',0");
+    let mut text = String::with_capacity(bytes.len());
+    for byte in bytes {
+        match *byte {
+            b'\r' => text.push_str("\\r"),
+            b'\n' => text.push_str("\\n"),
+            b'\t' => text.push_str("\\t"),
+            b'\\' => text.push_str("\\\\"),
+            b'\'' => text.push_str("\\'"),
+            byte @ 0x20..=0x7e => text.push(byte as char),
+            byte => text.push_str(&format!("\\x{byte:02X}")),
+        }
     }
-    let mut parts: Vec<String> = bytes
-        .iter()
-        .map(|byte| {
-            if *byte == 0 {
-                "0".to_owned()
-            } else {
-                hex_byte(*byte)
-            }
-        })
-        .collect();
-    parts.push("0".to_owned());
-    parts.join(",")
+    format!("'{text}',0")
 }
 
 /// Strings in the PE `HEADER` segment.
@@ -3863,9 +3855,9 @@ impl ReCraftApp {
             (segment.range.end, run)
         };
         let next = Address::new(addr.get() + run as u64);
-        // Gaps shorter than four bytes are not alignment padding IDA draws (`db 0` rows
-        // there); the boundary must let a 4/8/16-byte item start.
-        if run < 4 || next >= segment_end || next.get() % 4 != 0 {
+        // Gaps shorter than three bytes are not the padding IDA draws (`db 0` rows there);
+        // the boundary must let a 4/8/16-byte item start.
+        if run < 3 || next >= segment_end || next.get() % 4 != 0 {
             return None;
         }
         let item_here = string_row_at(&self.strings, next).is_some()
@@ -4014,7 +4006,11 @@ impl ReCraftApp {
                 .or_else(|| Some(format!("{prefix}{:x}", addr.get())));
             (typed_item_kind(size).0.to_owned(), operands, name)
         } else if len > 1 {
-            ("align".to_owned(), align_operand(next), None)
+            (
+                "align".to_owned(),
+                align_operand(next.get().saturating_sub(addr.get())),
+                None,
+            )
         } else {
             (
                 "db".to_owned(),
@@ -8307,9 +8303,15 @@ impl ReCraftApp {
         } else {
             line.name.as_ref().map(|name| format!("{name}:"))
         };
-        // A printable string item carries IDA's type comment above it; a control-byte run
-        // (`asc_… db 0Dh,0Ah,0`) does not.
-        let leading = if line.flags.is_data() && line.operands.starts_with('\'') {
+        // A named string item carries IDA's type comment above it; the address-named
+        // `asc_…` runs do not (`asc_140018448 db '\r\n',0` stays one line).
+        let leading = if line.flags.is_data()
+            && line.operands.starts_with('\'')
+            && line
+                .name
+                .as_deref()
+                .is_some_and(|name| !name.starts_with("asc_"))
+        {
             line.name
                 .as_ref()
                 .map(|name| format!("; const char {name}[]"))
@@ -17969,8 +17971,10 @@ mod tests {
             ida_data_name("\r\n", Address::new(0x140018448)),
             "asc_140018448"
         );
-        assert_eq!(format_db_bytes(&[0x0d, 0x0a]), "0Dh,0Ah,0");
+        assert_eq!(format_db_bytes(&[0x0d, 0x0a]), "'\\r\\n',0");
         assert_eq!(format_db_bytes(b"abc"), "'abc',0");
+        assert_eq!(format_db_bytes(b"it's"), "'it\\'s',0");
+        assert_eq!(format_db_bytes(&[0xc3, 0xa9]), "'\\xC3\\xA9',0");
         assert_eq!(short_literal_len(&[0x0d, 0x0a, 0x00, 0x00]), Some(3));
         assert_eq!(short_literal_len(&[0x00, 0x41]), None, "empty run");
         assert_eq!(short_literal_len(&[0xff, 0x41, 0x00]), None, "not text");
@@ -17986,9 +17990,9 @@ mod tests {
         assert_eq!(db_byte_operand(0xff), "0FFh");
         assert_eq!(db_byte_operand(0x54), " 54h");
         // `align` names the boundary the padding run ends on.
-        assert_eq!(align_operand(Address::new(0x140018450)), "10h");
-        assert_eq!(align_operand(Address::new(0x140018448)), "8");
-        assert_eq!(align_operand(Address::new(0x140018444)), "4");
+        // `align` carries the padding length in bytes.
+        assert_eq!(align_operand(3), "3");
+        assert_eq!(align_operand(5), "5");
         // A wide value prints as IDA's big-endian hex with the leading zero.
         assert_eq!(hex_value(&[0xff; 8]), "0FFFFFFFFFFFFFFFFh");
         assert_eq!(

@@ -97,13 +97,19 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    **Text 模式**操作数按语义分色：寄存器紫、立即数/地址青、符号名棕、字符串绿。
    ![Text mode operand colours](images/text-view.png)
    反汇编列表按 IDA 的 **IDA View** 排版：地址列是 `段名:16 位偏移`（`0000000140001424`，没有
-   `0x`），指令列固定在第 39 格、注释列在第 56 格；十六进制写成 IDA 的 `28h`/`0Ah`（0–9 仍用
-   十进制），分支与全局访存直接写符号名（`call sub_140001678`、`jnz short loc_140001483`、
-   `mov cs:byte_140023B40, 1`）而不是「地址 + 注释」，行尾有 `; CODE XREF:` / `; DATA XREF:`
-   （带 `↑`/`↓` 与 `c` call、`j` jump、`o` offset、`r` read、`w` write 字母）；函数入口上方
-   有 `public <名字>` 与 `proc near`、`<名字>:` 标签行（都带地址），末尾有 `endp`。**字节列默认
-   关闭**（`视图 → 显示字节` 打开，等价于 IDA 的 *Number of opcode bytes*），因此列表里不再有
+   `0x`），指令列与注释列按 IDA 的 .lst 实测值排（`.text` 第 39/63 格、`.rdata` 第 40/64 格，
+   即地址长度 + 17 与 + 24）；十六进制写成 IDA 的 `28h`/`0Ah`（0–9 仍用十进制），分支与全局
+   访存直接写符号名（`call sub_140001678`、`jnz short loc_140001483`、`mov cs:byte_140023B40, 1`）
+   而不是「地址 + 注释」，行尾有 `; CODE XREF:` / `; DATA XREF:`（带 `↑`/`↓` 与 `c` call、
+   `j` jump、`o` offset、`r` read、`w` write 字母）；函数入口上方有 `public <名字>` 与
+   `proc near`、`<名字>:` 标签行（都带地址），末尾有 `endp`。**字节列默认关闭**
+   （`视图 → 显示字节` 打开，等价于 IDA 的 *Number of opcode bytes*），因此列表里不再有
    列标题条。`recraft-cli disasm` 输出同一套排版。
+   数据区按项显示：字符串内联 `a<名字>`/`asc_<地址>` 并以转义字面量写出（`db '\r\n',0`），
+   命名字符串上方有 `; const char <名字>[]` 类型注释；字符串之间的零填充合并成 `align <字节数>`；
+   被 2/4/8/16 字节引用（含 `[table + index*scale]`）的数据项定型为 `dw`/`dd`/`dq`/`xmmword`
+   （`xmmword_1400184c0 xmmword 0FFFF…h`、`off_1400184d0 dq offset sub_…`），其余未定义字节
+   一字节一行 `db 0`。
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
 3. 点击函数（或按 **`F5`**）→ 中间 **Decompile** 页签，直接显示结构化反编译与签名（没有 L0/L1/L2 开关）；**Disassembly**
