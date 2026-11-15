@@ -835,6 +835,80 @@ fn string_terminator_len(enc: i64) -> u64 {
     }
 }
 
+/// IDA's auto name for a data item.
+///
+/// IDA derives it from the literal's words: `a` + up to 14 CamelCased alphanumerics.
+/// `"[-] Wrong flag. Try again."` becomes `aWrongFlagTryAg`, `" flag format: flag{…}"`
+/// becomes `aFlagFormatFlag`. A literal without letters (the `"\r\n"` between two strings)
+/// gets the address-based `asc_<hex>` instead.
+fn ida_data_name(text: &str, addr: Address) -> String {
+    const MAX: usize = 14;
+    let mut name = String::from("a");
+    let mut word_start = true;
+    let mut letters = 0usize;
+    for ch in text.chars() {
+        if !ch.is_ascii_alphanumeric() {
+            word_start = true;
+            continue;
+        }
+        if letters == MAX {
+            break;
+        }
+        if word_start {
+            name.push(ch.to_ascii_uppercase());
+            word_start = false;
+        } else {
+            name.push(ch);
+        }
+        letters += 1;
+    }
+    if letters == 0 {
+        format!("asc_{:x}", addr.get())
+    } else {
+        name
+    }
+}
+
+/// Length of a short NUL-terminated literal at the start of `bytes`, terminator included.
+///
+/// Below the Strings window's minimum length such runs never reach the `string` table, but
+/// IDA still shows the referenced ones as items (`asc_140018448 db 0Dh,0Ah,0`) instead of
+/// folding them into a raw byte row.
+fn short_literal_len(bytes: &[u8]) -> Option<usize> {
+    let end = bytes.iter().take(8).position(|byte| *byte == 0)?;
+    if end == 0 {
+        return None;
+    }
+    let text = &bytes[..end];
+    let printable = text
+        .iter()
+        .all(|byte| matches!(*byte, b'\t' | b'\n' | b'\r') || (0x20..0x7f).contains(byte));
+    printable.then_some(end + 1)
+}
+
+/// `db …` operand text for `bytes` the way IDA prints a short literal: `'abc',0` while the
+/// bytes are readable, `0Dh,0Ah,0` when they are not (hex digits uppercase, `h` suffix,
+/// no spaces, a plain `0` for the terminator).
+fn format_db_bytes(bytes: &[u8]) -> String {
+    if bytes.iter().all(|byte| (0x20..0x7f).contains(byte)) {
+        let text: String = bytes.iter().map(|byte| *byte as char).collect();
+        let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
+        return format!("'{escaped}',0");
+    }
+    let mut parts: Vec<String> = bytes
+        .iter()
+        .map(|byte| {
+            if *byte == 0 {
+                "0".to_owned()
+            } else {
+                format!("{byte:02X}h")
+            }
+        })
+        .collect();
+    parts.push("0".to_owned());
+    parts.join(",")
+}
+
 /// Strings in the PE `HEADER` segment.
 ///
 /// IDA does not map the file header (`is_loaded(IMAGE_BASE) == 0`), so its string list can
@@ -3620,7 +3694,10 @@ impl ReCraftApp {
             raw,
             mnemonic: mnemonic.to_owned(),
             operands,
-            name: row.name.clone(),
+            name: row
+                .name
+                .clone()
+                .or_else(|| Some(ida_data_name(&row.text, row.addr))),
             comment: None,
             segment: session
                 .segment_containing(row.addr)
@@ -3675,6 +3752,22 @@ impl ReCraftApp {
     /// rows of at most [`DATA_ROW_BYTES`] for the bytes between literals, and instructions
     /// in executable segments. Reaching the end of a segment continues at the next mapped
     /// address, so the listing can scroll across section boundaries.
+    /// Length (terminator included) of the *referenced* short literal at `addr`.
+    ///
+    /// IDA makes an item of a short literal only when something points at it; the same bytes
+    /// in unreferenced padding stay a raw byte row. The check keeps the listing's walk and
+    /// the rows it renders in agreement.
+    fn short_literal_len_at(&mut self, addr: Address) -> Option<usize> {
+        let session = self.session.as_mut()?;
+        let mut raw = [0u8; 8];
+        let read = session.read_at(addr, &mut raw).ok()?;
+        let len = short_literal_len(&raw[..read])?;
+        if session.xrefs_to(addr).ok()?.is_empty() {
+            return None;
+        }
+        Some(len)
+    }
+
     fn next_row_start(&mut self, addr: Address) -> Option<Address> {
         let segment = self.session.as_ref()?.segment_containing(addr)?.clone();
         let end = segment.range.end;
@@ -3693,6 +3786,10 @@ impl ReCraftApp {
                 .ok()??
                 .next_addr()
                 .get()
+        } else if let Some(len) = self.short_literal_len_at(addr) {
+            // A referenced short literal (`"\r\n"`) is its own item; the bytes after its
+            // terminator are padding, not part of the same raw row.
+            addr.get() + len as u64
         } else {
             let next_literal = self
                 .strings
@@ -3720,6 +3817,7 @@ impl ReCraftApp {
 
     /// Raw `db` row covering the bytes at `addr` up to the next row boundary.
     fn raw_data_row(&mut self, addr: Address) -> Option<DisasmLine> {
+        let literal_len = self.short_literal_len_at(addr);
         let end = self.session.as_ref()?.segment_containing(addr)?.range.end;
         let next = self.next_row_start(addr)?.min(end);
         let len = next
@@ -3730,18 +3828,44 @@ impl ReCraftApp {
         let mut raw = [0u8; 15];
         let read = session.read_at(addr, &mut raw).unwrap_or(0);
         let shown = read.min(usize::from(len));
-        let operands = raw[..shown]
-            .iter()
-            .map(|byte| format!("{byte:#04x}"))
-            .collect::<Vec<_>>()
-            .join(", ");
+        // A referenced short literal (`"\r\n"`) is an item of its own, not a byte block.
+        let (mnemonic, operands, name) = match literal_len.filter(|len| *len <= shown) {
+            Some(len) => {
+                let text: String = raw[..len - 1].iter().map(|byte| *byte as char).collect();
+                (
+                    "db".to_owned(),
+                    format_db_bytes(&raw[..len - 1]),
+                    Some(ida_data_name(&text, addr)),
+                )
+            }
+            None => {
+                let mut parts: Vec<String> = raw[..shown]
+                    .iter()
+                    .map(|byte| {
+                        if *byte == 0 {
+                            "0".to_owned()
+                        } else {
+                            format!("{byte:02X}h")
+                        }
+                    })
+                    .collect();
+                if parts.is_empty() {
+                    parts.push("0".to_owned());
+                }
+                (
+                    "db".to_owned(),
+                    parts.join(","),
+                    session.name_at(addr).ok().flatten(),
+                )
+            }
+        };
         Some(DisasmLine {
             addr,
             len,
             raw,
-            mnemonic: "db".to_owned(),
+            mnemonic,
             operands,
-            name: session.name_at(addr).ok().flatten(),
+            name,
             comment: None,
             segment: session
                 .segment_containing(addr)
@@ -7499,7 +7623,22 @@ impl ReCraftApp {
     /// Instruction line up to the operand text: address (and opcode bytes) padded to the
     /// instruction column, then the mnemonic in IDA's 8-cell field.
     fn disasm_code_text(&self, line: &DisasmLine) -> String {
-        let mut text = self.disasm_address_field(line);
+        let address = self.disasm_address(line);
+        let mut text = if line.flags.is_data() && !self.show_bytes {
+            match line.name.as_deref() {
+                // IDA writes a data item's name between the address and the `db`/`dw`.
+                Some(name) => {
+                    let column = DISASM_NAME_COL.max(address.chars().count() + 1);
+                    let mut text = format!("{address:<column$}{name}");
+                    let cells = text.chars().count();
+                    text.push_str(&" ".repeat(DISASM_INSN_COL.saturating_sub(cells).max(1)));
+                    text
+                }
+                None => format!("{address:<DISASM_INSN_COL$}"),
+            }
+        } else {
+            self.disasm_address_field(line)
+        };
         text.push_str(&self.disasm_bytes(line));
         text.push_str(&self.disasm_mnemonic_field(line));
         text.push_str(line.operands.trim_end());
@@ -7935,7 +8074,13 @@ impl ReCraftApp {
 
     /// Wrapper lines IDA draws around an instruction.
     fn disasm_chrome(&self, line: &DisasmLine) -> DisasmChrome {
-        let label = line.name.as_ref().map(|name| format!("{name}:"));
+        // Data items print their name inline (`aWrongFlagTryAg db '…',0`), code items put a
+        // label on its own line, as IDA does.
+        let label = if line.flags.is_data() {
+            None
+        } else {
+            line.name.as_ref().map(|name| format!("{name}:"))
+        };
         let function =
             function_at(&self.functions, line.addr).and_then(|index| self.functions.get(index));
         let Some(function) = function else {
@@ -17580,5 +17725,29 @@ mod tests {
         let values: Vec<u64> = links.iter().map(|addr| addr.get()).collect();
         assert_eq!(values, vec![0x1400019c0, 0x140001840]);
         assert!(address_links("没有地址").is_empty());
+    }
+
+    /// Data items get IDA's names and byte syntax: `a` + 14 CamelCased letters, `asc_<addr>`
+    /// for a literal without letters, `0Dh,0Ah,0` for unreadable bytes.
+    #[test]
+    fn ida_data_item_names_and_bytes() {
+        let text = Address::new(0x140018450);
+        assert_eq!(
+            ida_data_name("[-] Wrong flag. Try again.", text),
+            "aWrongFlagTryAg"
+        );
+        assert_eq!(
+            ida_data_name(" flag format: flag{...}", text),
+            "aFlagFormatFlag"
+        );
+        assert_eq!(
+            ida_data_name("\r\n", Address::new(0x140018448)),
+            "asc_140018448"
+        );
+        assert_eq!(format_db_bytes(&[0x0d, 0x0a]), "0Dh,0Ah,0");
+        assert_eq!(format_db_bytes(b"abc"), "'abc',0");
+        assert_eq!(short_literal_len(&[0x0d, 0x0a, 0x00, 0x00]), Some(3));
+        assert_eq!(short_literal_len(&[0x00, 0x41]), None, "empty run");
+        assert_eq!(short_literal_len(&[0xff, 0x41, 0x00]), None, "not text");
     }
 }
