@@ -237,6 +237,9 @@ CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产�
   PATH 就取消勾选（静默安装用 `ADDTOPATH=0`）。
 - **桌面快捷方式**（默认不勾）：默认只建开始菜单快捷方式（静默安装用
   `DESKTOPSHORTCUT=1`）。
+- **文件右键菜单**（默认勾选）：在资源管理器里右键任意文件多出 **用 ReCraft 打开**，直接
+  打开 PE/ELF 样本或 `.rcraft` 工程；不想加就取消勾选（静默安装用 `CONTEXTMENU=0`）。
+  Windows 11 的经典菜单项在 **显示更多选项**（Shift+F10）里。
 
 不勾 PATH 也能用：开始菜单多了一个 **ReCraft 命令行**，打开即位于安装目录；`recraft-cli.exe`
 和 GUI 一样注册了 App Paths，`Win+R` 输入 `recraft-cli` 也能启动。安装包还会把 ReCraft 登记到

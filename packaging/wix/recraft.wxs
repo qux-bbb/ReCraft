@@ -6,7 +6,8 @@
 
   Layout and conventions follow the PhotoCraft installer (storytold/photocraft,
   packaging/windows/photocraft.wxs): an installed wizard with the project's own
-  banner/dialog art, a Start-menu shortcut, an Apps & Features entry, an optional "launch
+  banner/dialog art, a Start-menu shortcut, an Apps & Features entry, an install-options
+  page (PATH, desktop shortcut, Explorer's "open with ReCraft" entry), an optional "launch
   after setup" step, and a .rcraft project association that the GUI can open
   (crates/recraft-ui main.rs takes the project or PE path as argv[1]).
 
@@ -81,10 +82,12 @@
     <Launch Condition="Installed OR VCRUNTIME140" Message="!(loc.VCRuntimeMissing)" />
 
     <!-- Optional steps. PATH is on by default so `recraft-cli` works in any terminal right
-         after setup; the desktop shortcut is off by default. Both can be turned off/on on
-         the options page or from the command line (ADDTOPATH=0, DESKTOPSHORTCUT=1). -->
+         after setup, and so is the Explorer right-click entry ("用 ReCraft 打开"); the
+         desktop shortcut is off by default. All three can be turned off/on on the options
+         page or from the command line (ADDTOPATH=0, DESKTOPSHORTCUT=1, CONTEXTMENU=0). -->
     <Property Id="ADDTOPATH" Value="1" Secure="yes" />
     <Property Id="DESKTOPSHORTCUT" Value="0" Secure="yes" />
+    <Property Id="CONTEXTMENU" Value="1" Secure="yes" />
 
     <!-- Per-machine scope: files land in %ProgramFiles%\ReCraft and setup asks for
          administrator permission once (msiexec's own elevation). The no-install path stays
@@ -129,7 +132,8 @@
         <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" TabSkip="yes" Text="!(loc.OptionsDescription)" />
         <Control Id="AddToPath" Type="CheckBox" X="20" Y="60" Width="330" Height="17" Property="ADDTOPATH" CheckBoxValue="1" TabSkip="no" Text="!(loc.OptionsAddToPath)" />
         <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="84" Width="330" Height="17" Property="DESKTOPSHORTCUT" CheckBoxValue="1" TabSkip="no" Text="!(loc.OptionsDesktopShortcut)" />
-        <Control Id="OptionsNote" Type="Text" X="20" Y="112" Width="330" Height="60" Transparent="yes" NoPrefix="yes" TabSkip="yes" Text="!(loc.OptionsNote)" />
+        <Control Id="ShellContextMenu" Type="CheckBox" X="20" Y="108" Width="330" Height="17" Property="CONTEXTMENU" CheckBoxValue="1" TabSkip="no" Text="!(loc.OptionsShellContextMenu)" />
+        <Control Id="OptionsNote" Type="Text" X="20" Y="136" Width="330" Height="90" Transparent="yes" NoPrefix="yes" TabSkip="yes" Text="!(loc.OptionsNote)" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" TabSkip="no" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="InstallDirDlg" />
         </Control>
@@ -219,8 +223,8 @@
     </ComponentGroup>
 
     <!-- Optional components, gated by the OptionsDlg checkboxes (or by ADDTOPATH=1 /
-         DESKTOPSHORTCUT=1 in a silent install). The registry values double as the
-         components' key paths. -->
+         DESKTOPSHORTCUT=1 / CONTEXTMENU=1 in a silent install). The registry values double
+         as the components' key paths. -->
     <ComponentGroup Id="RecraftOptions" Directory="INSTALLFOLDER">
       <Component Id="RecraftPathEntry" Guid="E4B4C3EB-9F70-4B4F-AD8E-5F4A6C8DAE04" Condition="ADDTOPATH = 1">
         <Environment Id="PathEnvironment" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
@@ -235,6 +239,19 @@
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ReCraftIcon.exe" />
         <RegistryValue Root="HKMU" Key="Software\ReCraft" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!-- Explorer's right-click entry ("用 ReCraft 打开" on every file). `*` covers PE/ELF
+           samples and .rcraft projects alike, and the command passes the same argv[1] the
+           ProgId verb does. This only adds a verb next to the existing "Open with" list; it
+           never claims a default handler. Classic shell verbs are machine-wide and stay
+           behind Windows 11's "显示更多选项"; the modern menu would need a packaged
+           IExplorerCommand, which is out of scope for an unsigned MSI. -->
+      <Component Id="RecraftShellContextMenu" Guid="49381EC8-8143-4BBB-8D19-03E8A9E88AF2" Condition="CONTEXTMENU = 1">
+        <RegistryValue Root="HKMU" Key="Software\Classes\*\shell\ReCraft" Name="MUIVerb" Value="!(loc.ShellContextMenuVerb)" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\*\shell\ReCraft" Name="Icon" Value="&quot;[INSTALLFOLDER]recraft.exe&quot;,0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\*\shell\ReCraft" Name="MultiSelectModel" Value="Single" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\*\shell\ReCraft\command" Value="&quot;[INSTALLFOLDER]recraft.exe&quot; &quot;%1&quot;" Type="string" />
       </Component>
     </ComponentGroup>
 

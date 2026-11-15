@@ -39,9 +39,15 @@ pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
 - **中文向导**：WixUI 自带 zh-cn，自有字符串在 `packaging/wix/zh-CN.wxl`；MSI 的
   `Language`/`Codepage` 由 `scripts/package.ps1 -Culture` 推导（zh-CN → 2052/936，
   en-US → 1033/1252，英文串在 `packaging/wix/en-US.wxl`）。发布包默认中文。
-- **安装选项页**：目录页之后一页两个复选框——把 `recraft-cli` 加入系统 PATH（默认勾选）、
-  创建桌面快捷方式（默认不勾）；静默安装用 `ADDTOPATH=0` 关闭 PATH、`DESKTOPSHORTCUT=1`
-  打开桌面图标。
+- **安装选项页**：目录页之后一页三个复选框——把 `recraft-cli` 加入系统 PATH（默认勾选）、
+  创建桌面快捷方式（默认不勾）、在文件右键菜单添加“用 ReCraft 打开”（默认勾选）；静默安装用
+  `ADDTOPATH=0` 关掉 PATH、`DESKTOPSHORTCUT=1` 建桌面图标、`CONTEXTMENU=0` 不写右键菜单项。
+- **右键菜单**：勾选后在 `HKLM\Software\Classes\*\shell\ReCraft` 写一个经典 shell 谓词
+  （`MUIVerb` 为“用 ReCraft 打开”、图标取 `recraft.exe`、命令
+  `"[INSTALLFOLDER]recraft.exe" "%1"`），对任意文件类型生效，PE/ELF 样本和 `.rcraft` 工程
+  都在内。它只是并列的一个动词：不改默认打开方式，也不抢 `.exe`/`.dll` 的关联。Windows 11
+  的经典动词收在“显示更多选项”（Shift+F10）里；新式右键菜单要打包的 `IExplorerCommand`，
+  未签名 MSI 做不到，因此不做。
 - **CLI 入口**：开始菜单多一个“ReCraft 命令行”，快捷方式指向
   `cmd.exe /k cd /d [INSTALLFOLDER]`。
 - **默认应用集成**：`HKLM\Software\ReCraft\Capabilities` + `Software\RegisteredApplications`，
@@ -60,13 +66,14 @@ pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
     -d DocsDir=docs -d IconPath=assets\recraft.ico `
     -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
   ```
-- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=0] [DESKTOPSHORTCUT=1]`；
-  `msiexec /x {ProductCode} /qn`（ProductCode 见“应用和功能”登记项）。
-- `scripts/verify-msi.ps1` 总是检查结构与载荷（21 项表断言：per-machine、两个快捷方式、
-  CLI App Paths、Capabilities/RegisteredApplications、安装选项页与 PATH、zh-CN 2052/936、
-  `.rcraft` 关联、`MajorUpgrade`、运行时启动条件；`msiexec /a` 解包后与
+- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=0] [DESKTOPSHORTCUT=1]
+  [CONTEXTMENU=0]`；`msiexec /x {ProductCode} /qn`（ProductCode 见“应用和功能”登记项）。
+- `scripts/verify-msi.ps1` 总是检查结构与载荷（24 项表断言：per-machine、两个快捷方式、
+  CLI App Paths、Capabilities/RegisteredApplications、安装选项页与 PATH/桌面/右键菜单三个选项、
+  zh-CN 2052/936、`.rcraft` 关联、`MajorUpgrade`、运行时启动条件；`msiexec /a` 解包后与
   `dist/ReCraft-<version>/` 逐字节比对），`-SkipInstall` 用于免提权环境。完整流程额外验证
-  选项生效（PATH 条目、桌面快捷方式、CLI 入口）以及卸载后目录/快捷方式/PATH/注册项的清理。
+  选项生效（PATH 条目、桌面快捷方式、右键菜单谓词及其命令、CLI 入口）以及卸载后目录/
+  快捷方式/PATH/注册项的清理。
 - `wix msi validate -ice ICE50` 由 `scripts/package.ps1` 顺带跑，仅告警不拦截。
 
 ## CI

@@ -21,6 +21,7 @@
   <String Id="CliShortcutDescription" Value="在安装目录打开命令提示符，直接运行 recraft-cli" />
   <String Id="ProgIdDescription" Value="ReCraft 工程" />
   <String Id="CapabilitiesDescription" Value="ReCraft 二进制逆向工程工作台" />
+  <String Id="ShellContextMenuVerb" Value="用 ReCraft 打开" />
 
   <String Id="VCRuntimeMissing" Value="ReCraft 需要 Microsoft Visual C++ 2015-2022 可再发行组件（x64）。请先从 https://aka.ms/vs/17/release/vc_redist.x64.exe 安装，然后重新运行安装程序。" />
 
@@ -32,5 +33,6 @@
   <String Id="OptionsDescription" Value="选择安装完成后要一并完成的操作。" />
   <String Id="OptionsAddToPath" Value="将 recraft-cli 加入系统 PATH" />
   <String Id="OptionsDesktopShortcut" Value="创建桌面快捷方式" />
-  <String Id="OptionsNote" Value="两项都可以不选：开始菜单的“ReCraft 命令行”会在安装目录打开命令提示符，Win+R 输入 recraft-cli 也能启动。" />
+  <String Id="OptionsShellContextMenu" Value="在文件右键菜单中添加“用 ReCraft 打开”" />
+  <String Id="OptionsNote" Value="三项都可以不选：开始菜单的“ReCraft 命令行”会在安装目录打开命令提示符，Win+R 输入 recraft-cli 也能启动；右键菜单项在 Windows 11 位于“显示更多选项”里。" />
 </WixLocalization>

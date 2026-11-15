@@ -21,6 +21,7 @@
   <String Id="CliShortcutDescription" Value="Open a command prompt in the install folder to run recraft-cli" />
   <String Id="ProgIdDescription" Value="ReCraft project" />
   <String Id="CapabilitiesDescription" Value="ReCraft binary reverse engineering workbench" />
+  <String Id="ShellContextMenuVerb" Value="Open with ReCraft" />
 
   <String Id="VCRuntimeMissing" Value="ReCraft needs the Microsoft Visual C++ 2015-2022 Redistributable (x64). Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and run this setup again." />
 
@@ -32,5 +33,6 @@
   <String Id="OptionsDescription" Value="Choose the optional steps to complete during setup." />
   <String Id="OptionsAddToPath" Value="Add recraft-cli to the system PATH" />
   <String Id="OptionsDesktopShortcut" Value="Create a desktop shortcut" />
-  <String Id="OptionsNote" Value="Both are optional: the Start menu's ReCraft CLI opens a prompt in the install folder, and Win+R recraft-cli works either way." />
+  <String Id="OptionsShellContextMenu" Value="Add &quot;Open with ReCraft&quot; to the file context menu" />
+  <String Id="OptionsNote" Value="All three are optional: the Start menu's ReCraft CLI opens a prompt in the install folder, and Win+R recraft-cli works either way; on Windows 11 the context-menu entry is under &quot;Show more options&quot;." />
 </WixLocalization>

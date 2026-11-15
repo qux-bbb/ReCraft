@@ -5,18 +5,19 @@
 #
 # Always:
 #   - structure: per-machine summary bit, .rcraft association, Start-menu shortcuts,
-#     CLI App Paths + Capabilities/RegisteredApplications, PATH/desktop-shortcut options,
-#     Apps & Features properties, MajorUpgrade rule, VC++ runtime launch condition,
+#     CLI App Paths + Capabilities/RegisteredApplications, PATH/desktop-shortcut/context-menu
+#     options, Apps & Features properties, MajorUpgrade rule, VC++ runtime launch condition,
 #     zh-CN wizard localization (2052/936);
 #   - payload: an administrative install (`msiexec /a`) extracts the same binaries,
 #     documents and docs/ tree as dist/ReCraft-<version>/ (byte-identical hashes).
 #
 # From an elevated prompt (the MSI is per-machine, so msiexec needs to elevate):
-#   - silent install into a temporary folder with ADDTOPATH=0 DESKTOPSHORTCUT=1 ->
-#     files / shortcuts / HKLM entries / desktop shortcut / installed CLI -> silent
-#     uninstall -> full cleanup (directory, shortcuts, registry);
-#   - silent install with the default folder and default options (PATH on, desktop off) ->
-#     %ProgramFiles%\ReCraft + PATH entry, no desktop shortcut -> uninstall -> PATH removed.
+#   - silent install into a temporary folder with ADDTOPATH=0 DESKTOPSHORTCUT=1 CONTEXTMENU=0
+#     -> files / shortcuts / HKLM entries / desktop shortcut / installed CLI / no
+#     context-menu verb -> silent uninstall -> full cleanup (directory, shortcuts, registry);
+#   - silent install with the default folder and default options (PATH on, context menu on,
+#     desktop off) -> %ProgramFiles%\ReCraft + PATH entry + "open with ReCraft" verb
+#     pointing at the installed exe, no desktop shortcut -> uninstall -> PATH and verb removed.
 #
 #   powershell -File scripts/verify-msi.ps1                 # full run (needs elevation)
 #   powershell -File scripts/verify-msi.ps1 -SkipInstall     # structure + payload only
@@ -62,6 +63,8 @@ $shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Re
 $startMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'ReCraft.lnk'
 $machineEnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+# The Explorer right-click verb the CONTEXTMENU option adds (`*` = every file type).
+$contextMenuKey = 'HKLM:\Software\Classes\*\shell\ReCraft'
 $defaultTarget = Join-Path $env:ProgramFiles 'ReCraft'
 $work = Join-Path $env:TEMP ('recraft-msi-check-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
@@ -175,6 +178,9 @@ try {
             @('Name="PATH"', 'PATH environment entry'),
             @('Property="ADDTOPATH"', 'PATH checkbox'),
             @('Property="DESKTOPSHORTCUT"', 'desktop-shortcut checkbox'),
+            @('Property="CONTEXTMENU"', 'context-menu checkbox'),
+            @('Id="RecraftShellContextMenu"', 'context-menu option component'),
+            @('Software\Classes\*\shell\ReCraft', 'Explorer context-menu verb'),
             @(('Codepage="{0}"' -f $msiCodepage), "$Culture string codepage"),
             @(('Language="{0}"' -f $msiLanguage), "$Culture package language"),
             @('Key=".rcraft"', '.rcraft project association'),
@@ -232,13 +238,13 @@ try {
         return
     }
 
-    # ---- 3. silent install into a temporary folder, opting out of PATH ---------------------------
+    # ---- 3. silent install into a temporary folder, opting out of PATH and the context menu ------
     # Native CLIs write progress to stderr; Windows PowerShell would turn that into a terminating
     # NativeCommandError under ErrorActionPreference=Stop.
     $ErrorActionPreference = 'Continue'
     $target = Join-Path $env:TEMP ('recraft-msi-install-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    Write-Host "[install] $Msi -> $target (ADDTOPATH=0 DESKTOPSHORTCUT=1)"
-    Install-Msi $target (Join-Path $work 'install.log') @('ADDTOPATH=0', 'DESKTOPSHORTCUT=1')
+    Write-Host "[install] $Msi -> $target (ADDTOPATH=0 DESKTOPSHORTCUT=1 CONTEXTMENU=0)"
+    Install-Msi $target (Join-Path $work 'install.log') @('ADDTOPATH=0', 'DESKTOPSHORTCUT=1', 'CONTEXTMENU=0')
 
     foreach ($entry in $payload) {
         Assert-Condition (Test-Path -LiteralPath (Join-Path $target $entry)) "missing installed file: $entry"
@@ -248,6 +254,7 @@ try {
     Assert-Condition (Test-Path -LiteralPath $desktopShortcut) 'desktop shortcut missing although DESKTOPSHORTCUT=1'
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     Assert-Condition (-not (Test-PathEntry $machinePath $target)) 'ADDTOPATH=0 still added the install folder to the machine PATH'
+    Assert-Condition (-not (Test-Path -LiteralPath $contextMenuKey)) 'CONTEXTMENU=0 still added the Explorer context-menu entry'
 
     $arp = Find-ArpKey 'ReCraft'
     Assert-Condition ($null -ne $arp) 'Apps & Features entry missing'
@@ -267,7 +274,7 @@ try {
     Assert-Condition ($fileAssociations.'.rcraft' -eq 'ReCraft.Project') 'Capabilities\FileAssociations\.rcraft missing'
     $registeredApps = Get-ItemProperty -LiteralPath 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue
     Assert-Condition ($registeredApps.ReCraft -eq 'Software\ReCraft\Capabilities') 'RegisteredApplications\ReCraft missing'
-    Write-Host "[install] files, GUI+CLI shortcuts, desktop shortcut, App Paths and Capabilities present ($($arpProps.DisplayName) $($arpProps.DisplayVersion), $installedCode)"
+    Write-Host "[install] files, GUI+CLI shortcuts, desktop shortcut, App Paths and Capabilities present; no context-menu verb ($($arpProps.DisplayName) $($arpProps.DisplayVersion), $installedCode)"
 
     $exe = Join-Path $target 'recraft-cli.exe'
     $info = & $exe info (Join-Path $env:SystemRoot 'System32\notepad.exe') 2>$null
@@ -302,7 +309,9 @@ try {
     Assert-Condition ($null -eq $registeredApps.ReCraft) 'RegisteredApplications\ReCraft still exists after uninstall'
     $reCraftKey = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft' -ErrorAction SilentlyContinue
     Assert-Condition ($null -eq $reCraftKey.InstallDir -and $null -eq $reCraftKey.PathEntry -and $null -eq $reCraftKey.DesktopShortcut) 'Software\ReCraft values still exist after uninstall'
-    Write-Host '[uninstall] directory, shortcuts, App Paths and Capabilities removed'
+    $contextMenu = Get-ItemProperty -LiteralPath $contextMenuKey -ErrorAction SilentlyContinue
+    Assert-Condition ($null -eq $contextMenu -or -not $contextMenu.MUIVerb) 'the Explorer context-menu verb still exists after uninstall'
+    Write-Host '[uninstall] directory, shortcuts, App Paths, Capabilities and context-menu verb removed'
     $installedCode = $null
 
     # ---- 4. default folder: %ProgramFiles%\ReCraft -----------------------------------------------
@@ -319,7 +328,15 @@ try {
         Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut created without DESKTOPSHORTCUT=1'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         Assert-Condition (Test-PathEntry $defaultMachinePath $defaultTarget) "the default install did not add the install folder to the machine PATH (ADDTOPATH defaults to 1); PATH was: $defaultMachinePath"
-        Write-Host "[install] default folder OK ($defaultTarget, PATH added by default, no desktop shortcut)"
+        # CONTEXTMENU defaults to 1: the verb points at the installed exe and stays non-default.
+        $defaultExe = Join-Path $defaultTarget 'recraft.exe'
+        $contextMenu = Get-ItemProperty -LiteralPath $contextMenuKey -ErrorAction SilentlyContinue
+        Assert-Condition ($null -ne $contextMenu -and $contextMenu.MUIVerb) 'the default install did not add the Explorer context-menu verb (CONTEXTMENU defaults to 1)'
+        Assert-Condition ($contextMenu.Icon -eq ('"{0}",0' -f $defaultExe)) "unexpected context-menu icon: $($contextMenu.Icon)"
+        $contextMenuCommand = (Get-Item -LiteralPath "$contextMenuKey\command" -ErrorAction SilentlyContinue)
+        $contextMenuCommand = if ($contextMenuCommand) { $contextMenuCommand.GetValue('') } else { $null }
+        Assert-Condition ($contextMenuCommand -eq ('"{0}" "%1"' -f $defaultExe)) "unexpected context-menu command: $contextMenuCommand"
+        Write-Host "[install] default folder OK ($defaultTarget, PATH and context-menu verb added by default, no desktop shortcut)"
 
         Uninstall-Msi $installedCode (Join-Path $work 'uninstall-default.log')
         for ($attempt = 0; $attempt -lt 40; $attempt++) {
@@ -331,7 +348,9 @@ try {
         Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after the default uninstall'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         Assert-Condition (-not (Test-PathEntry $defaultMachinePath $defaultTarget)) 'default install folder still on the machine PATH after uninstall'
-        Write-Host '[uninstall] default folder removed'
+        $contextMenu = Get-ItemProperty -LiteralPath $contextMenuKey -ErrorAction SilentlyContinue
+        Assert-Condition ($null -eq $contextMenu -or -not $contextMenu.MUIVerb) 'the Explorer context-menu verb still exists after the default uninstall'
+        Write-Host '[uninstall] default folder and context-menu verb removed'
         $installedCode = $null
     }
 

@@ -7,7 +7,7 @@
 # install with the default options, check every artifact, run the installed CLI on
 # notepad.exe, open the GUI (window + screenshot + WM_CLOSE), uninstall, and assert the
 # machine is back to its pre-install state (files, shortcuts, PATH, ARP, App Paths,
-# Capabilities, RegisteredApplications, Software\ReCraft).
+# Capabilities, RegisteredApplications, the Explorer context-menu verb, Software\ReCraft).
 #
 # The MSI is per-machine, so run this from an elevated prompt. It writes its own log
 # because VMware VIX guest runs cannot capture stdout; on a VM, drive it with
@@ -162,6 +162,8 @@ $installDir = Join-Path $env:ProgramFiles 'ReCraft'
 $startMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
 $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
 $desktopShortcut = Join-Path $desktop 'ReCraft.lnk'
+# The Explorer right-click verb the default CONTEXTMENU=1 install adds (`*` = every file).
+$contextMenuKey = 'HKLM:\Software\Classes\*\shell\ReCraft'
 $machinePathBefore = Get-MachinePathRaw
 $work = Join-Path $env:TEMP ('recraft-clean-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -175,13 +177,14 @@ try {
     Check (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'no ReCraft Start-menu shortcuts before install'
     Check (-not (Test-Path -LiteralPath $desktopShortcut)) 'no desktop shortcut before install'
     Check (-not (Test-PathEntry $machinePathBefore $installDir)) 'install folder not on the machine PATH before install'
+    Check (-not (Test-Path -LiteralPath $contextMenuKey)) 'no ReCraft context-menu verb before install'
     if (Test-Path -LiteralPath 'HKLM:\Software\ReCraft') {
         $stale = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft' -ErrorAction SilentlyContinue
         Write-Log "note HKLM\Software\ReCraft exists before install (InstallDir=$($stale.InstallDir) PathEntry=$($stale.PathEntry))"
     }
 
     # ---- install -------------------------------------------------------------------------
-    Write-Log "--- install (defaults: PATH on, desktop shortcut off) ---"
+    Write-Log "--- install (defaults: PATH on, context menu on, desktop shortcut off) ---"
     $installLog = Join-Path $work 'install.log'
     $p = Start-Process -FilePath 'msiexec.exe' -Wait -PassThru -ArgumentList @(
         '/i', $Msi, '/qn', '/l*v', $installLog)
@@ -217,6 +220,11 @@ try {
     Check ($cap.ApplicationName -eq 'ReCraft') 'Capabilities\ApplicationName registered'
     $regApps = Get-ItemProperty -LiteralPath 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue
     Check ($regApps.ReCraft -eq 'Software\ReCraft\Capabilities') 'RegisteredApplications\ReCraft registered'
+    $contextMenu = Get-ItemProperty -LiteralPath $contextMenuKey -ErrorAction SilentlyContinue
+    Check ($null -ne $contextMenu -and $contextMenu.MUIVerb) 'Explorer context-menu verb registered (CONTEXTMENU on by default)'
+    $contextMenuCommand = Get-Item -LiteralPath "$contextMenuKey\command" -ErrorAction SilentlyContinue
+    $expectedCommand = '"{0}" "%1"' -f (Join-Path $installDir 'recraft.exe')
+    Check ($null -ne $contextMenuCommand -and $contextMenuCommand.GetValue('') -eq $expectedCommand) 'context-menu verb runs the installed GUI'
 
     # ---- CLI from the installed location ---------------------------------------------------
     Write-Log "--- CLI (installed) ---"
@@ -287,6 +295,8 @@ try {
     Check ($null -eq $cap.ApplicationName) 'Capabilities values removed'
     $regApps = Get-ItemProperty -LiteralPath 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue
     Check ($null -eq $regApps.ReCraft) 'RegisteredApplications\ReCraft removed'
+    $contextMenu = Get-ItemProperty -LiteralPath $contextMenuKey -ErrorAction SilentlyContinue
+    Check ($null -eq $contextMenu -or -not $contextMenu.MUIVerb) 'context-menu verb removed'
     $reCraft = Get-ItemProperty -LiteralPath 'HKLM:\Software\ReCraft' -ErrorAction SilentlyContinue
     Check ($null -eq $reCraft.InstallDir -and $null -eq $reCraft.PathEntry -and $null -eq $reCraft.DesktopShortcut) 'Software\ReCraft values removed'
     Check ($machinePath -eq $machinePathBefore) 'machine PATH restored to its pre-install value'
