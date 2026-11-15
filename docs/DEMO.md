@@ -112,7 +112,11 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    **数据/类型操作**：反汇编行按 `C`（代码）/`D`（数据）/`A`（字符串数据）/`U`（取消定义）/
    `P`（建函数），或右键菜单选择；**右键 → Structures…** 打开结构体窗口，可定义
    `0:tag:u32, 16:value:i32` 布局并绑定到当前函数参数槽；右键 **Edit prototype…** 编辑函数原型。
-   左侧 **Functions** 有过滤框（名字/地址）；**Decompile** 行点击反跳反汇编；**`X`** 弹出 IDA 风格的
+   左侧 **Functions** 有过滤框（名字/地址）。**所有列表窗口（Functions / Strings / Imports /
+   Exports / Names / Segments）都按 IDA 的行光标规则工作**：单击行内任意位置只移动高亮、代码视图
+   留在原处，**双击或回车**才在反汇编里打开该行；列表获得焦点时 **↑/↓/PageUp/PageDown/Home/End**
+   移动行光标（选中行自动滚入视野），焦点在代码视图时这些键仍归代码视图。**Decompile** 行点击
+   反跳反汇编；**`X`** 弹出 IDA 风格的
    **交叉引用对话框**（标题为 `xrefs to <名字>`），四列为 **Direction（`Up` 引用进来 / `Down`
    引用出去）、Type（`c` call、`j` jump、`o` offset、`r` read、`w` write）、Address
    （`main:loc_1400010b9`）、Text（引用处指令，字符串以 `; 'flag{…}'` 附在行尾）**；

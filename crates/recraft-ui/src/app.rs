@@ -52,6 +52,9 @@ const ROW_HEIGHT: f32 = 15.0;
 /// Rows the Strings window paints per frame; a full string table would otherwise cost the
 /// whole frame. IDA caps its list the same way and reports the truncation in the status bar.
 const STRING_LIST_ROWS: usize = 2000;
+/// Rows one PageUp/PageDown moves the cursor of a docked list (IDA pages by the visible
+/// height; a fixed page keeps the list panes readable at every window size).
+const LIST_PAGE_ROWS: usize = 20;
 /// Extensions File → Import offers besides the all-files fallback. PE binaries are
 /// `.exe`/`.dll`/`.sys`; ELF binaries are commonly `.elf`/`.so`/`.bin`/`.out` and very often
 /// carry no extension at all (`a.out`, `busybox`), so the dialog must also list every file:
@@ -589,6 +592,20 @@ impl Pane {
             Pane::Structs => Some("F11"),
             _ => None,
         }
+    }
+
+    /// Dock lists whose rows behave like IDA's list windows: a row cursor that clicks and
+    /// the arrow keys move, and Enter to open the row in the disassembly.
+    fn is_list(self) -> bool {
+        matches!(
+            self,
+            Pane::Functions
+                | Pane::Strings
+                | Pane::Imports
+                | Pane::Exports
+                | Pane::Names
+                | Pane::Segments
+        )
     }
 }
 
@@ -1507,6 +1524,9 @@ pub struct ReCraftApp {
     /// Row picked in a dock list, keyed by the address it shows so a refresh keeps the
     /// highlight on the same item.
     list_sel: Option<(Pane, u64)>,
+    /// Row a list must scroll into view on its next frame (the row cursor moved by the
+    /// keyboard, so the list has to follow it like IDA's windows do).
+    list_scroll_to: Option<(Pane, u64)>,
     functions: Vec<FunctionInfo>,
     /// Names parallel to `functions` (for the side list), refreshed with it.
     function_labels: Vec<String>,
@@ -1643,6 +1663,7 @@ impl Default for ReCraftApp {
             hex_sel: None,
             hex_drag: false,
             list_sel: None,
+            list_scroll_to: None,
             functions: Vec::new(),
             function_labels: Vec::new(),
             functions_dirty: false,
@@ -2769,6 +2790,132 @@ impl ReCraftApp {
                 (name, Address::new(va), export.forwarder.clone())
             })
             .collect()
+    }
+
+    // ---------------------------------------------------------- list keyboard --
+
+    /// Keys of the rows a docked list shows right now, in display order. The pane's own
+    /// filter is applied here too, so the keyboard cursor can only land on rows that are
+    /// actually painted.
+    fn list_keys(&self, pane: Pane) -> Vec<u64> {
+        match pane {
+            Pane::Functions => {
+                let filter = self.function_filter.to_lowercase();
+                self.functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, function)| {
+                        let name = self
+                            .function_labels
+                            .get(*index)
+                            .map(String::as_str)
+                            .unwrap_or("");
+                        function_matches(&filter, function.start, name)
+                    })
+                    .map(|(_, function)| function.start.get())
+                    .collect()
+            }
+            Pane::Strings => {
+                let filter = self.string_filter.to_lowercase();
+                let hide_header = self.strings_hide_header;
+                let mut keys = Vec::new();
+                for row in &self.strings {
+                    if hide_header && is_header_string(&row.segment) {
+                        continue;
+                    }
+                    if !filter.is_empty()
+                        && !string_cell_text(&row.text).to_lowercase().contains(&filter)
+                    {
+                        continue;
+                    }
+                    if keys.len() == STRING_LIST_ROWS {
+                        break;
+                    }
+                    keys.push(row.addr.get());
+                }
+                keys
+            }
+            Pane::Imports => self.imports.iter().map(|row| row.iat.get()).collect(),
+            Pane::Exports => self
+                .exports()
+                .iter()
+                .map(|(_, address, _)| address.get())
+                .collect(),
+            Pane::Names => {
+                let filter = self.names_filter.to_lowercase();
+                self.names
+                    .iter()
+                    .filter(|(address, name)| {
+                        filter.is_empty()
+                            || name.to_lowercase().contains(&filter)
+                            || format!("{:#x}", address.get()).contains(&filter)
+                    })
+                    .map(|(address, _)| address.get())
+                    .collect()
+            }
+            Pane::Segments => self
+                .session
+                .as_ref()
+                .map(|session| {
+                    session
+                        .segments()
+                        .iter()
+                        .map(|segment| segment.range.start.get())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Put the row cursor on `key` and ask that list to reveal it on its next frame.
+    fn select_list_row(&mut self, pane: Pane, key: u64) {
+        self.list_sel = Some((pane, key));
+        self.copy_focus = CopyFocus::List(pane);
+        self.list_scroll_to = Some((pane, key));
+    }
+
+    /// Move a docked list's row cursor by `step` rows. The list keeps its own cursor and
+    /// the code views do not follow it; opening the row is Enter's or a double click's job,
+    /// exactly like IDA's list windows.
+    fn move_list_selection(&mut self, pane: Pane, step: i64) -> bool {
+        let keys = self.list_keys(pane);
+        if keys.is_empty() {
+            return false;
+        }
+        let current = self
+            .list_sel
+            .filter(|(selected, _)| *selected == pane)
+            .and_then(|(_, key)| keys.iter().position(|candidate| *candidate == key));
+        let next = match current {
+            Some(index) => (index as i64 + step).clamp(0, keys.len() as i64 - 1) as usize,
+            // No cursor yet: the first arrow press drops it on the first row, or on the
+            // last one when the user walks backwards.
+            None if step < 0 => keys.len() - 1,
+            None => 0,
+        };
+        self.select_list_row(pane, keys[next]);
+        true
+    }
+
+    /// Move a docked list's row cursor to its first (`end == false`) or last row.
+    fn move_list_cursor_to_edge(&mut self, pane: Pane, end: bool) -> bool {
+        let keys = self.list_keys(pane);
+        let target = if end { keys.last() } else { keys.first() }.copied();
+        let Some(key) = target else {
+            return false;
+        };
+        self.select_list_row(pane, key);
+        true
+    }
+
+    /// Where Enter opens a docked list: the highlighted row, or its first row when nothing
+    /// is highlighted yet (an IDA list window always has a row cursor once focused).
+    fn list_enter_target(&self, pane: Pane) -> Option<Address> {
+        self.list_sel
+            .filter(|(selected, _)| *selected == pane)
+            .map(|(_, key)| Address::new(key))
+            .or_else(|| self.list_keys(pane).first().map(|key| Address::new(*key)))
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
@@ -4835,41 +4982,95 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA's Segments window: name, range and permission columns with a row cursor that a
+    /// click moves; Enter or a double click jumps to the segment start.
     fn segments_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         let Some(session) = self.session.as_ref() else {
             ui.weak(self.t("ui_no_project_2"));
             return;
         };
+        let segments = session.segments();
+        let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
+        let mono = FontId::monospace(self.mono_size());
+        let row_h = self.row_height().max(16.0);
+        let width = ui.available_width();
+        let name_x = 4.0
+            + ui.painter()
+                .layout_no_wrap("WWWWWWWW".to_owned(), body.clone(), pal.text)
+                .size()
+                .x
+            + 14.0;
+        let range_x = name_x
+            + ui.painter()
+                .layout_no_wrap(
+                    "0x000000000000 .. 0x000000000000".to_owned(),
+                    mono.clone(),
+                    pal.addr,
+                )
+                .size()
+                .x
+            + 16.0;
         let picked = self
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Segments)
             .map(|(_, key)| key);
+        let wanted = self
+            .list_scroll_to
+            .filter(|(pane, _)| *pane == Pane::Segments)
+            .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
         let mut picked_now = None;
+        list_header(
+            ui,
+            width,
+            row_h,
+            &[
+                (4.0, self.t("ui_name").as_str()),
+                (name_x, self.t("ui_address").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         egui::ScrollArea::vertical()
+            .id_salt("segments_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for segment in session.segments() {
-                    let label = format!(
-                        "{:<8} {:#012x} .. {:#012x}  {}",
-                        segment.name,
-                        segment.range.start.get(),
-                        segment.range.end.get(),
-                        if segment.perm.is_executable() {
-                            "X"
-                        } else if segment.perm.is_readable() {
-                            "R"
-                        } else {
-                            "W"
-                        }
-                    );
+                for (index, segment) in segments.iter().enumerate() {
                     let key = segment.range.start.get();
-                    let response = ui.selectable_label(picked == Some(key), label);
-                    if response.clicked() || response.double_clicked() {
-                        *action = Action::NavigateToDisasm(segment.range.start);
-                    }
+                    let range = format!(
+                        "{:#012x} .. {:#012x}",
+                        segment.range.start.get(),
+                        segment.range.end.get()
+                    );
+                    let perm = if segment.perm.is_executable() {
+                        "X"
+                    } else if segment.perm.is_readable() {
+                        "R"
+                    } else {
+                        "W"
+                    };
+                    let response = list_row(
+                        ui,
+                        width,
+                        row_h,
+                        picked == Some(key),
+                        index % 2 == 1,
+                        &[
+                            (4.0, segment.name.as_str(), &body, pal.text),
+                            (name_x, range.as_str(), &mono, pal.addr),
+                            (range_x, perm, &mono, pal.mnemonic),
+                        ],
+                        &pal,
+                    );
                     if response.clicked() || response.secondary_clicked() {
                         picked_now = Some(key);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(segment.range.start);
+                    }
+                    if wanted == Some(key) {
+                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
                     let _ = response.context_menu(|ui| {
                         if ui.button(copy_row.as_str()).clicked() {
@@ -4885,8 +5086,10 @@ impl ReCraftApp {
         }
     }
 
-    /// PE exports list (document tab, like IDA's Exports window).
+    /// PE exports list (document tab, like IDA's Exports window): name, address and
+    /// forwarder columns, row cursor on click, jump on Enter or double click.
     fn exports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         if self.session.is_none() {
             ui.weak(self.t("ui_no_project_2"));
             return;
@@ -4896,44 +5099,92 @@ impl ReCraftApp {
             ui.weak(self.t("ui_no_exports"));
             return;
         }
+        let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
+        let mono = FontId::monospace(self.mono_size());
+        let row_h = self.row_height().max(16.0);
+        let width = ui.available_width();
+        let name_w = exports
+            .iter()
+            .map(|(name, _, _)| name)
+            .max_by_key(|name| name.chars().count())
+            .map(|name| {
+                ui.painter()
+                    .layout_no_wrap(name.clone(), body.clone(), pal.text)
+                    .size()
+                    .x
+                    + 14.0
+            })
+            .unwrap_or(80.0);
+        let address_x = 4.0 + name_w;
+        let forwarder_x = address_x
+            + ui.painter()
+                .layout_no_wrap("0x000000000000".to_owned(), mono.clone(), pal.addr)
+                .size()
+                .x
+            + 16.0;
         let picked = self
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Exports)
             .map(|(_, key)| key);
+        let wanted = self
+            .list_scroll_to
+            .filter(|(pane, _)| *pane == Pane::Exports)
+            .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
         let mut picked_now = None;
+        list_header(
+            ui,
+            width,
+            row_h,
+            &[
+                (4.0, self.t("ui_name").as_str()),
+                (address_x, self.t("ui_address").as_str()),
+                (forwarder_x, self.t("ui_forwarder").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         egui::ScrollArea::vertical()
+            .id_salt("exports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("exports_grid")
-                    .num_columns(3)
-                    .striped(true)
-                    .spacing([12.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(self.t("ui_name")).strong());
-                        ui.label(RichText::new(self.t("ui_address")).strong());
-                        ui.label(RichText::new(self.t("ui_forwarder")).strong());
-                        ui.end_row();
-                        for (name, address, forwarder) in &exports {
-                            let key = address.get();
-                            let response = ui.selectable_label(picked == Some(key), name);
-                            ui.label(RichText::new(format!("{:#x}", address.get())).monospace());
-                            ui.label(RichText::new(forwarder.as_deref().unwrap_or("")).weak());
-                            ui.end_row();
-                            if response.clicked() || response.double_clicked() {
-                                *action = Action::NavigateToDisasm(*address);
-                            }
-                            if response.clicked() || response.secondary_clicked() {
-                                picked_now = Some(key);
-                            }
-                            let _ = response.context_menu(|ui| {
-                                if ui.button(copy_row.as_str()).clicked() {
-                                    *action = Action::Copy;
-                                    ui.close();
-                                }
-                            });
+                for (index, (name, address, forwarder)) in exports.iter().enumerate() {
+                    let key = address.get();
+                    let address_text = format!("{:#x}", address.get());
+                    let response = list_row(
+                        ui,
+                        width,
+                        row_h,
+                        picked == Some(key),
+                        index % 2 == 1,
+                        &[
+                            (4.0, name.as_str(), &body, pal.text),
+                            (address_x, address_text.as_str(), &mono, pal.addr),
+                            (
+                                forwarder_x,
+                                forwarder.as_deref().unwrap_or(""),
+                                &body,
+                                pal.muted,
+                            ),
+                        ],
+                        &pal,
+                    );
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(key);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(*address);
+                    }
+                    if wanted == Some(key) {
+                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                    }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button(copy_row.as_str()).clicked() {
+                            *action = Action::Copy;
+                            ui.close();
                         }
                     });
+                }
             });
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Exports, key));
@@ -5215,6 +5466,9 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA's Functions window: icon / function name / segment columns and a row cursor that
+    /// a click anywhere in the row moves. Only a double click or Enter opens the function,
+    /// so browsing the list never re-anchors the code views.
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         if self.functions.is_empty() {
@@ -5231,86 +5485,130 @@ impl ReCraftApp {
             });
         }
         let filter = self.function_filter.to_lowercase();
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
         // Segment column, precomputed once per list refresh (IDA's Functions window has
         // "Function name" and "Segment" columns).
-        let segment_names: Vec<String> = {
-            let Some(session) = self.session.as_ref() else {
-                return;
-            };
-            self.functions
-                .iter()
-                .map(|function| {
-                    session
-                        .segment_containing(function.start)
-                        .map(|segment| segment.name.clone())
-                        .unwrap_or_default()
-                })
-                .collect()
-        };
-        let mut shown = 0usize;
+        let segment_names: Vec<String> = self
+            .functions
+            .iter()
+            .map(|function| {
+                session
+                    .segment_containing(function.start)
+                    .map(|segment| segment.name.clone())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
+        let mono = FontId::monospace(self.mono_size());
+        let row_h = self.row_height().max(16.0);
         let picked = self
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Functions)
             .map(|(_, key)| key);
+        // Rows the filter keeps, in list order. The name column is as wide as the longest
+        // of them, like IDA sizing "Function name" to its content.
+        let rows: Vec<usize> = self
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(index, function)| {
+                let name = self
+                    .function_labels
+                    .get(*index)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                function_matches(&filter, function.start, name)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let name_w = rows
+            .iter()
+            .filter_map(|&index| self.function_labels.get(index))
+            .max_by_key(|name| name.chars().count())
+            .map(|name| {
+                ui.painter()
+                    .layout_no_wrap(name.clone(), body.clone(), pal.text)
+                    .size()
+                    .x
+                    + 14.0
+            })
+            .unwrap_or(80.0);
+        let icon_x = 4.0;
+        let name_x = 20.0;
+        let segment_x = name_x + name_w;
+        let width = ui.available_width();
+        let wanted = self
+            .list_scroll_to
+            .filter(|(pane, _)| *pane == Pane::Functions)
+            .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
         let mut picked_now = None;
+        // Column titles stay above the scrolling rows; the icon column has none, like IDA's
+        // margin.
+        list_header(
+            ui,
+            width,
+            row_h,
+            &[
+                (name_x, self.t("ui_function_name").as_str()),
+                (segment_x, self.t("ui_segment").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         egui::ScrollArea::vertical()
+            .id_salt("functions_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("functions_grid")
-                    .num_columns(3)
-                    .striped(true)
-                    .spacing([10.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.label("");
-                        ui.label(RichText::new(self.t("ui_function_name")).strong());
-                        ui.label(RichText::new(self.t("ui_segment")).strong());
-                        ui.end_row();
-                        for (index, function) in self.functions.iter().enumerate() {
-                            let name = self
-                                .function_labels
-                                .get(index)
-                                .map(String::as_str)
-                                .unwrap_or("");
-                            if !function_matches(&filter, function.start, name) {
-                                continue;
+                for (shown, &index) in rows.iter().enumerate() {
+                    let function = &self.functions[index];
+                    let key = function.start.get();
+                    let name = self
+                        .function_labels
+                        .get(index)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let segment = segment_names.get(index).cloned().unwrap_or_default();
+                    let response = list_row(
+                        ui,
+                        width,
+                        row_h,
+                        picked == Some(key),
+                        shown % 2 == 1,
+                        &[
+                            (icon_x, "ƒ", &body, pal.name),
+                            (name_x, name, &body, pal.text),
+                            (segment_x, segment.as_str(), &mono, pal.muted),
+                        ],
+                        &pal,
+                    );
+                    // A single click only moves the row cursor; the jump is the double
+                    // click's job, exactly like IDA's Functions window.
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(key);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(function.start);
+                    }
+                    if wanted == Some(key) {
+                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                    }
+                    let _ = response
+                        .on_hover_text(format!(
+                            "{:#012x} .. {:#012x}",
+                            function.start.get(),
+                            function.end.get()
+                        ))
+                        .context_menu(|ui| {
+                            if ui.button(copy_row.as_str()).clicked() {
+                                *action = Action::Copy;
+                                ui.close();
                             }
-                            shown += 1;
-                            ui.label(RichText::new("ƒ").color(pal.name));
-                            let key = function.start.get();
-                            let response = ui
-                                .selectable_label(picked == Some(key), name)
-                                .on_hover_text(format!(
-                                    "{:#012x} .. {:#012x}",
-                                    function.start.get(),
-                                    function.end.get()
-                                ));
-                            ui.label(
-                                RichText::new(
-                                    segment_names.get(index).cloned().unwrap_or_default(),
-                                )
-                                .monospace()
-                                .weak(),
-                            );
-                            ui.end_row();
-                            if response.clicked() {
-                                *action = Action::Navigate(function.start);
-                            }
-                            if response.double_clicked() {
-                                *action = Action::NavigateToDisasm(function.start);
-                            }
-                            if response.clicked() || response.secondary_clicked() {
-                                picked_now = Some(key);
-                            }
-                            let _ = response.context_menu(|ui| {
-                                if ui.button(copy_row.as_str()).clicked() {
-                                    *action = Action::Copy;
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
-                if shown == 0 && !self.functions.is_empty() {
+                        });
+                }
+                if rows.is_empty() && !self.functions.is_empty() {
                     ui.weak(self.t("ui_no_match"));
                 }
             });
@@ -5432,6 +5730,10 @@ impl ReCraftApp {
         let edit_row_label = self.t("ui_edit_string");
         let hide_row_label = self.t("ui_delete_string");
         let restore_row_label = self.t("ui_restore_string");
+        let wanted = self
+            .list_scroll_to
+            .filter(|(pane, _)| *pane == Pane::Strings)
+            .map(|(_, key)| key);
         let mut picked_now = None;
         let mut edit_row = None;
         let mut hide_row = None;
@@ -5505,6 +5807,9 @@ impl ReCraftApp {
                     if response.clicked() || response.secondary_clicked() {
                         picked_now = Some(key);
                     }
+                    if wanted == Some(key) {
+                        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                    }
                     let _ = response.context_menu(|ui| {
                         if ui.button(copy_row.as_str()).clicked() {
                             *action = Action::Copy;
@@ -5564,35 +5869,55 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA's Imports window: one row per thunk with a row cursor that a click moves;
+    /// Enter or a double click opens the first call site in the disassembly.
     fn imports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         if self.imports.is_empty() {
             ui.weak(self.t("ui_no_imports_or_open_a_project_first"));
         }
+        let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
+        let row_h = self.row_height().max(16.0);
+        let width = ui.available_width();
         let picked = self
             .list_sel
+            .filter(|(pane, _)| *pane == Pane::Imports)
+            .map(|(_, key)| key);
+        let wanted = self
+            .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Imports)
             .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
         let mut picked_now = None;
         egui::ScrollArea::vertical()
+            .id_salt("imports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for import in &self.imports {
+                for (index, import) in self.imports.iter().enumerate() {
+                    let key = import.iat.get();
                     let label = format!(
                         "{}!{}  [{}]  ×{}",
                         import.module, import.api, import.category, import.refs
                     );
-                    let key = import.iat.get();
-                    let response = ui.selectable_label(picked == Some(key), label);
-                    let target = import.first_from.unwrap_or(import.iat);
-                    if response.clicked() {
-                        *action = Action::Navigate(target);
-                    }
-                    if response.double_clicked() {
-                        *action = Action::NavigateToDisasm(target);
-                    }
+                    // IDA's list windows only move the row cursor on a click; the jump is
+                    // the double click's (or Enter's) job.
+                    let response = list_row(
+                        ui,
+                        width,
+                        row_h,
+                        picked == Some(key),
+                        index % 2 == 1,
+                        &[(4.0, label.as_str(), &body, pal.text)],
+                        &pal,
+                    );
                     if response.clicked() || response.secondary_clicked() {
                         picked_now = Some(key);
+                    }
+                    if response.double_clicked() {
+                        *action = Action::NavigateToDisasm(import.first_from.unwrap_or(import.iat));
+                    }
+                    if wanted == Some(key) {
+                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
                     let _ = response.context_menu(|ui| {
                         if ui.button(copy_row.as_str()).clicked() {
@@ -5608,7 +5933,10 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA's Names window: address and name columns, row cursor on click, jump on Enter or
+    /// double click.
     fn names_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
+        let pal = self.palette();
         if self.names.is_empty() {
             ui.weak(self.t("ui_no_names_yet_open_a_project_and_run_analyze"));
         }
@@ -5622,15 +5950,44 @@ impl ReCraftApp {
             );
         });
         let filter = self.names_filter.to_lowercase();
+        let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
+        let mono = FontId::monospace(self.mono_size());
+        let row_h = self.row_height().max(16.0);
+        let width = ui.available_width();
+        // Widest address of the list (`0x` + 12 hex digits) so the name column starts at a
+        // fixed x, like IDA's Names window.
+        let name_x = 4.0
+            + ui.painter()
+                .layout_no_wrap("0x000000000000".to_owned(), mono.clone(), pal.addr)
+                .size()
+                .x
+            + 12.0;
         let picked = self
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Names)
             .map(|(_, key)| key);
+        let wanted = self
+            .list_scroll_to
+            .filter(|(pane, _)| *pane == Pane::Names)
+            .map(|(_, key)| key);
         let copy_row = self.t("ui_copy_row");
         let mut picked_now = None;
+        list_header(
+            ui,
+            width,
+            row_h,
+            &[
+                (4.0, self.t("ui_address").as_str()),
+                (name_x, self.t("ui_name").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         egui::ScrollArea::vertical()
+            .id_salt("names_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let mut shown = 0usize;
                 for (addr, name) in &self.names {
                     if !filter.is_empty()
                         && !name.to_lowercase().contains(&filter)
@@ -5638,13 +5995,29 @@ impl ReCraftApp {
                     {
                         continue;
                     }
-                    let label = format!("{:#012x}  {name}", addr.get());
-                    let response = ui.selectable_label(picked == Some(addr.get()), label);
-                    if response.clicked() || response.double_clicked() {
+                    let key = addr.get();
+                    let address = format!("{:#012x}", addr.get());
+                    let response = list_row(
+                        ui,
+                        width,
+                        row_h,
+                        picked == Some(key),
+                        shown % 2 == 1,
+                        &[
+                            (4.0, address.as_str(), &mono, pal.addr),
+                            (name_x, name.as_str(), &body, pal.text),
+                        ],
+                        &pal,
+                    );
+                    shown += 1;
+                    if response.clicked() || response.secondary_clicked() {
+                        picked_now = Some(key);
+                    }
+                    if response.double_clicked() {
                         *action = Action::NavigateToDisasm(*addr);
                     }
-                    if response.clicked() || response.secondary_clicked() {
-                        picked_now = Some(addr.get());
+                    if wanted == Some(key) {
+                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
                     let _ = response.context_menu(|ui| {
                         if ui.button(copy_row.as_str()).clicked() {
@@ -8364,6 +8737,46 @@ impl ReCraftApp {
         if select_all {
             return Action::SelectAll;
         }
+        // IDA's list windows own the keyboard while one of them has the focus: the arrow
+        // keys move the row cursor (the code views stay where they are), Home/End jump to
+        // the ends, PageUp/PageDown page, and Enter opens the highlighted row in the
+        // disassembly. The code views only see these keys when one of them is focused.
+        let focused = self.focused_pane();
+        if let Some(pane) = focused.filter(|pane| pane.is_list()) {
+            let (enter, up, down, page_up, page_down, home, end) = ctx.input(|input| {
+                (
+                    input.key_pressed(Key::Enter),
+                    input.key_pressed(Key::ArrowUp),
+                    input.key_pressed(Key::ArrowDown),
+                    input.key_pressed(Key::PageUp),
+                    input.key_pressed(Key::PageDown),
+                    input.key_pressed(Key::Home),
+                    input.key_pressed(Key::End),
+                )
+            });
+            if enter && let Some(target) = self.list_enter_target(pane) {
+                return Action::NavigateToDisasm(target);
+            }
+            let step = if down {
+                1
+            } else if up {
+                -1
+            } else if page_down {
+                LIST_PAGE_ROWS as i64
+            } else if page_up {
+                -(LIST_PAGE_ROWS as i64)
+            } else {
+                0
+            };
+            if step != 0 {
+                self.move_list_selection(pane, step);
+                return Action::None;
+            }
+            if home || end {
+                self.move_list_cursor_to_edge(pane, end);
+                return Action::None;
+            }
+        }
         let mut action = Action::None;
         ctx.input(|input| {
             if (input.modifiers.command && input.key_pressed(Key::P)) || input.key_pressed(Key::F1)
@@ -8895,6 +9308,9 @@ impl ReCraftApp {
         self.ai_sidebar_ui(root, &mut action);
         self.sync_graph_overview();
         self.dock_area(root, &mut action);
+        // A list gets one frame to scroll its row cursor into view; if the row is gone by
+        // then (a refresh dropped it), the request dies instead of firing later.
+        self.list_scroll_to = None;
         self.ai_settings_window(&ctx);
         self.about_window(&ctx);
         self.edit_window(&ctx, &mut action);
@@ -9377,6 +9793,60 @@ fn function_matches(filter: &str, start: Address, name: &str) -> bool {
         return true;
     }
     name.to_lowercase().contains(filter) || format!("{:#x}", start.get()).contains(filter)
+}
+
+/// One row of a docked list, painted the way IDA's list windows draw theirs: the hit area
+/// spans the whole row, the row cursor / hover / zebra stripe is a full-width band, and the
+/// cells sit at fixed x offsets (baseline shared, clipped to the row).
+fn list_row(
+    ui: &mut egui::Ui,
+    width: f32,
+    row_h: f32,
+    selected: bool,
+    zebra: bool,
+    cells: &[(f32, &str, &FontId, Color32)],
+    pal: &Palette,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
+    if selected {
+        ui.painter().rect_filled(rect, 1.0, pal.selected_row);
+    } else if response.hovered() || zebra {
+        ui.painter().rect_filled(rect, 1.0, pal.hover_row);
+    }
+    let painter = ui.painter_at(rect);
+    for (x, text, font, color) in cells {
+        painter.text(
+            egui::pos2(rect.left() + x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            *text,
+            (*font).clone(),
+            *color,
+        );
+    }
+    response
+}
+
+/// Column titles of a docked list, painted above the scrolling rows like IDA's list windows
+/// (they stay put while the rows scroll).
+fn list_header(
+    ui: &mut egui::Ui,
+    width: f32,
+    row_h: f32,
+    cells: &[(f32, &str)],
+    font: &FontId,
+    color: Color32,
+) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    let painter = ui.painter_at(rect);
+    for (x, text) in cells {
+        painter.text(
+            egui::pos2(rect.left() + x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            *text,
+            font.clone(),
+            color,
+        );
+    }
 }
 
 fn xref_kind_name(kind: i64) -> &'static str {
@@ -12061,6 +12531,328 @@ mod tests {
         assert!(!function_matches("memcpy", start, "start"));
     }
 
+    /// IDA's Functions window jumps on double-click only. Clicking a row once moves the
+    /// highlight (and the copy focus) but leaves the listing and the pseudocode where they
+    /// are, so browsing the list does not re-anchor the code views under the cursor.
+    #[test]
+    fn functions_list_single_click_only_selects_the_row() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("functions-click.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let first = Address::new(0x140001000);
+        let second = Address::new(0x140001100);
+        let mut app = ReCraftApp {
+            session: Some(session),
+            functions: vec![
+                FunctionInfo {
+                    start: first,
+                    end: second,
+                },
+                FunctionInfo {
+                    start: second,
+                    end: Address::new(0x140001200),
+                },
+            ],
+            function_labels: vec!["alpha".to_owned(), "beta".to_owned()],
+            disasm_start: first,
+            pseudo_start: first,
+            ..ReCraftApp::default()
+        };
+
+        let ctx = egui::Context::default();
+        let base = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 400.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base.clone(), |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "beta", 0))
+            .expect("the Functions list must be on screen");
+        let icon = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "ƒ", 0))
+            .expect("the first function row's icon must be on screen");
+        // IDA's two columns: the names start under "Function name", and the icon sits in the
+        // margin before them. Compare galley origins (glyph widths differ).
+        let text_x = |output: &egui::FullOutput, needle: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == needle => Some(text.pos.x),
+                    _ => None,
+                })
+        };
+        let header = text_x(&output, app.t("ui_function_name").as_str())
+            .expect("the Function name title must be on screen");
+        let name_x = text_x(&output, "beta").expect("the name must be on screen");
+        assert!(
+            (name_x - header).abs() < 1.0,
+            "the name column starts at {name_x} but its title starts at {header}"
+        );
+        assert!(icon.x < header, "the icon must sit in the margin");
+
+        let click = |pos: egui::Pos2, time: f64| {
+            let mut input = base.clone();
+            input.time = Some(time);
+            input.events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            input
+        };
+
+        // First click on the name: select the row, leave both code views at `first`.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(pos, 0.1), |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(action, Action::None, "a single click must not navigate");
+        assert_eq!(app.list_sel, Some((Pane::Functions, second.get())));
+        assert_eq!(app.disasm_start, first, "the listing keeps its place");
+        assert_eq!(app.pseudo_start, first, "the pseudocode keeps its place");
+        assert!(app.history.is_empty(), "no history entry for a plain click");
+
+        // Second click inside the double-click window: jump, like IDA.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(pos, 0.2), |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(
+            action,
+            Action::NavigateToDisasm(second),
+            "double-clicking the function must jump to it"
+        );
+
+        // A click off the name column (the icon cell) selects that row and nothing else.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(icon, 1.0), |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(action, Action::None, "a click must not navigate");
+        assert_eq!(
+            app.list_sel,
+            Some((Pane::Functions, first.get())),
+            "the whole row is clickable, not just the name"
+        );
+    }
+
+    /// IDA's list windows own the keyboard while they hold the focus: the arrow keys move the
+    /// row cursor and leave the code views where they are, Home/End jump to the ends, and
+    /// Enter opens the highlighted row in the disassembly.
+    #[test]
+    fn dock_list_arrows_move_the_row_cursor_and_enter_jumps() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("list-keys.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let first = Address::new(0x140001000);
+        let second = Address::new(0x140001100);
+        let third = Address::new(0x140001200);
+        let anchor = Address::new(0x140001900);
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            functions: vec![
+                FunctionInfo {
+                    start: first,
+                    end: second,
+                },
+                FunctionInfo {
+                    start: second,
+                    end: third,
+                },
+                FunctionInfo {
+                    start: third,
+                    end: Address::new(0x140001300),
+                },
+            ],
+            function_labels: vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
+            disasm_start: anchor,
+            pseudo_start: anchor,
+            ..ReCraftApp::default()
+        };
+        app.ensure_dock();
+        app.focus_pane(Pane::Functions);
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut press = |app: &mut ReCraftApp, key: egui::Key| {
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            input.events.clear();
+        };
+
+        // No cursor yet: the first arrow press drops it on the first row, and the listing
+        // keeps showing the address it was anchored on.
+        press(&mut app, egui::Key::ArrowDown);
+        assert_eq!(
+            app.list_sel,
+            Some((Pane::Functions, first.get())),
+            "the first arrow press must put the cursor on the first row"
+        );
+        assert_eq!(
+            app.disasm_start, anchor,
+            "the keyboard cursor must not move the listing"
+        );
+
+        press(&mut app, egui::Key::ArrowDown);
+        assert_eq!(app.list_sel, Some((Pane::Functions, second.get())));
+        assert_eq!(app.disasm_start, anchor);
+
+        // End/Home jump to the last/first row.
+        press(&mut app, egui::Key::End);
+        assert_eq!(app.list_sel, Some((Pane::Functions, third.get())));
+        press(&mut app, egui::Key::Home);
+        assert_eq!(app.list_sel, Some((Pane::Functions, first.get())));
+
+        // Enter opens the highlighted row in the disassembly, like IDA's list windows.
+        press(&mut app, egui::Key::Enter);
+        assert_eq!(app.disasm_start, first);
+        assert!(
+            matches!(app.tab, Tab::Disasm),
+            "Enter must open the row in the disassembly"
+        );
+        assert_eq!(
+            app.list_sel,
+            Some((Pane::Functions, first.get())),
+            "the list keeps its row cursor after opening the row"
+        );
+    }
+
+    /// The other dock lists follow the Functions window: a click moves the row cursor and
+    /// leaves both code views where they are; only a double click opens the row.
+    #[test]
+    fn dock_lists_select_on_a_click_and_jump_on_a_double_click() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("list-clicks.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let anchor = Address::new(0x140001900);
+        let call_site = Address::new(0x140001030);
+        let iat = Address::new(0x140002000);
+        let named = Address::new(0x140001234);
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            imports: vec![ImportRow {
+                module: "KERNEL32.dll".to_owned(),
+                api: "CreateFileW".to_owned(),
+                category: "file",
+                iat,
+                refs: 2,
+                first_from: Some(call_site),
+            }],
+            names: vec![(named, "g_target".to_owned())],
+            disasm_start: anchor,
+            pseudo_start: anchor,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let base = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 400.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let click = |pos: egui::Pos2, time: f64| {
+            let mut input = base.clone();
+            input.time = Some(time);
+            input.events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            input
+        };
+
+        // Imports: single click selects, double click follows the thunk's first call site.
+        let label = "KERNEL32.dll!CreateFileW  [file]  ×2";
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base.clone(), |ui| app.imports_list(ui, &mut action));
+        output.textures_delta.clear();
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, label, 4))
+            .expect("the import row must be on screen");
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(pos, 0.1), |ui| app.imports_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(action, Action::None, "a single click must not navigate");
+        assert_eq!(app.list_sel, Some((Pane::Imports, iat.get())));
+        assert_eq!(app.disasm_start, anchor, "the listing keeps its place");
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(pos, 0.2), |ui| app.imports_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(action, Action::NavigateToDisasm(call_site));
+
+        // Names: the same rule, with the address as the row key.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base.clone(), |ui| app.names_list(ui, &mut action));
+        output.textures_delta.clear();
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|clipped| char_click_pos(&clipped.shape, "g_target", 1))
+            .expect("the name row must be on screen");
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(pos, 1.0), |ui| app.names_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(action, Action::None, "a single click must not navigate");
+        assert_eq!(app.list_sel, Some((Pane::Names, named.get())));
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(click(pos, 1.1), |ui| app.names_list(ui, &mut action));
+        output.textures_delta.clear();
+        assert_eq!(action, Action::NavigateToDisasm(named));
+    }
+
     #[test]
     fn function_labels_and_reverse_jump_navigation() {
         let Some(bytes) = sample_pe() else {
@@ -13613,6 +14405,10 @@ mod tests {
                 .map(|(_, pos, ..)| pos.x)
                 .expect("the long literal is painted")
         };
+        // The dock applies its split on the frame after the first full layout, so warm up one
+        // frame before measuring (the panes used to get their second pass for free from the
+        // Functions Grid's discard request, which the painted list does not need).
+        let _ = strings_frame(&mut app, &ctx, &input);
         let painted = strings_frame(&mut app, &ctx, &input);
         let before = x_of(&painted);
         let row_y = painted
@@ -14986,6 +15782,10 @@ mod tests {
                 .find(|(painted, _)| *painted == addr)
                 .map(|(_, pos)| *pos)
         };
+        // The dock applies its split on the frame after the first full layout (the panes used
+        // to get their second pass from the Functions Grid's discard request), so warm up one
+        // frame before measuring the settled geometry.
+        let _ = step(&mut input, &mut app);
         let output = step(&mut input, &mut app);
         let before = header_pos(&output).expect("the column header is painted");
         let first_row = app.disasm_rows[0].addr.get();
