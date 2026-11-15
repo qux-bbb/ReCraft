@@ -5094,18 +5094,9 @@ impl ReCraftApp {
         let labels = RowMenuLabels::new(self);
         let mut menu = None;
         let mut picked_now = None;
-        list_header(
-            ui,
-            width,
-            row_h,
-            &[
-                (4.0, self.t("ui_name").as_str()),
-                (name_x, self.t("ui_address").as_str()),
-            ],
-            &body,
-            pal.text,
-        );
-        egui::ScrollArea::vertical()
+        let content_width = (range_x + 24.0).max(width);
+        let header = list_header_rect(ui, width, row_h);
+        let scroll = egui::ScrollArea::both()
             .id_salt("segments_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -5125,7 +5116,7 @@ impl ReCraftApp {
                     };
                     let response = list_row(
                         ui,
-                        width,
+                        content_width,
                         row_h,
                         picked == Some(key),
                         index % 2 == 1,
@@ -5154,6 +5145,17 @@ impl ReCraftApp {
                     }
                 }
             });
+        paint_list_header(
+            ui,
+            header,
+            scroll.state.offset.x,
+            &[
+                (4.0, self.t("ui_name").as_str()),
+                (name_x, self.t("ui_address").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Segments, Address::new(key), command, action, ui.ctx());
         }
@@ -5210,19 +5212,17 @@ impl ReCraftApp {
         let labels = RowMenuLabels::new(self);
         let mut menu = None;
         let mut picked_now = None;
-        list_header(
+        let widest_forwarder = widest_text(
             ui,
-            width,
-            row_h,
-            &[
-                (4.0, self.t("ui_name").as_str()),
-                (address_x, self.t("ui_address").as_str()),
-                (forwarder_x, self.t("ui_forwarder").as_str()),
-            ],
+            exports
+                .iter()
+                .filter_map(|(_, _, forwarder)| forwarder.clone()),
             &body,
-            pal.text,
+            pal.muted,
         );
-        egui::ScrollArea::vertical()
+        let content_width = (forwarder_x + widest_forwarder + 12.0).max(width);
+        let header = list_header_rect(ui, width, row_h);
+        let scroll = egui::ScrollArea::both()
             .id_salt("exports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -5231,7 +5231,7 @@ impl ReCraftApp {
                     let address_text = format!("{:#x}", address.get());
                     let response = list_row(
                         ui,
-                        width,
+                        content_width,
                         row_h,
                         picked == Some(key),
                         index % 2 == 1,
@@ -5265,6 +5265,18 @@ impl ReCraftApp {
                     }
                 }
             });
+        paint_list_header(
+            ui,
+            header,
+            scroll.state.offset.x,
+            &[
+                (4.0, self.t("ui_name").as_str()),
+                (address_x, self.t("ui_address").as_str()),
+                (forwarder_x, self.t("ui_forwarder").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Exports, Address::new(key), command, action, ui.ctx());
         }
@@ -5605,22 +5617,29 @@ impl ReCraftApp {
             })
             .map(|(index, _)| index)
             .collect();
-        let name_w = rows
-            .iter()
-            .filter_map(|&index| self.function_labels.get(index))
-            .max_by_key(|name| name.chars().count())
-            .map(|name| {
-                ui.painter()
-                    .layout_no_wrap(name.clone(), body.clone(), pal.text)
-                    .size()
-                    .x
-                    + 14.0
-            })
-            .unwrap_or(80.0);
+        let name_w = widest_text(
+            ui,
+            rows.iter()
+                .filter_map(|&index| self.function_labels.get(index).cloned()),
+            &body,
+            pal.text,
+        )
+        .max(80.0)
+            + 14.0;
         let icon_x = 4.0;
         let name_x = 20.0;
         let segment_x = name_x + name_w;
+        // IDA's Functions window sizes the columns to their content and scrolls sideways
+        // when the names do not fit, instead of cutting them at the pane edge.
+        let widest_segment = widest_text(
+            ui,
+            rows.iter()
+                .filter_map(|&index| segment_names.get(index).cloned()),
+            &mono,
+            pal.muted,
+        );
         let width = ui.available_width();
+        let content_width = (segment_x + widest_segment + 12.0).max(width);
         let wanted = self
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Functions)
@@ -5629,19 +5648,9 @@ impl ReCraftApp {
         let mut menu = None;
         let mut picked_now = None;
         // Column titles stay above the scrolling rows; the icon column has none, like IDA's
-        // margin.
-        list_header(
-            ui,
-            width,
-            row_h,
-            &[
-                (name_x, self.t("ui_function_name").as_str()),
-                (segment_x, self.t("ui_segment").as_str()),
-            ],
-            &body,
-            pal.text,
-        );
-        egui::ScrollArea::vertical()
+        // margin. They are painted after the scroll so they follow its horizontal offset.
+        let header = list_header_rect(ui, width, row_h);
+        let scroll = egui::ScrollArea::both()
             .id_salt("functions_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -5656,7 +5665,7 @@ impl ReCraftApp {
                     let segment = segment_names.get(index).cloned().unwrap_or_default();
                     let response = list_row(
                         ui,
-                        width,
+                        content_width,
                         row_h,
                         picked == Some(key),
                         shown % 2 == 1,
@@ -5695,6 +5704,17 @@ impl ReCraftApp {
                     ui.weak(self.t("ui_no_match"));
                 }
             });
+        paint_list_header(
+            ui,
+            header,
+            scroll.state.offset.x,
+            &[
+                (name_x, self.t("ui_function_name").as_str()),
+                (segment_x, self.t("ui_segment").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         if let Some((key, command)) = menu {
             self.run_row_command(
                 Pane::Functions,
@@ -5988,7 +6008,20 @@ impl ReCraftApp {
         let labels = RowMenuLabels::new(self);
         let mut menu = None;
         let mut picked_now = None;
-        egui::ScrollArea::vertical()
+        // A long `module!api` list scrolls sideways instead of cutting the names.
+        let widest_label = widest_text(
+            ui,
+            self.imports.iter().map(|import| {
+                format!(
+                    "{}!{}  [{}]  ?{}",
+                    import.module, import.api, import.category, import.refs
+                )
+            }),
+            &body,
+            pal.text,
+        );
+        let content_width = (4.0 + widest_label + 12.0).max(width);
+        egui::ScrollArea::both()
             .id_salt("imports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -6002,7 +6035,7 @@ impl ReCraftApp {
                     // the double click's (or Enter's) job.
                     let response = list_row(
                         ui,
-                        width,
+                        content_width,
                         row_h,
                         picked == Some(key),
                         index % 2 == 1,
@@ -6076,18 +6109,22 @@ impl ReCraftApp {
         let labels = RowMenuLabels::new(self);
         let mut menu = None;
         let mut picked_now = None;
-        list_header(
+        let widest_name = widest_text(
             ui,
-            width,
-            row_h,
-            &[
-                (4.0, self.t("ui_address").as_str()),
-                (name_x, self.t("ui_name").as_str()),
-            ],
+            self.names
+                .iter()
+                .filter(|(address, name)| {
+                    filter.is_empty()
+                        || name.to_lowercase().contains(&filter)
+                        || format!("{:#x}", address.get()).contains(&filter)
+                })
+                .map(|(_, name)| name.clone()),
             &body,
             pal.text,
         );
-        egui::ScrollArea::vertical()
+        let content_width = (name_x + widest_name + 12.0).max(width);
+        let header = list_header_rect(ui, width, row_h);
+        let scroll = egui::ScrollArea::both()
             .id_salt("names_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -6103,7 +6140,7 @@ impl ReCraftApp {
                     let address = format!("{:#012x}", addr.get());
                     let response = list_row(
                         ui,
-                        width,
+                        content_width,
                         row_h,
                         picked == Some(key),
                         shown % 2 == 1,
@@ -6132,6 +6169,17 @@ impl ReCraftApp {
                     }
                 }
             });
+        paint_list_header(
+            ui,
+            header,
+            scroll.state.offset.x,
+            &[
+                (4.0, self.t("ui_address").as_str()),
+                (name_x, self.t("ui_name").as_str()),
+            ],
+            &body,
+            pal.text,
+        );
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Names, Address::new(key), command, action, ui.ctx());
         }
@@ -9921,27 +9969,53 @@ fn list_row(
     response
 }
 
-/// Column titles of a docked list, painted above the scrolling rows like IDA's list windows
-/// (they stay put while the rows scroll).
-fn list_header(
-    ui: &mut egui::Ui,
-    width: f32,
-    row_h: f32,
+/// Reserve the title strip of a docked list. The strip is painted with
+/// [`paint_list_header`] after the scroll area, so its titles can follow the horizontal
+/// offset the way IDA's list windows do.
+fn list_header_rect(ui: &mut egui::Ui, width: f32, row_h: f32) -> egui::Rect {
+    ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover())
+        .0
+}
+
+/// Column titles of a docked list above the scrolling rows. `offset_x` is the horizontal
+/// scroll offset, so the titles stay glued to their columns when the list scrolls sideways.
+fn paint_list_header(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    offset_x: f32,
     cells: &[(f32, &str)],
     font: &FontId,
     color: Color32,
 ) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
     let painter = ui.painter_at(rect);
+    let left = rect.left() - offset_x;
     for (x, text) in cells {
         painter.text(
-            egui::pos2(rect.left() + x, rect.center().y),
+            egui::pos2(left + x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             *text,
             font.clone(),
             color,
         );
     }
+}
+
+/// Width of the widest `text` in `font`, laid out once (egui caches the galley).
+fn widest_text(
+    ui: &egui::Ui,
+    texts: impl Iterator<Item = String>,
+    font: &FontId,
+    color: Color32,
+) -> f32 {
+    texts
+        .max_by_key(|text| text.chars().count())
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), color)
+                .size()
+                .x
+        })
+        .unwrap_or(0.0)
 }
 
 /// A command from a docked list's row menu. IDA's list windows act on the row under the
@@ -14768,6 +14842,84 @@ mod tests {
         assert!(
             after < before - 100.0,
             "the list must scroll sideways to reach the tail of a long literal: {before} -> {after}"
+        );
+    }
+
+    /// The same rule for the Functions window: a name wider than the pane stays reachable
+    /// because the name column sizes to the content and the list scrolls sideways.
+    #[test]
+    fn headless_functions_list_scrolls_sideways_to_a_long_name() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-functions-scroll.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let long = format!("sub_{}", "a".repeat(80));
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            functions: vec![FunctionInfo {
+                start: Address::new(0x140001000),
+                end: Address::new(0x140001100),
+            }],
+            function_labels: vec![long.clone()],
+            ..ReCraftApp::default()
+        };
+        app.strings_dirty = false;
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut input = egui::RawInput {
+            // Narrower than the name: the row cannot fit and has to scroll sideways.
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 400.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let x_of = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == long => Some(text.pos),
+                    _ => None,
+                })
+                .expect("the long function name is painted")
+        };
+        // The dock-free render starts on the row it is given; warm up one frame so the
+        // scroll area knows its viewport before the wheel arrives.
+        let mut first = ctx.run_ui(input.clone(), |ui| app.functions_list(ui, &mut action));
+        first.textures_delta.clear();
+        let before = x_of(&first);
+        let pointer = egui::pos2(before.x + 10.0, before.y + 4.0);
+        let mut frame = 1.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.functions_list(ui, &mut action));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        input.events.push(egui::Event::PointerMoved(pointer));
+        let _ = step(&mut input, &mut app);
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -600.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::SHIFT,
+        });
+        let mut output = step(&mut input, &mut app);
+        for _ in 0..40 {
+            output = step(&mut input, &mut app);
+        }
+        let after = x_of(&output).x;
+        assert!(
+            after < before.x - 100.0,
+            "the Functions window must scroll sideways to reach a long name: {} -> {after}",
+            before.x
         );
     }
 
