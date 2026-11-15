@@ -52,8 +52,9 @@ const ROW_HEIGHT: f32 = 15.0;
 /// Rows the Strings window paints per frame; a full string table would otherwise cost the
 /// whole frame. IDA caps its list the same way and reports the truncation in the status bar.
 const STRING_LIST_ROWS: usize = 2000;
-/// Rows one PageUp/PageDown moves the cursor of a docked list (IDA pages by the visible
-/// height; a fixed page keeps the list panes readable at every window size).
+/// Rows one PageUp/PageDown moves the cursor of a docked list before the pane has been
+/// painted once; afterwards the height it last showed decides the page ([`ReCraftApp::
+/// list_page_rows`]).
 const LIST_PAGE_ROWS: usize = 20;
 /// Extensions File → Import offers besides the all-files fallback. PE binaries are
 /// `.exe`/`.dll`/`.sys`; ELF binaries are commonly `.elf`/`.so`/`.bin`/`.out` and very often
@@ -1527,6 +1528,9 @@ pub struct ReCraftApp {
     /// Row a list must scroll into view on its next frame (the row cursor moved by the
     /// keyboard, so the list has to follow it like IDA's windows do).
     list_scroll_to: Option<(Pane, u64)>,
+    /// Rows that fit on screen in the last frame a list was painted, so PageUp/PageDown
+    /// pages by the visible height like IDA's list windows.
+    list_page: Option<(Pane, usize)>,
     functions: Vec<FunctionInfo>,
     /// Names parallel to `functions` (for the side list), refreshed with it.
     function_labels: Vec<String>,
@@ -1664,6 +1668,7 @@ impl Default for ReCraftApp {
             hex_drag: false,
             list_sel: None,
             list_scroll_to: None,
+            list_page: None,
             functions: Vec::new(),
             function_labels: Vec::new(),
             functions_dirty: false,
@@ -2873,6 +2878,23 @@ impl ReCraftApp {
         self.list_sel = Some((pane, key));
         self.copy_focus = CopyFocus::List(pane);
         self.list_scroll_to = Some((pane, key));
+    }
+
+    /// Remember how many rows of `pane` fit on screen, from the height the list just laid
+    /// out (`pitch` is row height plus the gap between rows).
+    fn record_list_page(&mut self, pane: Pane, viewport_h: f32, pitch: f32) {
+        let rows = (viewport_h / pitch.max(1.0)).floor().max(1.0) as usize;
+        self.list_page = Some((pane, rows));
+    }
+
+    /// Rows one PageUp/PageDown moves `pane`'s cursor: the height the list last showed, with
+    /// [`LIST_PAGE_ROWS`] only as the fallback before the pane has been painted.
+    fn list_page_rows(&self, pane: Pane) -> usize {
+        self.list_page
+            .filter(|(recorded, _)| *recorded == pane)
+            .map(|(_, rows)| rows)
+            .unwrap_or(LIST_PAGE_ROWS)
+            .max(1)
     }
 
     /// Move a docked list's row cursor by `step` rows. The list keeps its own cursor and
@@ -5145,6 +5167,8 @@ impl ReCraftApp {
                     }
                 }
             });
+        let pitch = row_h + ui.spacing().item_spacing.y;
+        self.record_list_page(Pane::Segments, scroll.inner_rect.height(), pitch);
         paint_list_header(
             ui,
             header,
@@ -5265,6 +5289,8 @@ impl ReCraftApp {
                     }
                 }
             });
+        let pitch = row_h + ui.spacing().item_spacing.y;
+        self.record_list_page(Pane::Exports, scroll.inner_rect.height(), pitch);
         paint_list_header(
             ui,
             header,
@@ -5704,6 +5730,8 @@ impl ReCraftApp {
                     ui.weak(self.t("ui_no_match"));
                 }
             });
+        let pitch = row_h + ui.spacing().item_spacing.y;
+        self.record_list_page(Pane::Functions, scroll.inner_rect.height(), pitch);
         paint_list_header(
             ui,
             header,
@@ -5948,6 +5976,8 @@ impl ReCraftApp {
                     ui.weak(self.t("ui_first_2000_matches"));
                 }
             });
+        let pitch = row_h + ui.spacing().item_spacing.y;
+        self.record_list_page(Pane::Strings, scroll.inner_rect.height(), pitch);
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Strings, Address::new(key), command, action, ui.ctx());
         }
@@ -6021,7 +6051,7 @@ impl ReCraftApp {
             pal.text,
         );
         let content_width = (4.0 + widest_label + 12.0).max(width);
-        egui::ScrollArea::both()
+        let scroll = egui::ScrollArea::both()
             .id_salt("imports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -6060,6 +6090,8 @@ impl ReCraftApp {
                     }
                 }
             });
+        let pitch = row_h + ui.spacing().item_spacing.y;
+        self.record_list_page(Pane::Imports, scroll.inner_rect.height(), pitch);
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Imports, Address::new(key), command, action, ui.ctx());
         }
@@ -6169,6 +6201,8 @@ impl ReCraftApp {
                     }
                 }
             });
+        let pitch = row_h + ui.spacing().item_spacing.y;
+        self.record_list_page(Pane::Names, scroll.inner_rect.height(), pitch);
         paint_list_header(
             ui,
             header,
@@ -8918,9 +8952,9 @@ impl ReCraftApp {
             } else if up {
                 -1
             } else if page_down {
-                LIST_PAGE_ROWS as i64
+                self.list_page_rows(pane) as i64
             } else if page_up {
-                -(LIST_PAGE_ROWS as i64)
+                -(self.list_page_rows(pane) as i64)
             } else {
                 0
             };
@@ -13092,6 +13126,89 @@ mod tests {
         let mut output = ctx.run_ui(click(pos, 1.1), |ui| app.names_list(ui, &mut action));
         output.textures_delta.clear();
         assert_eq!(action, Action::NavigateToDisasm(named));
+    }
+
+    /// PageUp/PageDown move a list's cursor by the rows the pane actually shows, like IDA's
+    /// list windows, not by the fixed fallback page.
+    #[test]
+    fn list_page_keys_page_by_the_visible_height() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("list-page.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let base = 0x140001000u64;
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            functions: (0..40)
+                .map(|index| FunctionInfo {
+                    start: Address::new(base + index * 0x10),
+                    end: Address::new(base + (index + 1) * 0x10),
+                })
+                .collect(),
+            function_labels: (0..40)
+                .map(|index| format!("sub_{:x}", base + index * 0x10))
+                .collect(),
+            ..ReCraftApp::default()
+        };
+        app.ensure_dock();
+        app.focus_pane(Pane::Functions);
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 500.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        // Two warm-up frames: the dock settles its split (and the Graph overview above the
+        // list) after the first full layout, and the page size follows the pane height.
+        for _ in 0..2 {
+            let mut warm = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            warm.textures_delta.clear();
+        }
+        let mut press = |app: &mut ReCraftApp, key: egui::Key| {
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            input.events.clear();
+        };
+
+        press(&mut app, egui::Key::ArrowDown);
+        let page = match app.list_page {
+            Some((Pane::Functions, rows)) => rows,
+            other => panic!("the Functions pane must record its page, got {other:?}"),
+        };
+        assert!(
+            page > 1 && page < LIST_PAGE_ROWS,
+            "a short window must page by fewer than the {LIST_PAGE_ROWS}-row fallback, got {page}"
+        );
+        assert_eq!(
+            app.list_sel,
+            Some((Pane::Functions, base)),
+            "the first arrow lands on the first row"
+        );
+
+        press(&mut app, egui::Key::PageDown);
+        assert_eq!(
+            app.list_sel,
+            Some((Pane::Functions, base + page as u64 * 0x10)),
+            "PageDown must move exactly one visible page"
+        );
+        press(&mut app, egui::Key::PageUp);
+        assert_eq!(
+            app.list_sel,
+            Some((Pane::Functions, base)),
+            "PageUp must come back one visible page"
+        );
     }
 
     /// IDA's list-row context menu: jump, decompile (Functions window only), rename, cross
