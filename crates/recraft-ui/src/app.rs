@@ -906,6 +906,51 @@ fn hex_byte(byte: u8) -> String {
     }
 }
 
+/// IDA's directive and auto-name prefix for a data item read as `size` bytes.
+fn typed_item_kind(size: usize) -> (&'static str, &'static str) {
+    match size {
+        16 => ("xmmword", "xmmword_"),
+        8 => ("dq", "qword_"),
+        4 => ("dd", "dword_"),
+        2 => ("dw", "word_"),
+        _ => ("db", "byte_"),
+    }
+}
+
+/// Address a 4/8-byte item holds (little-endian), when the value could name one.
+fn data_offset_target(bytes: &[u8]) -> Option<Address> {
+    let mut value = 0u64;
+    for (index, byte) in bytes.iter().enumerate().take(8) {
+        value |= u64::from(*byte) << (index * 8);
+    }
+    (value != 0).then(|| Address::new(value))
+}
+
+/// Big-endian hex text of a little-endian value, IDA style: uppercase, `h` suffix, and a
+/// leading zero when the first digit is a letter (`0FFFFFFFFFFFFFFFFh`).
+fn hex_value(bytes: &[u8]) -> String {
+    if bytes.iter().all(|byte| *byte == 0) {
+        return "0".to_owned();
+    }
+    let mut digits = String::with_capacity(bytes.len() * 2);
+    for byte in bytes.iter().rev() {
+        digits.push_str(&format!("{byte:02X}"));
+    }
+    let mut text = digits.trim_start_matches('0').to_owned();
+    if text.is_empty() {
+        text.push('0');
+    }
+    if text
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+    {
+        text.insert(0, '0');
+    }
+    text.push('h');
+    text
+}
+
 /// One undefined data byte the way IDA prints it: `0` or `0FFh`, right-aligned in the
 /// four-cell operand field (`db    0`, `db  54h`, `db 0FFh`).
 fn db_byte_operand(byte: u8) -> String {
@@ -3818,12 +3863,15 @@ impl ReCraftApp {
             (segment.range.end, run)
         };
         let next = Address::new(addr.get() + run as u64);
-        if next >= segment_end || next.get() % 4 != 0 {
+        // Gaps shorter than four bytes are not alignment padding IDA draws (`db 0` rows
+        // there); the boundary must let a 4/8/16-byte item start.
+        if run < 4 || next >= segment_end || next.get() % 4 != 0 {
             return None;
         }
         let item_here = string_row_at(&self.strings, next).is_some()
             || self.literal_data_bytes(next).is_some()
             || self.short_literal_len_at(next).is_some()
+            || self.wide_data_access(next).is_some()
             || self
                 .session
                 .as_ref()?
@@ -3856,6 +3904,9 @@ impl ReCraftApp {
             // A referenced short literal (`"\r\n"`) is its own item; the bytes after its
             // terminator are padding, not part of the same raw row.
             addr.get() + len as u64
+        } else if let Some(size) = self.wide_data_access(addr) {
+            // A wide read types the data item: it covers `size` bytes as one row.
+            addr.get() + size as u64
         } else if let Some(padding) = self.padding_run(addr) {
             padding.get()
         } else {
@@ -3879,9 +3930,42 @@ impl ReCraftApp {
             .min()
     }
 
+    /// Width of the widest direct access a cross reference makes to `addr`.
+    ///
+    /// IDA types a data item by how it is used: a 16-byte read becomes
+    /// `xmmword_1400184C0 xmmword 0FFFF…h`, an 8-byte read a `dq`, a 4-byte read a `dd`.
+    /// Returns `None` for `addr` that nothing reads as a 2/4/8/16-byte value.
+    fn wide_data_access(&mut self, addr: Address) -> Option<usize> {
+        let session = self.session.as_mut()?;
+        let mut width = None;
+        for xref in session.xrefs_to(addr).ok()? {
+            let Some(insn) = session.insn_at(xref.from).ok()? else {
+                continue;
+            };
+            // Direct operands name the address themselves; an indexed operand
+            // (`[table + index*scale]`) reaches the item through its table base.
+            let references = if insn.memory_is_direct() {
+                Address::new(insn.memory_displacement64()) == addr
+            } else if let Some((table, _)) = insn.memory_indexed_table() {
+                Address::new(table) == addr
+            } else {
+                false
+            };
+            if !references {
+                continue;
+            }
+            let size = insn.memory_size().size();
+            if matches!(size, 2 | 4 | 8 | 16) && width.is_none_or(|current| size > current) {
+                width = Some(size);
+            }
+        }
+        width
+    }
+
     /// Raw `db` row covering the bytes at `addr` up to the next row boundary.
     fn raw_data_row(&mut self, addr: Address) -> Option<DisasmLine> {
         let literal_len = self.short_literal_len_at(addr);
+        let wide = self.wide_data_access(addr);
         let end = self.session.as_ref()?.segment_containing(addr)?.range.end;
         let next = self.next_row_start(addr)?.min(end);
         let len = next
@@ -3889,26 +3973,54 @@ impl ReCraftApp {
             .saturating_sub(addr.get())
             .min(u64::from(u8::MAX)) as u8;
         let session = self.session.as_mut()?;
+        // Sixteen bytes: an `xmmword` item needs the whole row; `raw` keeps the first 15.
+        let mut bytes = [0u8; 16];
+        let read = session.read_at(addr, &mut bytes).unwrap_or(0);
         let mut raw = [0u8; 15];
-        let read = session.read_at(addr, &mut raw).unwrap_or(0);
+        let copied = read.min(15);
+        raw[..copied].copy_from_slice(&bytes[..copied]);
         let shown = read.min(usize::from(len));
-        // A referenced short literal (`"\r\n"`) is an item of its own; a multi-byte run of
-        // zero padding becomes IDA's `align` line; everything else is one byte per row.
-        let (mnemonic, operands, name) = match literal_len.filter(|len| *len <= shown) {
-            Some(len) => {
-                let text: String = raw[..len - 1].iter().map(|byte| *byte as char).collect();
-                (
-                    "db".to_owned(),
-                    format_db_bytes(&raw[..len - 1]),
-                    Some(ida_data_name(&text, addr)),
-                )
-            }
-            None if len > 1 => ("align".to_owned(), align_operand(next), None),
-            None => (
+        // A referenced short literal (`"\r\n"`) is an item of its own; a wide read types the
+        // item (`xmmword_…`, `dq …`); a multi-byte run of zero padding becomes IDA's `align`
+        // line; everything else is one byte per row.
+        let (mnemonic, operands, name) = if let Some(len) = literal_len.filter(|len| *len <= shown)
+        {
+            let text: String = bytes[..len - 1].iter().map(|byte| *byte as char).collect();
+            (
                 "db".to_owned(),
-                db_byte_operand(raw.first().copied().unwrap_or(0)),
+                format_db_bytes(&bytes[..len - 1]),
+                Some(ida_data_name(&text, addr)),
+            )
+        } else if let Some(size) = wide.filter(|size| *size <= shown) {
+            let (_, mut prefix) = typed_item_kind(size);
+            let value_bytes = &bytes[..size];
+            let operands = match (size, data_offset_target(value_bytes)) {
+                (4 | 8, Some(target)) if session.segment_containing(target).is_some() => {
+                    match session.name_at(target).ok().flatten() {
+                        Some(name) => {
+                            // IDA names an item holding an address `off_<hex>`.
+                            prefix = "off_";
+                            format!("offset {name}")
+                        }
+                        None => hex_value(value_bytes),
+                    }
+                }
+                _ => hex_value(value_bytes),
+            };
+            let name = session
+                .name_at(addr)
+                .ok()
+                .flatten()
+                .or_else(|| Some(format!("{prefix}{:x}", addr.get())));
+            (typed_item_kind(size).0.to_owned(), operands, name)
+        } else if len > 1 {
+            ("align".to_owned(), align_operand(next), None)
+        } else {
+            (
+                "db".to_owned(),
+                db_byte_operand(bytes.first().copied().unwrap_or(0)),
                 session.name_at(addr).ok().flatten(),
-            ),
+            )
         };
         Some(DisasmLine {
             addr,
@@ -17877,5 +17989,18 @@ mod tests {
         assert_eq!(align_operand(Address::new(0x140018450)), "10h");
         assert_eq!(align_operand(Address::new(0x140018448)), "8");
         assert_eq!(align_operand(Address::new(0x140018444)), "4");
+        // A wide value prints as IDA's big-endian hex with the leading zero.
+        assert_eq!(hex_value(&[0xff; 8]), "0FFFFFFFFFFFFFFFFh");
+        assert_eq!(
+            hex_value(&[0x54, 0x1f, 0x00, 0x40, 0x01, 0x00]),
+            "140001F54h"
+        );
+        assert_eq!(hex_value(&[0, 0, 0, 0]), "0");
+        assert_eq!(
+            data_offset_target(&[0x54, 0x1f, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00]),
+            Some(Address::new(0x140001f54))
+        );
+        assert_eq!(typed_item_kind(16), ("xmmword", "xmmword_"));
+        assert_eq!(typed_item_kind(8), ("dq", "qword_"));
     }
 }
