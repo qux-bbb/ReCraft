@@ -16,10 +16,11 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use recraft_common::{Address, AddressRange, Error, Result};
-use recraft_decode::{DecodeCache, FlowKind, Formatter, Insn, Mode, decode};
+use recraft_decode::{DecodeCache, Formatter, Insn, Mode, decode};
 use recraft_format::{Arch, Format, Image};
 use recraft_storage::{JournalEntry, Project};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -29,6 +30,7 @@ use crate::command::{
     StructField,
 };
 use crate::flags::{Flags, FlagsStore};
+use crate::listing::{self, ListingSymbols, SharedSymbols};
 use crate::segments::{self, Segment};
 use crate::snapshot::SessionSnapshot;
 use crate::view::{DisasmLine, FunctionInfo, SessionView, StringEntry, StringOverride, XrefEntry};
@@ -166,6 +168,9 @@ pub struct Session {
     image_cache: RefCell<ImageCache>,
     flags: FlagsStore,
     decoders: RefCell<DecodeCache>,
+    /// Symbol table the listing renders through (names, function starts, mapped ranges).
+    /// Rebuilt on the next listing after an edit; see [`Session::listing_symbols`].
+    listing_symbols: RefCell<Option<Arc<ListingSymbols>>>,
     /// Provenance stamped on every journal record this session writes (`cli`, `mcp`,
     /// `gui`, `ai`, ...): the journal is shared by every front end.
     origin: String,
@@ -216,6 +221,7 @@ impl Session {
             image_cache: RefCell::new(ImageCache::new(IMAGE_CACHE_PAGES)),
             flags: FlagsStore::new(FLAGS_CACHE_PAGES),
             decoders: RefCell::new(DecodeCache::new(DECODE_CACHE_ENTRIES)),
+            listing_symbols: RefCell::new(None),
             origin: "user".to_owned(),
         })
     }
@@ -252,6 +258,7 @@ impl Session {
             image_cache: RefCell::new(ImageCache::new(IMAGE_CACHE_PAGES)),
             flags: FlagsStore::new(FLAGS_CACHE_PAGES),
             decoders: RefCell::new(DecodeCache::new(DECODE_CACHE_ENTRIES)),
+            listing_symbols: RefCell::new(None),
             origin: "user".to_owned(),
         })
     }
@@ -410,9 +417,9 @@ impl Session {
         let mut lines = Vec::with_capacity(count.min(4096));
         let mut addr = start;
         for _ in 0..count {
-            if self.segment_containing(addr).is_none() {
+            let Some(segment) = self.segment_containing(addr).cloned() else {
                 break;
-            }
+            };
             let Some(decoded) = self.decoded_at(addr)? else {
                 break;
             };
@@ -439,9 +446,14 @@ impl Session {
                 operands,
                 name,
                 comment,
+                segment: segment.name,
+                xrefs: Vec::new(),
                 flags,
             });
             addr = Address::new(addr.get() + u64::from(decoded.len));
+        }
+        if count > 1 {
+            listing::attach_xref_comments(self, &mut lines)?;
         }
         Ok(lines)
     }
@@ -1171,6 +1183,31 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// Cross-references pointing *into* `[start, end)`.
+    ///
+    /// One indexed range scan feeds a whole listing window's `; CODE XREF:` comments.
+    pub fn xrefs_to_range(&self, start: Address, end: Address) -> Result<Vec<XrefEntry>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare(
+                "SELECT from_addr, to_addr, type FROM xref
+                 WHERE to_addr >= ?1 AND to_addr < ?2
+                 ORDER BY to_addr, from_addr",
+            )
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map(params![start.get() as i64, end.get() as i64], |row| {
+                Ok(XrefEntry {
+                    from: Address::new(row.get::<_, i64>(0)? as u64),
+                    to: Address::new(row.get::<_, i64>(1)? as u64),
+                    kind: row.get(2)?,
+                })
+            })
+            .map_err(command::db_err)?;
+        rows.map(|row| row.map_err(command::db_err)).collect()
+    }
+
     /// All persisted cross-references, optionally filtered by kind.
     pub fn all_xrefs(&self, kind: Option<i64>) -> Result<Vec<XrefEntry>> {
         let mut stmt = self
@@ -1329,6 +1366,9 @@ impl Session {
             .conn()
             .execute("DELETE FROM pseudocode", [])
             .map_err(command::db_err)?;
+        // Every mutation drops the listing's symbol table too: names, function starts and
+        // the xrefs the comments read all live in this project.
+        *self.listing_symbols.borrow_mut() = None;
         Ok(())
     }
 
@@ -1598,18 +1638,61 @@ impl Session {
 
     // --------------------------------------------------------------- views ---
 
+    /// Symbol table the listing renders through, rebuilt after an edit.
+    ///
+    /// The table holds every name, function start and mapped range, so building it per
+    /// window would put a full `name`/`func` read behind every scroll. It is shared behind
+    /// an [`Arc`] and dropped whenever the project changes ([`Self::clear_pseudocode_cache`]).
+    fn listing_symbols(&self) -> Result<Arc<ListingSymbols>> {
+        if let Some(symbols) = self.listing_symbols.borrow().as_ref() {
+            return Ok(Arc::clone(symbols));
+        }
+        let symbols = Arc::new(ListingSymbols::collect(self)?);
+        *self.listing_symbols.borrow_mut() = Some(Arc::clone(&symbols));
+        Ok(symbols)
+    }
+
+    /// Formatter the linear listing renders through: IDA syntax (`28h`, symbol names).
+    ///
+    /// Shared so the graph view's block text and the listing print the same instruction.
+    pub fn listing_formatter(&self) -> Result<Formatter> {
+        let symbols = self.listing_symbols()?;
+        Ok(Formatter::ida(Some(Box::new(SharedSymbols(symbols)))))
+    }
+
+    /// Drop the cached symbol table after another connection changed names or functions.
+    ///
+    /// `PRAGMA data_version` tells the GUI that a second writer committed; this makes the
+    /// next listing window rebuild its names instead of showing the old ones.
+    pub fn invalidate_listing_symbols(&self) {
+        *self.listing_symbols.borrow_mut() = None;
+    }
+
+    /// Fill `; CODE XREF:` / `; DATA XREF:` comments for a rendered listing window.
+    ///
+    /// The UI renders a window that mixes instructions with data rows (literals, `db` gaps),
+    /// so it decorates the finished rows in one pass.
+    pub fn attach_xref_comments(&self, lines: &mut [DisasmLine]) -> Result<()> {
+        listing::attach_xref_comments(self, lines)
+    }
+
     /// Linear disassembly starting at `start`.
+    ///
+    /// Instruction text is IDA's: `h`-suffixed hex, symbol names for branch and data
+    /// targets, and `; CODE XREF:` / `; DATA XREF:` comments on the rows that are referenced
+    /// (only when more than one row is rendered — a single-line read, as the xref dialog
+    /// does, does not pay for the extra queries).
     pub fn disasm(&mut self, start: Address, count: usize) -> Result<Vec<DisasmLine>> {
         if self.arch == Arch::Aarch64 {
             return self.disasm_aarch64(start, count);
         }
         let mut lines = Vec::with_capacity(count.min(4096));
-        let mut formatter = Formatter::new();
+        let mut formatter = self.listing_formatter()?;
         let mut addr = start;
         for _ in 0..count {
-            if self.segment_containing(addr).is_none() {
+            let Some(segment) = self.segment_containing(addr).cloned() else {
                 break;
-            }
+            };
             let Some(insn) = self.insn_at(addr)? else {
                 break;
             };
@@ -1618,25 +1701,10 @@ impl Session {
             if read == 0 {
                 break;
             }
-            let (mnemonic, mut operands) = {
+            let (mnemonic, operands) = {
                 let (mnemonic, operands) = formatter.format_parts(&insn);
                 (mnemonic.to_owned(), operands.to_owned())
             };
-            // Resolve names for direct memory operands (IAT slots, globals) and direct
-            // call/jump targets (auto `sub_...`, exports) so disassembly is readable.
-            let referenced = if insn.memory_is_direct() {
-                Some(Address::new(insn.memory_displacement64()))
-            } else if matches!(insn.flow(), FlowKind::Call | FlowKind::UnconditionalBranch) {
-                insn.branch_target()
-            } else {
-                None
-            };
-            if let Some(target) = referenced
-                && let Some(target_name) = self.name_at(target)?
-            {
-                operands.push_str("  ; ");
-                operands.push_str(&target_name);
-            }
             let name = self.name_at(addr)?;
             let comment = self.comment_at(addr, CommentKind::Regular)?;
             let flags = self.flags_at(addr)?;
@@ -1648,9 +1716,14 @@ impl Session {
                 operands,
                 name,
                 comment,
+                segment: segment.name,
+                xrefs: Vec::new(),
                 flags,
             });
             addr = insn.next_addr();
+        }
+        if count > 1 {
+            listing::attach_xref_comments(self, &mut lines)?;
         }
         Ok(lines)
     }
@@ -1924,6 +1997,10 @@ fn describe_value(value: &Option<String>) -> String {
 impl SessionView for Session {
     fn image(&self) -> &Image {
         &self.image
+    }
+
+    fn listing_formatter(&self) -> Result<Formatter> {
+        Session::listing_formatter(self)
     }
 
     fn segments(&self) -> &[Segment] {

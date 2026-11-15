@@ -10,6 +10,7 @@
 
 mod command;
 mod flags;
+mod listing;
 pub mod plt;
 mod script;
 mod segments;

@@ -53,6 +53,14 @@ pub trait SessionView {
         Ok(self.insn_at(addr)?.map(|insn| insn.neutral()))
     }
 
+    /// Formatter the listing renders through: IDA syntax with this project's symbol names.
+    ///
+    /// Sessions with a symbol table override this; snapshots and other read-only views fall
+    /// back to the plain formatter.
+    fn listing_formatter(&self) -> Result<recraft_decode::Formatter> {
+        Ok(recraft_decode::Formatter::ida(None))
+    }
+
     /// Copy up to `out.len()` image bytes starting at virtual address `addr`.
     fn read_at(&self, addr: Address, out: &mut [u8]) -> Result<usize>;
 
@@ -118,6 +126,12 @@ pub struct DisasmLine {
     pub operands: String,
     pub name: Option<String>,
     pub comment: Option<String>,
+    /// Name of the segment the line sits in (`.text`, `.rdata`), the prefix IDA puts in front
+    /// of the address column.
+    pub segment: String,
+    /// Cross-reference comments, IDA style and without the leading `;`:
+    /// `CODE XREF: sub_140001474+6↑j`, `DATA XREF: .pdata:0000000140002500↑o`.
+    pub xrefs: Vec<String>,
     pub flags: Flags,
 }
 

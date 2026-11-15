@@ -27,6 +27,7 @@ ui_unexplored = 未探索
 ui_external_symbol = 外部符号
 ui_synchronized_with_hex_view = （与十六进制视图同步）
 ui_bytes = 字节
+ui_show_bytes = 显示字节
 ui_words = 字
 ui_follow_selection = 跟随选中
 ui_no_readable_bytes_here = 该地址没有可读字节。

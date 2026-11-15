@@ -482,27 +482,112 @@ impl DecodeCache {
     }
 }
 
-/// Intel-syntax formatter with IDA-friendly defaults.
+/// Source of the names the disassembler substitutes for numeric addresses.
+///
+/// IDA's listing never prints a call target or a global as a bare number: it prints the
+/// symbol (`call sub_140001678`, `mov cs:byte_140023B40, 1`). The formatter asks this trait
+/// while it renders, so callers that have a project can hand it one and callers that only
+/// own bytes ([`Insn::asm`]) keep the plain numbers.
+pub trait Symbols {
+    /// Name of the code at `address` — a call or branch target.
+    fn code(&mut self, address: u64) -> Option<String>;
+
+    /// Name of the data at `address`, addressed with `size` bytes (`1`, `2`, `4`, `8`, …).
+    fn data(&mut self, address: u64, size: u32) -> Option<String>;
+}
+
+/// Bridges [`Symbols`] to iced's resolver, which is consulted for branch targets, memory
+/// displacements and immediates alike. Immediates are left alone: `add rsp, 28h` must stay a
+/// number, so only branch and memory operands are resolved.
+struct SymbolAdapter {
+    symbols: Box<dyn Symbols>,
+}
+
+impl iced_x86::SymbolResolver for SymbolAdapter {
+    fn symbol(
+        &mut self,
+        instruction: &iced_x86::Instruction,
+        _operand: u32,
+        instruction_operand: Option<u32>,
+        address: u64,
+        _address_size: u32,
+    ) -> Option<iced_x86::SymbolResult<'_>> {
+        let index = instruction_operand?;
+        let text = match instruction.op_kind(index) {
+            iced_x86::OpKind::NearBranch16
+            | iced_x86::OpKind::NearBranch32
+            | iced_x86::OpKind::NearBranch64
+            | iced_x86::OpKind::FarBranch16
+            | iced_x86::OpKind::FarBranch32 => self.symbols.code(address)?,
+            iced_x86::OpKind::Memory => {
+                let size = instruction.memory_size().size() as u32;
+                self.symbols.data(address, size)?
+            }
+            _ => return None,
+        };
+        Some(iced_x86::SymbolResult {
+            address,
+            text: iced_x86::SymResTextInfo::with_string(text, iced_x86::FormatterTextKind::Label),
+            flags: iced_x86::SymbolFlags::NONE,
+            symbol_size: None,
+        })
+    }
+}
+
+/// Intel-syntax formatter.
+///
+/// [`Formatter::new`] keeps the C-style `0x` hex that the IR and `__asm("…")` text use;
+/// [`Formatter::ida`] switches to IDA's listing syntax (bare `h`-suffixed hex) and resolves
+/// symbol names.
 pub struct Formatter {
     inner: iced_x86::IntelFormatter,
     output: String,
 }
 
 impl Formatter {
+    /// C-style hex (`0x401000`) with no symbol resolution.
     pub fn new() -> Self {
         let mut inner = iced_x86::IntelFormatter::new();
-        let options = inner.options_mut();
-        options.set_space_after_operand_separator(true);
-        options.set_hex_prefix("0x");
-        options.set_hex_suffix("");
-        options.set_uppercase_hex(false);
-        options.set_leading_zeros(false);
-        options.set_small_hex_numbers_in_decimal(false);
-        options.set_branch_leading_zeros(false);
+        Self::configure(&mut inner, false);
         Self {
             inner,
             output: String::with_capacity(64),
         }
+    }
+
+    /// IDA listing syntax: `28h`, `0FFFFFFFFFFFFFFFFh`, `sub_140001678`.
+    ///
+    /// `symbols` names branch and data targets; `None` keeps the numbers.
+    pub fn ida(symbols: Option<Box<dyn Symbols>>) -> Self {
+        let resolver: Option<Box<dyn iced_x86::SymbolResolver>> = symbols.map(|symbols| {
+            Box::new(SymbolAdapter { symbols }) as Box<dyn iced_x86::SymbolResolver>
+        });
+        let mut inner = iced_x86::IntelFormatter::with_options(resolver, None);
+        Self::configure(&mut inner, true);
+        Self {
+            inner,
+            output: String::with_capacity(64),
+        }
+    }
+
+    fn configure(inner: &mut iced_x86::IntelFormatter, ida: bool) {
+        let options = inner.options_mut();
+        options.set_space_after_operand_separator(true);
+        if ida {
+            // IDA writes `28h`, `0Ah` (a leading 0 when the first digit is a letter) and
+            // no `0x` prefix; iced's formatter supplies that leading zero itself.
+            options.set_hex_prefix("");
+            options.set_hex_suffix("h");
+            options.set_uppercase_hex(true);
+        } else {
+            options.set_hex_prefix("0x");
+            options.set_hex_suffix("");
+            options.set_uppercase_hex(false);
+        }
+        options.set_leading_zeros(false);
+        // IDA prints 0–9 in decimal (`mov al, 1`) and everything wider in hex (`28h`).
+        options.set_small_hex_numbers_in_decimal(ida);
+        options.set_branch_leading_zeros(false);
     }
 
     /// Full Intel-syntax text: `mov rax, rbx`, `call 0x401000`, `ret`.
@@ -645,6 +730,61 @@ mod tests {
         let (mnemonic, operands) = formatter.format_parts(&ret);
         assert_eq!(mnemonic, "ret");
         assert_eq!(operands, "");
+    }
+
+    #[test]
+    fn ida_syntax_writes_h_suffixed_hex() {
+        let mut formatter = Formatter::ida(None);
+        // `sub rsp, 28h` — IDA's suffix form, not iced's default `0x28`.
+        let sub = decode64(&[0x48, 0x83, 0xec, 0x28], 0x140001424);
+        assert_eq!(formatter.format(&sub), "sub rsp, 28h");
+        // A first digit that is a letter gets IDA's leading zero: `and al, 0Ah`.
+        let and = decode64(&[0x24, 0x0a], 0x140001000);
+        assert_eq!(formatter.format(&and), "and al, 0Ah");
+        // `0x` stays for the IR/`__asm` text.
+        assert_eq!(Formatter::new().format(&sub), "sub rsp, 0x28");
+    }
+
+    /// Names the formatter may substitute; counts how often it is asked.
+    struct Names {
+        map: Vec<(u64, &'static str)>,
+    }
+
+    impl Symbols for Names {
+        fn code(&mut self, address: u64) -> Option<String> {
+            self.map
+                .iter()
+                .find(|(target, _)| *target == address)
+                .map(|(_, name)| (*name).to_owned())
+        }
+
+        fn data(&mut self, address: u64, _size: u32) -> Option<String> {
+            self.code(address)
+        }
+    }
+
+    #[test]
+    fn ida_syntax_resolves_symbols() {
+        let symbols = Names {
+            map: vec![
+                (0x140001678, "sub_140001678"),
+                (0x140001466, "loc_140001466"),
+                (0x140023b40, "byte_140023B40"),
+            ],
+        };
+        let mut formatter = Formatter::ida(Some(Box::new(symbols)));
+
+        // `call rel32` prints the target's name instead of the number.
+        let call = decode64(&[0xe8, 0x4b, 0x02, 0x00, 0x00], 0x140001428);
+        assert_eq!(formatter.format(&call), "call sub_140001678");
+
+        // `je rel8` keeps iced's `short` prefix and takes the label.
+        let je = decode64(&[0x74, 0x21], 0x140001443);
+        assert_eq!(formatter.format(&je), "je short loc_140001466");
+
+        // A RIP-relative memory operand (how x64 reaches a global) becomes the data name.
+        let mov = decode64(&[0xc6, 0x05, 0xc5, 0x26, 0x02, 0x00, 0x01], 0x140001474);
+        assert_eq!(formatter.format(&mov), "mov byte ptr [byte_140023B40], 1");
     }
 
     #[test]

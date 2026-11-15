@@ -1378,6 +1378,8 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
                     "operands": line.operands,
                     "name": line.name,
                     "comment": line.comment,
+                    "segment": line.segment,
+                    "xrefs": line.xrefs,
                     "code": line.flags.is_code(),
                     "data": line.flags.is_data(),
                 })
@@ -1386,27 +1388,44 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
         return json_result(&json!({ "start": format!("{:#x}", start.get()), "lines": lines }));
     }
 
+    // IDA's listing columns, text only: `segment:offset`, the mnemonic in its 8-cell field,
+    // then the operands with the `; comment` parked on the comment column.
+    const INSN_COL: usize = 39;
+    const COMMENT_COL: usize = 56;
     for line in &lines {
-        let bytes = line
-            .bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let mut text = format!(
-            "{:#012x}  {:<47}  {:<8} {}",
-            line.addr.get(),
-            bytes,
-            line.mnemonic,
-            line.operands
-        );
+        let address = format!("{}:{:016X}", line.segment, line.addr.get());
+        // IDA prints a label on its own line, with the address repeated.
         if let Some(name) = &line.name {
-            text.push_str("   ; ");
-            text.push_str(name);
+            println!("{address} {name}:");
         }
-        if let Some(comment) = &line.comment {
-            text.push_str("   ; ");
+        let mut text = format!(
+            "{address:<INSN_COL$}{:<7} {}",
+            line.mnemonic,
+            line.operands.trim_end()
+        );
+        let mut comments = Vec::new();
+        if let Some(comment) = line.comment.as_deref().map(str::trim) {
+            if !comment.is_empty() {
+                comments.push(if comment.starts_with(';') {
+                    comment.to_owned()
+                } else {
+                    format!("; {comment}")
+                });
+            }
+        }
+        comments.extend(line.xrefs.iter().map(|xref| format!("; {xref}")));
+        for (index, comment) in comments.iter().enumerate() {
+            if index == 0 && text.chars().count() + 2 <= COMMENT_COL {
+                let padding = COMMENT_COL - text.chars().count();
+                text.push_str(&" ".repeat(padding));
+            } else {
+                text.push('\n');
+                text.push_str(&" ".repeat(COMMENT_COL));
+            }
             text.push_str(comment);
+        }
+        if comments.is_empty() {
+            text.truncate(text.trim_end().len());
         }
         println!("{text}");
     }

@@ -27,6 +27,7 @@ ui_unexplored = Unexplored
 ui_external_symbol = External symbol
 ui_synchronized_with_hex_view = (Synchronized with Hex view)
 ui_bytes = Bytes
+ui_show_bytes = Show opcode bytes
 ui_words = Words
 ui_follow_selection = Follow selection
 ui_no_readable_bytes_here = No readable bytes here.

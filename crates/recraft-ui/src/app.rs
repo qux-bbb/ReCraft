@@ -37,11 +37,17 @@ const DATA_ROW_BYTES: u64 = 8;
 /// Cap on row-boundary steps when a data window is paged backwards, so a huge segment
 /// cannot stall the UI.
 const DATA_WALK_LIMIT: usize = 200_000;
-/// Column starts of the disassembly listing, in monospace cells. They mirror the field widths
-/// [`ReCraftApp::disasm_columns`] formats (14 address + 46 bytes + 9 mnemonic + 36 operands), so
-/// the pinned header can be painted cell by cell instead of padded with `{:<14}` — a CJK label is
-/// wider than one cell and would shift every later column.
-const DISASM_COLUMN_CELLS: [usize; 5] = [0, 14, 60, 69, 105];
+/// Column of the instruction text in the listing, in monospace cells. IDA prints the
+/// address (`segname:offset`) and then indents the instruction to this column; everything
+/// before it (address, optional opcode bytes) is padded.
+const DISASM_INSN_COL: usize = 39;
+/// Cells IDA leaves between the instruction column and the comment column.
+const DISASM_COMMENT_GAP: usize = 17;
+/// Cells the opcode-bytes column takes when it is enabled: up to eight bytes, the most
+/// IDA shows with *Number of opcode bytes*.
+const DISASM_BYTES_CELLS: usize = 25;
+/// Which column the label line puts the name after the address.
+const DISASM_NAME_COL: usize = 23;
 const MONO_SIZE: f32 = 12.5;
 /// Fraction of the font size by which the monospace CJK fallback is lifted so its
 /// baseline lines up with Consolas (see [`ui_fonts`]). The gap is proportional to the
@@ -736,6 +742,17 @@ struct XrefDialog {
     dirty: bool,
 }
 
+/// Lines IDA draws around an instruction that are not instructions themselves: the
+/// `public`/`proc near` header of a function, its `name:` label and the closing `endp`.
+struct DisasmChrome {
+    /// `public <name>` / `proc near`, printed above the label of a function entry.
+    directives: Vec<String>,
+    /// `<name>:` label line (the entry point of a name).
+    label: Option<String>,
+    /// `endp` printed under the function's last instruction.
+    endp: bool,
+}
+
 /// Decode stored string bytes according to the analysis encoding id.
 /// The selected text of a pseudo-C listing: whole rows inside the selection, partial rows
 /// clipped to the selected characters. Rows are joined with newlines, in reading order.
@@ -816,24 +833,6 @@ fn string_terminator_len(enc: i64) -> u64 {
     } else {
         1
     }
-}
-
-/// `; DATA XREF: …` comment for a data row (the first three referencing sites).
-fn data_xref_comment(session: &Session, addr: Address) -> Option<String> {
-    let xrefs = session.xrefs_to(addr).ok()?;
-    if xrefs.is_empty() {
-        return None;
-    }
-    let mut from = Vec::new();
-    for xref in xrefs.iter().take(3) {
-        let name = session
-            .name_at(xref.from)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| format!("{:#x}", xref.from.get()));
-        from.push(name);
-    }
-    Some(format!("; DATA XREF: {}", from.join(", ")))
 }
 
 /// Strings in the PE `HEADER` segment.
@@ -1047,6 +1046,9 @@ struct SavedLayout {
     ai_sidebar_width: f32,
     #[serde(default)]
     ai_fab_pos: Option<[f32; 2]>,
+    /// Whether the listing shows IDA's opcode-bytes column.
+    #[serde(default)]
+    show_bytes: bool,
 }
 
 fn layout_store_path() -> Option<PathBuf> {
@@ -1446,6 +1448,8 @@ enum Action {
     ResetLayout,
     SetTheme(ThemeMode),
     ToggleTheme,
+    /// Show/hide IDA's opcode-bytes column in the listing.
+    ToggleShowBytes,
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -1491,6 +1495,9 @@ pub struct ReCraftApp {
     disasm_rows: Vec<DisasmLine>,
     selected: usize,
     disasm_dirty: bool,
+    /// Whether the listing shows IDA's opcode-bytes column (`Options → 显示字节`). Off by
+    /// default, like IDA's *Number of opcode bytes* = 0.
+    show_bytes: bool,
     /// Vertical scroll offset of the disassembly view, as reported by the scroll area.
     disasm_offset: f32,
     /// One-shot scroll offset to apply on the next frame (keeps rows in place when the
@@ -1662,6 +1669,7 @@ impl Default for ReCraftApp {
             disasm_rows: Vec::new(),
             selected: 0,
             disasm_dirty: false,
+            show_bytes: false,
             disasm_offset: 0.0,
             disasm_scroll_to: None,
             key_pass: None,
@@ -2211,6 +2219,10 @@ impl ReCraftApp {
             return;
         }
         self.data_version = version;
+        if let Some(session) = self.session.as_ref() {
+            // Names, function starts and xrefs come from the other writer's commit.
+            session.invalidate_listing_symbols();
+        }
         self.functions_dirty = true;
         self.strings_dirty = true;
         self.imports_dirty = true;
@@ -3269,6 +3281,11 @@ impl ReCraftApp {
                 self.pseudo_dirty = true;
                 self.strings_dirty = true;
                 self.imports_dirty = true;
+                if let Some(session) = self.session.as_ref() {
+                    // The analysis worker committed function starts and names through its own
+                    // connection: the listing's symbol table must be rebuilt.
+                    session.invalidate_listing_symbols();
+                }
                 if let Some(dialog) = self.xref_dialog.as_mut() {
                     dialog.dirty = true;
                 }
@@ -3591,7 +3608,6 @@ impl ReCraftApp {
             let copied = row.raw.len().min(15);
             raw[..copied].copy_from_slice(&row.raw[..copied]);
         }
-        let comment = data_xref_comment(session, row.addr);
         let escaped = row.text.replace('\\', "\\\\").replace('\'', "\\'");
         let (mnemonic, operands) = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
             ("dw", format!("'{escaped}',0"))
@@ -3605,7 +3621,12 @@ impl ReCraftApp {
             mnemonic: mnemonic.to_owned(),
             operands,
             name: row.name.clone(),
-            comment,
+            comment: None,
+            segment: session
+                .segment_containing(row.addr)
+                .map(|segment| segment.name.clone())
+                .unwrap_or_default(),
+            xrefs: Vec::new(),
             flags: Flags::data(),
         })
     }
@@ -3638,7 +3659,12 @@ impl ReCraftApp {
             mnemonic: "db".to_owned(),
             operands: format!("{literal},0"),
             name: session.name_at(addr).ok().flatten(),
-            comment: data_xref_comment(session, addr),
+            comment: None,
+            segment: session
+                .segment_containing(addr)
+                .map(|segment| segment.name.clone())
+                .unwrap_or_default(),
+            xrefs: Vec::new(),
             flags: Flags::data(),
         })
     }
@@ -3716,7 +3742,12 @@ impl ReCraftApp {
             mnemonic: "db".to_owned(),
             operands,
             name: session.name_at(addr).ok().flatten(),
-            comment: data_xref_comment(session, addr),
+            comment: None,
+            segment: session
+                .segment_containing(addr)
+                .map(|segment| segment.name.clone())
+                .unwrap_or_default(),
+            xrefs: Vec::new(),
             flags: Flags::data(),
         })
     }
@@ -3885,6 +3916,13 @@ impl ReCraftApp {
         // window-relative, so they must be re-found in the new rows.
         let previous = std::mem::take(&mut self.disasm_rows);
         self.disasm_rows = self.data_rows(start, DISASM_ROWS).unwrap_or_default();
+        // The window mixes instructions and data rows; decorate them together so literals
+        // get IDA's xref comments as well.
+        if let Some(session) = self.session.as_ref() {
+            let mut rows = std::mem::take(&mut self.disasm_rows);
+            let _ = session.attach_xref_comments(&mut rows);
+            self.disasm_rows = rows;
+        }
         self.disasm_dirty = false;
         if let Some(selection) = self.disasm_sel {
             self.disasm_sel = remap_selection(selection, &previous, &self.disasm_rows);
@@ -4400,6 +4438,16 @@ impl ReCraftApp {
                     });
                     ui.menu_button(view_menu.as_str(), |ui| {
                         self.pane_menu_items(ui, action);
+                        ui.separator();
+                        // IDA's listing hides opcode bytes by default (`Options → General →
+                        // Number of opcode bytes` = 0); this is the same column, toggled here.
+                        if ui
+                            .selectable_label(self.show_bytes, self.t("ui_show_bytes"))
+                            .clicked()
+                        {
+                            *action = Action::ToggleShowBytes;
+                            ui.close();
+                        }
                         ui.separator();
                         if ui.button(self.t("ui_zoom_in_ctrl")).clicked() {
                             *action = Action::ZoomIn;
@@ -5061,6 +5109,7 @@ impl ReCraftApp {
             ai_sidebar: self.ai_sidebar,
             ai_sidebar_width: self.ai_sidebar_width,
             ai_fab_pos: self.ai_fab_pos.map(|pos| [pos.x, pos.y]),
+            show_bytes: self.show_bytes,
         };
         let Ok(text) = serde_json::to_string(&saved) else {
             return;
@@ -5087,6 +5136,7 @@ impl ReCraftApp {
             self.ai_sidebar = saved.ai_sidebar;
             self.ai_sidebar_width = saved.ai_sidebar_width.clamp(300.0, 620.0);
             self.ai_fab_pos = saved.ai_fab_pos.map(|[x, y]| egui::pos2(x, y));
+            self.show_bytes = saved.show_bytes;
             self.dock = Some(saved.dock);
         }
     }
@@ -7388,28 +7438,104 @@ impl ReCraftApp {
         );
     }
 
-    /// Column text of one disassembly row exactly as the listing paints it. Text selection
-    /// and copy both run off this, so they cannot drift from the rendering.
-    fn disasm_columns(&self, line: &DisasmLine) -> (String, String, String, String, String) {
+    /// Address column: IDA's `segment:offset` — 16 hex digits, no `0x`.
+    fn disasm_address(&self, line: &DisasmLine) -> String {
+        let segment = if line.segment.is_empty() {
+            "?"
+        } else {
+            line.segment.as_str()
+        };
+        format!("{segment}:{:016X}", line.addr.get())
+    }
+
+    /// Opcode-bytes column (`48 83 EC 28`), empty unless *Number of opcode bytes* is on.
+    ///
+    /// IDA hides opcode bytes by default; when it shows them they sit between the address
+    /// and the instruction, so this column only exists while the option is on.
+    fn disasm_bytes(&self, line: &DisasmLine) -> String {
+        if !self.show_bytes {
+            return String::new();
+        }
         let bytes = line
             .bytes()
             .iter()
-            .map(|byte| format!("{byte:02x} "))
+            .take(8)
+            .map(|byte| format!("{byte:02X} "))
             .collect::<String>();
-        (
-            format!("{:#012x}  ", line.addr.get()),
-            format!("{bytes:<46}"),
-            format!("{:<9}", line.mnemonic),
-            format!("{:<36}", line.operands),
-            line.comment.clone().unwrap_or_default(),
-        )
+        format!("{bytes:<DISASM_BYTES_CELLS$}")
     }
 
-    /// One disassembly row as the listing paints it (address, bytes, mnemonic, operands,
-    /// comment).
-    fn disasm_line_text(&self, line: &DisasmLine) -> String {
-        let (address, bytes, mnemonic, operands, comment) = self.disasm_columns(line);
-        format!("{address}{bytes}{mnemonic}{operands}{comment}")
+    /// Column the instruction starts on: the address line plus, when enabled, opcode bytes.
+    fn disasm_insn_col(&self) -> usize {
+        if self.show_bytes {
+            24 + DISASM_BYTES_CELLS
+        } else {
+            DISASM_INSN_COL
+        }
+    }
+
+    /// Column `; comment` starts on (IDA moves a comment that would overrun it to the next
+    /// line).
+    fn disasm_comment_col(&self) -> usize {
+        self.disasm_insn_col() + DISASM_COMMENT_GAP
+    }
+
+    /// Address (and opcode bytes) padded up to the instruction column.
+    fn disasm_address_field(&self, line: &DisasmLine) -> String {
+        let address = self.disasm_address(line);
+        if self.show_bytes {
+            let width = 24.max(address.chars().count() + 1);
+            format!("{address:<width$}")
+        } else {
+            format!("{address:<DISASM_INSN_COL$}")
+        }
+    }
+
+    /// Mnemonic in IDA's 8-cell field (`sub     rsp`).
+    fn disasm_mnemonic_field(&self, line: &DisasmLine) -> String {
+        format!("{:<7} ", line.mnemonic)
+    }
+
+    /// Instruction line up to the operand text: address (and opcode bytes) padded to the
+    /// instruction column, then the mnemonic in IDA's 8-cell field.
+    fn disasm_code_text(&self, line: &DisasmLine) -> String {
+        let mut text = self.disasm_address_field(line);
+        text.push_str(&self.disasm_bytes(line));
+        text.push_str(&self.disasm_mnemonic_field(line));
+        text.push_str(line.operands.trim_end());
+        text
+    }
+
+    /// Comments of one row in the order IDA prints them: the user comment first, then the
+    /// cross references. Every entry carries its `;` prefix.
+    fn disasm_comments(&self, line: &DisasmLine) -> Vec<String> {
+        let mut comments = Vec::new();
+        if let Some(text) = line.comment.as_deref() {
+            let text = text.trim();
+            if !text.is_empty() {
+                comments.push(if text.starts_with(';') {
+                    text.to_owned()
+                } else {
+                    format!("; {text}")
+                });
+            }
+        }
+        for xref in &line.xrefs {
+            comments.push(format!("; {xref}"));
+        }
+        comments
+    }
+
+    /// Comments that do not fit on the instruction line: IDA keeps the comment column and
+    /// moves anything that would overrun it to the following line.
+    fn disasm_wrapped_comments(&self, line: &DisasmLine) -> Vec<String> {
+        let mut comments = self.disasm_comments(line);
+        if !comments.is_empty()
+            && self.disasm_code_text(line).chars().count() + 2 <= self.disasm_comment_col()
+        {
+            comments.remove(0);
+        }
+        comments
     }
 
     /// Instruction text of one row, without the address/bytes columns: what Ctrl+C copies
@@ -7417,14 +7543,23 @@ impl ReCraftApp {
     fn disasm_line_copy_text(&self, line: &DisasmLine) -> String {
         let mut text = format!("{} {}", line.mnemonic, line.operands);
         text.truncate(text.trim_end().len());
-        if let Some(comment) = line
-            .comment
-            .as_deref()
-            .map(str::trim)
-            .filter(|comment| !comment.is_empty())
-        {
-            text.push_str("  ; ");
-            text.push_str(comment.trim_start_matches(';').trim_start());
+        if let Some(comment) = self.disasm_comments(line).into_iter().next() {
+            text.push_str("  ");
+            text.push_str(&comment);
+        }
+        text
+    }
+
+    /// One row as the listing paints its instruction line (address, mnemonics, operands and
+    /// the comment that fits next to them).
+    fn disasm_line_text(&self, line: &DisasmLine) -> String {
+        let mut text = self.disasm_code_text(line);
+        if let Some(comment) = self.disasm_comments(line).first() {
+            let cells = text.chars().count();
+            if cells + 2 <= self.disasm_comment_col() {
+                text.push_str(&" ".repeat(self.disasm_comment_col() - cells));
+                text.push_str(comment);
+            }
         }
         text
     }
@@ -7458,74 +7593,118 @@ impl ReCraftApp {
         let extend_selection = ui.input(|input| input.modifiers.shift);
         let mut first_top: Option<f32> = None;
         let mut last_bottom: Option<f32> = None;
-        // Column header, reserved above the listing instead of being the first row *inside* it:
-        // as a scroll-area item the wheel carried it off the top with the instructions. IDA pins
-        // its column header, and the Strings list here already reserves its header the same way.
-        let headers = [
-            self.t("ui_address"),
-            self.t("ui_bytes"),
-            self.t("ui_mnemonic"),
-            self.t("ui_operands"),
-            self.t("ui_comment_2"),
-        ];
-        // The CJK fallback makes a header line taller than a listing row (`row_height()` is 15 px
-        // at 100 %), so the strip is sized to the text. Clipping the text to a row-high strip cut
-        // the top of the glyphs.
-        let head_line = headers
-            .iter()
-            .map(|label| {
-                ui.painter()
-                    .layout_no_wrap(label.clone(), mono.clone(), pal.text)
-                    .size()
-                    .y
-            })
-            .fold(0.0f32, f32::max);
-        let header_height = self.row_height().max(head_line + 2.0);
-        let (header_rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), header_height),
-            Sense::hover(),
-        );
+        // IDA's listing has no column header: the address column, the instruction indent and
+        // the comment column line the rows up on their own, so the strip is gone.
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         if let Some(offset) = self.disasm_scroll_to.take() {
             area = area.vertical_scroll_offset(offset);
         }
         let scroll = area.show(ui, |ui| {
             let width = ui.available_width().max(1000.0);
+            let cell = monospace_cell_width(ui, &mono, pal.text);
             for (index, line) in self.disasm_rows.iter().enumerate() {
-                // IDA renders names as inline labels above the instruction instead of a
-                // dedicated "Name" column.
-                let label_height = self.disasm_label_height(line);
-                let row_height = self.row_height() + label_height;
+                // IDA draws wrapper lines around an instruction (`public`/`proc near` above
+                // the label, `endp` below the last one) and keeps the listing's address and
+                // comment columns aligned: the row's height covers all of them.
+                let chrome = self.disasm_chrome(line);
+                let comments = self.disasm_comments(line);
+                let code = self.disasm_code_text(line);
+                let inline_comment = comments
+                    .first()
+                    .filter(|_| code.chars().count() + 2 <= self.disasm_comment_col())
+                    .cloned();
+                let wrapped: Vec<String> = comments
+                    .iter()
+                    .skip(usize::from(inline_comment.is_some()))
+                    .cloned()
+                    .collect();
+                let line_height = self.row_height();
+                let rows = 1
+                    + wrapped.len()
+                    + chrome.directives.len()
+                    + usize::from(chrome.label.is_some())
+                    + usize::from(chrome.endp);
                 // One full-row hit area, like IDA: the whole line is selectable and
                 // double-click follows the operand instead of only the address cell. The
                 // drag sense is what turns the listing into selectable text.
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click_and_drag());
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(width, line_height * rows as f32),
+                    Sense::click_and_drag(),
+                );
                 first_top.get_or_insert(rect.top());
                 last_bottom = Some(rect.bottom());
+                // IDA's cursor band covers the instruction line only, not the wrapper lines
+                // that belong to the same item.
+                let instruction_top = rect.top()
+                    + (chrome.directives.len() + usize::from(chrome.label.is_some())) as f32
+                        * self.row_height();
+                let band = egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), instruction_top),
+                    egui::vec2(rect.width(), self.row_height()),
+                );
                 if index == self.selected {
-                    ui.painter().rect_filled(rect, 1.0, pal.selected_row);
+                    ui.painter().rect_filled(band, 1.0, pal.selected_row);
                 } else if response.hovered() {
-                    ui.painter().rect_filled(rect, 1.0, pal.hover_row);
+                    ui.painter().rect_filled(band, 1.0, pal.hover_row);
                 }
-                if let Some(name) = line.name.as_deref() {
+                let mut y = rect.top();
+                // `public start` / `proc near`: IDA prints them in the instruction column,
+                // above the label, with the entry's address beside them.
+                for directive in &chrome.directives {
                     ui.painter().text(
-                        rect.left_top() + egui::vec2(4.0, 1.0),
+                        egui::pos2(rect.left() + 4.0, y),
                         egui::Align2::LEFT_TOP,
-                        format!("{name}:"),
+                        self.disasm_address(line),
+                        mono.clone(),
+                        pal.addr,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 4.0 + self.disasm_insn_col() as f32 * cell, y),
+                        egui::Align2::LEFT_TOP,
+                        directive,
+                        mono.clone(),
+                        pal.mnemonic,
+                    );
+                    y += line_height;
+                }
+                if let Some(label) = chrome.label.as_deref() {
+                    // The label line carries the address, as IDA's does.
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 4.0, y),
+                        egui::Align2::LEFT_TOP,
+                        self.disasm_address(line),
+                        mono.clone(),
+                        pal.addr,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 4.0 + DISASM_NAME_COL as f32 * cell, y),
+                        egui::Align2::LEFT_TOP,
+                        label,
                         mono.clone(),
                         pal.name,
                     );
+                    y += line_height;
                 }
-                let (address, byte_column, mnemonic, operands, comment) = self.disasm_columns(line);
+                let address_field = self.disasm_address_field(line);
+                let bytes_field = self.disasm_bytes(line);
+                let mnemonic_field = self.disasm_mnemonic_field(line);
                 let mut job = LayoutJob::default();
-                append(&mut job, &address, pal.addr, &mono);
-                append(&mut job, &byte_column, pal.bytes, &mono);
-                append(&mut job, &mnemonic, pal.mnemonic, &mono);
-                append_operands(&mut job, &operands, pal, &mono);
-                append(&mut job, &comment, pal.comment, &mono);
+                append(&mut job, &address_field, pal.addr, &mono);
+                append(&mut job, &bytes_field, pal.bytes, &mono);
+                append(&mut job, &mnemonic_field, pal.mnemonic, &mono);
+                append_operands(&mut job, &line.operands, pal, &mono);
+                if let Some(comment) = inline_comment.as_deref() {
+                    let cells = job.text.chars().count();
+                    append(
+                        &mut job,
+                        &" ".repeat(self.disasm_comment_col().saturating_sub(cells)),
+                        pal.text,
+                        &mono,
+                    );
+                    append(&mut job, comment, pal.comment, &mono);
+                }
                 let galley = ui.painter().layout_job(job);
-                let text_origin = rect.left_top() + egui::vec2(4.0, label_height + 1.0);
+                let text_origin = egui::pos2(rect.left() + 4.0, y + 1.0);
                 // The dragged selection sits behind the glyphs so the code stays readable.
                 if let Some(selection) = text_sel
                     && let Some(range) = selection.row_range(index, galley.text().chars().count())
@@ -7662,28 +7841,40 @@ impl ReCraftApp {
                         ui.close();
                     }
                 });
+                // Comments IDA could not fit next to the instruction, then the function's
+                // closing `endp`. Both stay inside the row's allocated height.
+                y += line_height;
+                for comment in &wrapped {
+                    ui.painter().text(
+                        egui::pos2(
+                            rect.left() + 4.0 + self.disasm_comment_col() as f32 * cell,
+                            y,
+                        ),
+                        egui::Align2::LEFT_TOP,
+                        comment,
+                        mono.clone(),
+                        pal.comment,
+                    );
+                    y += line_height;
+                }
+                if chrome.endp {
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 4.0, y),
+                        egui::Align2::LEFT_TOP,
+                        self.disasm_address(line),
+                        mono.clone(),
+                        pal.addr,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 4.0 + self.disasm_insn_col() as f32 * cell, y),
+                        egui::Align2::LEFT_TOP,
+                        "endp",
+                        mono.clone(),
+                        pal.mnemonic,
+                    );
+                }
             }
         });
-        // Pinned header: painted over the reserved strip after the list so it can follow this
-        // frame's horizontal offset and keep its columns lined up with the rows.
-        //
-        // One label per column instead of one padded string: a CJK label is wider than one
-        // monospace cell, so `{:<14}` padding would push every later column to the right. Only the
-        // horizontal edge is clipped (the pane's), so a tall glyph box is never cut vertically.
-        let cell = monospace_cell_width(ui, &mono, pal.text);
-        let clip = egui::Rect::from_x_y_ranges(header_rect.x_range(), ui.clip_rect().y_range());
-        let painter = ui.painter().with_clip_rect(clip);
-        let left = header_rect.left() + 4.0 - scroll.state.offset.x;
-        let top = header_rect.top() + ((header_height - head_line) * 0.5).max(1.0);
-        for (cells, label) in DISASM_COLUMN_CELLS.iter().zip(&headers) {
-            painter.text(
-                egui::pos2(left + *cells as f32 * cell, top),
-                egui::Align2::LEFT_TOP,
-                label,
-                mono.clone(),
-                pal.text,
-            );
-        }
         self.follow_disasm_scroll(ui, &scroll);
         // Dragging above or below the window keeps selecting to that edge.
         if dragging
@@ -7742,19 +7933,45 @@ impl ReCraftApp {
         }
     }
 
-    /// Extra height a row needs for the inline name label IDA draws above an instruction.
-    fn disasm_label_height(&self, line: &DisasmLine) -> f32 {
-        if line.name.is_some() {
-            self.mono_size() + 1.0
-        } else {
-            0.0
+    /// Wrapper lines IDA draws around an instruction.
+    fn disasm_chrome(&self, line: &DisasmLine) -> DisasmChrome {
+        let label = line.name.as_ref().map(|name| format!("{name}:"));
+        let function =
+            function_at(&self.functions, line.addr).and_then(|index| self.functions.get(index));
+        let Some(function) = function else {
+            return DisasmChrome {
+                directives: Vec::new(),
+                label,
+                endp: false,
+            };
+        };
+        // `public start` / `proc near` mark the entry the way IDA's listing does; they need
+        // the function's name, which is the label this same row prints.
+        let mut directives = Vec::new();
+        if function.start == line.addr
+            && let Some(name) = line.name.as_deref()
+        {
+            directives.push(format!("public {name}"));
+            directives.push("proc near".to_owned());
+        }
+        let next = Address::new(line.addr.get() + u64::from(line.len.max(1)));
+        DisasmChrome {
+            directives,
+            label,
+            endp: function.end == next,
         }
     }
 
     /// Pixel pitch of one rendered row: the allocated height plus the item spacing the layout
     /// inserts after it (kept in sync with `disasm_view`).
     fn disasm_row_pitch(&self, ui: &egui::Ui, line: &DisasmLine) -> f32 {
-        self.row_height() + self.disasm_label_height(line) + ui.spacing().item_spacing.y
+        let chrome = self.disasm_chrome(line);
+        let rows = 1
+            + self.disasm_wrapped_comments(line).len()
+            + chrome.directives.len()
+            + usize::from(chrome.label.is_some())
+            + usize::from(chrome.endp);
+        self.row_height() * rows as f32 + ui.spacing().item_spacing.y
     }
 
     /// Let the wheel keep scrolling past the ends of the loaded window.
@@ -9276,6 +9493,10 @@ impl ReCraftApp {
                     ThemeMode::Dark => self.t("ui_dark_theme").to_owned(),
                     ThemeMode::Light => self.t("ui_light_theme").to_owned(),
                 });
+            }
+            Action::ToggleShowBytes => {
+                self.show_bytes = !self.show_bytes;
+                self.layout_saved = None;
             }
             Action::ZoomIn => {
                 self.mono_zoom = (self.mono_zoom + ZOOM_STEP).min(ZOOM_MAX);
@@ -13577,6 +13798,8 @@ mod tests {
                 operands: String::new(),
                 name: None,
                 comment: None,
+                segment: ".text".to_owned(),
+                xrefs: Vec::new(),
                 flags: Flags::code(),
             }],
             ..ReCraftApp::default()
@@ -14820,12 +15043,14 @@ mod tests {
                 ai_sidebar: true,
                 ai_sidebar_width: 360.0,
                 ai_fab_pos: Some([100.0, 200.0]),
+                show_bytes: true,
             },
         )
         .unwrap();
         let loaded = load_layout_from(&file).expect("layout reload");
         assert_eq!(loaded.theme, ThemeMode::Light, "theme must persist");
         assert_eq!(loaded.lang, Lang::Zh, "language must persist");
+        assert!(loaded.show_bytes, "the opcode-bytes column must persist");
         assert!(loaded.ai_sidebar, "AI sidebar visibility must persist");
         assert!(
             (loaded.ai_sidebar_width - 360.0).abs() < f32::EPSILON,
@@ -16306,20 +16531,23 @@ mod tests {
         );
     }
 
-    /// Address/y of every disassembly row painted in a frame (`0x...` galleys carry the row).
+    /// Address/y of every disassembly row painted in a frame. Rows open with IDA's
+    /// `segment:0000000000000000` address column; the label line paints the same address
+    /// alone, so only galleys that continue past it are rows.
     fn painted_rows(output: &egui::FullOutput) -> Vec<(u64, egui::Pos2)> {
         let mut rows = Vec::new();
         for clipped in &output.shapes {
             if let egui::Shape::Text(text) = &clipped.shape {
                 let s = text.galley.text();
-                if let Some(rest) = s.strip_prefix("0x") {
-                    let digits: String =
-                        rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-                    if digits.len() >= 8
-                        && let Ok(addr) = u64::from_str_radix(&digits, 16)
-                    {
-                        rows.push((addr, text.pos));
-                    }
+                let Some((_, rest)) = s.split_once(':') else {
+                    continue;
+                };
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+                if digits.len() == 16
+                    && rest.chars().count() > 16
+                    && let Ok(addr) = u64::from_str_radix(&digits, 16)
+                {
+                    rows.push((addr, text.pos));
                 }
             }
         }
@@ -16443,14 +16671,14 @@ mod tests {
         );
     }
 
-    /// The column header stays pinned while the listing scrolls. It used to be the first item
-    /// *inside* the scroll area, so the wheel carried it off the top with the instructions and
-    /// the columns were only visible at offset 0.
+    /// The listing renders IDA's columns: `segment:offset` addresses with no `0x`, no column
+    /// header strip, and comments parked on the comment column.
     #[test]
-    fn headless_disassembly_header_stays_pinned_when_the_listing_scrolls() {
+    fn headless_listing_uses_ida_address_and_comment_columns() {
         let Some((mut app, ctx, mut input)) = headless_disassembly() else {
             return;
         };
+        let xref = "CODE XREF: sub_140001000+6↑j".to_owned();
         let mut frame = 0.0f64;
         let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
             frame += 1.0;
@@ -16460,123 +16688,82 @@ mod tests {
             out.textures_delta.clear();
             out
         };
-        let address_head = app.t("ui_address");
-        let header_pos = |output: &egui::FullOutput| {
-            output
-                .shapes
-                .iter()
-                .find_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(text) if text.galley.text().starts_with(&address_head) => {
-                        Some(text.pos)
-                    }
-                    _ => None,
-                })
-        };
-        let pos_of = |output: &egui::FullOutput, addr: u64| {
-            painted_rows(output)
-                .iter()
-                .find(|(painted, _)| *painted == addr)
-                .map(|(_, pos)| *pos)
-        };
-        // The dock applies its split on the frame after the first full layout (the panes used
-        // to get their second pass from the Functions Grid's discard request), so warm up one
-        // frame before measuring the settled geometry.
+        // The dock applies its split on the frame after the first layout, so settle first;
+        // the listing itself is loaded by the first frame.
         let _ = step(&mut input, &mut app);
+        app.disasm_rows[0].xrefs = vec![xref.clone()];
         let output = step(&mut input, &mut app);
-        let before = header_pos(&output).expect("the column header is painted");
-        let first_row = app.disasm_rows[0].addr.get();
-        let row_pos = pos_of(&output, first_row).expect("first row is painted");
-        let row_before_y = row_pos.y;
-        // Every header column must start on the x of its row glyph. A CJK label is wider than
-        // one monospace cell, so painting the header as one `{:<14}` padded string pushed
-        // 助记符/操作数 to the right of their columns.
+
+        let first = app.disasm_rows[0].addr.get();
+        let address = format!("{:016X}", first);
+        let (first_addr, row_pos) = painted_rows(&output)
+            .into_iter()
+            .next()
+            .expect("the first row is painted");
+        assert_eq!(first_addr, first);
         let row_galley = output
             .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text)
-                    if text
-                        .galley
-                        .text()
-                        .starts_with(&format!("{first_row:#012x}")) =>
-                {
-                    Some(text.galley.clone())
-                }
+                egui::Shape::Text(text) if text.pos == row_pos => Some(text.galley.clone()),
                 _ => None,
             })
-            .expect("first row galley");
-        let glyph_x = |cell: usize| row_galley.rows[0].glyphs[cell].pos.x;
-        for (cell, label) in [
-            (0usize, app.t("ui_address")),
-            (14, app.t("ui_bytes")),
-            (60, app.t("ui_mnemonic")),
-            (69, app.t("ui_operands")),
+            .expect("the first row's galley");
+        let row = row_galley.text().to_owned();
+        assert!(
+            !row.contains("0x"),
+            "IDA's listing uses `h`-suffixed hex, got {row:?}"
+        );
+        assert!(
+            row.starts_with(&format!("{}:{}", app.disasm_rows[0].segment, address)),
+            "the row must open with `segment:offset`, got {row:?}"
+        );
+        // IDA's listing has no column header strip: the labels are nowhere on screen.
+        for label in [
+            app.t("ui_address"),
+            app.t("ui_bytes"),
+            app.t("ui_mnemonic"),
+            app.t("ui_operands"),
         ] {
-            let x = output
+            assert!(
+                !output.shapes.iter().any(|clipped| matches!(
+                    &clipped.shape,
+                    egui::Shape::Text(text) if text.galley.text() == label
+                )),
+                "the {label} column header must be gone"
+            );
+        }
+        // The comment is parked on the comment column, not glued to the operand text: it is
+        // a separate text run, well right of the instruction, and every commented row shares
+        // the same column.
+        let other = "DATA XREF: .pdata:0000000140002500↑o".to_owned();
+        app.disasm_rows[1].xrefs = vec![other.clone()];
+        let output = step(&mut input, &mut app);
+        let comment_x = |text: &str| {
+            output
                 .shapes
                 .iter()
                 .find_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos.x),
+                    egui::Shape::Text(shape) if shape.galley.text() == text => Some(shape.pos.x),
                     _ => None,
                 })
-                .unwrap_or_else(|| panic!("the {label} column header is not painted"));
-            let expected = row_pos.x + glyph_x(cell);
-            assert!(
-                (x - expected).abs() < 1.0,
-                "the {label} header starts at {x} but cell {cell} of the row starts at {expected}"
-            );
-        }
-        // The header line is taller than its 15 px strip (CJK fallback line height), which is why
-        // it is painted without a vertical clip; it must still stop before the first row's text.
-        let (head_pos, head_height) = output
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.text() == address_head.as_str() => {
-                    Some((text.pos, text.galley.size().y))
-                }
-                _ => None,
-            })
-            .expect("the address header galley");
+                .unwrap_or_else(|| panic!("{text} is not painted"))
+        };
+        let first_comment = comment_x(&format!("; {xref}"));
+        let second_comment = comment_x(&format!("; {other}"));
+        let cell = row_galley.rows[0].glyphs[1].pos.x - row_galley.rows[0].glyphs[0].pos.x;
         assert!(
-            head_pos.y + head_height <= row_pos.y,
-            "the header text ({}..{}) runs into the first row at {}",
-            head_pos.y,
-            head_pos.y + head_height,
-            row_pos.y
+            first_comment - row_pos.x >= cell * 45.0,
+            "the comment starts at {first_comment}, right next to the operands at {}",
+            row_pos.x
         );
-        // Turn the wheel down over the listing: the rows move up, the header must not.
-        input
-            .events
-            .push(egui::Event::PointerMoved(before + egui::vec2(200.0, 120.0)));
-        let _ = step(&mut input, &mut app);
-        input.events.push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -40.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::NONE,
-        });
-        let mut output = output;
-        for _ in 0..20 {
-            output = step(&mut input, &mut app);
-        }
         assert!(
-            app.disasm_offset > 0.0,
-            "the wheel did not scroll the listing (offset {})",
-            app.disasm_offset
+            (first_comment - second_comment).abs() < 0.5,
+            "comments must share one column ({first_comment} vs {second_comment})"
         );
-        let after = header_pos(&output).expect("the header is painted after scrolling");
         assert!(
-            (after.y - before.y).abs() < 1.0,
-            "the header moved from {} to {} while the listing scrolled",
-            before.y,
-            after.y
-        );
-        let row_after = pos_of(&output, first_row).expect("first row is still painted");
-        assert!(
-            row_after.y < row_before_y - 10.0,
-            "the first row did not scroll up ({row_before_y} -> {})",
-            row_after.y
+            !row.contains(';'),
+            "comments belong to the comment column, not the row text: {row:?}"
         );
     }
 
@@ -16792,6 +16979,8 @@ mod tests {
             operands: operands.to_owned(),
             name: None,
             comment: None,
+            segment: ".text".to_owned(),
+            xrefs: Vec::new(),
             flags: Flags::code(),
         }
     }
@@ -16953,17 +17142,20 @@ mod tests {
         output.textures_delta.clear();
         let first = app.disasm_line_text(&app.disasm_rows[0]);
         let last = app.disasm_line_text(&app.disasm_rows[2]);
-        // Start just before the "mov" mnemonic (column 60: address 14 + bytes 46) and end
-        // after the "ret" of the third row.
+        // Start in the gap before the "mov" mnemonic (IDA's instruction column) and end on
+        // the "ret" of the third row.
+        let last_end = last.chars().count().saturating_sub(1);
         let start = output
             .shapes
             .iter()
-            .find_map(|clipped| char_click_pos(&clipped.shape, &first, 59))
+            .find_map(|clipped| {
+                char_click_pos(&clipped.shape, &first, DISASM_INSN_COL.saturating_sub(4))
+            })
             .expect("the first row is on screen");
         let end = output
             .shapes
             .iter()
-            .find_map(|clipped| char_click_pos(&clipped.shape, &last, 63))
+            .find_map(|clipped| char_click_pos(&clipped.shape, &last, last_end))
             .expect("the last row is on screen");
 
         let mut frame = 0.0f64;
@@ -17312,7 +17504,7 @@ mod tests {
             "one line per selected row, got {copied:?}"
         );
         assert!(
-            copied.contains("0x"),
+            copied.contains(&format!("{:016X}", visible[0].0)),
             "the copied rows are the displayed text, got {copied:?}"
         );
     }

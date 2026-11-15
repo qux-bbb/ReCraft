@@ -204,7 +204,9 @@ pub fn build_cfg(session: &dyn SessionView, start: Address, end: Address) -> Res
     let mut external: Vec<(Address, Address)> = Vec::new();
 
     let mut new_blocks: Vec<BasicBlock> = Vec::with_capacity(blocks.len());
-    let mut formatter = Formatter::new();
+    let mut formatter = session
+        .listing_formatter()
+        .unwrap_or_else(|_| Formatter::new());
     for block in &blocks {
         let (block_start, block_end) = (block.start, block.end);
         let first = *instruction_index.get(&block_start.get()).unwrap_or(&0);
@@ -220,23 +222,11 @@ pub fn build_cfg(session: &dyn SessionView, start: Address, end: Address) -> Res
         let mut insns: Vec<CfgInsn> = Vec::with_capacity(count);
         for raw_insn in raw.iter().skip(first).take(count) {
             let insn = &raw_insn.insn;
-            let (mnemonic, mut operands) = {
+            // The listing formatter resolves names, so the graph prints the same text.
+            let (mnemonic, operands) = {
                 let (mnemonic, operands) = formatter.format_parts(insn);
                 (mnemonic.to_owned(), operands.to_owned())
             };
-            let referenced = if insn.memory_is_direct() {
-                Some(Address::new(insn.memory_displacement64()))
-            } else if matches!(insn.flow(), FlowKind::Call | FlowKind::UnconditionalBranch) {
-                insn.branch_target()
-            } else {
-                None
-            };
-            if let Some(target) = referenced
-                && let Some(target_name) = session.name_at(target)?
-            {
-                operands.push_str("  ; ");
-                operands.push_str(&target_name);
-            }
             insns.push(CfgInsn {
                 addr: raw_insn.addr,
                 text: format!("{mnemonic} {operands}").trim_end().to_owned(),
