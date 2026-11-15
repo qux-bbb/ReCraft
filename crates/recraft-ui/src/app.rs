@@ -997,6 +997,21 @@ struct EditState {
     just_opened: bool,
 }
 
+/// The `G` dialog. It carries a throwaway address rather than an [`EditState`]: the text is
+/// pre-filled with the cursor's address so `G` + Enter keeps the listing where it is.
+struct GotoState {
+    text: String,
+    /// Frames left to claim the keyboard and select the pre-fill. egui therefore grants the
+    /// focus twice: it drops the request made on the first frame a window's field appears.
+    focus_frames: u8,
+}
+
+/// Fixed widget id of the go-to address field. The dialog needs it before the field is
+/// drawn: egui only keeps a stored text selection for the widget that owns the focus.
+fn goto_field_id() -> egui::Id {
+    egui::Id::new("goto_address_field")
+}
+
 /// Layout persistence (`%LOCALAPPDATA%\ReCraft\layout.json`). The version is bumped when
 /// the default pane set changes so stale layouts fall back to the new default instead of
 /// resurrecting the old arrangement. The theme is stored alongside the dock state.
@@ -1610,7 +1625,7 @@ pub struct ReCraftApp {
     edit: Option<EditState>,
     /// Pending stack-variable rename: function, stack offset and the edited text.
     var_edit: Option<(Address, i64, String)>,
-    goto: Option<String>,
+    goto: Option<GotoState>,
     palette: Option<PaletteState>,
     recent: Vec<PathBuf>,
     hex_unit: HexUnit,
@@ -8465,33 +8480,58 @@ impl ReCraftApp {
         }
     }
 
+    /// IDA's *Jump to address*: the field opens on the address under the cursor, already
+    /// selected, so `G` + Enter stays put and typing replaces the pre-fill.
     fn goto_window(&mut self, ctx: &egui::Context, action: &mut Action) {
-        let Some(mut buffer) = self.goto.take() else {
+        let Some(mut state) = self.goto.take() else {
             return;
         };
+        if state.focus_frames > 0 && ctx.current_pass_index() == 0 {
+            // The field owns the keyboard from its first frame and the pre-fill is selected,
+            // so typing replaces the address (IDA's *Jump to address* behaves the same).
+            // egui drops the focus granted on the frame a window first appears, hence the
+            // second claim; without it the field would open unfocused.
+            let field = goto_field_id();
+            ctx.memory_mut(|memory| memory.request_focus(field));
+            if state.focus_frames == 2 {
+                // The selection has to be stored before the field is drawn: egui only keeps
+                // a stored text selection on a field that already owns the keyboard.
+                let mut edit = egui::TextEdit::load_state(ctx, field).unwrap_or_default();
+                edit.cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(state.text.chars().count()),
+                    )));
+                edit.store(ctx, field);
+            }
+            state.focus_frames -= 1;
+        }
         let mut submit = None;
         let mut open = true;
         egui::Window::new(self.t("ui_go_to_address_symbol"))
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut buffer)
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.text)
+                        .id(goto_field_id())
                         .desired_width(320.0)
                         .hint_text("0x140001000, 4198400, start"),
                 );
                 if ui.input(|input| input.key_pressed(Key::Enter)) {
-                    submit = Some(buffer.clone());
+                    submit = Some(state.text.clone());
+                }
+                if ui.input(|input| input.key_pressed(Key::Escape)) {
+                    open = false;
                 }
                 ui.horizontal(|ui| {
                     if ui.button(self.t("ui_go")).clicked() {
-                        submit = Some(buffer.clone());
+                        submit = Some(state.text.clone());
                     }
                     if ui.button(self.t("ui_cancel")).clicked() {
                         open = false;
                     }
                 });
-                let _ = response;
             });
         if let Some(raw) = submit {
             if let Some(session) = self.session.as_ref() {
@@ -8506,7 +8546,7 @@ impl ReCraftApp {
             }
         }
         if open {
-            self.goto = Some(buffer);
+            self.goto = Some(state);
         } else {
             self.goto = None;
         }
@@ -9354,7 +9394,16 @@ impl ReCraftApp {
             }
             Action::GotoDialog => {
                 if self.session.is_some() {
-                    self.goto = Some(String::new());
+                    // Pre-fill with the address under the cursor (IDA pre-fills the same
+                    // way): Enter then keeps the listing where it is, and typing replaces it.
+                    let text = self
+                        .cursor_address()
+                        .map(|addr| format!("{:#x}", addr.get()))
+                        .unwrap_or_default();
+                    self.goto = Some(GotoState {
+                        text,
+                        focus_frames: 2,
+                    });
                 }
             }
             Action::ShowXrefs => {
@@ -10950,6 +10999,66 @@ mod tests {
             Some(dialog.target),
             app.disasm_rows.get(app.selected).map(|line| line.addr),
             "the dialog must open on the selected address"
+        );
+    }
+
+    #[test]
+    fn g_dialog_prefills_the_cursor_address() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-goto.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.refresh_disasm();
+        let expected = format!("{:#x}", app.disasm_rows[app.selected].addr.get());
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut first = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        first.textures_delta.clear();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::G,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut second = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        second.textures_delta.clear();
+        input.events.clear();
+        // The window is built on the frame after the shortcut, and it claims the keyboard
+        // on that frame and the next one (egui drops the first request in a new window).
+        let mut third = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+        third.textures_delta.clear();
+        let mut fourth = ctx.run_ui(input, |ui| app.update_inner(ui));
+        fourth.textures_delta.clear();
+        let state = app.goto.as_ref().expect("G should open the go-to dialog");
+        assert_eq!(
+            state.text, expected,
+            "the dialog must be pre-filled with the cursor's address"
+        );
+        assert!(
+            ctx.text_edit_focused(),
+            "the address field must own the keyboard"
+        );
+        let selection = egui::TextEdit::load_state(&ctx, goto_field_id())
+            .and_then(|state| state.cursor.char_range())
+            .expect("the go-to field should keep its selection");
+        assert_eq!(
+            selection.as_sorted_char_range(),
+            egui::text::CharIndex::ZERO..egui::text::CharIndex::from(expected.chars().count()),
+            "typing must replace the pre-filled address"
         );
     }
 
