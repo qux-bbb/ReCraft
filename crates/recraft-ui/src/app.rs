@@ -1052,13 +1052,17 @@ fn load_recent() -> Vec<PathBuf> {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .take(8)
-        .collect()
+    let mut recent: Vec<PathBuf> = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        // Entries written before the list stopped calling `canonicalize` are verbatim paths
+        // (`\\?\C:\...`); drop the prefix so every spelling of one project stays comparable.
+        let path = strip_verbatim(Path::new(line));
+        if path.is_file() && !recent.contains(&path) {
+            recent.push(path);
+        }
+    }
+    recent.truncate(8);
+    recent
 }
 
 fn save_recent(recent: &[PathBuf]) {
@@ -1080,6 +1084,39 @@ fn push_recent(recent: &mut Vec<PathBuf>, path: &Path) {
     recent.retain(|existing| existing != path);
     recent.insert(0, path.to_path_buf());
     recent.truncate(8);
+}
+
+/// Rewrite a verbatim (`\\?\C:\...`) path into the plain form.
+///
+/// The recent list used to be filled with `Path::canonicalize` output, which is always a
+/// verbatim path on Windows; the prefix then leaked into the welcome list, the title bar and
+/// every status message built from `project.display()`. Verbatim paths also bypass `.`/`..`
+/// resolution, so only the unambiguous `\\?\C:\...` and `\\?\UNC\server\share\...` shapes are
+/// rewritten; everything else (`\\.\`, `\??\`, volume paths) is kept as-is.
+#[cfg(windows)]
+fn strip_verbatim(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() > 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 /// Split operand text into candidate hex addresses / symbol tokens.
@@ -1841,8 +1878,14 @@ impl ReCraftApp {
     }
 
     /// Track the last opened projects (persisted under `%LOCALAPPDATA%\ReCraft`).
+    ///
+    /// Only an absolute path is needed here, so use `std::path::absolute` instead of
+    /// `canonicalize`: the latter returns a verbatim `\\?\C:\...` path on Windows, and that
+    /// spelling used to stick to the project for the rest of the session.
     fn remember_recent(&mut self, path: &Path) {
-        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path = std::path::absolute(path)
+            .map(|path| strip_verbatim(&path))
+            .unwrap_or_else(|_| path.to_path_buf());
         push_recent(&mut self.recent, &path);
         save_recent(&self.recent);
     }
@@ -10444,6 +10487,56 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn recent_paths_lose_the_verbatim_prefix() {
+        // Plain paths pass through untouched on every platform.
+        assert_eq!(
+            strip_verbatim(Path::new("D:/files/a.rcraft")),
+            PathBuf::from("D:/files/a.rcraft")
+        );
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_verbatim(Path::new(r"\\?\D:\files\projects\a.rcraft")),
+                PathBuf::from(r"D:\files\projects\a.rcraft")
+            );
+            assert_eq!(
+                strip_verbatim(Path::new(r"\\?\UNC\server\share\a.rcraft")),
+                PathBuf::from(r"\\server\share\a.rcraft")
+            );
+            // Device and namespace paths mean something else without the prefix.
+            assert_eq!(
+                strip_verbatim(Path::new(r"\\.\PhysicalDrive0")),
+                PathBuf::from(r"\\.\PhysicalDrive0")
+            );
+            assert_eq!(
+                strip_verbatim(Path::new(r"\\?\Volume{0000}\a")),
+                PathBuf::from(r"\\?\Volume{0000}\a")
+            );
+        }
+    }
+
+    #[test]
+    fn recent_path_stays_plain_and_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("plain.rcraft");
+        std::fs::write(&project, b"x").unwrap();
+        let stored = strip_verbatim(&std::path::absolute(&project).unwrap());
+        assert_eq!(stored, project);
+        assert!(!stored.to_string_lossy().starts_with(r"\\?\"));
+        assert!(stored.is_file());
+        #[cfg(windows)]
+        {
+            // What the old code path stored: still readable, and stripping recovers a path
+            // the list, title bar and `push_recent` dedupe all agree on.
+            let canonical = project.canonicalize().unwrap();
+            assert!(canonical.to_string_lossy().starts_with(r"\\?\"));
+            let stripped = strip_verbatim(&canonical);
+            assert!(stripped.is_file());
+            assert!(!stripped.to_string_lossy().starts_with(r"\\?\"));
+        }
     }
 
     #[test]
