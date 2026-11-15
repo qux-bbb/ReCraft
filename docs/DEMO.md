@@ -115,7 +115,9 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    左侧 **Functions** 有过滤框（名字/地址）。**所有列表窗口（Functions / Strings / Imports /
    Exports / Names / Segments）都按 IDA 的行光标规则工作**：单击行内任意位置只移动高亮、代码视图
    留在原处，**双击或回车**才在反汇编里打开该行；列表获得焦点时 **↑/↓/PageUp/PageDown/Home/End**
-   移动行光标（选中行自动滚入视野），焦点在代码视图时这些键仍归代码视图。**Decompile** 行点击
+   移动行光标（选中行自动滚入视野），焦点在代码视图时这些键仍归代码视图。**右键**任意一行弹出
+   IDA 式行菜单：**跳转到 / 反编译该函数**（仅 Functions）/ **改名… / 交叉引用 / 复制该行 /
+   复制地址**，命令作用于右键那一行（行光标随之移动），不影响反汇编光标。**Decompile** 行点击
    反跳反汇编；**`X`** 弹出 IDA 风格的
    **交叉引用对话框**（标题为 `xrefs to <名字>`），四列为 **Direction（`Up` 引用进来 / `Down`
    引用出去）、Type（`c` call、`j` jump、`o` offset、`r` read、`w` write）、Address

@@ -967,7 +967,7 @@ struct AiJob {
     started: Instant,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditKind {
     Rename,
     Comment,
@@ -2918,6 +2918,60 @@ impl ReCraftApp {
             .or_else(|| self.list_keys(pane).first().map(|key| Address::new(*key)))
     }
 
+    /// Run one of IDA's list-row commands on `addr`. IDA's list windows act on the row under
+    /// the right click and move the row cursor to it, so every command selects the row first.
+    fn run_row_command(
+        &mut self,
+        pane: Pane,
+        addr: Address,
+        command: RowCommand,
+        action: &mut Action,
+        ctx: &egui::Context,
+    ) {
+        self.list_sel = Some((pane, addr.get()));
+        self.copy_focus = CopyFocus::List(pane);
+        match command {
+            RowCommand::Jump => *action = Action::NavigateToDisasm(addr),
+            RowCommand::Decompile => {
+                // The Functions window's rows are function entries; elsewhere the row may
+                // sit inside one, and a row outside every function falls back to the jump.
+                let start = self
+                    .functions
+                    .iter()
+                    .find(|function| function.start == addr)
+                    .map(|function| function.start)
+                    .or_else(|| {
+                        self.function_containing(addr)
+                            .map(|function| function.start)
+                    });
+                *action = match start {
+                    Some(start) => Action::EnterFunction(start),
+                    None => Action::NavigateToDisasm(addr),
+                };
+            }
+            RowCommand::Rename => {
+                let text = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.name_at(addr).ok().flatten())
+                    .unwrap_or_default();
+                self.edit = Some(EditState {
+                    kind: EditKind::Rename,
+                    addr,
+                    text,
+                    just_opened: true,
+                });
+            }
+            RowCommand::Xrefs => self.open_xrefs(addr),
+            RowCommand::CopyRow => self.copy_focused(ctx),
+            RowCommand::CopyAddress => {
+                let text = format!("{:#x}", addr.get());
+                ctx.copy_text(text.clone());
+                self.set_status(self.t_args("ui_copied_address", &[("addr", &text)]));
+            }
+        }
+    }
+
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let pal = self.palette();
         let mut visuals = match self.theme {
@@ -4051,6 +4105,24 @@ impl ReCraftApp {
         self.imports_dirty = false;
     }
 
+    /// Open IDA's `xrefs to …` dialog on `addr` (the `X` shortcut, or a list row's menu).
+    fn open_xrefs(&mut self, addr: Address) {
+        if self.session.is_none() {
+            return;
+        }
+        self.xref_dialog = Some(XrefDialog {
+            target: addr,
+            rows: Vec::new(),
+            selected: 0,
+            filter: String::new(),
+            search: false,
+            search_focus: false,
+            help: false,
+            dirty: true,
+        });
+        self.refresh_xrefs();
+    }
+
     /// Rebuild the open dialog's rows when they are missing or stale.
     fn refresh_xrefs(&mut self) {
         let Some(target) = self.xref_dialog.as_ref().map(|dialog| dialog.target) else {
@@ -5019,7 +5091,8 @@ impl ReCraftApp {
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Segments)
             .map(|(_, key)| key);
-        let copy_row = self.t("ui_copy_row");
+        let labels = RowMenuLabels::new(self);
+        let mut menu = None;
         let mut picked_now = None;
         list_header(
             ui,
@@ -5072,14 +5145,18 @@ impl ReCraftApp {
                     if wanted == Some(key) {
                         ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
+                    let mut menu_pick = None;
                     let _ = response.context_menu(|ui| {
-                        if ui.button(copy_row.as_str()).clicked() {
-                            *action = Action::Copy;
-                            ui.close();
-                        }
+                        menu_pick = list_row_menu(ui, &labels, false);
                     });
+                    if let Some(command) = menu_pick {
+                        menu = Some((key, command));
+                    }
                 }
             });
+        if let Some((key, command)) = menu {
+            self.run_row_command(Pane::Segments, Address::new(key), command, action, ui.ctx());
+        }
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Segments, key));
             self.copy_focus = CopyFocus::List(Pane::Segments);
@@ -5130,7 +5207,8 @@ impl ReCraftApp {
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Exports)
             .map(|(_, key)| key);
-        let copy_row = self.t("ui_copy_row");
+        let labels = RowMenuLabels::new(self);
+        let mut menu = None;
         let mut picked_now = None;
         list_header(
             ui,
@@ -5178,14 +5256,18 @@ impl ReCraftApp {
                     if wanted == Some(key) {
                         ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
+                    let mut menu_pick = None;
                     let _ = response.context_menu(|ui| {
-                        if ui.button(copy_row.as_str()).clicked() {
-                            *action = Action::Copy;
-                            ui.close();
-                        }
+                        menu_pick = list_row_menu(ui, &labels, false);
                     });
+                    if let Some(command) = menu_pick {
+                        menu = Some((key, command));
+                    }
                 }
             });
+        if let Some((key, command)) = menu {
+            self.run_row_command(Pane::Exports, Address::new(key), command, action, ui.ctx());
+        }
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Exports, key));
             self.copy_focus = CopyFocus::List(Pane::Exports);
@@ -5543,7 +5625,8 @@ impl ReCraftApp {
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Functions)
             .map(|(_, key)| key);
-        let copy_row = self.t("ui_copy_row");
+        let labels = RowMenuLabels::new(self);
+        let mut menu = None;
         let mut picked_now = None;
         // Column titles stay above the scrolling rows; the icon column has none, like IDA's
         // margin.
@@ -5595,23 +5678,32 @@ impl ReCraftApp {
                     if wanted == Some(key) {
                         ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
-                    let _ = response
-                        .on_hover_text(format!(
-                            "{:#012x} .. {:#012x}",
-                            function.start.get(),
-                            function.end.get()
-                        ))
-                        .context_menu(|ui| {
-                            if ui.button(copy_row.as_str()).clicked() {
-                                *action = Action::Copy;
-                                ui.close();
-                            }
-                        });
+                    let response = response.on_hover_text(format!(
+                        "{:#012x} .. {:#012x}",
+                        function.start.get(),
+                        function.end.get()
+                    ));
+                    let mut menu_pick = None;
+                    let _ = response.context_menu(|ui| {
+                        menu_pick = list_row_menu(ui, &labels, true);
+                    });
+                    if let Some(command) = menu_pick {
+                        menu = Some((key, command));
+                    }
                 }
                 if rows.is_empty() && !self.functions.is_empty() {
                     ui.weak(self.t("ui_no_match"));
                 }
             });
+        if let Some((key, command)) = menu {
+            self.run_row_command(
+                Pane::Functions,
+                Address::new(key),
+                command,
+                action,
+                ui.ctx(),
+            );
+        }
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Functions, key));
             self.copy_focus = CopyFocus::List(Pane::Functions);
@@ -5726,14 +5818,15 @@ impl ReCraftApp {
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Strings)
             .map(|(_, key)| key);
-        let copy_row = self.t("ui_copy_row");
         let edit_row_label = self.t("ui_edit_string");
         let hide_row_label = self.t("ui_delete_string");
         let restore_row_label = self.t("ui_restore_string");
+        let labels = RowMenuLabels::new(self);
         let wanted = self
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Strings)
             .map(|(_, key)| key);
+        let mut menu = None;
         let mut picked_now = None;
         let mut edit_row = None;
         let mut hide_row = None;
@@ -5811,10 +5904,12 @@ impl ReCraftApp {
                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                     }
                     let _ = response.context_menu(|ui| {
-                        if ui.button(copy_row.as_str()).clicked() {
-                            *action = Action::Copy;
-                            ui.close();
+                        let picked = list_row_menu(ui, &labels, false);
+                        if picked.is_some() {
+                            menu = picked.map(|command| (key, command));
+                            return;
                         }
+                        ui.separator();
                         if ui.button(edit_row_label.as_str()).clicked() {
                             edit_row = Some((row.addr, row.text.clone()));
                             ui.close();
@@ -5833,6 +5928,9 @@ impl ReCraftApp {
                     ui.weak(self.t("ui_first_2000_matches"));
                 }
             });
+        if let Some((key, command)) = menu {
+            self.run_row_command(Pane::Strings, Address::new(key), command, action, ui.ctx());
+        }
         if let Some((addr, text)) = edit_row {
             self.edit = Some(EditState {
                 kind: EditKind::StringText,
@@ -5887,7 +5985,8 @@ impl ReCraftApp {
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Imports)
             .map(|(_, key)| key);
-        let copy_row = self.t("ui_copy_row");
+        let labels = RowMenuLabels::new(self);
+        let mut menu = None;
         let mut picked_now = None;
         egui::ScrollArea::vertical()
             .id_salt("imports_rows")
@@ -5919,14 +6018,18 @@ impl ReCraftApp {
                     if wanted == Some(key) {
                         ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
+                    let mut menu_pick = None;
                     let _ = response.context_menu(|ui| {
-                        if ui.button(copy_row.as_str()).clicked() {
-                            *action = Action::Copy;
-                            ui.close();
-                        }
+                        menu_pick = list_row_menu(ui, &labels, false);
                     });
+                    if let Some(command) = menu_pick {
+                        menu = Some((key, command));
+                    }
                 }
             });
+        if let Some((key, command)) = menu {
+            self.run_row_command(Pane::Imports, Address::new(key), command, action, ui.ctx());
+        }
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Imports, key));
             self.copy_focus = CopyFocus::List(Pane::Imports);
@@ -5970,7 +6073,8 @@ impl ReCraftApp {
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Names)
             .map(|(_, key)| key);
-        let copy_row = self.t("ui_copy_row");
+        let labels = RowMenuLabels::new(self);
+        let mut menu = None;
         let mut picked_now = None;
         list_header(
             ui,
@@ -6019,14 +6123,18 @@ impl ReCraftApp {
                     if wanted == Some(key) {
                         ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     }
+                    let mut menu_pick = None;
                     let _ = response.context_menu(|ui| {
-                        if ui.button(copy_row.as_str()).clicked() {
-                            *action = Action::Copy;
-                            ui.close();
-                        }
+                        menu_pick = list_row_menu(ui, &labels, false);
                     });
+                    if let Some(command) = menu_pick {
+                        menu = Some((key, command));
+                    }
                 }
             });
+        if let Some((key, command)) = menu {
+            self.run_row_command(Pane::Names, Address::new(key), command, action, ui.ctx());
+        }
         if let Some(key) = picked_now {
             self.list_sel = Some((Pane::Names, key));
             self.copy_focus = CopyFocus::List(Pane::Names);
@@ -9171,20 +9279,7 @@ impl ReCraftApp {
                 let Some(addr) = self.disasm_rows.get(self.selected).map(|line| line.addr) else {
                     return;
                 };
-                if self.session.is_none() {
-                    return;
-                }
-                self.xref_dialog = Some(XrefDialog {
-                    target: addr,
-                    rows: Vec::new(),
-                    selected: 0,
-                    filter: String::new(),
-                    search: false,
-                    search_focus: false,
-                    help: false,
-                    dirty: true,
-                });
-                self.refresh_xrefs();
+                self.open_xrefs(addr);
             }
             Action::EditName | Action::EditComment => {
                 let Some(line) = self.disasm_rows.get(self.selected) else {
@@ -9847,6 +9942,78 @@ fn list_header(
             color,
         );
     }
+}
+
+/// A command from a docked list's row menu. IDA's list windows act on the row under the
+/// right click (and move the row cursor to it), not on the disassembly cursor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RowCommand {
+    /// Open the row in the disassembly (Enter / double click).
+    Jump,
+    /// Show the function containing the row in the Decompile pane (Functions window only).
+    Decompile,
+    Rename,
+    Xrefs,
+    CopyRow,
+    CopyAddress,
+}
+
+/// Labels of [`RowCommand`]'s menu, resolved once per list frame: the menu closure only runs
+/// while it is open and cannot borrow the app, so the strings are prepared up front.
+struct RowMenuLabels {
+    jump: String,
+    decompile: String,
+    rename: String,
+    xrefs: String,
+    copy_row: String,
+    copy_address: String,
+}
+
+impl RowMenuLabels {
+    fn new(app: &ReCraftApp) -> Self {
+        Self {
+            jump: app.t("ui_list_jump"),
+            decompile: app.t("ui_list_decompile"),
+            rename: app.t("ui_rename"),
+            xrefs: app.t("ui_cross_references"),
+            copy_row: app.t("ui_copy_row"),
+            copy_address: app.t("ui_copy_address"),
+        }
+    }
+}
+
+/// The row menu the docked lists share (IDA's list-window menus): open the row, then the
+/// symbol commands, then the copies. `decompile` is only offered where every row is a
+/// function, like IDA's Functions window.
+fn list_row_menu(ui: &mut egui::Ui, labels: &RowMenuLabels, decompile: bool) -> Option<RowCommand> {
+    let mut picked = None;
+    if ui.button(labels.jump.as_str()).clicked() {
+        picked = Some(RowCommand::Jump);
+        ui.close();
+    }
+    if decompile && ui.button(labels.decompile.as_str()).clicked() {
+        picked = Some(RowCommand::Decompile);
+        ui.close();
+    }
+    ui.separator();
+    if ui.button(labels.rename.as_str()).clicked() {
+        picked = Some(RowCommand::Rename);
+        ui.close();
+    }
+    if ui.button(labels.xrefs.as_str()).clicked() {
+        picked = Some(RowCommand::Xrefs);
+        ui.close();
+    }
+    ui.separator();
+    if ui.button(labels.copy_row.as_str()).clicked() {
+        picked = Some(RowCommand::CopyRow);
+        ui.close();
+    }
+    if ui.button(labels.copy_address.as_str()).clicked() {
+        picked = Some(RowCommand::CopyAddress);
+        ui.close();
+    }
+    picked
 }
 
 fn xref_kind_name(kind: i64) -> &'static str {
@@ -12851,6 +13018,157 @@ mod tests {
         let mut output = ctx.run_ui(click(pos, 1.1), |ui| app.names_list(ui, &mut action));
         output.textures_delta.clear();
         assert_eq!(action, Action::NavigateToDisasm(named));
+    }
+
+    /// IDA's list-row context menu: jump, decompile (Functions window only), rename, cross
+    /// references and the two copies — each command acts on the row it was opened on, not on
+    /// the disassembly cursor.
+    #[test]
+    fn list_row_menu_offers_ida_commands_and_acts_on_its_row() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("row-menu.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let start = Address::new(0x140001000);
+        let outside = Address::new(0x140000500);
+        let mut app = ReCraftApp {
+            session: Some(session),
+            project: Some(project),
+            functions: vec![FunctionInfo {
+                start,
+                end: Address::new(0x140001100),
+            }],
+            function_labels: vec!["main".to_owned()],
+            disasm_start: outside,
+            pseudo_start: outside,
+            ..ReCraftApp::default()
+        };
+        let labels = RowMenuLabels::new(&app);
+        let ctx = egui::Context::default();
+        let base = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 300.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let painted = |output: &egui::FullOutput| -> Vec<String> {
+            let mut runs = Vec::new();
+            for clipped in &output.shapes {
+                collect_text_runs(&clipped.shape, &mut runs);
+            }
+            runs.into_iter().map(|(text, _)| text).collect()
+        };
+        let mut output = ctx.run_ui(base.clone(), |ui| {
+            list_row_menu(ui, &labels, true);
+        });
+        output.textures_delta.clear();
+        let texts = painted(&output);
+        for label in [
+            &labels.jump,
+            &labels.decompile,
+            &labels.rename,
+            &labels.xrefs,
+            &labels.copy_row,
+            &labels.copy_address,
+        ] {
+            assert!(
+                texts.iter().any(|text| text == label),
+                "the row menu is missing {label}"
+            );
+        }
+        // Decompile belongs to the Functions window; the other lists do not offer it.
+        let mut output = ctx.run_ui(base.clone(), |ui| {
+            list_row_menu(ui, &labels, false);
+        });
+        output.textures_delta.clear();
+        assert!(
+            !painted(&output)
+                .iter()
+                .any(|text| text == &labels.decompile),
+            "only the Functions window offers Decompile"
+        );
+
+        // Jump opens the row and moves the list cursor to it.
+        let mut action = Action::None;
+        app.run_row_command(Pane::Functions, start, RowCommand::Jump, &mut action, &ctx);
+        assert_eq!(action, Action::NavigateToDisasm(start));
+        assert_eq!(app.list_sel, Some((Pane::Functions, start.get())));
+
+        // Decompile opens the function containing the row; a row outside every function
+        // falls back to the plain jump.
+        let mut action = Action::None;
+        app.run_row_command(
+            Pane::Functions,
+            start,
+            RowCommand::Decompile,
+            &mut action,
+            &ctx,
+        );
+        assert_eq!(action, Action::EnterFunction(start));
+        let mut action = Action::None;
+        app.run_row_command(
+            Pane::Imports,
+            outside,
+            RowCommand::Decompile,
+            &mut action,
+            &ctx,
+        );
+        assert_eq!(action, Action::NavigateToDisasm(outside));
+
+        // Rename edits the row's symbol.
+        let mut action = Action::None;
+        app.run_row_command(Pane::Names, start, RowCommand::Rename, &mut action, &ctx);
+        let edit = app.edit.as_ref().expect("the rename dialog must open");
+        assert_eq!((edit.kind, edit.addr), (EditKind::Rename, start));
+        assert_eq!(action, Action::None);
+        app.edit = None;
+
+        // Cross references target the row, not the disassembly cursor.
+        let mut action = Action::None;
+        app.run_row_command(
+            Pane::Segments,
+            outside,
+            RowCommand::Xrefs,
+            &mut action,
+            &ctx,
+        );
+        assert_eq!(
+            app.xref_dialog.as_ref().map(|dialog| dialog.target),
+            Some(outside)
+        );
+        app.xref_dialog = None;
+
+        // Copy address puts the row's address on the clipboard and reports it.
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base, |_ui| {
+            app.run_row_command(
+                Pane::Functions,
+                start,
+                RowCommand::CopyAddress,
+                &mut action,
+                &ctx,
+            );
+        });
+        output.textures_delta.clear();
+        assert!(
+            output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(
+                    command,
+                    egui::OutputCommand::CopyText(text) if text == "0x140001000"
+                )),
+            "Copy address must put the row address on the clipboard"
+        );
+        assert!(
+            app.status.contains("0x140001000"),
+            "the status line must report the copied address, got {}",
+            app.status
+        );
     }
 
     #[test]
