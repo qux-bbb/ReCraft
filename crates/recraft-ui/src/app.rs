@@ -7690,24 +7690,33 @@ impl ReCraftApp {
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width().clamp(240.0, 520.0));
-                        let response = ui
-                            .horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(RichText::new(name).size(13.0).strong());
-                                    ui.label(
-                                        RichText::new(path.display().to_string())
-                                            .size(11.0)
-                                            .color(pal.muted),
-                                    );
-                                });
-                            })
-                            .response;
-                        if response.interact(egui::Sense::click()).clicked() {
-                            *action = Action::OpenRecent(index);
-                        }
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(name).size(13.0).strong());
+                                ui.label(
+                                    RichText::new(path.display().to_string())
+                                        .size(11.0)
+                                        .color(pal.muted),
+                                );
+                            });
+                        });
                     });
-                card.response
+                // The click target has to be registered after the frame, not on the inner
+                // layout's response: a `Ui`'s own response keeps the widget slot it was given
+                // when the `Ui` started, i.e. it sits *below* everything drawn inside it, and
+                // egui hands a click to the last widget registered under the pointer. Labels
+                // sense clicks themselves (selectable labels are the default), so the click on
+                // the name or the path was swallowed by the label and the card never opened.
+                let clickable = ui
+                    .interact(
+                        card.response.rect,
+                        ui.id().with(("recent-card", index)),
+                        egui::Sense::click(),
+                    )
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if clickable.clicked() {
+                    *action = Action::OpenRecent(index);
+                }
                 ui.add_space(6.0);
             }
         }
@@ -12052,6 +12061,61 @@ mod tests {
         let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
         output.textures_delta.clear();
         assert!(app.session.is_none());
+    }
+
+    /// A click on a recent-project card must open that project.
+    ///
+    /// The card used to hang its click target on the horizontal layout's own response, which
+    /// sits below the labels drawn inside it, and the selectable labels sense clicks
+    /// themselves — so egui handed the click to the name and the card never reacted.
+    #[test]
+    fn clicking_a_recent_project_card_opens_it() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("recent-card.rcraft");
+        {
+            let _session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        }
+        let mut app = ReCraftApp {
+            recent: vec![project.clone()],
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let base = test_input();
+        let name = project.file_name().unwrap().to_string_lossy().to_string();
+        // The dock only knows its final size on the second frame, so click where the card
+        // ends up in the settled layout.
+        let mut pos = None;
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(base.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            if let Some(found) = output
+                .shapes
+                .iter()
+                .find_map(|clipped| char_click_pos(&clipped.shape, &name, 0))
+            {
+                pos = Some(found);
+            }
+        }
+        let pos = pos.expect("the recent card must be on screen");
+        // egui's hit test runs one frame behind the widgets, so the pointer has to rest on
+        // the card before the press/release pair arrives.
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(pos), release(pos)],
+        ] {
+            let mut input = base.clone();
+            input.events = events;
+            let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        assert!(
+            app.session.is_some(),
+            "clicking a recent card must open its project"
+        );
+        assert_eq!(app.project.as_deref(), Some(project.as_path()));
     }
 
     #[test]
