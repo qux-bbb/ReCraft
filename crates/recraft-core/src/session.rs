@@ -446,6 +446,7 @@ impl Session {
                 operands,
                 name,
                 comment,
+                literal: None,
                 segment: segment.name,
                 xrefs: Vec::new(),
                 flags,
@@ -1208,6 +1209,31 @@ impl Session {
         rows.map(|row| row.map_err(command::db_err)).collect()
     }
 
+    /// Distinct data-reference targets, in address order.
+    ///
+    /// The listing asks once per revision which data items an operand can name. Distinct
+    /// targets cost far less than every referencing instruction (shell32: 15 k against
+    /// 56 k). The raw index scan plus a Rust sort/dedup is measurably cheaper than SQLite's
+    /// `DISTINCT`, which has to build a temporary b-tree for the same answer.
+    pub fn data_xref_targets(&self) -> Result<Vec<Address>> {
+        let mut stmt = self
+            .project
+            .conn()
+            .prepare("SELECT to_addr FROM xref WHERE type = ?1")
+            .map_err(command::db_err)?;
+        let rows = stmt
+            .query_map([listing::XREF_DATA], |row| {
+                Ok(Address::new(row.get::<_, i64>(0)? as u64))
+            })
+            .map_err(command::db_err)?;
+        let mut targets: Vec<Address> = rows
+            .map(|row| row.map_err(command::db_err))
+            .collect::<Result<_>>()?;
+        targets.sort_unstable();
+        targets.dedup();
+        Ok(targets)
+    }
+
     /// All persisted cross-references, optionally filtered by kind.
     pub fn all_xrefs(&self, kind: Option<i64>) -> Result<Vec<XrefEntry>> {
         let mut stmt = self
@@ -1686,8 +1712,12 @@ impl Session {
         if self.arch == Arch::Aarch64 {
             return self.disasm_aarch64(start, count);
         }
+        // IDA quotes the literal an instruction points at (`lea rcx, aEnterFlag; "Enter
+        // flag: "`), so the listing needs the symbol table that resolves the operand, not
+        // just the formatter that prints it.
+        let symbols = self.listing_symbols()?;
+        let mut formatter = Formatter::ida(Some(Box::new(SharedSymbols(Arc::clone(&symbols)))));
         let mut lines = Vec::with_capacity(count.min(4096));
-        let mut formatter = self.listing_formatter()?;
         let mut addr = start;
         for _ in 0..count {
             let Some(segment) = self.segment_containing(addr).cloned() else {
@@ -1705,6 +1735,7 @@ impl Session {
                 let (mnemonic, operands) = formatter.format_parts(&insn);
                 (mnemonic.to_owned(), operands.to_owned())
             };
+            let literal = listing::literal_comment(&symbols, &insn);
             let name = self.name_at(addr)?;
             let comment = self.comment_at(addr, CommentKind::Regular)?;
             let flags = self.flags_at(addr)?;
@@ -1716,6 +1747,7 @@ impl Session {
                 operands,
                 name,
                 comment,
+                literal,
                 segment: segment.name,
                 xrefs: Vec::new(),
                 flags,

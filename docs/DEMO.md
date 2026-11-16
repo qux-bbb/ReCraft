@@ -100,7 +100,13 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    `0x`），指令列与注释列按 IDA 的 .lst 实测值排（`.text` 第 39/63 格、`.rdata` 第 40/64 格，
    即地址长度 + 17 与 + 24）；十六进制写成 IDA 的 `28h`/`0Ah`（0–9 仍用十进制），分支与全局
    访存直接写符号名（`call sub_140001678`、`jnz short loc_140001483`、`mov cs:byte_140023B40, 1`）
-   而不是「地址 + 注释」，行尾有 `; CODE XREF:` / `; DATA XREF:`（带 `↑`/`↓` 与 `c` call、
+   而不是「地址 + 注释」；绝对内存操作数与 IDA 一样不带方括号——真正访存的写上段前缀
+   （`mov cs:qword_140023B38`、`mov rax, gs:30h`），`lea` 只算地址所以只写名字
+   （`lea rcx, aEnterFlag`；无类型时 `lea rax, unk_140024BD0`），只有寄存器相对的
+   `[rsp+8]` 保留方括号。操作数指向字符串字面量时，字面量按 IDA 的写法贴在操作数后面
+   （`lea rcx, aEnterFlag; "Enter flag: "`；超过 39 格截成 `"…"` 再补 `...`；低于
+   Strings 面板最小长度的小字面量同样成项：`lea rdx, asc_140018448; "\r\n"`）。
+   `; CODE XREF:` / `; DATA XREF:` 注释（带 `↑`/`↓` 与 `c` call、
    `j` jump、`o` offset、`r` read、`w` write 字母）；函数入口上方有 `public <名字>` 与
    `proc near`、`<名字>:` 标签行（都带地址），末尾有 `endp`。**字节列默认关闭**
    （`视图 → 显示字节` 打开，等价于 IDA 的 *Number of opcode bytes*），因此列表里不再有

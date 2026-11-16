@@ -21,7 +21,7 @@ use egui::{Color32, FontId, Key, RichText, Sense};
 use recraft_common::{Address, AddressRange};
 use recraft_core::{
     CodeData, Command, CommentKind, DisasmLine, Flags, FunctionInfo, Session, StructDef,
-    StructField, XrefEntry,
+    StructField, XrefEntry, data_name_for_literal,
 };
 use recraft_decompile::PseudoLine;
 
@@ -833,38 +833,12 @@ fn string_terminator_len(enc: i64) -> u64 {
     }
 }
 
-/// IDA's auto name for a data item.
+/// IDA's auto name for a data item, shared with the listing's operand names.
 ///
-/// IDA derives it from the literal's words: `a` + up to 14 CamelCased alphanumerics.
-/// `"[-] Wrong flag. Try again."` becomes `aWrongFlagTryAg`, `" flag format: flag{…}"`
-/// becomes `aFlagFormatFlag`. A literal without letters (the `"\r\n"` between two strings)
-/// gets the address-based `asc_<hex>` instead.
+/// [`data_name_for_literal`] owns the rule (the listing prints the same name in front of a
+/// `lea` that reaches the literal); this alias keeps the data-row code readable.
 fn ida_data_name(text: &str, addr: Address) -> String {
-    const MAX: usize = 14;
-    let mut name = String::from("a");
-    let mut word_start = true;
-    let mut letters = 0usize;
-    for ch in text.chars() {
-        if !ch.is_ascii_alphanumeric() {
-            word_start = true;
-            continue;
-        }
-        if letters == MAX {
-            break;
-        }
-        if word_start {
-            name.push(ch.to_ascii_uppercase());
-            word_start = false;
-        } else {
-            name.push(ch);
-        }
-        letters += 1;
-    }
-    if letters == 0 {
-        format!("asc_{:x}", addr.get())
-    } else {
-        name
-    }
+    data_name_for_literal(text, addr)
 }
 
 /// Length of a short NUL-terminated literal at the start of `bytes`, terminator included.
@@ -3767,6 +3741,7 @@ impl ReCraftApp {
                 .clone()
                 .or_else(|| Some(ida_data_name(&row.text, row.addr))),
             comment: None,
+            literal: None,
             segment: session
                 .segment_containing(row.addr)
                 .map(|segment| segment.name.clone())
@@ -3805,6 +3780,7 @@ impl ReCraftApp {
             operands: format!("{literal},0"),
             name: session.name_at(addr).ok().flatten(),
             comment: None,
+            literal: None,
             segment: session
                 .segment_containing(addr)
                 .map(|segment| segment.name.clone())
@@ -4026,6 +4002,7 @@ impl ReCraftApp {
             operands,
             name,
             comment: None,
+            literal: None,
             segment: session
                 .segment_containing(addr)
                 .map(|segment| segment.name.clone())
@@ -7829,7 +7806,18 @@ impl ReCraftApp {
         text.push_str(&self.disasm_bytes(line));
         text.push_str(&self.disasm_mnemonic_field(line));
         text.push_str(line.operands.trim_end());
+        text.push_str(&self.disasm_literal_field(line));
         text
+    }
+
+    /// IDA's literal-operand comment, glued to the operands without padding:
+    /// `lea rcx, aEnterFlag; "Enter flag: "`. It belongs to the instruction line (unlike the
+    /// cross-reference comments, which go on the comment column).
+    fn disasm_literal_field(&self, line: &DisasmLine) -> String {
+        match line.literal.as_deref() {
+            Some(literal) => format!("; {literal}"),
+            None => String::new(),
+        }
     }
 
     /// Comments of one row in the order IDA prints them: the user comment first, then the
@@ -7867,7 +7855,12 @@ impl ReCraftApp {
     /// Instruction text of one row, without the address/bytes columns: what Ctrl+C copies
     /// when the user did not drag a text selection.
     fn disasm_line_copy_text(&self, line: &DisasmLine) -> String {
-        let mut text = format!("{} {}", line.mnemonic, line.operands);
+        let mut text = format!(
+            "{} {}{}",
+            line.mnemonic,
+            line.operands,
+            self.disasm_literal_field(line)
+        );
         text.truncate(text.trim_end().len());
         if let Some(comment) = self.disasm_comments(line).into_iter().next() {
             text.push_str("  ");
@@ -8055,6 +8048,13 @@ impl ReCraftApp {
                 append(&mut job, &bytes_field, pal.bytes, &mono);
                 append(&mut job, &mnemonic_field, pal.mnemonic, &mono);
                 append_operands(&mut job, &line.operands, pal, &mono);
+                // The literal an operand points at rides on the instruction line, glued to
+                // the operands as IDA writes it (`aEnterFlag; "Enter flag: "`), and only a
+                // real comment takes the comment column.
+                let literal_field = self.disasm_literal_field(line);
+                if !literal_field.is_empty() {
+                    append(&mut job, &literal_field, pal.comment, &mono);
+                }
                 if let Some(comment) = inline_comment.as_deref() {
                     let cells = job.text.chars().count();
                     append(
@@ -12934,6 +12934,77 @@ mod tests {
         assert!(line.flags.is_data(), "string rows are data, not code");
     }
 
+    /// IDA names the literal an instruction points at and quotes it on the same line:
+    /// `lea rcx, aEnterFlag; "Enter flag: "`. Before this, the operand stayed a bare address
+    /// (`lea rcx, [140018438h]`), so nothing on the line said which string it was.
+    #[test]
+    fn a_string_reference_shows_its_name_and_literal() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("string-refs.rcraft");
+        let _ = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _ = run_analysis_job(&project, &cancel);
+        let session = Session::open(&project).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        app.refresh_strings();
+
+        // A short printable literal whose quoted form is exactly its text, so the expected
+        // comment needs no escape rules of its own.
+        let row = app
+            .strings
+            .iter()
+            .find(|row| {
+                let text = row.text.as_str();
+                !is_header_string(&row.segment)
+                    && !text.is_empty()
+                    && text.chars().count() <= 20
+                    && text.chars().all(|ch| ch.is_ascii_graphic() || ch == ' ')
+            })
+            .cloned()
+            .expect("sample has a short printable string");
+        let session = app.session.as_mut().unwrap();
+        let site = session
+            .xrefs_to(row.addr)
+            .unwrap()
+            .into_iter()
+            .find(|xref| xref.kind == recraft_analysis::XREF_DATA)
+            .expect("the sample references one of its strings from code");
+        let lines = session.disasm(site.from, 1).unwrap();
+        let line = lines.first().expect("the referencing instruction decodes");
+        let name = data_name_for_literal(&row.text, row.addr);
+        assert!(
+            line.operands.contains(&name),
+            "the operand should name the literal {name:?}, got {:?}",
+            line.operands
+        );
+        assert_eq!(
+            line.literal.as_deref(),
+            Some(format!("\"{}\"", row.text).as_str()),
+            "the referencing line should quote the literal, got {:?}",
+            line.literal
+        );
+
+        // The painted/copied line glues the comment to the operands, with no padding.
+        app.disasm_rows = vec![line.clone()];
+        let text = app.disasm_line_text(&app.disasm_rows[0]);
+        assert!(
+            text.contains(&format!("; \"{}\"", row.text)),
+            "the listing line should carry the literal, got {text:?}"
+        );
+        assert!(
+            !text.contains("  ; \""),
+            "the literal must not be parked on the comment column: {text:?}"
+        );
+    }
+
     /// IDA's graph view exists for instructions inside a function only: asking for it on a
     /// data row (or on an address outside every function) reports the switch and stays in
     /// text, and a jump onto data leaves graph mode the same way instead of painting an
@@ -14274,6 +14345,7 @@ mod tests {
                 operands: String::new(),
                 name: None,
                 comment: None,
+                literal: None,
                 segment: ".text".to_owned(),
                 xrefs: Vec::new(),
                 flags: Flags::code(),
@@ -17441,6 +17513,7 @@ mod tests {
             operands: operands.to_owned(),
             name: None,
             comment: None,
+            literal: None,
             segment: ".text".to_owned(),
             xrefs: Vec::new(),
             flags: Flags::code(),

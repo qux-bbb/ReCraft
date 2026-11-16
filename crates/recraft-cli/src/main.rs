@@ -1378,6 +1378,7 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
                     "operands": line.operands,
                     "name": line.name,
                     "comment": line.comment,
+                    "literal": line.literal,
                     "segment": line.segment,
                     "xrefs": line.xrefs,
                     "code": line.flags.is_code(),
@@ -1403,6 +1404,11 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
             line.mnemonic,
             line.operands.trim_end()
         );
+        // IDA glues the literal an operand points at to the operand: `aEnterFlag; "Enter flag: "`.
+        if let Some(literal) = line.literal.as_deref() {
+            text.push_str("; ");
+            text.push_str(literal);
+        }
         let mut comments = Vec::new();
         if let Some(comment) = line.comment.as_deref().map(str::trim) {
             if !comment.is_empty() {

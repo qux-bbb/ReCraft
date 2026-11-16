@@ -288,6 +288,36 @@ impl Insn {
         self.instruction.memory_size()
     }
 
+    /// Addresses this instruction's operands name as *data*.
+    ///
+    /// IDA types every operand that points at data: `lea rcx, aEnterFlag`,
+    /// `push offset aUsage`, `dq offset aCaption`. The listing uses these addresses to find
+    /// the item behind the operand and print the literal it holds (`; "Enter flag: "`).
+    /// Nothing is checked against the program map here: the caller filters.
+    ///
+    /// A memory operand contributes its direct address (RIP-relative operands are already
+    /// absolute) or an indexed table's base; an address-wide immediate contributes its value
+    /// and is the one case IDA prints as `offset …`.
+    pub fn data_operand_addresses(&self) -> Vec<u64> {
+        use iced_x86::OpKind;
+        let instruction = &self.instruction;
+        let mut addresses = Vec::new();
+        if self.memory_is_direct() {
+            addresses.push(self.memory_displacement64());
+        } else if let Some((table, _)) = self.memory_indexed_table() {
+            addresses.push(table);
+        }
+        for index in 0..instruction.op_count() {
+            match instruction.op_kind(index) {
+                OpKind::Immediate32 | OpKind::Immediate32to64 | OpKind::Immediate64 => {
+                    addresses.push(instruction.immediate(index));
+                }
+                _ => {}
+            }
+        }
+        addresses
+    }
+
     #[inline]
     pub fn is_ip_rel_memory_operand(&self) -> bool {
         self.instruction.is_ip_rel_memory_operand()
@@ -494,6 +524,15 @@ pub trait Symbols {
 
     /// Name of the data at `address`, addressed with `size` bytes (`1`, `2`, `4`, `8`, …).
     fn data(&mut self, address: u64, size: u32) -> Option<String>;
+
+    /// Name of the data an *immediate* operand names (`push offset aUsage`).
+    ///
+    /// Only an item that already has a name resolves here. A plain number that happens to
+    /// fall inside a data segment (`mov eax, 3000h` in a PIE image) must stay a number, so
+    /// the address-based `unk_…`/`dword_…` fallback is not used for immediates.
+    fn offset(&mut self, address: u64) -> Option<String> {
+        self.data(address, 0)
+    }
 }
 
 /// Bridges [`Symbols`] to iced's resolver, which is consulted for branch targets, memory
@@ -523,6 +562,13 @@ impl iced_x86::SymbolResolver for SymbolAdapter {
                 let size = instruction.memory_size().size() as u32;
                 self.symbols.data(address, size)?
             }
+            // An address-wide immediate is a data reference in IDA (`push offset aUsage`);
+            // only an item that already has a name resolves (see [`Symbols::offset`]).
+            iced_x86::OpKind::Immediate32
+            | iced_x86::OpKind::Immediate32to64
+            | iced_x86::OpKind::Immediate64 => {
+                format!("offset {}", self.symbols.offset(address)?)
+            }
             _ => return None,
         };
         Some(iced_x86::SymbolResult {
@@ -542,6 +588,9 @@ impl iced_x86::SymbolResolver for SymbolAdapter {
 pub struct Formatter {
     inner: iced_x86::IntelFormatter,
     output: String,
+    /// Whether the output is IDA's listing text, which drops the brackets around an
+    /// absolute memory operand (`mov rax, cs:qword_140023B38`, not `[qword_…]`).
+    ida: bool,
 }
 
 impl Formatter {
@@ -552,6 +601,7 @@ impl Formatter {
         Self {
             inner,
             output: String::with_capacity(64),
+            ida: false,
         }
     }
 
@@ -567,6 +617,7 @@ impl Formatter {
         Self {
             inner,
             output: String::with_capacity(64),
+            ida: true,
         }
     }
 
@@ -595,6 +646,9 @@ impl Formatter {
         self.output.clear();
         // `format` takes the instruction by reference and appends to the output.
         self.inner.format(insn.instruction(), &mut self.output);
+        if self.ida && insn.memory_is_direct() {
+            self.output = absolute_memory_operand(&self.output, insn);
+        }
         &self.output
     }
 
@@ -611,6 +665,65 @@ impl Formatter {
 impl Default for Formatter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// IDA's spelling of an absolute memory operand: no brackets.
+///
+/// iced always brackets one (`mov rax, [qword_140023B38]`, `lea rcx, [aEnterFlag]`,
+/// `mov rax, gs:[30h]`). IDA brackets only register-relative operands: an absolute read or
+/// write becomes `cs:qword_140023B38` (the segment IDA otherwise leaves implicit), and a
+/// `lea`, which computes an address instead of touching memory, drops the brackets and the
+/// segment alike (`lea rcx, aEnterFlag`).
+fn absolute_memory_operand(text: &str, insn: &Insn) -> String {
+    let Some(open) = text.find('[') else {
+        return text.to_owned();
+    };
+    let Some(close) = text[open..].find(']').map(|offset| open + offset) else {
+        return text.to_owned();
+    };
+    let (before, inner, after) = (&text[..open], &text[open + 1..close], &text[close + 1..]);
+    // The operand is a name when it starts with a letter or underscore: IDA puts the item's
+    // type in the name itself (`byte_…`, `qword_…`) and drops iced's `… ptr` keyword.
+    let bare_address = inner
+        .chars()
+        .next()
+        .is_none_or(|ch| ch.is_ascii_digit() || ch == '-');
+    let mut rewritten = String::with_capacity(text.len());
+    rewritten.push_str(if bare_address {
+        before
+    } else {
+        without_size_keyword(before)
+    });
+    // A segment iced already printed (`gs:[30h]`) stays; it is the more specific override.
+    // IDA prints the segment in front of every memory access, and in front of a `lea` only
+    // when the operand is a bare address instead of an item's name (`lea rdi,
+    // cs:140000000h` vs `lea rcx, aEnterFlag`).
+    let computes_address = matches!(insn.mnemonic(), iced_x86::Mnemonic::Lea);
+    if (!computes_address || bare_address) && !before.ends_with(':') {
+        // 64-bit code runs in one flat code segment; a 32-bit data reference defaults to
+        // `ds`. Either is what IDA prints in front of an absolute address.
+        rewritten.push_str(
+            if insn.instruction().code_size() == iced_x86::CodeSize::Code64 {
+                "cs:"
+            } else {
+                "ds:"
+            },
+        );
+    }
+    rewritten.push_str(inner);
+    rewritten.push_str(after);
+    rewritten
+}
+
+/// `mov byte ptr ` → `mov ` (iced's size keyword, which a named item makes redundant).
+fn without_size_keyword(before: &str) -> &str {
+    let Some(head) = before.strip_suffix(" ptr ") else {
+        return before;
+    };
+    match head.rfind(' ') {
+        Some(index) => &head[..index + 1],
+        None => before,
     }
 }
 
@@ -782,9 +895,56 @@ mod tests {
         let je = decode64(&[0x74, 0x21], 0x140001443);
         assert_eq!(formatter.format(&je), "je short loc_140001466");
 
-        // A RIP-relative memory operand (how x64 reaches a global) becomes the data name.
+        // A RIP-relative memory operand (how x64 reaches a global) becomes the data name,
+        // spelled the way IDA does: `cs:` instead of brackets, and no `byte ptr` keyword
+        // because the name already carries the item's size.
         let mov = decode64(&[0xc6, 0x05, 0xc5, 0x26, 0x02, 0x00, 0x01], 0x140001474);
-        assert_eq!(formatter.format(&mov), "mov byte ptr [byte_140023B40], 1");
+        assert_eq!(formatter.format(&mov), "mov cs:byte_140023B40, 1");
+    }
+
+    #[test]
+    fn ida_syntax_drops_the_brackets_of_an_absolute_operand() {
+        /// A `lea` reaches a literal; a read reaches a global.
+        struct Globals;
+
+        impl Symbols for Globals {
+            fn code(&mut self, _address: u64) -> Option<String> {
+                None
+            }
+
+            fn data(&mut self, address: u64, size: u32) -> Option<String> {
+                match (address, size) {
+                    (0x140018438, _) => Some("aEnterFlag".to_owned()),
+                    (0x140023b38, 8) => Some("qword_140023B38".to_owned()),
+                    // A `lea` has no access width: IDA types the item `unk_…`.
+                    (0x140024bd0, 0) => Some("unk_140024BD0".to_owned()),
+                    _ => None,
+                }
+            }
+        }
+
+        let mut formatter = Formatter::ida(Some(Box::new(Globals)));
+        // `lea rcx, [rip+disp]` — IDA: the item's name alone, no segment, no brackets.
+        let lea = decode64(&[0x48, 0x8d, 0x0d, 0xd1, 0x73, 0x01, 0x00], 0x140001060);
+        assert_eq!(formatter.format(&lea), "lea rcx, aEnterFlag");
+        // A read keeps the segment prefix: `lock cmpxchg cs:qword_…, rcx`.
+        let cmpxchg = decode64(
+            &[0xf0, 0x48, 0x0f, 0xb1, 0x0d, 0xd4, 0x26, 0x02, 0x00],
+            0x14000145b,
+        );
+        assert_eq!(
+            formatter.format(&cmpxchg),
+            "lock cmpxchg cs:qword_140023B38, rcx"
+        );
+        // An absolute address with no item keeps the number but not the brackets, and the
+        // segment says the operand is memory.
+        let untyped = decode64(&[0x48, 0x8d, 0x05, 0xc9, 0x3b, 0x02, 0x00], 0x140001000);
+        assert_eq!(formatter.format(&untyped), "lea rax, unk_140024BD0");
+        // Register-relative operands keep IDA's brackets.
+        let stack = decode64(&[0x48, 0x89, 0x5c, 0x24, 0x08], 0x140001010);
+        assert_eq!(formatter.format(&stack), "mov [rsp+8], rbx");
+        // The C-style formatter (IR/`__asm` text) keeps iced's plain output.
+        assert_eq!(Formatter::new().format(&stack), "mov [rsp+0x8], rbx");
     }
 
     #[test]

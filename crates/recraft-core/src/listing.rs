@@ -17,17 +17,147 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use recraft_common::{Address, Result};
-use recraft_decode::{FlowKind, Formatter, Symbols};
+use recraft_decode::{FlowKind, Formatter, Insn, Symbols};
 
 use crate::segments::SegmentKind;
 use crate::session::Session;
-use crate::view::{DisasmLine, FunctionInfo, XrefEntry};
+use crate::view::{DisasmLine, FunctionInfo, StringOverride, XrefEntry};
 
 /// `xref.type` values. They mirror `recraft_analysis::XREF_*`; core does not depend on the
 /// analysis crate, so the three values it needs are repeated here.
 const XREF_CALL: i64 = 1;
 const XREF_JUMP: i64 = 2;
-const XREF_DATA: i64 = 3;
+pub(crate) const XREF_DATA: i64 = 3;
+
+/// Encoding of a UTF-16LE literal in the `string` table. Also mirrors
+/// `recraft_analysis::STRING_ENC_UTF16LE`, for the same reason as the xref kinds above.
+const STRING_ENC_UTF16LE: i64 = 2;
+
+/// What the listing knows about one stored string literal.
+struct StringLiteral {
+    /// IDA's auto name for the item (`aEnterFlag`, `asc_140018448`).
+    name: String,
+    /// The literal as IDA appends it to the instruction that points at it: `"Enter flag: "`.
+    quoted: String,
+}
+
+/// Name of the data at `address`, sized like [`ListingSymbols::data`].
+///
+/// IDA derives a literal's auto name from its words: `a` + up to 14 CamelCased
+/// alphanumerics. `"[-] Wrong flag. Try again."` becomes `aWrongFlagTryAg`, `" flag format:
+/// flag{…}"` becomes `aFlagFormatFlag`. A literal without letters (the `"\r\n"` between two
+/// strings) gets the address-based `asc_<hex>` instead.
+pub fn data_name_for_literal(text: &str, addr: Address) -> String {
+    const MAX: usize = 14;
+    let mut name = String::from("a");
+    let mut word_start = true;
+    let mut letters = 0usize;
+    for ch in text.chars() {
+        if !ch.is_ascii_alphanumeric() {
+            word_start = true;
+            continue;
+        }
+        if letters == MAX {
+            break;
+        }
+        if word_start {
+            name.push(ch.to_ascii_uppercase());
+            word_start = false;
+        } else {
+            name.push(ch);
+        }
+        letters += 1;
+    }
+    if letters == 0 {
+        format!("asc_{:x}", addr.get())
+    } else {
+        name
+    }
+}
+
+/// The literal stored at `bytes`: its text and encoding.
+///
+/// IDA treats a referenced printable run as a string item whether or not the Strings window
+/// would list it (`aEnterFlag db 'Enter flag: ',0`, `asc_140018448 db 0Dh,0Ah,0`), so the
+/// listing decodes the bytes a reference lands on instead of consulting the `string` table.
+fn literal_text(bytes: &[u8]) -> Option<(String, i64)> {
+    // Wide text (`H\0e\0l\0l\0o\0`) would otherwise decode as the one-character `"H"`.
+    if let Some(text) = utf16_literal_text(bytes) {
+        return Some((text, STRING_ENC_UTF16LE));
+    }
+    ascii_literal_text(bytes).map(|text| (text, 1))
+}
+
+fn printable_byte(byte: u8) -> bool {
+    matches!(byte, b'\t' | b'\n' | b'\r') || (0x20..0x7f).contains(&byte)
+}
+
+/// Printable run at the start of `bytes`, as an 8-bit literal.
+///
+/// A short run needs its NUL terminator (`"\r\n"`, `"\n"`); a longer one is a real literal
+/// even when it runs past the window — only the first `PREFIX` bytes are ever looked at.
+fn ascii_literal_text(bytes: &[u8]) -> Option<String> {
+    let end = bytes
+        .iter()
+        .position(|byte| !printable_byte(*byte))
+        .unwrap_or(bytes.len());
+    let text = &bytes[..end];
+    let terminated = bytes.get(end) == Some(&0);
+    if text.is_empty() || (text.len() < 4 && !terminated) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(text).into_owned())
+}
+
+/// `u"…"` literal: printable ASCII code units with a zero high byte.
+fn utf16_literal_text(bytes: &[u8]) -> Option<String> {
+    let mut units = Vec::new();
+    for pair in bytes.chunks_exact(2) {
+        let unit = u16::from_le_bytes([pair[0], pair[1]]);
+        match u8::try_from(unit) {
+            Ok(byte) if printable_byte(byte) => units.push(unit),
+            _ => break,
+        }
+    }
+    (units.len() >= 2).then(|| String::from_utf16_lossy(&units))
+}
+
+/// The literal as IDA quotes it on a referencing instruction: C-escaped, in double quotes,
+/// cut at 39 cells with `...` after the closing quote (IDA's listing does exactly that for
+/// long strings; `"====…"` from a 42-byte run of `=` ends `"…"` + `...`).
+fn quoted_literal(text: &str, enc: i64) -> String {
+    const MAX_CELLS: usize = 39;
+    let mut escaped = String::with_capacity(text.len() + 2);
+    for ch in text.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\r' => escaped.push_str("\\r"),
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => {
+                let code = ch as u32;
+                if code <= 0xff {
+                    escaped.push_str(&format!("\\x{code:02X}"));
+                } else {
+                    escaped.push_str(&format!("\\u{{{code:x}}}"));
+                }
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    let truncated = escaped.chars().count() > MAX_CELLS;
+    if truncated {
+        escaped = escaped.chars().take(MAX_CELLS).collect();
+    }
+    // IDA marks a wide literal `u"…"`, so a UTF-16 item is not mistaken for its low bytes.
+    let prefix = if enc == STRING_ENC_UTF16LE { "u" } else { "" };
+    let mut quoted = format!("{prefix}\"{escaped}\"");
+    if truncated {
+        quoted.push_str("...");
+    }
+    quoted
+}
 
 /// Names the listing substitutes for numeric addresses.
 ///
@@ -36,6 +166,8 @@ const XREF_DATA: i64 = 3;
 /// full-table read behind every scroll.
 pub(crate) struct ListingSymbols {
     names: HashMap<u64, String>,
+    /// Stored string literals by address: the name and the quoted text IDA shows.
+    literals: HashMap<u64, StringLiteral>,
     /// Function starts, sorted (binary searched).
     functions: Vec<u64>,
     /// Every mapped `[start, end)` range.
@@ -67,12 +199,89 @@ impl ListingSymbols {
                 data.push(range);
             }
         }
+        // String literals are items in IDA's listing even though analysis stores only their
+        // address and length: every one gets an auto name, and an instruction that points at
+        // it carries the quoted text (`lea rcx, aEnterFlag; "Enter flag: "`, `lea rdx,
+        // asc_140018448; "\r\n"`).
+        //
+        // Like IDA, the text is decoded from the bytes a reference lands on, not looked up
+        // in the `string` table: an operand can only name what something points at, and
+        // reading the whole table would make the first listing window of a large binary
+        // noticeably slower (shell32 stores 124 k strings).
+        let overrides: HashMap<u64, StringOverride> = session
+            .string_overrides()?
+            .into_iter()
+            .map(|(addr, entry)| (addr.get(), entry))
+            .collect();
+        let targets: Vec<u64> = session
+            .data_xref_targets()?
+            .into_iter()
+            .map(|target| target.get())
+            .filter(|target| in_ranges(&data, *target))
+            .collect();
+        let mut literals = HashMap::with_capacity(targets.len());
+        // One page of image bytes serves every target on it; a literal is at most `PREFIX`
+        // bytes here, which is all an auto name and a quoted comment need.
+        const WINDOW: u64 = 0x1_0000;
+        const PREFIX: usize = 128;
+        let mut window_start = u64::MAX;
+        let mut window: Vec<u8> = Vec::new();
+        let mut spill: Vec<u8> = Vec::new();
+        for target in targets {
+            let start = target & !(WINDOW - 1);
+            if start != window_start {
+                window_start = start;
+                window.clear();
+                window.resize(WINDOW as usize, 0);
+                let read = session
+                    .read_at(Address::new(start), &mut window)
+                    .unwrap_or(0);
+                window.truncate(read);
+            }
+            let offset = usize::try_from(target - start).unwrap_or(usize::MAX);
+            let bytes: &[u8] = if offset.saturating_add(PREFIX) <= window.len() {
+                &window[offset..offset + PREFIX]
+            } else {
+                // A literal that runs past the window (or ends the segment) is read on its
+                // own; one item is not worth a second page.
+                spill.clear();
+                spill.resize(PREFIX, 0);
+                let read = session
+                    .read_at(Address::new(target), &mut spill)
+                    .unwrap_or(0);
+                spill.truncate(read);
+                &spill
+            };
+            let (text, enc) = match overrides.get(&target).and_then(|edit| edit.text.clone()) {
+                Some(text) => (text, 1),
+                None => match literal_text(bytes) {
+                    Some(found) => found,
+                    None => continue,
+                },
+            };
+            literals.insert(
+                target,
+                StringLiteral {
+                    name: data_name_for_literal(&text, Address::new(target)),
+                    quoted: quoted_literal(&text, enc),
+                },
+            );
+        }
         Ok(Self {
             names,
+            literals,
             functions,
             mapped,
             data,
         })
+    }
+
+    /// IDA's trailing literal comment for the item starting at `address`, quotes included
+    /// (`"Enter flag: "`). An address inside a literal or between items has none.
+    pub(crate) fn literal(&self, address: u64) -> Option<&str> {
+        self.literals
+            .get(&address)
+            .map(|literal| literal.quoted.as_str())
     }
 
     fn is_function_start(&self, addr: u64) -> bool {
@@ -90,6 +299,10 @@ impl Symbols for SharedSymbols {
 
     fn data(&mut self, address: u64, size: u32) -> Option<String> {
         self.0.data(address, size)
+    }
+
+    fn offset(&mut self, address: u64) -> Option<String> {
+        self.0.offset(address)
     }
 }
 
@@ -117,6 +330,11 @@ impl ListingSymbols {
         if !in_ranges(&self.data, address) {
             return None;
         }
+        // A literal is an item of its own whatever width the operand reads it with: IDA
+        // shows `mov rax, qword ptr [aCaption]`, not a `qword_…` view of the string.
+        if let Some(literal) = self.literals.get(&address) {
+            return Some(literal.name.clone());
+        }
         let prefix = match size {
             1 => "byte_",
             2 => "word_",
@@ -124,9 +342,28 @@ impl ListingSymbols {
             8 => "qword_",
             16 => "xmmword_",
             32 => "ymmword_",
+            // An operand that names an address without reading it (`lea rax, [addr]`) has no
+            // width; IDA types the item as `unk_` when analysis has nothing better.
+            0 => "unk_",
             _ => return None,
         };
         Some(format!("{prefix}{address:x}"))
+    }
+
+    /// Name of the item an immediate operand points at — only an existing name resolves.
+    ///
+    /// A plain number that happens to fall inside a data segment (`mov eax, 3000h` in a PIE
+    /// image) must not become `offset unk_3000`, so this never synthesizes a name.
+    pub(crate) fn offset(&self, address: u64) -> Option<String> {
+        if let Some(name) = self.names.get(&address) {
+            return Some(name.clone());
+        }
+        if !in_ranges(&self.data, address) {
+            return None;
+        }
+        self.literals
+            .get(&address)
+            .map(|literal| literal.name.clone())
     }
 }
 
@@ -134,6 +371,15 @@ fn in_ranges(ranges: &[(u64, u64)], address: u64) -> bool {
     ranges
         .iter()
         .any(|(start, end)| address >= *start && address < *end)
+}
+
+/// IDA's trailing literal comment for one instruction: the quoted text of the first operand
+/// that points at a string literal (`"Enter flag: "`), if any.
+pub(crate) fn literal_comment(symbols: &ListingSymbols, insn: &Insn) -> Option<String> {
+    insn.data_operand_addresses()
+        .into_iter()
+        .find_map(|target| symbols.literal(target))
+        .map(str::to_owned)
 }
 
 /// Fill `line.xrefs` with IDA's `CODE XREF:` / `DATA XREF:` comments.

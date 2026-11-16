@@ -23,6 +23,9 @@ pub use command::{
     StructDef, StructField,
 };
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
+// IDA's auto name for a string literal, shared by the listing (operand names) and the
+// disassembly view (a `db '…',0` row's name), so the two cannot drift.
+pub use listing::data_name_for_literal;
 // Loaders live in `recraft-format`; front ends and the decompiler read them through
 // the session, so the vocabulary is re-exported here.
 pub use plt::PltStub;

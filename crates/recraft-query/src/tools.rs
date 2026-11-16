@@ -433,6 +433,7 @@ pub fn disassembly(session: &mut Session, arguments: &Value) -> Result<Value, St
                 "operands": line.operands,
                 "name": line.name,
                 "comment": line.comment,
+                "literal": line.literal,
             })
         })
         .collect();

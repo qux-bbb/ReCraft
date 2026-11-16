@@ -126,6 +126,10 @@ pub struct DisasmLine {
     pub operands: String,
     pub name: Option<String>,
     pub comment: Option<String>,
+    /// IDA's literal-operand comment: the text of the string an operand points at, quoted
+    /// (`"Enter flag: "`). The listing glues it to the operands (`lea rcx, aEnterFlag;
+    /// "Enter flag: "`); unlike a cross-reference it is part of the instruction's own line.
+    pub literal: Option<String>,
     /// Name of the segment the line sits in (`.text`, `.rdata`), the prefix IDA puts in front
     /// of the address column.
     pub segment: String,
