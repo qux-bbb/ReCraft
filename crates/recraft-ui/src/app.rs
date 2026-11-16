@@ -7014,6 +7014,8 @@ impl ReCraftApp {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
+            // IDA's dialogs appear at once; egui's 200 ms fade-in reads as slow motion.
+            .fade_in(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.image((icon, egui::vec2(64.0, 64.0)));
@@ -7052,6 +7054,7 @@ impl ReCraftApp {
         egui::Window::new(self.t("ui_provider_settings"))
             .open(&mut open)
             .resizable(true)
+            .fade_in(false)
             .default_width(560.0)
             .show(ctx, |ui| self.ai_settings_ui(ui));
         self.ai_settings_open = open;
@@ -8914,6 +8917,7 @@ impl ReCraftApp {
         egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
+            .fade_in(false)
             .show(ctx, |ui| {
                 ui.label(format!("{:#x}  {slot}", func.get()));
                 let response = ui.add(
@@ -8976,6 +8980,7 @@ impl ReCraftApp {
         egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
+            .fade_in(false)
             .show(ctx, |ui| {
                 ui.label(format!("{:#x}", edit.addr.get()));
                 // A pseudocode comment may span several lines; the disassembly comment
@@ -9051,6 +9056,7 @@ impl ReCraftApp {
         egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
+            .fade_in(false)
             .default_width(420.0)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -9124,6 +9130,7 @@ impl ReCraftApp {
         egui::Window::new(self.t("ui_go_to_address_symbol"))
             .collapsible(false)
             .resizable(false)
+            .fade_in(false)
             .show(ctx, |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut state.text)
@@ -9176,6 +9183,7 @@ impl ReCraftApp {
         egui::Window::new(self.t("ui_strings_setup_title"))
             .collapsible(false)
             .resizable(false)
+            .fade_in(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(self.t("ui_min_string_length"));
@@ -9262,9 +9270,14 @@ impl ReCraftApp {
             .id(egui::Id::new("recraft_xrefs_dialog"))
             .collapsible(false)
             .resizable(true)
+            // IDA shows the window at once; egui's 200 ms fade-in reads as slow motion.
+            .fade_in(false)
             .default_pos(default_pos)
             .default_size(default_size)
             .min_width(480.0)
+            // Room for the header and the footer; below it the list would overflow and the
+            // window would grow itself again.
+            .min_height(160.0)
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut typing = false;
@@ -9328,6 +9341,58 @@ impl ReCraftApp {
                     dialog.selected = visible[next as usize];
                     scroll_to_selected = true;
                 }
+                // IDA's status line and buttons are a footer pinned to the dialog's bottom:
+                // declaring it before the list takes its height out of what the list may use,
+                // so the content never grows past the window and the dialog stops resizing
+                // itself (egui's `Resize` auto-expands to the last content size, and a magic
+                // reserve for the footer left it 3 px short and growing every frame).
+                let total = visible.len();
+                let line_no = visible
+                    .iter()
+                    .position(|index| *index == dialog.selected)
+                    .map_or(0, |position| position + 1);
+                let status = self.t_args(
+                    "ui_line_n_of_m",
+                    &[
+                        ("line", &line_no.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                );
+                egui::Panel::bottom(egui::Id::new("recraft_xrefs_footer"))
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            // IDA's status line: `Line N of M`; nothing to number when empty.
+                            ui.weak(if total == 0 { "" } else { status.as_str() });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button(help_label.as_str()).clicked() {
+                                        dialog.help = !dialog.help;
+                                    }
+                                    if ui.button(search_label.as_str()).clicked() {
+                                        dialog.search = !dialog.search;
+                                        dialog.search_focus = dialog.search;
+                                        if !dialog.search {
+                                            dialog.filter.clear();
+                                        }
+                                    }
+                                    if ui.button(cancel_label.as_str()).clicked() {
+                                        close = true;
+                                    }
+                                    if ui.button(ok_label.as_str()).clicked()
+                                        && let Some(row) = dialog.rows.get(dialog.selected)
+                                    {
+                                        follow = Some(row.addr);
+                                    }
+                                },
+                            );
+                        });
+                        if dialog.help {
+                            ui.weak(help_text.as_str());
+                        }
+                    });
                 let width = ui.available_width().max(420.0);
                 let char_w = ui
                     .painter()
@@ -9362,8 +9427,8 @@ impl ReCraftApp {
                 }
                 let text_chars = (((width - text_x) / char_w).floor() as usize).max(16);
                 let label_chars = (((addr_w - 8.0) / char_w).floor() as usize).max(8);
-                // Fill the dialog: the list scrolls while the button row stays pinned below.
-                let list_height = (ui.available_height() - 36.0).max(80.0);
+                // Fill the rest of the dialog; the footer already took its own height.
+                let list_height = ui.available_height().max(1.0);
                 let mut clicked_row = None;
                 egui::ScrollArea::vertical()
                     .id_salt("recraft_xrefs_rows")
@@ -9444,46 +9509,6 @@ impl ReCraftApp {
                     });
                 if let Some(index) = clicked_row {
                     dialog.selected = index;
-                }
-                ui.separator();
-                let total = visible.len();
-                let line_no = visible
-                    .iter()
-                    .position(|index| *index == dialog.selected)
-                    .map_or(0, |position| position + 1);
-                let status = self.t_args(
-                    "ui_line_n_of_m",
-                    &[
-                        ("line", &line_no.to_string()),
-                        ("total", &total.to_string()),
-                    ],
-                );
-                ui.horizontal(|ui| {
-                    // IDA's status line: `Line N of M`; nothing to number when empty.
-                    ui.weak(if total == 0 { "" } else { status.as_str() });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(help_label.as_str()).clicked() {
-                            dialog.help = !dialog.help;
-                        }
-                        if ui.button(search_label.as_str()).clicked() {
-                            dialog.search = !dialog.search;
-                            dialog.search_focus = dialog.search;
-                            if !dialog.search {
-                                dialog.filter.clear();
-                            }
-                        }
-                        if ui.button(cancel_label.as_str()).clicked() {
-                            close = true;
-                        }
-                        if ui.button(ok_label.as_str()).clicked()
-                            && let Some(row) = dialog.rows.get(dialog.selected)
-                        {
-                            follow = Some(row.addr);
-                        }
-                    });
-                });
-                if dialog.help {
-                    ui.weak(help_text.as_str());
                 }
             });
         if let Some(addr) = follow {
@@ -18070,5 +18095,137 @@ mod tests {
         );
         assert_eq!(typed_item_kind(16), ("xmmword", "xmmword_"));
         assert_eq!(typed_item_kind(8), ("dq", "qword_"));
+    }
+
+    /// The dialog must keep the size it opened with. egui's `Resize` grows a window to the
+    /// last content size and never shrinks it again, so while the footer was reserved with a
+    /// magic `36.0` the content came out 3 px taller than the window and the dialog unfolded
+    /// by 3 px every frame — the reported "opens in slow motion". The footer is a bottom
+    /// panel now and the list takes exactly the height that is left over.
+    #[test]
+    fn the_xrefs_dialog_keeps_its_height() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-xrefs-rect.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+        app.apply_action(&ctx, Action::ShowXrefs);
+        assert!(app.xref_dialog.is_some(), "xrefs dialog did not open");
+        let id = egui::Id::new("recraft_xrefs_dialog");
+        let mut heights = Vec::new();
+        let mut footer_painted = false;
+        for frame in 0..20 {
+            input.time = Some(1.0 + frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            heights.push(
+                ctx.memory(|memory| memory.area_rect(id))
+                    .map(|rect| rect.height()),
+            );
+            footer_painted |= output.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape,
+                    egui::epaint::Shape::Text(text) if text.galley.text() == app.t("ui_ok"))
+            });
+        }
+        let first = heights[0].expect("the dialog has no rect");
+        assert!(
+            heights.iter().all(|height| *height == Some(first)),
+            "the dialog resizes itself while open: {heights:?}"
+        );
+        assert!(footer_painted, "the dialog footer was not painted");
+        app.xref_dialog = None;
+    }
+
+    /// `X` must show the dialog at full opacity on its first frame. egui fades a `Window`
+    /// in over `style.animation_time` (200 ms) unless `fade_in(false)` is set; a translucent
+    /// window coming up over a dozen frames reads as slow motion.
+    #[test]
+    fn the_xrefs_dialog_opens_without_a_fade() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ui-xrefs-fade.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        for frame in 0..2 {
+            input.time = Some(frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        }
+
+        app.apply_action(&ctx, Action::ShowXrefs);
+        let target = app
+            .xref_dialog
+            .as_ref()
+            .expect("xrefs dialog did not open")
+            .target;
+        let title = app.xrefs_title(target);
+        // egui measures a new window for one frame before painting it, so the title shape
+        // shows up on frame 1 at the latest; from then on it has to be fully opaque.
+        let mut first_paint = None;
+        for frame in 0..4 {
+            input.time = Some(1.0 + frame as f64 / 60.0);
+            let mut output = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+            let alpha = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.text() == title => {
+                        Some(text.fallback_color.a())
+                    }
+                    _ => None,
+                });
+            if let Some(alpha) = alpha {
+                first_paint = Some((frame, alpha));
+                break;
+            }
+        }
+        let (frame, alpha) = first_paint.expect("the xrefs dialog never painted its title");
+        assert_eq!(
+            alpha, 255,
+            "frame {frame}: the xrefs dialog fades in instead of appearing at once (`{title}`)"
+        );
+        assert!(frame <= 1, "the xrefs dialog took {frame} frames to appear");
+        app.xref_dialog = None;
     }
 }
