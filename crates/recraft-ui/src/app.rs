@@ -1672,7 +1672,13 @@ pub struct ReCraftApp {
     /// Names parallel to `functions` (for the side list), refreshed with it.
     function_labels: Vec<String>,
     functions_dirty: bool,
+    /// Quick filter of the Functions window. IDA's list viewers keep this line hidden until
+    /// Ctrl+F opens it, so the list is all rows when nobody is filtering.
     function_filter: String,
+    /// `true` while the Functions window's quick filter line is open (Ctrl+F).
+    function_filter_open: bool,
+    /// Set for one frame after Ctrl+F so the filter line takes the keyboard.
+    function_filter_focus: bool,
     strings: Vec<StringRow>,
     /// Hide strings in the `HEADER` segment (IDA never sees them: it does not map headers,
     /// so its list cannot contain the DOS stub or the section table).
@@ -1811,6 +1817,8 @@ impl Default for ReCraftApp {
             function_labels: Vec::new(),
             functions_dirty: false,
             function_filter: String::new(),
+            function_filter_open: false,
+            function_filter_focus: false,
             strings: Vec::new(),
             strings_hide_header: true,
             strings_min_len: recraft_analysis::DEFAULT_MIN_STRING_LEN,
@@ -2106,6 +2114,8 @@ impl ReCraftApp {
         self.function_labels.clear();
         self.functions_dirty = false;
         self.function_filter.clear();
+        self.function_filter_open = false;
+        self.function_filter_focus = false;
         self.strings.clear();
         self.strings_dirty = false;
         self.string_filter.clear();
@@ -5507,7 +5517,7 @@ impl ReCraftApp {
             .id_salt("segments_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (index, segment) in segments.iter().enumerate() {
+                for segment in segments {
                     let key = segment.range.start.get();
                     let range = format!(
                         "{:#012x} .. {:#012x}",
@@ -5526,7 +5536,6 @@ impl ReCraftApp {
                         content_width,
                         row_h,
                         picked == Some(key),
-                        index % 2 == 1,
                         &[
                             (4.0, segment.name.as_str(), &body, pal.text),
                             (name_x, range.as_str(), &mono, pal.addr),
@@ -5635,7 +5644,7 @@ impl ReCraftApp {
             .id_salt("exports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (index, (name, address, forwarder)) in exports.iter().enumerate() {
+                for (name, address, forwarder) in exports.iter() {
                     let key = address.get();
                     let address_text = format!("{:#x}", address.get());
                     let response = list_row(
@@ -5643,7 +5652,6 @@ impl ReCraftApp {
                         content_width,
                         row_h,
                         picked == Some(key),
-                        index % 2 == 1,
                         &[
                             (4.0, name.as_str(), &body, pal.text),
                             (address_x, address_text.as_str(), &mono, pal.addr),
@@ -5973,20 +5981,32 @@ impl ReCraftApp {
 
     /// IDA's Functions window: icon / function name / segment columns and a row cursor that
     /// a click anywhere in the row moves. Only a double click or Enter opens the function,
-    /// so browsing the list never re-anchors the code views.
+    /// so browsing the list never re-anchors the code views. Around the rows it uses the
+    /// chrome of IDA's list viewers: column titles that start at the column edge (over the
+    /// icon margin, not over the names), no zebra striping, the quick filter line only while
+    /// Ctrl+F is in effect, and the "Line N of M" status line under the rows.
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
+
         if self.functions.is_empty() {
             ui.weak(self.t("ui_no_functions_yet_press_analyze_f5"));
-        } else {
-            let hint = self.t("ui_name_or_address");
+        }
+        let hint = self.t("ui_name_or_address");
+        // IDA's list viewers only show the quick filter line while it is in use: Ctrl+F
+        // opens it, Esc drops the filter and hides the line again.
+        if !self.functions.is_empty()
+            && (self.function_filter_open || !self.function_filter.is_empty())
+        {
             ui.horizontal(|ui| {
-                ui.weak(self.t("ui_filter"));
-                ui.add(
+                let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.function_filter)
                         .desired_width(f32::INFINITY)
-                        .hint_text(hint),
+                        .hint_text(hint.as_str()),
                 );
+                if self.function_filter_focus {
+                    edit.request_focus();
+                    self.function_filter_focus = false;
+                }
             });
         }
         let filter = self.function_filter.to_lowercase();
@@ -6032,7 +6052,7 @@ impl ReCraftApp {
             ui,
             rows.iter()
                 .filter_map(|&index| self.function_labels.get(index).cloned()),
-            &body,
+            &mono,
             pal.text,
         )
         .max(80.0)
@@ -6058,14 +6078,23 @@ impl ReCraftApp {
         let labels = RowMenuLabels::new(self);
         let mut menu = None;
         let mut picked_now = None;
+        // The list is one continuous surface in IDA (the pane's code-view colour), not a
+        // striped table on the panel colour: header, rows and the empty space under them
+        // share it, and only the status line below is the raised strip.
+        let list_rect =
+            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, ui.available_height()));
+        ui.painter().rect_filled(list_rect, 0.0, pal.view);
         // Column titles stay above the scrolling rows; the icon column has none, like IDA's
         // margin. They are painted after the scroll so they follow its horizontal offset.
         let header = list_header_rect(ui, width, row_h);
+        let footer_h = row_h;
+        let scroll_h = (ui.available_height() - footer_h).max(row_h);
         let scroll = egui::ScrollArea::both()
             .id_salt("functions_rows")
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
-                for (shown, &index) in rows.iter().enumerate() {
+                for &index in &rows {
                     let function = &self.functions[index];
                     let key = function.start.get();
                     let name = self
@@ -6079,10 +6108,9 @@ impl ReCraftApp {
                         content_width,
                         row_h,
                         picked == Some(key),
-                        shown % 2 == 1,
                         &[
                             (icon_x, "ƒ", &body, pal.name),
-                            (name_x, name, &body, pal.text),
+                            (name_x, name, &mono, pal.text),
                             (segment_x, segment.as_str(), &mono, pal.muted),
                         ],
                         &pal,
@@ -6122,12 +6150,25 @@ impl ReCraftApp {
             header,
             scroll.state.offset.x,
             &[
-                (name_x, self.t("ui_function_name").as_str()),
+                (icon_x, self.t("ui_function_name").as_str()),
                 (segment_x, self.t("ui_segment").as_str()),
             ],
-            &body,
+            &mono,
             pal.text,
         );
+        if !self.functions.is_empty() {
+            let line = picked
+                .and_then(|key| {
+                    rows.iter()
+                        .position(|&index| self.functions[index].start.get() == key)
+                })
+                .map_or(1, |position| position + 1);
+            let total = rows.len();
+            let (line, total) = (line.to_string(), total.to_string());
+            let text = self.t_args("ui_line_of_total", &[("line", &line), ("total", &total)]);
+            let (footer, _) = ui.allocate_exact_size(egui::vec2(width, footer_h), Sense::hover());
+            paint_list_footer(ui, footer, &text, &body, &pal);
+        }
         if let Some((key, command)) = menu {
             self.run_row_command(
                 Pane::Functions,
@@ -6268,7 +6309,7 @@ impl ReCraftApp {
             .id_salt("strings_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (shown, &index) in visible.iter().enumerate() {
+                for &index in visible.iter() {
                     let row = &self.strings[index];
                     let key = row.addr.get();
                     let is_selected = row.addr == selected || picked == Some(key);
@@ -6276,7 +6317,7 @@ impl ReCraftApp {
                         ui.allocate_exact_size(egui::vec2(content_width, row_h), Sense::click());
                     if is_selected {
                         ui.painter().rect_filled(rect, 1.0, pal.selected_row);
-                    } else if response.hovered() || shown % 2 == 1 {
+                    } else if response.hovered() {
                         ui.painter().rect_filled(rect, 1.0, pal.hover_row);
                     }
                     let painter = ui.painter_at(rect);
@@ -6440,7 +6481,7 @@ impl ReCraftApp {
             .id_salt("imports_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (index, import) in self.imports.iter().enumerate() {
+                for import in &self.imports {
                     let key = import.iat.get();
                     let label = format!(
                         "{}!{}  [{}]  ×{}",
@@ -6453,7 +6494,6 @@ impl ReCraftApp {
                         content_width,
                         row_h,
                         picked == Some(key),
-                        index % 2 == 1,
                         &[(4.0, label.as_str(), &body, pal.text)],
                         &pal,
                     );
@@ -6545,7 +6585,6 @@ impl ReCraftApp {
             .id_salt("names_rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let mut shown = 0usize;
                 for (addr, name) in &self.names {
                     if !filter.is_empty()
                         && !name.to_lowercase().contains(&filter)
@@ -6560,14 +6599,12 @@ impl ReCraftApp {
                         content_width,
                         row_h,
                         picked == Some(key),
-                        shown % 2 == 1,
                         &[
                             (4.0, address.as_str(), &mono, pal.addr),
                             (name_x, name.as_str(), &body, pal.text),
                         ],
                         &pal,
                     );
-                    shown += 1;
                     if response.clicked() || response.secondary_clicked() {
                         picked_now = Some(key);
                     }
@@ -9623,6 +9660,40 @@ impl ReCraftApp {
         if self.edit.is_some() || self.goto.is_some() {
             return Action::None;
         }
+
+        // IDA's list viewers open their quick filter line with Ctrl+F and drop the filter
+        // (hiding the line) with Esc. Both are handled before the "text field owns the
+        // keyboard" guard, because the line itself owns the keyboard while it is open. The
+        // chord is read off the key event, like Ctrl+A above.
+        let quick_filter = ctx.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: Key::F,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.command
+                )
+            })
+        });
+        if quick_filter && self.focused_pane() == Some(Pane::Functions) {
+            self.function_filter_open = true;
+            self.function_filter_focus = true;
+            return Action::None;
+        }
+        // Esc belongs to the filter line while it is on screen, wherever the row cursor is.
+        // The release counts too: with an IME composition active (Chinese input) Escape's
+        // key-down is swallowed while the key-up still arrives, and the line must close.
+        let escape =
+            ctx.input(|input| input.key_pressed(Key::Escape) || input.key_released(Key::Escape));
+        if self.function_filter_open && escape {
+            self.function_filter.clear();
+            self.function_filter_open = false;
+            self.function_filter_focus = false;
+            return Action::None;
+        }
         // A focused text field owns the keyboard, so typing there cannot trigger shortcuts.
         // Tab is the exception: egui's focus ring is cancelled for it (see
         // [`Self::claim_tab_from_focus_navigation`]), so a Tab pressed while a button or a
@@ -9665,6 +9736,7 @@ impl ReCraftApp {
         if select_all {
             return Action::SelectAll;
         }
+
         // IDA's list windows own the keyboard while one of them has the focus: the arrow
         // keys move the row cursor (the code views stay where they are), Home/End jump to
         // the ends, PageUp/PageDown page, and Enter opens the highlighted row in the
@@ -10725,21 +10797,21 @@ fn function_matches(filter: &str, start: Address, name: &str) -> bool {
 }
 
 /// One row of a docked list, painted the way IDA's list windows draw theirs: the hit area
-/// spans the whole row, the row cursor / hover / zebra stripe is a full-width band, and the
-/// cells sit at fixed x offsets (baseline shared, clipped to the row).
+/// spans the whole row, the row cursor / hover band is a full-width stripe, and the cells
+/// sit at fixed x offsets (baseline shared, clipped to the row). IDA's lists have no zebra
+/// striping - a plain list is plain, and only the cursor and the hover mark a row.
 fn list_row(
     ui: &mut egui::Ui,
     width: f32,
     row_h: f32,
     selected: bool,
-    zebra: bool,
     cells: &[(f32, &str, &FontId, Color32)],
     pal: &Palette,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
     if selected {
         ui.painter().rect_filled(rect, 1.0, pal.selected_row);
-    } else if response.hovered() || zebra {
+    } else if response.hovered() {
         ui.painter().rect_filled(rect, 1.0, pal.hover_row);
     }
     let painter = ui.painter_at(rect);
@@ -10784,6 +10856,25 @@ fn paint_list_header(
             color,
         );
     }
+}
+
+/// Status line of a docked list under the rows, IDA's "Line 393 of 530": a raised strip in
+/// the panel colour with a hairline on top and the position written at its left edge.
+fn paint_list_footer(ui: &egui::Ui, rect: egui::Rect, text: &str, font: &FontId, pal: &Palette) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, pal.panel);
+    painter.hline(
+        rect.x_range(),
+        rect.top(),
+        egui::Stroke::new(1.0, pal.border),
+    );
+    painter.text(
+        egui::pos2(rect.left() + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        font.clone(),
+        pal.muted,
+    );
 }
 
 /// Width of the widest `text` in `font`, laid out once (egui caches the galley).
@@ -13788,8 +13879,8 @@ mod tests {
             .iter()
             .find_map(|clipped| char_click_pos(&clipped.shape, "ƒ", 0))
             .expect("the first function row's icon must be on screen");
-        // IDA's two columns: the names start under "Function name", and the icon sits in the
-        // margin before them. Compare galley origins (glyph widths differ).
+        // IDA's two columns: the names are indented past the icon margin, while the column
+        // title starts at the column edge, over that margin. Compare galley origins.
         let text_x = |output: &egui::FullOutput, needle: &str| {
             output
                 .shapes
@@ -13803,10 +13894,14 @@ mod tests {
             .expect("the Function name title must be on screen");
         let name_x = text_x(&output, "beta").expect("the name must be on screen");
         assert!(
-            (name_x - header).abs() < 1.0,
-            "the name column starts at {name_x} but its title starts at {header}"
+            (header - icon.x).abs() < 4.0,
+            "the column title starts at {header} but the column edge is at {}",
+            icon.x
         );
-        assert!(icon.x < header, "the icon must sit in the margin");
+        assert!(
+            name_x > header + 8.0,
+            "the name at {name_x} must sit to the right of the title at {header}"
+        );
 
         let click = |pos: egui::Pos2, time: f64| {
             let mut input = base.clone();
@@ -13858,6 +13953,126 @@ mod tests {
             app.list_sel,
             Some((Pane::Functions, first.get())),
             "the whole row is clickable, not just the name"
+        );
+    }
+
+    /// IDA's list viewers carry a "Line N of M" status line under the rows. It follows the
+    /// row cursor and counts the rows the quick filter keeps, not the whole table.
+    #[test]
+    fn functions_list_footer_shows_the_row_position() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("functions-footer.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let first = Address::new(0x140001000);
+        let second = Address::new(0x140001100);
+        let mut app = ReCraftApp {
+            session: Some(session),
+            functions: vec![
+                FunctionInfo {
+                    start: first,
+                    end: second,
+                },
+                FunctionInfo {
+                    start: second,
+                    end: Address::new(0x140001200),
+                },
+            ],
+            function_labels: vec!["alpha".to_owned(), "beta".to_owned()],
+            disasm_start: first,
+            pseudo_start: first,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let base = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 400.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let shows = |output: &egui::FullOutput, needle: &str| {
+            output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => text.galley.text() == needle,
+                _ => false,
+            })
+        };
+
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base.clone(), |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        let first_line = app.t_args("ui_line_of_total", &[("line", "1"), ("total", "2")]);
+        assert!(
+            shows(&output, &first_line),
+            "the list must start on line 1 of 2: {first_line}"
+        );
+
+        app.list_sel = Some((Pane::Functions, second.get()));
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base.clone(), |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        let second_line = app.t_args("ui_line_of_total", &[("line", "2"), ("total", "2")]);
+        assert!(
+            shows(&output, &second_line),
+            "the status line must follow the row cursor: {second_line}"
+        );
+
+        // The quick filter shrinks the table the count describes.
+        app.function_filter = "beta".to_owned();
+        app.list_sel = None;
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base, |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        let filtered = app.t_args("ui_line_of_total", &[("line", "1"), ("total", "1")]);
+        assert!(
+            shows(&output, &filtered),
+            "a filtered list counts only the rows it keeps: {filtered}"
+        );
+    }
+
+    /// IDA's list viewers hide the quick filter line until Ctrl+F opens it, and Esc drops
+    /// the filter and closes the line again.
+    #[test]
+    fn function_quick_filter_opens_with_ctrl_f_and_closes_on_escape() {
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        app.focus_pane(Pane::Functions);
+        let ctx = egui::Context::default();
+        let press = |app: &mut ReCraftApp, key: egui::Key, modifiers: egui::Modifiers| {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                ..egui::RawInput::default()
+            };
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            });
+            let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        };
+
+        assert!(
+            !app.function_filter_open,
+            "the quick filter line stays hidden until Ctrl+F"
+        );
+        press(&mut app, egui::Key::F, egui::Modifiers::COMMAND);
+        assert!(
+            app.function_filter_open,
+            "Ctrl+F must open the quick filter"
+        );
+        app.function_filter.push_str("beta");
+        press(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(
+            !app.function_filter_open && app.function_filter.is_empty(),
+            "Esc must drop the filter and close the line"
         );
     }
 

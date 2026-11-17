@@ -84,7 +84,9 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    伪代码里按 `Tab` 回到光标行对应的反汇编地址并保留该行高亮；切换不写导航历史，再按一次
    `Tab` 回到同一行且不会重新反编译）、`F2` Functions、`F3` Names、`F6` Imports、
    `F8` Segments、`F9` Hex、`F10` 开/关 AI 侧栏、`F11` Local Types；**`Shift+F12` 打开/聚焦 Strings**
-   （同 IDA 的 Strings 窗口，页签关掉后按键会重新停靠）；`X` 打开交叉引用对话框；`Space` 切换
+   （同 IDA 的 Strings 窗口，页签关掉后按键会重新停靠）；Functions 窗口里 **`Ctrl+F` 打开快速
+   过滤行**（IDA 的 list viewer 同款）、**`Esc` 清空过滤并收起该行**，列表底部的 **`行 N / M`**
+   随行光标与过滤结果更新；`X` 打开交叉引用对话框；`Space` 切换
    Disassembly 的 Graph/Text（仅反汇编视图；数据行上留在 Text 并提示）；**`Ctrl+=` /
    `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
    （Text/Decompile/Hex）。分析没有独立快捷键（同 IDA）：导入时自动跑，重跑在菜单里。

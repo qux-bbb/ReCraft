@@ -44,6 +44,7 @@ ui_name_or_address = 名字或地址…
 ui_filter = 过滤
 ui_function_name = 函数名
 ui_segment = 段
+ui_line_of_total = 行 { $line } / { $total }
 ui_no_match = （无匹配）
 ui_substring = 子串…
 ui_hide_header_strings = 隐藏头部字符串

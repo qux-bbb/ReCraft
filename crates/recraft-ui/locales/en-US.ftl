@@ -44,6 +44,7 @@ ui_name_or_address = name or address…
 ui_filter = filter
 ui_function_name = Function name
 ui_segment = Segment
+ui_line_of_total = Line { $line } of { $total }
 ui_no_match = (no match)
 ui_substring = substring…
 ui_hide_header_strings = Hide header strings
