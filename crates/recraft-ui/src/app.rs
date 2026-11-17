@@ -590,7 +590,6 @@ impl Pane {
             Pane::Imports => Some("F6"),
             Pane::Segments => Some("F8"),
             Pane::Hex => Some("F9"),
-            Pane::Ai => Some("F10"),
             Pane::Structs => Some("F11"),
             _ => None,
         }
@@ -4575,7 +4574,8 @@ impl ReCraftApp {
 
     // ---------------------------------------------------------------- draw --
 
-    /// Focus/Show entries shared by the View and Windows menus.
+    /// The View menu's list of panes to open or focus — IDA's "Open subviews": everything
+    /// that *can* be on screen, whether or not it is right now.
     fn pane_menu_items(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         for pane in Pane::all() {
             // The overview only exists while a graph is displayed (same rule IDA applies
@@ -4596,6 +4596,40 @@ impl ReCraftApp {
                 ui.close();
             }
         }
+    }
+
+    /// Tabs the dock holds right now, in tab order — the Windows menu's list.
+    fn open_panes(&self) -> Vec<Pane> {
+        self.dock.as_ref().map_or_else(Vec::new, |state| {
+            state.iter_all_tabs().map(|(_, tab)| *tab).collect()
+        })
+    }
+
+    /// The window the user is currently in. Several leaves can be on screen at once, so
+    /// this is the focused leaf's active tab, not every visible tab.
+    fn active_pane(&mut self) -> Option<Pane> {
+        self.dock
+            .as_mut()
+            .and_then(|state| state.find_active_focused())
+            .map(|(_, tab)| *tab)
+    }
+
+    /// IDA's Windows menu lists the windows that are open right now, with the current one
+    /// marked; the list of things that can be opened belongs to View, so this menu is not a
+    /// second copy of it.
+    fn windows_menu_items(&mut self, ui: &mut egui::Ui, action: &mut Action) -> bool {
+        let active = self.active_pane();
+        let open = self.open_panes();
+        for pane in &open {
+            if ui
+                .selectable_label(active == Some(*pane), self.t(pane.key()))
+                .clicked()
+            {
+                *action = Action::FocusPane(*pane);
+                ui.close();
+            }
+        }
+        !open.is_empty()
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui, action: &mut Action) {
@@ -4699,6 +4733,17 @@ impl ReCraftApp {
                     ui.menu_button(view_menu.as_str(), |ui| {
                         self.pane_menu_items(ui, action);
                         ui.separator();
+                        // The assistant is the one panel here that is not a dock tab, so it
+                        // toggles instead of focusing — same slot as IDA's "Open subviews"
+                        // entries, and the same F10 that closes it.
+                        if ui
+                            .selectable_label(self.ai_sidebar, self.t("ui_ai_sidebar"))
+                            .on_hover_text("F10")
+                            .clicked()
+                        {
+                            *action = Action::ToggleAiSidebar;
+                            ui.close();
+                        }
                         // IDA's listing hides opcode bytes by default (`Options → General →
                         // Number of opcode bytes` = 0); this is the same column, toggled here.
                         if ui
@@ -4769,13 +4814,6 @@ impl ReCraftApp {
                                 ui.close();
                             }
                         });
-                        if ui
-                            .selectable_label(self.ai_sidebar, self.t("ui_ai_sidebar"))
-                            .clicked()
-                        {
-                            *action = Action::ToggleAiSidebar;
-                            ui.close();
-                        }
                         if ui.button(self.t("ui_provider_settings")).clicked() {
                             *action = Action::OpenAiSettings;
                             ui.close();
@@ -4791,14 +4829,11 @@ impl ReCraftApp {
                             *action = Action::ToggleLang;
                             ui.close();
                         }
-                        if ui.button("AI").clicked() {
-                            *action = Action::FocusPane(Pane::Ai);
-                            ui.close();
-                        }
                     });
                     ui.menu_button(windows_menu.as_str(), |ui| {
-                        self.pane_menu_items(ui, action);
-                        ui.separator();
+                        if self.windows_menu_items(ui, action) {
+                            ui.separator();
+                        }
                         if ui.button(reset_label.as_str()).clicked() {
                             *action = Action::ResetLayout;
                             ui.close();
@@ -5185,6 +5220,27 @@ impl ReCraftApp {
                 surface.split_below(left, GRAPH_OVERVIEW_SPLIT, vec![Pane::GraphOverview]);
         }
         self.dock = Some(state);
+        self.ensure_current_window();
+    }
+
+    /// egui_dock only learns which leaf has focus from a click, so a desktop that was built
+    /// (or restored) before the first click has no current window — and the Windows menu
+    /// would have nothing to mark. Point it at the document view, or at the leaf of the
+    /// first tab when that one was closed; the leaf's own active tab decides what "current"
+    /// means.
+    fn ensure_current_window(&mut self) {
+        let Some(state) = self.dock.as_mut() else {
+            return;
+        };
+        if state.focused_leaf().is_some() {
+            return;
+        }
+        let path = state
+            .find_tab(&Pane::View)
+            .or_else(|| state.iter_all_tabs().next().map(|(path, _)| path));
+        if let Some(path) = path {
+            state.set_focused_node_and_surface(path.node_path());
+        }
     }
 
     /// IDA only keeps the Graph overview on screen while a graph is displayed: in text
@@ -5335,6 +5391,9 @@ impl ReCraftApp {
                 let _ = state.set_active_tab(view);
             }
         }
+        // Removing the focused leaf's tab clears its focus; give the desktop a current
+        // window again so the Windows menu still marks one.
+        self.ensure_current_window();
     }
 
     /// Persist the dock layout and theme to `%LOCALAPPDATA%\ReCraft\layout.json` when they
@@ -5399,6 +5458,7 @@ impl ReCraftApp {
             self.show_bytes = saved.show_bytes;
             self.dock = Some(saved.dock);
         }
+        self.ensure_current_window();
     }
 
     /// IDA's Segments window: name, range and permission columns with a row cursor that a
@@ -9687,7 +9747,8 @@ impl ReCraftApp {
             }
             // Pane focus shortcuts (F2/F3, F6, F8-F11). Like IDA, analysis has no key of
             // its own: it runs when the binary is loaded, and re-running it is a menu
-            // command.
+            // command. F10 is the exception: the assistant is sidebar-only, so the key
+            // toggles that panel instead of focusing a dock tab.
             if input.key_pressed(Key::F2) {
                 action = Action::FocusPane(Pane::Functions);
             } else if input.key_pressed(Key::F3) {
@@ -9699,7 +9760,7 @@ impl ReCraftApp {
             } else if input.key_pressed(Key::F9) {
                 action = Action::FocusPane(Pane::Hex);
             } else if input.key_pressed(Key::F10) {
-                action = Action::FocusPane(Pane::Ai);
+                action = Action::ToggleAiSidebar;
             } else if input.key_pressed(Key::F11) {
                 action = Action::FocusPane(Pane::Structs);
             }
@@ -11405,14 +11466,6 @@ mod tests {
         }
     }
 
-    /// Pane the dock shows in its focused leaf: the view that owns the screen right now.
-    fn active_pane(app: &mut ReCraftApp) -> Option<Pane> {
-        app.dock
-            .as_mut()
-            .and_then(|state| state.find_active_focused())
-            .map(|(_, tab)| *tab)
-    }
-
     /// Headless layout smoke test: real `Session` + real widget code, no window.
     /// Verifies the grid actually emits shapes and that a frame stays fast enough
     /// for interactive use (this is our stand-in for a visual check in CI).
@@ -12211,11 +12264,11 @@ mod tests {
         let mut app = ReCraftApp::default();
         app.ensure_dock();
         app.focus_pane(Pane::Pseudo);
-        assert_eq!(active_pane(&mut app), Some(Pane::Pseudo));
+        assert_eq!(app.active_pane(), Some(Pane::Pseudo));
 
         app.show_welcome_tab();
         assert_eq!(
-            active_pane(&mut app),
+            app.active_pane(),
             Some(Pane::View),
             "no project: the welcome page must own the screen"
         );
@@ -12224,7 +12277,7 @@ mod tests {
         // afterwards stays put.
         app.focus_pane(Pane::Hex);
         app.tick();
-        assert_eq!(active_pane(&mut app), Some(Pane::Hex));
+        assert_eq!(app.active_pane(), Some(Pane::Hex));
     }
 
     #[test]
@@ -12269,7 +12322,7 @@ mod tests {
         assert!(app.session.is_none(), "a broken project must not load");
         assert!(app.is_error, "the failure must be reported");
         assert_eq!(
-            active_pane(&mut app),
+            app.active_pane(),
             Some(Pane::View),
             "with no project the welcome page stays in front"
         );
@@ -12294,14 +12347,14 @@ mod tests {
         // An open project keeps whatever tab the user put in front.
         app.show_welcome_tab();
         assert_eq!(
-            active_pane(&mut app),
+            app.active_pane(),
             Some(Pane::Pseudo),
             "the welcome rule must not steal the tab while a project is open"
         );
 
         app.apply_action(&egui::Context::default(), Action::CloseProject);
         assert_eq!(
-            active_pane(&mut app),
+            app.active_pane(),
             Some(Pane::View),
             "closing the project must show the welcome page again"
         );
@@ -16958,6 +17011,80 @@ mod tests {
             .and_then(|state| state.find_active_focused())
             .map(|(_, tab)| *tab);
         assert_eq!(active, Some(Pane::Functions));
+    }
+
+    #[test]
+    fn ai_sidebar_shortcut_toggles_the_sidebar_instead_of_a_tab() {
+        // The assistant is sidebar-only, so F10 flips the panel instead of focusing the
+        // retired AI dock tab (docs/DEMO.md: "F10 开/关 AI 侧栏").
+        let mut app = ReCraftApp::default();
+        let ctx = egui::Context::default();
+        let step = |app: &mut ReCraftApp, key: egui::Key| {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..egui::RawInput::default()
+            };
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            let mut output = ctx.run_ui(input, |ui| app.update_inner(ui));
+            output.textures_delta.clear();
+        };
+        assert!(app.ai_sidebar, "the sidebar starts open");
+        step(&mut app, egui::Key::F10);
+        assert!(!app.ai_sidebar, "F10 closes the open sidebar");
+        step(&mut app, egui::Key::F10);
+        assert!(app.ai_sidebar, "F10 reopens it");
+        assert!(
+            app.dock
+                .as_ref()
+                .and_then(|state| state.find_tab(&Pane::Ai))
+                .is_none(),
+            "the sidebar must not come back as a dock tab"
+        );
+    }
+
+    #[test]
+    fn windows_menu_lists_open_tabs_and_marks_the_current_window() {
+        let mut app = ReCraftApp::default();
+        app.ensure_dock();
+        let open = app.open_panes();
+        assert!(open.contains(&Pane::View), "the document view is a window");
+        assert!(
+            open.contains(&Pane::Output),
+            "docked panels are windows too"
+        );
+        assert!(
+            !open.contains(&Pane::Names),
+            "a pane that was never opened is not a window"
+        );
+        assert_eq!(
+            app.active_pane(),
+            Some(Pane::View),
+            "a desktop with no click yet still has a current window to mark"
+        );
+
+        // Closing a tab takes it out of the list; focusing it again docks it back.
+        let path = app
+            .dock
+            .as_ref()
+            .and_then(|state| state.find_tab(&Pane::Strings))
+            .expect("Strings is docked by default");
+        app.dock.as_mut().unwrap().remove_tab(path);
+        assert!(!app.open_panes().contains(&Pane::Strings));
+
+        app.focus_pane(Pane::Pseudo);
+        assert_eq!(app.active_pane(), Some(Pane::Pseudo));
+        app.focus_pane(Pane::Strings);
+        assert!(app.open_panes().contains(&Pane::Strings));
+        assert_eq!(app.active_pane(), Some(Pane::Strings));
     }
 
     #[test]

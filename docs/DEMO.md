@@ -78,11 +78,12 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    ![Default light theme](images/ida-layout.png)
    ![Dark theme](images/ida-layout-dark.png)
    布局可拖动分屏/合并，自动保存到 `%LOCALAPPDATA%\ReCraft\layout.json`，Views 菜单可聚焦
-   pane 或 Reset layout。快捷键：`F5` 反编译光标所在函数（IDA 同款，切到 Decompile 页签并把
+   pane、开关 AI 侧栏或 Reset layout，Windows 菜单列出当前打开的窗口（勾选的是当前窗口，
+   点一下切过去）。快捷键：`F5` 反编译光标所在函数（IDA 同款，切到 Decompile 页签并把
    当前行居中）、**`Tab` 在反汇编与伪代码之间来回切换**（同 IDA：反汇编里按 `Tab` 等于 `F5`；
    伪代码里按 `Tab` 回到光标行对应的反汇编地址并保留该行高亮；切换不写导航历史，再按一次
    `Tab` 回到同一行且不会重新反编译）、`F2` Functions、`F3` Names、`F6` Imports、
-   `F8` Segments、`F9` Hex、`F10` AI、`F11` Local Types；**`Shift+F12` 打开/聚焦 Strings**
+   `F8` Segments、`F9` Hex、`F10` 开/关 AI 侧栏、`F11` Local Types；**`Shift+F12` 打开/聚焦 Strings**
    （同 IDA 的 Strings 窗口，页签关掉后按键会重新停靠）；`X` 打开交叉引用对话框；`Space` 切换
    Disassembly 的 Graph/Text（仅反汇编视图；数据行上留在 Text 并提示）；**`Ctrl+=` /
    `Ctrl+-` / `Ctrl+0`** 缩放/重置代码视图字号
