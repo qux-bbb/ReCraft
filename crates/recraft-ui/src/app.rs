@@ -5552,12 +5552,22 @@ impl ReCraftApp {
         let mut picked_now = None;
         let content_width = (range_x + 24.0).max(width);
         let header = list_header_rect(ui, width, row_h);
+        let total_rows = segments.len();
+        let footer_h = row_h;
+        let scroll_h = (ui.available_height() - footer_h).max(row_h);
+        let mut picked_line = None;
+        let mut shown = 0usize;
         let scroll = egui::ScrollArea::both()
             .id_salt("segments_rows")
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
                 for segment in segments {
                     let key = segment.range.start.get();
+                    if picked == Some(key) {
+                        picked_line = Some(shown + 1);
+                    }
+                    shown += 1;
                     let range = format!(
                         "{:#012x} .. {:#012x}",
                         segment.range.start.get(),
@@ -5602,6 +5612,10 @@ impl ReCraftApp {
             });
         let pitch = row_h + ui.spacing().item_spacing.y;
         self.record_list_page(Pane::Segments, scroll.inner_rect.height(), pitch);
+        let line = picked_line.unwrap_or(1).to_string();
+        let total = total_rows.to_string();
+        let text = self.t_args("ui_line_of_total", &[("line", &line), ("total", &total)]);
+        list_status_line(ui, width, row_h, &text, &body, &pal);
         paint_list_header(
             ui,
             header,
@@ -5678,13 +5692,23 @@ impl ReCraftApp {
             pal.muted,
         );
         let content_width = (forwarder_x + widest_forwarder + 12.0).max(width);
+        let total_rows = exports.len();
         let header = list_header_rect(ui, width, row_h);
+        let footer_h = row_h;
+        let scroll_h = (ui.available_height() - footer_h).max(row_h);
+        let mut picked_line = None;
+        let mut shown = 0usize;
         let scroll = egui::ScrollArea::both()
             .id_salt("exports_rows")
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
                 for (name, address, forwarder) in exports.iter() {
                     let key = address.get();
+                    if picked == Some(key) {
+                        picked_line = Some(shown + 1);
+                    }
+                    shown += 1;
                     let address_text = format!("{:#x}", address.get());
                     let response = list_row(
                         ui,
@@ -5723,6 +5747,10 @@ impl ReCraftApp {
             });
         let pitch = row_h + ui.spacing().item_spacing.y;
         self.record_list_page(Pane::Exports, scroll.inner_rect.height(), pitch);
+        let line = picked_line.unwrap_or(1).to_string();
+        let total = total_rows.to_string();
+        let text = self.t_args("ui_line_of_total", &[("line", &line), ("total", &total)]);
+        list_status_line(ui, width, row_h, &text, &body, &pal);
         paint_list_header(
             ui,
             header,
@@ -6439,6 +6467,8 @@ impl ReCraftApp {
             .map(|line| line.addr)
             .unwrap_or(self.disasm_start);
         let mono = FontId::monospace(mono_size);
+        let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
+        let width = ui.available_width();
         let widest = visible
             .iter()
             .map(|&index| string_cell_text(&self.strings[index].text))
@@ -6456,11 +6486,10 @@ impl ReCraftApp {
         // IDA's Strings window sizes its columns to their content and scrolls sideways when
         // the widest literal does not fit, so a long string is reachable instead of being
         // cut at the pane edge.
-        let content_width = (string_x + widest_w + 12.0).max(ui.available_width());
+        let content_width = (string_x + widest_w + 12.0).max(width);
         // Header row, aligned with the row offsets below and painted after the list so it
         // can follow this frame's horizontal offset.
-        let (header, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), row_h), Sense::hover());
+        let (header, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
         let picked = self
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Strings)
@@ -6478,13 +6507,22 @@ impl ReCraftApp {
         let mut edit_row = None;
         let mut hide_row = None;
         let mut restore_row = None;
+        let footer_h = row_h;
+        let scroll_h = (ui.available_height() - footer_h).max(row_h);
+        let mut picked_line = None;
+        let mut shown = 0usize;
         let scroll = egui::ScrollArea::both()
             .id_salt("strings_rows")
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
                 for &index in visible.iter() {
                     let row = &self.strings[index];
                     let key = row.addr.get();
+                    if picked == Some(key) {
+                        picked_line = Some(shown + 1);
+                    }
+                    shown += 1;
                     let is_selected = row.addr == selected || picked == Some(key);
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(content_width, row_h), Sense::click());
@@ -6577,6 +6615,10 @@ impl ReCraftApp {
             });
         let pitch = row_h + ui.spacing().item_spacing.y;
         self.record_list_page(Pane::Strings, scroll.inner_rect.height(), pitch);
+        let line = picked_line.unwrap_or(1).to_string();
+        let total = shown.to_string();
+        let text = self.t_args("ui_line_of_total", &[("line", &line), ("total", &total)]);
+        list_status_line(ui, width, row_h, &text, &body, &pal);
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Strings, Address::new(key), command, action, ui.ctx());
         }
@@ -6650,12 +6692,22 @@ impl ReCraftApp {
             pal.text,
         );
         let content_width = (4.0 + widest_label + 12.0).max(width);
+        let total_rows = self.imports.len();
+        let footer_h = row_h;
+        let scroll_h = (ui.available_height() - footer_h).max(row_h);
+        let mut picked_line = None;
+        let mut shown = 0usize;
         let scroll = egui::ScrollArea::both()
             .id_salt("imports_rows")
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
                 for import in &self.imports {
                     let key = import.iat.get();
+                    if picked == Some(key) {
+                        picked_line = Some(shown + 1);
+                    }
+                    shown += 1;
                     let label = format!(
                         "{}!{}  [{}]  ×{}",
                         import.module, import.api, import.category, import.refs
@@ -6690,6 +6742,10 @@ impl ReCraftApp {
             });
         let pitch = row_h + ui.spacing().item_spacing.y;
         self.record_list_page(Pane::Imports, scroll.inner_rect.height(), pitch);
+        let line = picked_line.unwrap_or(1).to_string();
+        let total = total_rows.to_string();
+        let text = self.t_args("ui_line_of_total", &[("line", &line), ("total", &total)]);
+        list_status_line(ui, width, row_h, &text, &body, &pal);
         if let Some((key, command)) = menu {
             self.run_row_command(Pane::Imports, Address::new(key), command, action, ui.ctx());
         }
@@ -6754,9 +6810,14 @@ impl ReCraftApp {
         );
         let content_width = (name_x + widest_name + 12.0).max(width);
         let header = list_header_rect(ui, width, row_h);
+        let footer_h = row_h;
+        let scroll_h = (ui.available_height() - footer_h).max(row_h);
+        let mut picked_line = None;
+        let mut shown = 0usize;
         let scroll = egui::ScrollArea::both()
             .id_salt("names_rows")
             .auto_shrink([false, false])
+            .max_height(scroll_h)
             .show(ui, |ui| {
                 for (addr, name) in &self.names {
                     if !filter.is_empty()
@@ -6766,6 +6827,10 @@ impl ReCraftApp {
                         continue;
                     }
                     let key = addr.get();
+                    if picked == Some(key) {
+                        picked_line = Some(shown + 1);
+                    }
+                    shown += 1;
                     let address = format!("{:#012x}", addr.get());
                     let response = list_row(
                         ui,
@@ -6798,6 +6863,10 @@ impl ReCraftApp {
             });
         let pitch = row_h + ui.spacing().item_spacing.y;
         self.record_list_page(Pane::Names, scroll.inner_rect.height(), pitch);
+        let line = picked_line.unwrap_or(1).to_string();
+        let total = shown.to_string();
+        let text = self.t_args("ui_line_of_total", &[("line", &line), ("total", &total)]);
+        list_status_line(ui, width, row_h, &text, &body, &pal);
         paint_list_header(
             ui,
             header,
@@ -11140,6 +11209,21 @@ fn paint_list_header(
             color,
         );
     }
+}
+
+/// Reserve and paint the status line under a docked list (IDA's "Line N of M" strip). The
+/// caller limits its scroll area to `available_height() - row_h` first, so the strip lands
+/// at the bottom of the pane.
+fn list_status_line(
+    ui: &mut egui::Ui,
+    width: f32,
+    row_h: f32,
+    text: &str,
+    font: &FontId,
+    pal: &Palette,
+) {
+    let (footer, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    paint_list_footer(ui, footer, text, font, pal);
 }
 
 /// Status line of a docked list under the rows, IDA's "Line 393 of 530": a raised strip in
