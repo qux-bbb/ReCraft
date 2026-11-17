@@ -23,6 +23,7 @@ mod boundaries;
 mod cfg;
 mod golang;
 mod prologue;
+mod shape;
 mod strings;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -35,6 +36,7 @@ pub use api::{categorize, categorize_path};
 pub use boundaries::merge_pdata_functions;
 pub use cfg::{BasicBlock, Cfg, CfgInsn, EdgeKind, build_cfg, layers};
 pub use golang::{GoFunction, parse_pclntab};
+pub use shape::{FunctionShape, function_shape};
 pub use strings::{
     DEFAULT_MIN_STRING_LEN, ExtractedString, MIN_STRING_LEN_CEILING, MIN_STRING_LEN_FLOOR,
     MIN_STRING_LEN_META_KEY, STRING_ENC_ASCII, STRING_ENC_UTF16LE, STRING_KIND_GENERIC,

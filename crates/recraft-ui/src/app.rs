@@ -1671,6 +1671,12 @@ pub struct ReCraftApp {
     functions: Vec<FunctionInfo>,
     /// Names parallel to `functions` (for the side list), refreshed with it.
     function_labels: Vec<String>,
+    /// IDA's Functions window numbers per function (segment, offset, length, locals, args,
+    /// flags), parallel to `functions` and computed once per refresh.
+    functions_meta: Vec<FunctionMeta>,
+    /// Column the Functions window is sorted by, with its direction; `None` keeps IDA's
+    /// default address order.
+    function_sort: Option<(FunctionColumn, bool)>,
     functions_dirty: bool,
     /// Quick filter of the Functions window. IDA's list viewers keep this line hidden until
     /// Ctrl+F opens it, so the list is all rows when nobody is filtering.
@@ -1815,6 +1821,8 @@ impl Default for ReCraftApp {
             list_page: None,
             functions: Vec::new(),
             function_labels: Vec::new(),
+            functions_meta: Vec::new(),
+            function_sort: None,
             functions_dirty: false,
             function_filter: String::new(),
             function_filter_open: false,
@@ -2112,6 +2120,8 @@ impl ReCraftApp {
 
         self.functions.clear();
         self.function_labels.clear();
+        self.functions_meta.clear();
+        self.function_sort = None;
         self.functions_dirty = false;
         self.function_filter.clear();
         self.function_filter_open = false;
@@ -2956,22 +2966,11 @@ impl ReCraftApp {
     /// actually painted.
     fn list_keys(&self, pane: Pane) -> Vec<u64> {
         match pane {
-            Pane::Functions => {
-                let filter = self.function_filter.to_lowercase();
-                self.functions
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, function)| {
-                        let name = self
-                            .function_labels
-                            .get(*index)
-                            .map(String::as_str)
-                            .unwrap_or("");
-                        function_matches(&filter, function.start, name)
-                    })
-                    .map(|(_, function)| function.start.get())
-                    .collect()
-            }
+            Pane::Functions => self
+                .function_rows()
+                .into_iter()
+                .map(|index| self.functions[index].start.get())
+                .collect(),
             Pane::Strings => {
                 let filter = self.string_filter.to_lowercase();
                 let hide_header = self.strings_hide_header;
@@ -4316,6 +4315,39 @@ impl ReCraftApp {
         (rows, cols)
     }
 
+    /// Fill the Functions window's per-function facts when they are missing. A refresh always
+    /// fills them; the guard keeps hand-built app states (tests) from indexing past the end.
+    fn ensure_function_meta(&mut self) {
+        if self.functions_meta.len() == self.functions.len() {
+            return;
+        }
+        self.functions_meta = match self.session.as_ref() {
+            Some(session) => self
+                .functions
+                .iter()
+                .map(|function| function_meta(session, function))
+                .collect(),
+            None => vec![FunctionMeta::default(); self.functions.len()],
+        };
+    }
+
+    /// One function's facts, or empty ones when the list and its metadata are out of step.
+    fn meta_at(&self, index: usize) -> &FunctionMeta {
+        static EMPTY: FunctionMeta = FunctionMeta {
+            segment: String::new(),
+            offset: 0,
+            length: 0,
+            locals: None,
+            args: 0,
+            flags: String::new(),
+            offset_text: String::new(),
+            length_text: String::new(),
+            locals_text: String::new(),
+            args_text: String::new(),
+        };
+        self.functions_meta.get(index).unwrap_or(&EMPTY)
+    }
+
     /// Lines of a stored comment, ignoring one trailing newline so a CLI-authored note does
     /// not render a stray empty continuation row.
     fn comment_lines(text: &str) -> std::str::Split<'_, char> {
@@ -4326,12 +4358,13 @@ impl ReCraftApp {
         let Some(session) = self.session.as_ref() else {
             self.functions.clear();
             self.function_labels.clear();
+            self.functions_meta.clear();
             self.functions_dirty = false;
             return;
         };
         match session.functions() {
             Ok(functions) => {
-                let labels = functions
+                let labels: Vec<String> = functions
                     .iter()
                     .map(|function| {
                         session
@@ -4341,14 +4374,20 @@ impl ReCraftApp {
                             .unwrap_or_else(|| format!("sub_{:x}", function.start.get()))
                     })
                     .collect();
+                let meta: Vec<FunctionMeta> = functions
+                    .iter()
+                    .map(|function| function_meta(session, function))
+                    .collect();
                 self.functions = functions;
                 self.function_labels = labels;
+                self.functions_meta = meta;
                 self.names = session.names().unwrap_or_default();
                 self.functions_dirty = false;
             }
             Err(error) => {
                 self.functions.clear();
                 self.function_labels.clear();
+                self.functions_meta.clear();
                 self.functions_dirty = false;
                 self.set_error(error);
             }
@@ -5979,14 +6018,69 @@ impl ReCraftApp {
         }
     }
 
-    /// IDA's Functions window: icon / function name / segment columns and a row cursor that
-    /// a click anywhere in the row moves. Only a double click or Enter opens the function,
-    /// so browsing the list never re-anchors the code views. Around the rows it uses the
-    /// chrome of IDA's list viewers: column titles that start at the column edge (over the
-    /// icon margin, not over the names), no zebra striping, the quick filter line only while
-    /// Ctrl+F is in effect, and the "Line N of M" status line under the rows.
+    /// Rows of the Functions window in display order: the quick filter applied, then the
+    /// column sort (IDA's list viewers sort on a column-title click; address order is the
+    /// default and every sort falls back to it for ties).
+    fn function_rows(&self) -> Vec<usize> {
+        let filter = self.function_filter.to_lowercase();
+        let mut rows: Vec<usize> = self
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(index, function)| {
+                let name = self
+                    .function_labels
+                    .get(*index)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                function_matches(&filter, function.start, name)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let Some((column, ascending)) = self.function_sort else {
+            return rows;
+        };
+        rows.sort_by(|&a, &b| {
+            let ordering = match column {
+                FunctionColumn::Name => {
+                    name_cmp(&self.function_labels[a], &self.function_labels[b])
+                }
+                FunctionColumn::Segment => self.meta_at(a).segment.cmp(&self.meta_at(b).segment),
+                FunctionColumn::Offset => self.meta_at(a).offset.cmp(&self.meta_at(b).offset),
+                FunctionColumn::Length => self.meta_at(a).length.cmp(&self.meta_at(b).length),
+                FunctionColumn::Locals => self
+                    .meta_at(a)
+                    .locals
+                    .unwrap_or(0)
+                    .cmp(&self.meta_at(b).locals.unwrap_or(0)),
+                FunctionColumn::Args => self.meta_at(a).args.cmp(&self.meta_at(b).args),
+                FunctionColumn::Flags => self.meta_at(a).flags.cmp(&self.meta_at(b).flags),
+            };
+            let ordering = ordering.then_with(|| {
+                self.functions[a]
+                    .start
+                    .get()
+                    .cmp(&self.functions[b].start.get())
+            });
+            if ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        });
+        rows
+    }
+
+    /// IDA's Functions window: icon / function name / segment / offset / length / locals /
+    /// args / flags columns and a row cursor that a click anywhere in the row moves. Only a
+    /// double click or Enter opens the function, so browsing the list never re-anchors the
+    /// code views. Around the rows it uses the chrome of IDA's list viewers: column titles
+    /// that start at the column edge (over the icon margin, not over the names), no zebra
+    /// striping, the quick filter line only while Ctrl+F is in effect, and the "Line N of M"
+    /// status line under the rows.
     fn functions_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
+        self.ensure_function_meta();
 
         if self.functions.is_empty() {
             ui.weak(self.t("ui_no_functions_yet_press_analyze_f5"));
@@ -6009,22 +6103,13 @@ impl ReCraftApp {
                 }
             });
         }
-        let filter = self.function_filter.to_lowercase();
-        let Some(session) = self.session.as_ref() else {
+        if self.session.is_none() {
             return;
-        };
-        // Segment column, precomputed once per list refresh (IDA's Functions window has
-        // "Function name" and "Segment" columns).
-        let segment_names: Vec<String> = self
-            .functions
-            .iter()
-            .map(|function| {
-                session
-                    .segment_containing(function.start)
-                    .map(|segment| segment.name.clone())
-                    .unwrap_or_default()
-            })
-            .collect();
+        }
+        // IDA's Functions window columns, in its order: function name, segment, offset inside
+        // the segment, length, locals, arguments and the flag letters. Every column is sized
+        // to its content (and never narrower than its title), like IDA's list viewers, and the
+        // list scrolls sideways when the columns do not fit across the pane.
         let body = ui.style().text_styles[&egui::TextStyle::Body].clone();
         let mono = FontId::monospace(self.mono_size());
         let row_h = self.row_height().max(16.0);
@@ -6032,45 +6117,95 @@ impl ReCraftApp {
             .list_sel
             .filter(|(pane, _)| *pane == Pane::Functions)
             .map(|(_, key)| key);
-        // Rows the filter keeps, in list order. The name column is as wide as the longest
-        // of them, like IDA sizing "Function name" to its content.
-        let rows: Vec<usize> = self
-            .functions
-            .iter()
-            .enumerate()
-            .filter(|(index, function)| {
-                let name = self
-                    .function_labels
-                    .get(*index)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                function_matches(&filter, function.start, name)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        let name_w = widest_text(
-            ui,
-            rows.iter()
-                .filter_map(|&index| self.function_labels.get(index).cloned()),
-            &mono,
-            pal.text,
-        )
-        .max(80.0)
-            + 14.0;
-        let icon_x = 4.0;
+        // Rows the filter and the column sort leave, in display order.
+        let rows: Vec<usize> = self.function_rows();
+        let titles = [
+            self.t("ui_function_name"),
+            self.t("ui_segment"),
+            self.t("ui_col_offset"),
+            self.t("ui_col_length"),
+            self.t("ui_col_locals"),
+            self.t("ui_col_args"),
+            self.t("ui_col_flags"),
+        ];
         let name_x = 20.0;
-        let segment_x = name_x + name_w;
-        // IDA's Functions window sizes the columns to their content and scrolls sideways
-        // when the names do not fit, instead of cutting them at the pane edge.
-        let widest_segment = widest_text(
+        let icon_x = 4.0;
+        let name_w = column_width(
             ui,
             rows.iter()
-                .filter_map(|&index| segment_names.get(index).cloned()),
+                .filter_map(|&index| self.function_labels.get(index).map(String::as_str)),
+            &titles[0],
             &mono,
-            pal.muted,
+        )
+        .max(84.0);
+        let segment_x = name_x + name_w;
+        let segment_w = column_width(
+            ui,
+            rows.iter().filter_map(|&index| {
+                self.functions_meta
+                    .get(index)
+                    .map(|meta| meta.segment.as_str())
+            }),
+            &titles[1],
+            &mono,
+        );
+        let offset_x = segment_x + segment_w;
+        let offset_w = column_width(
+            ui,
+            rows.iter().filter_map(|&index| {
+                self.functions_meta
+                    .get(index)
+                    .map(|meta| meta.offset_text.as_str())
+            }),
+            &titles[2],
+            &mono,
+        );
+        let length_x = offset_x + offset_w;
+        let length_w = column_width(
+            ui,
+            rows.iter().filter_map(|&index| {
+                self.functions_meta
+                    .get(index)
+                    .map(|meta| meta.length_text.as_str())
+            }),
+            &titles[3],
+            &mono,
+        );
+        let locals_x = length_x + length_w;
+        let locals_w = column_width(
+            ui,
+            rows.iter().filter_map(|&index| {
+                self.functions_meta
+                    .get(index)
+                    .map(|meta| meta.locals_text.as_str())
+            }),
+            &titles[4],
+            &mono,
+        );
+        let args_x = locals_x + locals_w;
+        let args_w = column_width(
+            ui,
+            rows.iter().filter_map(|&index| {
+                self.functions_meta
+                    .get(index)
+                    .map(|meta| meta.args_text.as_str())
+            }),
+            &titles[5],
+            &mono,
+        );
+        let flags_x = args_x + args_w;
+        let flags_w = column_width(
+            ui,
+            rows.iter().filter_map(|&index| {
+                self.functions_meta
+                    .get(index)
+                    .map(|meta| meta.flags.as_str())
+            }),
+            &titles[6],
+            &mono,
         );
         let width = ui.available_width();
-        let content_width = (segment_x + widest_segment + 12.0).max(width);
+        let content_width = (flags_x + flags_w).max(width);
         let wanted = self
             .list_scroll_to
             .filter(|(pane, _)| *pane == Pane::Functions)
@@ -6102,7 +6237,7 @@ impl ReCraftApp {
                         .get(index)
                         .map(String::as_str)
                         .unwrap_or("");
-                    let segment = segment_names.get(index).cloned().unwrap_or_default();
+                    let meta = self.meta_at(index);
                     let response = list_row(
                         ui,
                         content_width,
@@ -6111,7 +6246,12 @@ impl ReCraftApp {
                         &[
                             (icon_x, "ƒ", &body, pal.name),
                             (name_x, name, &mono, pal.text),
-                            (segment_x, segment.as_str(), &mono, pal.muted),
+                            (segment_x, meta.segment.as_str(), &mono, pal.muted),
+                            (offset_x, meta.offset_text.as_str(), &mono, pal.text),
+                            (length_x, meta.length_text.as_str(), &mono, pal.text),
+                            (locals_x, meta.locals_text.as_str(), &mono, pal.text),
+                            (args_x, meta.args_text.as_str(), &mono, pal.text),
+                            (flags_x, meta.flags.as_str(), &mono, pal.text),
                         ],
                         &pal,
                     );
@@ -6145,17 +6285,50 @@ impl ReCraftApp {
             });
         let pitch = row_h + ui.spacing().item_spacing.y;
         self.record_list_page(Pane::Functions, scroll.inner_rect.height(), pitch);
-        paint_list_header(
-            ui,
-            header,
-            scroll.state.offset.x,
-            &[
-                (icon_x, self.t("ui_function_name").as_str()),
-                (segment_x, self.t("ui_segment").as_str()),
-            ],
-            &mono,
-            pal.text,
-        );
+        // Column titles are buttons: a click sorts by that column (IDA's list viewers sort on
+        // a title click and keep the direction on a second one). The titles follow the
+        // horizontal scroll, like IDA's list headers.
+        let scroll_x = scroll.state.offset.x;
+        let painter = ui.painter_at(header);
+        let columns: [(FunctionColumn, f32, f32); 7] = [
+            (FunctionColumn::Name, icon_x, segment_x - icon_x),
+            (FunctionColumn::Segment, segment_x, segment_w),
+            (FunctionColumn::Offset, offset_x, offset_w),
+            (FunctionColumn::Length, length_x, length_w),
+            (FunctionColumn::Locals, locals_x, locals_w),
+            (FunctionColumn::Args, args_x, args_w),
+            (FunctionColumn::Flags, flags_x, flags_w),
+        ];
+        for (index, (column, x, w)) in columns.iter().enumerate() {
+            let mut title = titles[index].clone();
+            if let Some((sorted, ascending)) = self.function_sort
+                && sorted == *column
+            {
+                title.push(if ascending { '\u{25B2}' } else { '\u{25BC}' });
+            }
+            painter.text(
+                egui::pos2(header.left() - scroll_x + x, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                title,
+                mono.clone(),
+                pal.text,
+            );
+            let hit = egui::Rect::from_min_size(
+                egui::pos2(header.left() - scroll_x + x, header.top()),
+                egui::vec2(*w, row_h),
+            );
+            let response = ui.interact(
+                header.intersect(hit),
+                ui.id().with(("functions_header", index)),
+                Sense::click(),
+            );
+            if response.clicked() {
+                self.function_sort = Some(match self.function_sort {
+                    Some((active, ascending)) if active == *column => (*column, !ascending),
+                    _ => (*column, true),
+                });
+            }
+        }
         if !self.functions.is_empty() {
             let line = picked
                 .and_then(|key| {
@@ -10796,6 +10969,117 @@ fn function_matches(filter: &str, start: Address, name: &str) -> bool {
     name.to_lowercase().contains(filter) || format!("{:#x}", start.get()).contains(filter)
 }
 
+/// One column of the Functions window, in the order IDA's window shows them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FunctionColumn {
+    Name,
+    Segment,
+    Offset,
+    Length,
+    Locals,
+    Args,
+    Flags,
+}
+
+/// Case-insensitive order of two function names, IDA's "Function name" sort. Lowercasing
+/// character by character keeps the comparison allocation-free.
+fn name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .cmp(b.chars().flat_map(char::to_lowercase))
+}
+/// The numbers IDA's Functions window shows next to a function's name. IDA keeps them in the
+/// function record built by auto-analysis; ReCraft derives them from the code (see
+/// [`recraft_analysis::function_shape`]) and from the project's prototypes.
+#[derive(Clone, Debug, Default)]
+struct FunctionMeta {
+    segment: String,
+    /// Offset of the function start inside its segment.
+    offset: u64,
+    length: u64,
+    /// Locals plus saved registers, `None` when the prologue does not decode.
+    locals: Option<u32>,
+    /// Stack argument bytes. IDA takes them from the function's type, so an untyped function
+    /// reports 0 there too; ReCraft has no stack-argument record yet and leaves them at 0.
+    args: u32,
+    /// IDA's flag letters: `R` returns to caller, `B` frame pointer, `T` typed.
+    flags: String,
+    /// Pre-formatted cells: the list paints every row each frame, so the text is made once.
+    offset_text: String,
+    length_text: String,
+    locals_text: String,
+    args_text: String,
+}
+
+/// Read one function's IDA-style facts from the session.
+fn function_meta(session: &recraft_core::Session, function: &FunctionInfo) -> FunctionMeta {
+    let (segment, offset) = match session.segment_containing(function.start) {
+        Some(entry) => (
+            entry.name.clone(),
+            function.start.get().saturating_sub(entry.range.start.get()),
+        ),
+        None => (String::new(), 0),
+    };
+    let shape = recraft_analysis::function_shape(session, function.start, function.end);
+    let typed = session
+        .prototype_at(function.start)
+        .ok()
+        .flatten()
+        .is_some();
+    let mut flags = String::new();
+    if shape.returns {
+        flags.push('R');
+    }
+    if shape.bp_frame {
+        flags.push('B');
+    }
+    if typed {
+        flags.push('T');
+    }
+    let length = function.end.get().saturating_sub(function.start.get());
+    FunctionMeta {
+        segment,
+        offset,
+        length,
+        locals: shape.frame_size,
+        args: 0,
+        flags,
+        offset_text: format!("{offset:#x}"),
+        length_text: format!("{length:#x}"),
+        locals_text: shape
+            .frame_size
+            .map(|size| format!("{size:#x}"))
+            .unwrap_or_default(),
+        args_text: "0".to_owned(),
+    }
+}
+
+/// Width of one list column: the widest cell or the title, plus the gap to the next column.
+/// Cell widths come from the character count (every one of these columns is monospace), so
+/// laying out 500 rows costs one pass instead of 500 galleys.
+fn column_width<'a>(
+    ui: &egui::Ui,
+    cells: impl Iterator<Item = &'a str>,
+    title: &str,
+    font: &FontId,
+) -> f32 {
+    let char_w = ui
+        .painter()
+        .layout_no_wrap("0".to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .x
+        .max(1.0);
+    let title_w = ui
+        .painter()
+        .layout_no_wrap(title.to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .x;
+    let cells_w = cells
+        .map(|text| text.chars().count() as f32 * char_w)
+        .fold(0.0, f32::max);
+    cells_w.max(title_w) + 16.0
+}
+
 /// One row of a docked list, painted the way IDA's list windows draw theirs: the hit area
 /// spans the whole row, the row cursor / hover band is a full-width stripe, and the cells
 /// sit at fixed x offsets (baseline shared, clipped to the row). IDA's lists have no zebra
@@ -13956,6 +14240,144 @@ mod tests {
         );
     }
 
+    /// IDA's Functions window shows the function's segment, offset inside it, length, locals,
+    /// argument bytes and flag letters next to the name; every column has its title.
+    #[test]
+    fn functions_list_paints_ida_columns() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("functions-columns.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let first = Address::new(0x140001000);
+        let second = Address::new(0x140001100);
+        let meta = |offset: u64, length: u64, locals: u32, flags: &str| FunctionMeta {
+            segment: ".text".to_owned(),
+            offset,
+            length,
+            locals: Some(locals),
+            args: 0,
+            flags: flags.to_owned(),
+            offset_text: format!("{offset:#x}"),
+            length_text: format!("{length:#x}"),
+            locals_text: format!("{locals:#x}"),
+            args_text: "0".to_owned(),
+        };
+        let mut app = ReCraftApp {
+            session: Some(session),
+            functions: vec![
+                FunctionInfo {
+                    start: first,
+                    end: Address::new(first.get() + 0x159),
+                },
+                FunctionInfo {
+                    start: second,
+                    end: Address::new(second.get() + 0x12),
+                },
+            ],
+            function_labels: vec!["alpha".to_owned(), "beta".to_owned()],
+            functions_meta: vec![meta(0x10, 0x159, 0x128, "R"), meta(0x110, 0x12, 0x28, "RB")],
+            disasm_start: first,
+            pseudo_start: first,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let base = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 400.0),
+            )),
+            ..egui::RawInput::default()
+        };
+        let mut action = Action::None;
+        let mut output = ctx.run_ui(base, |ui| app.functions_list(ui, &mut action));
+        output.textures_delta.clear();
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        for title in [
+            app.t("ui_function_name"),
+            app.t("ui_segment"),
+            app.t("ui_col_offset"),
+            app.t("ui_col_length"),
+            app.t("ui_col_locals"),
+            app.t("ui_col_args"),
+            app.t("ui_col_flags"),
+        ] {
+            assert!(
+                texts.contains(&title),
+                "the column title {title} must be on screen: {texts:?}"
+            );
+        }
+        for cell in ["0x10", "0x159", "0x128", "RB"] {
+            assert!(
+                texts.iter().any(|text| text == cell),
+                "the cell {cell} must be painted: {texts:?}"
+            );
+        }
+    }
+
+    /// A column-title click sorts the list the way IDA's list viewers do: the same column
+    /// flips the direction, a different column starts ascending from the address order.
+    #[test]
+    fn functions_list_sorts_by_column() {
+        let meta = |offset: u64, length: u64, locals: u32, flags: &str| FunctionMeta {
+            segment: ".text".to_owned(),
+            offset,
+            length,
+            locals: Some(locals),
+            args: 0,
+            flags: flags.to_owned(),
+            offset_text: format!("{offset:#x}"),
+            length_text: format!("{length:#x}"),
+            locals_text: format!("{locals:#x}"),
+            args_text: "0".to_owned(),
+        };
+        let mut app = ReCraftApp {
+            functions: vec![
+                FunctionInfo {
+                    start: Address::new(0x1000),
+                    end: Address::new(0x1100),
+                },
+                FunctionInfo {
+                    start: Address::new(0x2000),
+                    end: Address::new(0x2010),
+                },
+                FunctionInfo {
+                    start: Address::new(0x3000),
+                    end: Address::new(0x3050),
+                },
+            ],
+            function_labels: vec!["gamma".to_owned(), "alpha".to_owned(), "beta".to_owned()],
+            functions_meta: vec![
+                meta(0x0, 0x100, 0x40, "R"),
+                meta(0x0, 0x10, 0x0, "R"),
+                meta(0x0, 0x50, 0x20, "RB"),
+            ],
+            ..ReCraftApp::default()
+        };
+        // IDA's default: address order.
+        assert_eq!(app.function_rows(), vec![0, 1, 2]);
+
+        app.function_sort = Some((FunctionColumn::Name, true));
+        assert_eq!(app.function_rows(), vec![1, 2, 0], "alpha, beta, gamma");
+
+        app.function_sort = Some((FunctionColumn::Length, false));
+        assert_eq!(app.function_rows(), vec![0, 2, 1], "longest first");
+
+        app.function_sort = Some((FunctionColumn::Locals, true));
+        assert_eq!(app.function_rows(), vec![1, 2, 0], "smallest frame first");
+
+        // Ties keep the address order.
+        app.function_sort = Some((FunctionColumn::Segment, true));
+        assert_eq!(app.function_rows(), vec![0, 1, 2]);
+    }
     /// IDA's list viewers carry a "Line N of M" status line under the rows. It follows the
     /// row cursor and counts the rows the quick filter keeps, not the whole table.
     #[test]

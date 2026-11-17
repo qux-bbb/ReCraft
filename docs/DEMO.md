@@ -60,8 +60,8 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
 2. 导入 PE 后**自动开始分析**（后台线程，可取消；与 IDA 加载即分析一致），需要重跑时走
    **Options → Analyze functions**（分析运行期间同一位置显示“分析中… Ns”与「取消」）。工作区
    按 IDA 布局组织：顶部**菜单栏**（File/Edit/Jump/Search/View/Options/Windows/Help，没有第二行
-   工具栏）+ **全局导航带与图例**；左侧 **Functions**（Function name / Segment 两列，带函数
-   图标），其下方是 **Graph overview**（只在 Disassembly 的 Graph 模式出现，Text 模式把空间还给
+   工具栏）+ **全局导航带与图例**；左侧 **Functions**（按 IDA 的列：函数名 / 段 / 偏移 /
+   长度 / 局部变量 / 参数 / 标志，带函数图标；点列标题排序，再点一次反向），其下方是 **Graph overview**（只在 Disassembly 的 Graph 模式出现，Text 模式把空间还给
    Functions，与 IDA 相同）；右侧**文档标签区**按固定顺序显示 **Disassembly、
    Decompile、Hex、Strings、Local Types、Imports、Exports、AI**（Names、Segments
    默认隐藏，可从 **Views** 菜单打开）；底部 **Output** 窗口；最下方为 **AU/状态栏**（地址、
