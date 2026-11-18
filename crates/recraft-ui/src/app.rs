@@ -97,6 +97,19 @@ const NAV_EXTERNAL: Color32 = Color32::from_rgb(0x7a, 0x3a, 0x6a);
 /// docked underneath it (the overview takes the remaining 18 %, like IDA's ~110 px pane).
 const GRAPH_OVERVIEW_SPLIT: f32 = 0.82;
 
+/// Graph zoom bounds. IDA scales a graph from a thumbnail up to several hundred percent
+/// (its status line showed 381 % on a zoomed graph), so the range is wider than 50-200 %.
+const GRAPH_ZOOM_MIN: f32 = 0.1;
+const GRAPH_ZOOM_MAX: f32 = 4.0;
+
+/// What the graph status line's zoom buttons asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GraphZoom {
+    In,
+    Out,
+    Fit,
+}
+
 /// Semantic palette shared by the chrome, code views and graph view.
 #[derive(Clone, Copy)]
 struct Palette {
@@ -123,10 +136,15 @@ struct Palette {
     tab_inactive_text: Color32,
     grid_line: Color32,
     graph_node: Color32,
+    /// Canvas behind the blocks (IDA tints its graph view light blue, not white).
+    graph_background: Color32,
     graph_border: Color32,
-    graph_selected_border: Color32,
     graph_header: Color32,
     graph_header_text: Color32,
+    /// Drop shadow under a graph node (IDA lifts the blocks off the canvas).
+    graph_shadow: Color32,
+    /// Band behind the instruction the cursor sits on (IDA's grey current line).
+    graph_current_line: Color32,
     edge_jump: Color32,
     edge_taken: Color32,
     edge_not_taken: Color32,
@@ -164,14 +182,16 @@ impl Palette {
         tab_inactive_text: Color32::from_rgb(0x8b, 0x94, 0xa3),
         grid_line: Color32::from_rgb(0x2c, 0x32, 0x3c),
         graph_node: Color32::from_rgb(0x0d, 0x10, 0x12),
-        graph_border: Color32::from_rgb(0x4a, 0x8f, 0x8f),
-        graph_selected_border: Color32::from_rgb(0xc9, 0xb4, 0x58),
+        graph_background: Color32::from_rgb(0x0a, 0x0d, 0x11),
+        graph_border: Color32::from_rgb(0x55, 0x5f, 0x66),
         graph_header: Color32::from_rgb(0x9c, 0xc8, 0xc8),
         graph_header_text: Color32::from_rgb(0x14, 0x2a, 0x2a),
-        edge_jump: Color32::from_rgb(0x5a, 0x9a, 0x9a),
+        graph_shadow: Color32::from_black_alpha(110),
+        graph_current_line: Color32::from_rgb(0x2a, 0x33, 0x3f),
+        edge_jump: Color32::from_rgb(0x5a, 0x9a, 0xff),
         edge_taken: Color32::from_rgb(0x6a, 0xb0, 0x6a),
-        edge_not_taken: Color32::from_rgb(0xc0, 0x6a, 0x6a),
-        edge_jump_table: Color32::from_rgb(0xa0, 0x8a, 0xc0),
+        edge_not_taken: Color32::from_rgb(0xff, 0x6a, 0x6a),
+        edge_jump_table: Color32::from_rgb(0xd0, 0xa0, 0x30),
         surface_2: Color32::from_rgb(0x1a, 0x1e, 0x24),
         border: Color32::from_rgb(0x26, 0x2b, 0x33),
         border_strong: Color32::from_rgb(0x33, 0x3a, 0x45),
@@ -200,14 +220,16 @@ impl Palette {
         tab_inactive_text: Color32::from_rgb(0x40, 0x48, 0x50),
         grid_line: Color32::from_rgb(0xc0, 0xc6, 0xcc),
         graph_node: Color32::from_rgb(0xff, 0xff, 0xff),
-        graph_border: Color32::from_rgb(0x3a, 0x8f, 0x8f),
-        graph_selected_border: Color32::from_rgb(0xb0, 0x7a, 0x00),
+        graph_background: Color32::from_rgb(0xf0, 0xfa, 0xff),
+        graph_border: Color32::from_rgb(0x1e, 0x1e, 0x1e),
         graph_header: Color32::from_rgb(0xc8, 0xe4, 0xe4),
         graph_header_text: Color32::from_rgb(0x10, 0x30, 0x30),
-        edge_jump: Color32::from_rgb(0x1f, 0x6f, 0x6f),
-        edge_taken: Color32::from_rgb(0x1f, 0x7a, 0x1f),
-        edge_not_taken: Color32::from_rgb(0xa0, 0x20, 0x20),
-        edge_jump_table: Color32::from_rgb(0x6a, 0x3f, 0x9f),
+        graph_shadow: Color32::from_black_alpha(45),
+        graph_current_line: Color32::from_rgb(0xe4, 0xe4, 0xe4),
+        edge_jump: Color32::from_rgb(0x00, 0x00, 0xd0),
+        edge_taken: Color32::from_rgb(0x00, 0x80, 0x00),
+        edge_not_taken: Color32::from_rgb(0xff, 0x00, 0x00),
+        edge_jump_table: Color32::from_rgb(0xc0, 0x60, 0x00),
         surface_2: Color32::from_rgb(0xed, 0xf1, 0xf6),
         border: Color32::from_rgb(0xd6, 0xdc, 0xe4),
         border_strong: Color32::from_rgb(0xb7, 0xc0, 0xcc),
@@ -1706,14 +1728,25 @@ pub struct ReCraftApp {
     cfg: Option<recraft_analysis::Cfg>,
     cfg_for: Option<Address>,
     cfg_dirty: bool,
-    /// Graph-view zoom factor (0.5..=2.0), adjusted by the on-pane +/- controls.
+    /// Graph-view zoom factor (0.1..=4.0, IDA's range), adjusted by Ctrl+wheel, the
+    /// on-pane +/- controls or *Fit*.
     graph_zoom: f32,
+    /// Function the zoom/scroll state belongs to; a new graph re-centres at 100 %.
+    graph_shown_for: Option<Address>,
+    /// Scroll offset of the graph canvas, kept so Ctrl+wheel can anchor the cursor.
+    graph_scroll: egui::Vec2,
+    /// Scroll offset to apply on the next frame (zoom buttons keep the pane centre fixed).
+    graph_pending_offset: Option<egui::Vec2>,
+    /// Centre the graph on its next frame (after opening or *Fit*, like IDA).
+    graph_center_pending: bool,
     /// Graph or text mode of the single Code View pane.
     view_mode: ViewMode,
     /// Code-view font/row scale (0.75..=2.0), shared by Text/Pseudocode/Hex views.
     mono_zoom: f32,
     /// Last visible graph-canvas rectangle (for the overview viewport box).
     graph_visible: Option<egui::Rect>,
+    /// Screen rectangle of the graph pane; Ctrl+wheel uses it to anchor the zoom.
+    graph_viewport: Option<egui::Rect>,
     /// Split fraction used to re-dock the Graph overview below Functions after it was
     /// taken out of the layout in text mode (kept so a resized overview survives toggles).
     graph_overview_fraction: f32,
@@ -1842,9 +1875,14 @@ impl Default for ReCraftApp {
             cfg: None,
             cfg_for: None,
             graph_zoom: 1.0,
+            graph_shown_for: None,
+            graph_scroll: egui::Vec2::ZERO,
+            graph_pending_offset: None,
+            graph_center_pending: false,
             view_mode: ViewMode::Graph,
             mono_zoom: 1.0,
             graph_visible: None,
+            graph_viewport: None,
             graph_overview_fraction: GRAPH_OVERVIEW_SPLIT,
             graph_center_on: None,
             cfg_dirty: false,
@@ -2139,6 +2177,11 @@ impl ReCraftApp {
         self.cfg_for = None;
         self.cfg_dirty = false;
         self.graph_visible = None;
+        self.graph_viewport = None;
+        self.graph_shown_for = None;
+        self.graph_scroll = egui::Vec2::ZERO;
+        self.graph_pending_offset = None;
+        self.graph_center_pending = false;
 
         self.history.clear();
         self.history_pos = 0;
@@ -7709,9 +7752,9 @@ impl ReCraftApp {
             });
     }
 
-    /// Apply every ticked AI proposal through the command bus (journaled/undoable).
-    /// IDA-style graph view: basic-block nodes with teal frames and headers, curved
-    /// coloured edges with arrowheads, entry marker, zoom controls and a status line.
+    /// IDA-style graph view: basic blocks laid out top-down in flow order, right-angled
+    /// edges that leave a block's bottom edge and enter the target's top edge, a grey band
+    /// over the instruction the cursor sits on, and Ctrl+wheel / *Fit* zooming.
     fn graph_view(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         self.tab = Tab::Disasm;
         let pal = self.palette();
@@ -7724,6 +7767,282 @@ impl ReCraftApp {
             return;
         }
         let edge_color = |kind: recraft_analysis::EdgeKind| graph_edge_color(pal, kind);
+        // Opening another function starts at 100 % with the graph centred in the pane,
+        // like IDA opening a graph window.
+        if self.graph_shown_for != Some(cfg.function) {
+            self.graph_shown_for = Some(cfg.function);
+            self.graph_zoom = 1.0;
+            self.graph_scroll = egui::Vec2::ZERO;
+            self.graph_pending_offset = None;
+            self.graph_center_pending = true;
+        }
+        // Ctrl+wheel zooms around the pointer instead of scrolling the canvas (IDA's
+        // graph gesture). The wheel delta is consumed here so the scroll area stays put.
+        let mut forced_offset = self.graph_pending_offset.take();
+        let wheel = ui.input(|input| input.smooth_scroll_delta.y);
+        let pointer = ui.input(|input| input.pointer.hover_pos());
+        if ui.input(|input| input.modifiers.ctrl)
+            && wheel != 0.0
+            && let (Some(viewport), Some(pointer)) = (self.graph_viewport, pointer)
+            && viewport.contains(pointer)
+        {
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+            forced_offset = self.zoom_graph(
+                (wheel * 0.0025).exp(),
+                Some(pointer - viewport.min),
+                viewport,
+            );
+        }
+        let zoom = self.graph_zoom;
+        let header_h = 18.0 * zoom;
+        let line_h = 14.0 * zoom;
+        let text_size = 11.0 * zoom;
+        let pad = 10.0 * zoom;
+        let max_lines = 10usize;
+        let (local, canvas) = graph_layout(&cfg, zoom);
+        let selected = self
+            .disasm_rows
+            .get(self.selected)
+            .map(|line| line.addr.get());
+        let mono = FontId::monospace(text_size);
+        let mut visible_rect = None;
+        // Reserve a line for the legend/zoom strip: the canvas must not push it off the
+        // pane (IDA's graph fills the tab and keeps its status line visible).
+        let strip_h = 26.0;
+        let mut area = egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .max_height((ui.available_height() - strip_h).max(80.0));
+        if let Some(offset) = forced_offset {
+            area = area.scroll_offset(offset);
+        }
+        let output = area.show(ui, |ui| {
+            let (response, painter) = ui.allocate_painter(
+                egui::vec2(
+                    canvas.x.max(ui.available_width()),
+                    canvas.y.max(ui.available_height()),
+                ),
+                Sense::click_and_drag(),
+            );
+            let origin = response.rect.min.to_vec2();
+            let clip = ui.clip_rect();
+            self.graph_viewport = Some(clip);
+            painter.rect_filled(response.rect, 0.0, pal.graph_background);
+            // IDA pans a graph by dragging the canvas; the wheel still scrolls and
+            // Ctrl+wheel zooms.
+            if response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                ui.scroll_with_delta(-response.drag_delta());
+            }
+            // The visible rectangle is stored in unzoomed layout coordinates: the overview
+            // draws the 1.0 layout, so a zoomed view must not shrink or grow its frame.
+            let inverse = 1.0 / zoom;
+            visible_rect = Some(egui::Rect::from_min_max(
+                egui::pos2(
+                    (clip.min.x - origin.x) * inverse,
+                    (clip.min.y - origin.y) * inverse,
+                ),
+                egui::pos2(
+                    (clip.max.x - origin.x) * inverse,
+                    (clip.max.y - origin.y) * inverse,
+                ),
+            ));
+            if self.graph_center_pending {
+                // Centre a graph that fits; when it is taller than the pane, line up its
+                // top edge so the entry block (and its header) is visible, like IDA.
+                let viewport = clip.size();
+                let target = if canvas.x <= viewport.x && canvas.y <= viewport.y {
+                    response.rect
+                } else {
+                    egui::Rect::from_min_size(response.rect.min, egui::vec2(canvas.x, viewport.y))
+                };
+                ui.scroll_to_rect(target, Some(egui::Align::Center));
+                self.graph_center_pending = false;
+            }
+            // An overview click asks the graph to centre one block without leaving
+            // graph mode (IDA pans the graph instead of switching to the listing).
+            if let Some(addr) = self.graph_center_on.take()
+                && let Some(index) = cfg.blocks.iter().position(|block| {
+                    block.start.get() <= addr.get() && addr.get() < block.end.get()
+                })
+            {
+                ui.scroll_to_rect(local[index].translate(origin), Some(egui::Align::Center));
+            }
+            // Edges first, so frames paint on top (IDA draws them under the blocks).
+            for block in &cfg.blocks {
+                let source = local[block.index];
+                let mut track = 0usize;
+                for &(target, kind) in &block.edges {
+                    let Some(&target_rect) = local.get(target) else {
+                        continue;
+                    };
+                    let color = edge_color(kind);
+                    let stroke = egui::Stroke::new((1.4 * zoom).max(1.0), color);
+                    if target_rect.min.y > source.max.y + 6.0 * zoom {
+                        // Forward edge: straight down out of the source, across, then down
+                        // into the target's top edge. Each edge of one block gets its own
+                        // track so a two-way branch does not draw both lines on top of
+                        // each other.
+                        let sx = source.center().x + origin.x;
+                        let dx = target_rect.center().x + origin.x;
+                        let top = source.max.y + origin.y;
+                        let bottom = target_rect.min.y + origin.y;
+                        let mid = (top + (16.0 + track as f32 * 7.0) * zoom)
+                            .min(bottom - 11.0 * zoom)
+                            .max(top + 4.0 * zoom);
+                        painter.add(egui::epaint::PathShape::line(
+                            vec![
+                                egui::pos2(sx, top),
+                                egui::pos2(sx, mid),
+                                egui::pos2(dx, mid),
+                                egui::pos2(dx, bottom - 9.0 * zoom),
+                            ],
+                            stroke,
+                        ));
+                        paint_graph_arrow(
+                            &painter,
+                            egui::pos2(dx, bottom),
+                            egui::vec2(0.0, 1.0),
+                            color,
+                            zoom,
+                        );
+                    } else {
+                        // Back edge (or a jump inside one row): leave the bottom, run down
+                        // the right-hand margin and come back in through the target's
+                        // right edge, the way IDA wraps loop edges.
+                        let lane = source.max.x.max(target_rect.max.x)
+                            + origin.x
+                            + (20.0 + track as f32 * 9.0) * zoom;
+                        let out = source.max.y + origin.y;
+                        let y = target_rect.center().y + origin.y;
+                        painter.add(egui::epaint::PathShape::line(
+                            vec![
+                                egui::pos2(source.center().x + origin.x, out),
+                                egui::pos2(source.center().x + origin.x, out + 13.0 * zoom),
+                                egui::pos2(lane, out + 13.0 * zoom),
+                                egui::pos2(lane, y),
+                                egui::pos2(target_rect.max.x + origin.x + 9.0 * zoom, y),
+                            ],
+                            stroke,
+                        ));
+                        paint_graph_arrow(
+                            &painter,
+                            egui::pos2(target_rect.max.x + origin.x, y),
+                            egui::vec2(-1.0, 0.0),
+                            color,
+                            zoom,
+                        );
+                    }
+                    track += 1;
+                }
+            }
+            for (index, block) in cfg.blocks.iter().enumerate() {
+                let rect = local[index].translate(origin);
+                let is_entry = index == cfg.entry;
+                let current = selected
+                    .and_then(|addr| block.insns.iter().position(|insn| insn.addr.get() == addr));
+                // IDA's block: drop shadow, white body, hairline frame, teal header.
+                // The cursor is a grey band over its instruction, not a tinted frame.
+                painter.rect_filled(
+                    rect.translate(egui::vec2(2.0, 2.0) * zoom),
+                    0.0,
+                    pal.graph_shadow,
+                );
+                painter.rect_filled(rect, 0.0, pal.graph_node);
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.0, pal.graph_border),
+                    egui::StrokeKind::Inside,
+                );
+                let header =
+                    egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
+                painter.rect_filled(header, 0.0, pal.graph_header);
+                painter.hline(
+                    header.x_range(),
+                    header.max.y,
+                    egui::Stroke::new(1.0, pal.graph_border),
+                );
+                painter.text(
+                    header.min + egui::vec2(6.0, 1.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{:#x}", block.start.get()),
+                    FontId::monospace(text_size * 0.92),
+                    pal.graph_header_text,
+                );
+                if is_entry {
+                    painter.text(
+                        header.right_center() - egui::vec2(4.0, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        self.t("graph_entry").as_str(),
+                        FontId::proportional(text_size * 0.85),
+                        pal.comment,
+                    );
+                }
+                if let Some(line_index) = current {
+                    let y = rect.min.y + header_h + pad + line_index as f32 * line_h;
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(rect.min.x + 1.0, y),
+                            egui::vec2(rect.width() - 2.0, line_h),
+                        ),
+                        0.0,
+                        pal.graph_current_line,
+                    );
+                }
+                for (line_index, insn) in block.insns.iter().take(max_lines).enumerate() {
+                    let mut job = LayoutJob::default();
+                    let (mnemonic, operands) = match insn.text.split_once(' ') {
+                        Some((mnemonic, rest)) => (mnemonic, rest),
+                        None => (insn.text.as_str(), ""),
+                    };
+                    append(&mut job, mnemonic, pal.mnemonic, &mono);
+                    append(&mut job, " ", pal.text, &mono);
+                    if let Some((operands, comment)) = operands.split_once(';') {
+                        append_operands(&mut job, operands, pal, &mono);
+                        append(&mut job, &format!("; {comment}"), pal.comment, &mono);
+                    } else {
+                        append_operands(&mut job, operands, pal, &mono);
+                    }
+                    let galley = painter.layout_job(job);
+                    painter.galley(
+                        rect.min + egui::vec2(pad, header_h + pad + line_index as f32 * line_h),
+                        galley,
+                        pal.text,
+                    );
+                }
+                if block.insns.len() > max_lines {
+                    painter.text(
+                        rect.left_bottom() + egui::vec2(pad, -pad - line_h * 0.2),
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("… {} more", block.insns.len() - max_lines),
+                        FontId::proportional(text_size * 0.85),
+                        Color32::from_gray(0x90),
+                    );
+                }
+                let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click());
+                if response.clicked() {
+                    *action = Action::Navigate(block.start);
+                }
+                if response.double_clicked() {
+                    *action = Action::NavigateToDisasm(block.start);
+                }
+                if response.hovered() {
+                    let tooltip = block
+                        .insns
+                        .iter()
+                        .map(|insn| insn.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    response.on_hover_text(tooltip);
+                }
+            }
+        });
+        self.graph_visible = visible_rect;
+        self.graph_scroll = output.state.offset;
+        ui.separator();
+        // The legend and the zoom controls live on one status line under the canvas, the
+        // way IDA keeps the graph itself free of toolbars.
+        let mut zoom_action = None;
         ui.horizontal(|ui| {
             for (label, color) in [
                 (
@@ -7747,7 +8066,7 @@ impl ReCraftApp {
                     edge_color(recraft_analysis::EdgeKind::JumpTable),
                 ),
             ] {
-                ui.colored_label(color, label);
+                ui.label(RichText::new(label).color(color).small());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -7755,193 +8074,67 @@ impl ReCraftApp {
                     .on_hover_text(self.t("graph_zoom_in"))
                     .clicked()
                 {
-                    self.graph_zoom = (self.graph_zoom + 0.1).min(2.0);
+                    zoom_action = Some(GraphZoom::In);
                 }
                 if ui
                     .small_button("-")
                     .on_hover_text(self.t("graph_zoom_out"))
                     .clicked()
                 {
-                    self.graph_zoom = (self.graph_zoom - 0.1).max(0.5);
+                    zoom_action = Some(GraphZoom::Out);
                 }
                 if ui
                     .small_button(self.t("graph_fit"))
                     .on_hover_text(self.t("graph_zoom_reset"))
                     .clicked()
                 {
-                    self.graph_zoom = 1.0;
+                    zoom_action = Some(GraphZoom::Fit);
                 }
-                ui.monospace(format!("{:.2}%", self.graph_zoom * 100.0));
+                ui.monospace(format!("{:.2}%", zoom * 100.0));
             });
         });
-        let zoom = self.graph_zoom;
-        let header_h = 18.0 * zoom;
-        let line_h = 14.0 * zoom;
-        let text_size = 11.0 * zoom;
-        let pad = 10.0 * zoom;
-        let max_lines = 10usize;
-        let (local, canvas) = graph_layout(&cfg, zoom);
-        let canvas_w = canvas.x;
-        let canvas_h = canvas.y;
-        let selected = self
-            .disasm_rows
-            .get(self.selected)
-            .map(|line| line.addr.get());
-        let mono = FontId::monospace(text_size);
-        let mut visible_rect = None;
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let (response, painter) = ui.allocate_painter(
-                    egui::vec2(
-                        canvas_w.max(ui.available_width()),
-                        canvas_h.max(ui.available_height()),
-                    ),
-                    Sense::hover(),
-                );
-                let origin = response.rect.min.to_vec2();
-                let clip = ui.clip_rect();
-                visible_rect = Some(egui::Rect::from_min_max(
-                    clip.min - origin,
-                    clip.max - origin,
-                ));
-                // An overview click asks the graph to centre one block without leaving
-                // graph mode (IDA pans the graph instead of switching to the listing).
-                if let Some(addr) = self.graph_center_on.take()
-                    && let Some(index) = cfg.blocks.iter().position(|block| {
-                        block.start.get() <= addr.get() && addr.get() < block.end.get()
-                    })
-                {
-                    ui.scroll_to_rect(local[index].translate(origin), Some(egui::Align::Center));
-                }
-                // Edges first, so frames paint on top.
-                for block in &cfg.blocks {
-                    for &(target, kind) in &block.edges {
-                        let Some(target_rect) = local.get(target) else {
-                            continue;
-                        };
-                        let from = local[block.index].right_center() + origin;
-                        let to = target_rect.left_center() + origin;
-                        let color = edge_color(kind);
-                        let bend = ((to.x - from.x).abs() * 0.4).max(40.0);
-                        painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-                            [
-                                from,
-                                egui::pos2(from.x + bend, from.y),
-                                egui::pos2(to.x - bend, to.y),
-                                to,
-                            ],
-                            false,
-                            Color32::TRANSPARENT,
-                            egui::Stroke::new((1.2 * zoom).max(1.0), color),
-                        ));
-                        // Arrowhead pointing into the target block.
-                        let dir = (to - egui::pos2(to.x - bend, to.y)).normalized();
-                        let size = 5.0 * zoom;
-                        let normal = egui::vec2(-dir.y, dir.x);
-                        let tip = to;
-                        let base = to - dir * size;
-                        painter.add(egui::epaint::PathShape::convex_polygon(
-                            vec![tip, base + normal * size * 0.6, base - normal * size * 0.6],
-                            color,
-                            egui::Stroke::NONE,
-                        ));
-                    }
-                }
-                for (index, block) in cfg.blocks.iter().enumerate() {
-                    let rect = local[index].translate(origin);
-                    let is_entry = index == cfg.entry;
-                    let current = selected
-                        .is_some_and(|addr| addr >= block.start.get() && addr < block.end.get());
-                    // IDA-style frame: dark body, teal border, light header bar.
-                    painter.rect_filled(rect, 4.0, pal.graph_node);
-                    let border = if current {
-                        pal.graph_selected_border
-                    } else {
-                        pal.graph_border
-                    };
-                    painter.rect_stroke(
-                        rect,
-                        4.0,
-                        egui::Stroke::new(if current { 2.0 } else { 1.0 }, border),
-                        egui::StrokeKind::Inside,
-                    );
-                    let header =
-                        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
-                    painter.rect_filled(header, 4.0, pal.graph_header);
-                    painter.text(
-                        header.min + egui::vec2(6.0, 1.0),
-                        egui::Align2::LEFT_TOP,
-                        format!("{:#x}", block.start.get()),
-                        FontId::monospace(text_size * 0.92),
-                        pal.graph_header_text,
-                    );
-                    if is_entry {
-                        painter.text(
-                            header.right_center() - egui::vec2(4.0, 0.0),
-                            egui::Align2::RIGHT_CENTER,
-                            self.t("graph_entry").as_str(),
-                            FontId::proportional(text_size * 0.85),
-                            pal.comment,
-                        );
-                    }
-                    for (line_index, insn) in block.insns.iter().take(max_lines).enumerate() {
-                        let mut job = LayoutJob::default();
-                        let (mnemonic, operands) = match insn.text.split_once(' ') {
-                            Some((mnemonic, rest)) => (mnemonic, rest),
-                            None => (insn.text.as_str(), ""),
-                        };
-                        append(&mut job, mnemonic, pal.mnemonic, &mono);
-                        append(&mut job, " ", pal.text, &mono);
-                        if let Some((operands, comment)) = operands.split_once(';') {
-                            append_operands(&mut job, operands, pal, &mono);
-                            append(&mut job, &format!("; {comment}"), pal.comment, &mono);
-                        } else {
-                            append_operands(&mut job, operands, pal, &mono);
-                        }
-                        let galley = painter.layout_job(job);
-                        painter.galley(
-                            rect.min + egui::vec2(pad, header_h + pad + line_index as f32 * line_h),
-                            galley,
-                            pal.text,
-                        );
-                    }
-                    if block.insns.len() > max_lines {
-                        painter.text(
-                            rect.left_bottom() + egui::vec2(pad, -pad - line_h * 0.2),
-                            egui::Align2::LEFT_BOTTOM,
-                            format!("… {} more", block.insns.len() - max_lines),
-                            FontId::proportional(text_size * 0.85),
-                            Color32::from_gray(0x90),
-                        );
-                    }
-                    let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click());
-                    if response.clicked() {
-                        *action = Action::Navigate(block.start);
-                    }
-                    if response.double_clicked() {
-                        *action = Action::NavigateToDisasm(block.start);
-                    }
-                    if response.hovered() {
-                        let tooltip = block
-                            .insns
-                            .iter()
-                            .map(|insn| insn.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        response.on_hover_text(tooltip);
-                    }
-                }
-            });
-        self.graph_visible = visible_rect;
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.weak(format!("{:.2}%", zoom * 100.0));
-            ui.separator();
-            ui.weak(format!("{} blocks", cfg.blocks.len()));
-            ui.separator();
-            ui.weak(self.t("ui_synchronized_with_hex_view"));
-        });
+        let Some(zoom_action) = zoom_action else {
+            return;
+        };
+        let Some(viewport) = self.graph_viewport else {
+            return;
+        };
+        match zoom_action {
+            GraphZoom::In => {
+                self.graph_pending_offset = self.zoom_graph(1.1, None, viewport);
+            }
+            GraphZoom::Out => {
+                self.graph_pending_offset = self.zoom_graph(1.0 / 1.1, None, viewport);
+            }
+            GraphZoom::Fit => {
+                // IDA's *Fit* scales the whole graph into the pane instead of returning
+                // to 100 %; the status line reports the scale it picked.
+                let (_, natural) = graph_layout(&cfg, 1.0);
+                let fit = (viewport.width() / natural.x).min(viewport.height() / natural.y);
+                // IDA's *Fit* never magnifies past 100 %: a small graph is just centred.
+                self.graph_zoom = fit.clamp(GRAPH_ZOOM_MIN, 1.0);
+                self.graph_center_pending = true;
+            }
+        }
+    }
+
+    /// Scale the graph around `anchor` (a point in pane coordinates) and return the scroll
+    /// offset that keeps the anchored content under it. `None` means the zoom was clipped.
+    fn zoom_graph(
+        &mut self,
+        factor: f32,
+        anchor: Option<egui::Vec2>,
+        viewport: egui::Rect,
+    ) -> Option<egui::Vec2> {
+        let old = self.graph_zoom;
+        let new = (old * factor).clamp(GRAPH_ZOOM_MIN, GRAPH_ZOOM_MAX);
+        if (new - old).abs() <= f32::EPSILON {
+            return None;
+        }
+        let anchor = anchor.unwrap_or(viewport.size() * 0.5);
+        let content = (anchor + self.graph_scroll) / old;
+        self.graph_zoom = new;
+        Some((content * new - anchor).max(egui::Vec2::ZERO))
     }
 
     /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
@@ -10585,6 +10778,30 @@ fn graph_edge_color(pal: Palette, kind: recraft_analysis::EdgeKind) -> Color32 {
     }
 }
 
+/// Solid arrowhead at `tip` pointing along `dir` (IDA draws a fat triangle where an edge
+/// lands on its target block).
+fn paint_graph_arrow(
+    painter: &egui::Painter,
+    tip: egui::Pos2,
+    dir: egui::Vec2,
+    color: Color32,
+    zoom: f32,
+) {
+    let dir = dir.normalized();
+    let normal = egui::vec2(-dir.y, dir.x);
+    let length = 9.0 * zoom;
+    let half = 4.5 * zoom;
+    painter.add(egui::epaint::PathShape::convex_polygon(
+        vec![
+            tip,
+            tip - dir * length + normal * half,
+            tip - dir * length - normal * half,
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Draw a dashed rectangle (egui has no dashed stroke, and IDA's overview viewport frame
 /// is dotted). The painter clips the segments to the pane.
 fn paint_dashed_rect(
@@ -10617,35 +10834,113 @@ fn paint_dashed_rect(
     }
 }
 
-/// Lay out the CFG the same way the graph view does, so the overview minimap can reuse
-/// the exact node geometry at any scale.
+/// Lay out the CFG the way IDA's graph does: one row per flow rank, top to bottom, with
+/// the blocks of a row ordered by where their predecessors sit and the whole row centred.
+/// The overview minimap uses the same geometry, so it stays a faithful miniature.
 fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egui::Vec2) {
     const MAX_LINES: usize = 10;
-    let node_w = 300.0 * zoom;
+    // Blocks per visual row inside one flow layer (wraps wide jump-table fans).
+    const MAX_PER_ROW: usize = 4;
     let header_h = 18.0 * zoom;
     let line_h = 14.0 * zoom;
-    let gap_x = 120.0 * zoom;
-    let gap_y = 24.0 * zoom;
+    let gap_x = 48.0 * zoom;
+    let gap_y = 44.0 * zoom;
     let pad = 10.0 * zoom;
+    let margin = 24.0 * zoom;
     let layer_of = recraft_analysis::layers(cfg);
-    let column_count = layer_of.iter().copied().max().unwrap_or(0) + 1;
-    let mut column_y = vec![24.0 * zoom; column_count];
-    let mut rects = Vec::with_capacity(cfg.blocks.len());
-    for (index, block) in cfg.blocks.iter().enumerate() {
-        let layer = layer_of[index];
-        let shown = block.insns.len().min(MAX_LINES);
-        let height = header_h + shown as f32 * line_h + pad * 2.0 + 4.0 * zoom;
-        let x = 24.0 * zoom + layer as f32 * (node_w + gap_x);
-        let y = column_y[layer];
-        column_y[layer] = y + height + gap_y;
-        rects.push(egui::Rect::from_min_size(
-            egui::pos2(x, y),
-            egui::vec2(node_w, height),
-        ));
+    let mut rows: Vec<Vec<usize>> =
+        vec![Vec::new(); layer_of.iter().copied().max().map_or(0, |last| last + 1)];
+    for (index, &layer) in layer_of.iter().enumerate() {
+        rows[layer].push(index);
     }
-    let width = 48.0 * zoom + column_count as f32 * (node_w + gap_x);
-    let height = column_y.iter().copied().fold(24.0f32 * zoom, f32::max) + 24.0 * zoom;
-    (rects, egui::vec2(width, height))
+    if rows.is_empty() {
+        return (Vec::new(), egui::Vec2::ZERO);
+    }
+    // IDA sizes a block to its text (a one-instruction block is a small box, not a 300 px
+    // stamp). Consolas advances ~0.55 em, so the widest displayed line plus padding is the
+    // width; comments are left out so a long trailing comment cannot stretch the graph.
+    let width_of = |block: &recraft_analysis::BasicBlock| {
+        let cells = block
+            .insns
+            .iter()
+            .take(MAX_LINES)
+            .map(|insn| insn.text.split(';').next().unwrap_or("").chars().count())
+            .max()
+            .unwrap_or(0);
+        (cells as f32 * 11.0 * 0.55 + 22.0).clamp(150.0, 520.0) * zoom
+    };
+    let height_of = |block: &recraft_analysis::BasicBlock| {
+        header_h + block.insns.len().min(MAX_LINES) as f32 * line_h + pad * 2.0 + 4.0 * zoom
+    };
+    let row_width = |row: &[usize]| {
+        row.iter()
+            .map(|&block| width_of(&cfg.blocks[block]))
+            .sum::<f32>()
+            + row.len().saturating_sub(1) as f32 * gap_x
+    };
+    let mut content_w = 0.0f32;
+    for row in &rows {
+        for chunk in row.chunks(MAX_PER_ROW) {
+            content_w = content_w.max(row_width(chunk));
+        }
+    }
+    let canvas_w = content_w + margin * 2.0;
+    // Predecessors once: the barycentre pass runs for every block on every frame, so
+    // scanning all blocks per row would make a 1 600-block function quadratic.
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); cfg.blocks.len()];
+    for block in &cfg.blocks {
+        for &(target, _) in &block.edges {
+            if let Some(list) = predecessors.get_mut(target) {
+                list.push(block.index);
+            }
+        }
+    }
+    let mut centers = vec![0.0f32; cfg.blocks.len()];
+    let mut rects = vec![egui::Rect::ZERO; cfg.blocks.len()];
+    let mut y = margin;
+    for (row_index, row) in rows.iter().enumerate() {
+        // Barycentre pass: a block follows the average x of the blocks that jump to it, so
+        // a fan-out keeps its children under the parent instead of in address order.
+        let mut keyed: Vec<(f32, usize)> = row
+            .iter()
+            .map(|&block| {
+                let mut sum = 0.0;
+                let mut count = 0usize;
+                for &predecessor in &predecessors[block] {
+                    if layer_of[predecessor] < row_index {
+                        sum += centers[predecessor];
+                        count += 1;
+                    }
+                }
+                let key = if count == 0 {
+                    f32::MAX
+                } else {
+                    sum / count as f32
+                };
+                (key, block)
+            })
+            .collect();
+        keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let order: Vec<usize> = keyed.into_iter().map(|(_, block)| block).collect();
+        // A jump table can fan out to dozens of blocks in one layer; wrap the layer into
+        // several rows instead of one thousands-of-pixels-wide line (IDA wraps too).
+        for chunk in order.chunks(MAX_PER_ROW) {
+            let mut x = (canvas_w - row_width(chunk)) * 0.5;
+            let mut row_h = 0.0f32;
+            for &block in chunk {
+                let width = width_of(&cfg.blocks[block]);
+                let height = height_of(&cfg.blocks[block]);
+                rects[block] =
+                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height));
+                centers[block] = x + width * 0.5;
+                x += width + gap_x;
+                row_h = row_h.max(height);
+            }
+            y += row_h + gap_y;
+        }
+    }
+    let canvas_h = (y - gap_y + margin).max(margin * 2.0);
+    (rects, egui::vec2(canvas_w, canvas_h))
 }
 
 fn append(job: &mut LayoutJob, text: &str, color: Color32, mono: &FontId) {
@@ -17527,7 +17822,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_layout_uses_real_cfg_geometry() {
+    fn graph_layout_flows_top_down_like_ida() {
         use recraft_analysis::{BasicBlock, Cfg, CfgInsn, EdgeKind};
         let block =
             |index: usize, start: u64, end: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
@@ -17540,24 +17835,74 @@ mod tests {
                 }],
                 edges,
             };
+        // Diamond: 0 -> {1, 2} -> 3.
         let cfg = Cfg {
             function: Address::new(0x1000),
             entry: 0,
             blocks: vec![
-                block(0, 0x1000, 0x1001, vec![(1, EdgeKind::Unconditional)]),
-                block(1, 0x1001, 0x1002, Vec::new()),
+                block(
+                    0,
+                    0x1000,
+                    0x1001,
+                    vec![(1, EdgeKind::Taken), (2, EdgeKind::NotTaken)],
+                ),
+                block(1, 0x1001, 0x1002, vec![(3, EdgeKind::Unconditional)]),
+                block(2, 0x1002, 0x1003, vec![(3, EdgeKind::Unconditional)]),
+                block(3, 0x1003, 0x1004, Vec::new()),
             ],
             external: Vec::new(),
             jump_tables: Default::default(),
         };
         let (rects, canvas) = graph_layout(&cfg, 1.0);
-        assert_eq!(rects.len(), 2);
+        assert_eq!(rects.len(), 4);
+        // IDA's graph flows down the canvas: children sit below their parent, not to the
+        // right of it.
         assert!(
-            rects[1].min.x > rects[0].min.x,
-            "the target block must sit in a later layer"
+            rects[1].min.y > rects[0].max.y,
+            "the first layer's targets must sit below the entry"
         );
+        assert!(
+            rects[3].min.y > rects[1].max.y && rects[3].min.y > rects[2].max.y,
+            "the join must sit below both branches"
+        );
+        // Siblings share a row and stand side by side.
+        assert!((rects[1].min.y - rects[2].min.y).abs() < 0.5);
+        assert!(rects[1].max.x <= rects[2].min.x);
+        // Every row is centred on the canvas, like IDA places a layer under its parent.
+        let branch_center = (rects[1].center().x + rects[2].center().x) * 0.5;
+        assert!((branch_center - canvas.x * 0.5).abs() < 1.0);
+        assert!((rects[0].center().x - canvas.x * 0.5).abs() < 1.0);
         assert!(canvas.x > rects[1].max.x, "canvas must contain the nodes");
-        assert!(canvas.y >= rects[0].max.y);
+        assert!(canvas.y > rects[3].max.y);
+    }
+
+    #[test]
+    fn graph_zoom_anchors_the_pointer_and_clamps_like_ida() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut app = ReCraftApp {
+            graph_zoom: 1.0,
+            graph_scroll: egui::vec2(120.0, 80.0),
+            ..ReCraftApp::default()
+        };
+        let anchor = egui::vec2(300.0, 200.0);
+        let content = (anchor + app.graph_scroll) / app.graph_zoom;
+        let offset = app
+            .zoom_graph(2.0, Some(anchor), viewport)
+            .expect("zooming inside the range must move the scale");
+        // Ctrl+wheel keeps the content under the pointer fixed, like IDA's graph zoom.
+        assert!(
+            (content * app.graph_zoom - offset - anchor).length() < 0.01,
+            "the anchored point must stay under the pointer"
+        );
+        // IDA's graph range: 10 % up to 400 %.
+        assert!(app.zoom_graph(100.0, None, viewport).is_some());
+        assert_eq!(app.graph_zoom, GRAPH_ZOOM_MAX);
+        assert!(
+            app.zoom_graph(2.0, None, viewport).is_none(),
+            "a clipped zoom must leave both the scale and the scroll offset alone"
+        );
+        assert!(app.zoom_graph(0.0001, None, viewport).is_some());
+        assert_eq!(app.graph_zoom, GRAPH_ZOOM_MIN);
     }
 
     #[test]
