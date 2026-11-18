@@ -250,8 +250,9 @@ The release wizard is Chinese (WixUI ships zh-cn; ReCraft's own strings are in
 
 - **Add to the system PATH** (checked by default) — makes `recraft-cli` runnable in any
   terminal; clear it to leave the machine PATH alone (`ADDTOPATH=0` for silent installs).
-- **Desktop shortcut** (off by default) — the Start-menu shortcut is always created
-  (`DESKTOPSHORTCUT=1` for silent installs).
+- **Desktop shortcut** (checked by default) — puts a ReCraft icon on the desktop; clear it
+  to skip it (`DESKTOPSHORTCUT=0` for silent installs). The Start-menu shortcut is always
+  created.
 - **File context menu** (checked by default) — right-clicking any file in Explorer adds
   **Open with ReCraft**, which opens the PE/ELF sample or `.rcraft` project straight away;
   clear it to skip the entry (`CONTEXTMENU=0` for silent installs). On Windows 11 the

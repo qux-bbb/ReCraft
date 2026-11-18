@@ -235,8 +235,8 @@ CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产�
 
 - **加入系统 PATH**（默认勾选）：装完可以在任意终端直接运行 `recraft-cli`；不想改系统
   PATH 就取消勾选（静默安装用 `ADDTOPATH=0`）。
-- **桌面快捷方式**（默认不勾）：默认只建开始菜单快捷方式（静默安装用
-  `DESKTOPSHORTCUT=1`）。
+- **桌面快捷方式**（默认勾选）：在桌面建一个 ReCraft 图标；不想建就取消勾选（静默安装用
+  `DESKTOPSHORTCUT=0`）。开始菜单快捷方式始终会建。
 - **文件右键菜单**（默认勾选）：在资源管理器里右键任意文件多出 **用 ReCraft 打开**，直接
   打开 PE/ELF 样本或 `.rcraft` 工程；不想加就取消勾选（静默安装用 `CONTEXTMENU=0`）。
   Windows 11 的经典菜单项在 **显示更多选项**（Shift+F10）里。

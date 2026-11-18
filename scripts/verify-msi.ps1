@@ -15,9 +15,9 @@
 #   - silent install into a temporary folder with ADDTOPATH=0 DESKTOPSHORTCUT=1 CONTEXTMENU=0
 #     -> files / shortcuts / HKLM entries / desktop shortcut / installed CLI / no
 #     context-menu verb -> silent uninstall -> full cleanup (directory, shortcuts, registry);
-#   - silent install with the default folder and default options (PATH on, context menu on,
-#     desktop off) -> %ProgramFiles%\ReCraft + PATH entry + "open with ReCraft" verb
-#     pointing at the installed exe, no desktop shortcut -> uninstall -> PATH and verb removed.
+#   - silent install with the default folder and default options (PATH on, desktop shortcut
+#     on, context menu on) -> %ProgramFiles%\ReCraft + PATH entry + desktop shortcut +
+#     "open with ReCraft" verb pointing at the installed exe -> uninstall -> all removed.
 #
 #   powershell -File scripts/verify-msi.ps1                 # full run (needs elevation)
 #   powershell -File scripts/verify-msi.ps1 -SkipInstall     # structure + payload only
@@ -178,6 +178,7 @@ try {
             @('Name="PATH"', 'PATH environment entry'),
             @('Property="ADDTOPATH"', 'PATH checkbox'),
             @('Property="DESKTOPSHORTCUT"', 'desktop-shortcut checkbox'),
+            @('<Property Id="DESKTOPSHORTCUT" Value="1"', 'desktop shortcut on by default'),
             @('Property="CONTEXTMENU"', 'context-menu checkbox'),
             @('Id="RecraftShellContextMenu"', 'context-menu option component'),
             @('Software\Classes\*\shell\ReCraft', 'Explorer context-menu verb'),
@@ -193,6 +194,13 @@ try {
         )
         foreach ($check in $expected) {
             Assert-Condition ($tables -match [regex]::Escape($check[0])) "missing $($check[1])"
+        }
+        # A check box is drawn ticked whenever its property is non-empty, whatever the value
+        # is, while a component is only installed when its condition (X = 1) holds. So "0" is
+        # never a valid default: it shows a ticked box whose option is silently skipped (the
+        # desktop shortcut did exactly that in 0.2.0). Off is the empty property.
+        foreach ($optionProperty in @('ADDTOPATH', 'DESKTOPSHORTCUT', 'CONTEXTMENU')) {
+            Assert-Condition ($tables -notmatch [regex]::Escape(('<Property Id="{0}" Value="0"' -f $optionProperty))) "$optionProperty must not default to 0: MSI draws that as a ticked box while $optionProperty = 1 is false"
         }
         Write-Host "[msi] structure OK ($($expected.Count) table checks, per-machine)"
     } else {
@@ -325,7 +333,7 @@ try {
         $installedCode = Split-Path -Leaf $arp.PSPath
         Assert-Condition (Test-Path -LiteralPath (Join-Path $defaultTarget 'recraft.exe')) "the default install did not land in $defaultTarget"
         Assert-Condition (Test-Path -LiteralPath $shortcut) 'Start Menu shortcut missing after the default install'
-        Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut created without DESKTOPSHORTCUT=1'
+        Assert-Condition (Test-Path -LiteralPath $desktopShortcut) 'the default install did not create the desktop shortcut (DESKTOPSHORTCUT defaults to 1)'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         Assert-Condition (Test-PathEntry $defaultMachinePath $defaultTarget) "the default install did not add the install folder to the machine PATH (ADDTOPATH defaults to 1); PATH was: $defaultMachinePath"
         # CONTEXTMENU defaults to 1: the verb points at the installed exe and stays non-default.
@@ -336,7 +344,7 @@ try {
         $contextMenuCommand = (Get-Item -LiteralPath "$contextMenuKey\command" -ErrorAction SilentlyContinue)
         $contextMenuCommand = if ($contextMenuCommand) { $contextMenuCommand.GetValue('') } else { $null }
         Assert-Condition ($contextMenuCommand -eq ('"{0}" "%1"' -f $defaultExe)) "unexpected context-menu command: $contextMenuCommand"
-        Write-Host "[install] default folder OK ($defaultTarget, PATH and context-menu verb added by default, no desktop shortcut)"
+        Write-Host "[install] default folder OK ($defaultTarget, PATH, desktop shortcut and context-menu verb added by default)"
 
         Uninstall-Msi $installedCode (Join-Path $work 'uninstall-default.log')
         for ($attempt = 0; $attempt -lt 40; $attempt++) {
@@ -346,6 +354,7 @@ try {
         Assert-Condition (-not (Test-Path -LiteralPath $defaultTarget)) 'default install directory still exists after uninstall'
         Assert-Condition ($null -eq (Find-ArpKey 'ReCraft')) 'Apps & Features entry still exists after the default uninstall'
         Assert-Condition (@(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue).Count -eq 0) 'Start-menu shortcuts still exist after the default uninstall'
+        Assert-Condition (-not (Test-Path -LiteralPath $desktopShortcut)) 'desktop shortcut still exists after the default uninstall'
         $defaultMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         Assert-Condition (-not (Test-PathEntry $defaultMachinePath $defaultTarget)) 'default install folder still on the machine PATH after uninstall'
         $contextMenu = Get-ItemProperty -LiteralPath $contextMenuKey -ErrorAction SilentlyContinue

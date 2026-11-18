@@ -40,8 +40,11 @@ pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
   `Language`/`Codepage` 由 `scripts/package.ps1 -Culture` 推导（zh-CN → 2052/936，
   en-US → 1033/1252，英文串在 `packaging/wix/en-US.wxl`）。发布包默认中文。
 - **安装选项页**：目录页之后一页三个复选框——把 `recraft-cli` 加入系统 PATH（默认勾选）、
-  创建桌面快捷方式（默认不勾）、在文件右键菜单添加“用 ReCraft 打开”（默认勾选）；静默安装用
-  `ADDTOPATH=0` 关掉 PATH、`DESKTOPSHORTCUT=1` 建桌面图标、`CONTEXTMENU=0` 不写右键菜单项。
+  创建桌面快捷方式（默认勾选）、在文件右键菜单添加“用 ReCraft 打开”（默认勾选）；静默安装用
+  `ADDTOPATH=0` 关掉 PATH、`DESKTOPSHORTCUT=0` 不建桌面图标、`CONTEXTMENU=0` 不写右键菜单项。
+  三个属性在 Property 表里都默认 `1`：MSI 的复选框只要属性非空就画成勾选，而组件只在
+  `属性 = 1` 时安装，写 `0` 会出现“看着勾上、其实不装”的静默失效（0.2.0 的桌面快捷方式
+  就是这么坏的）。
 - **右键菜单**：勾选后在 `HKLM\Software\Classes\*\shell\ReCraft` 写一个经典 shell 谓词
   （`MUIVerb` 为“用 ReCraft 打开”、图标取 `recraft.exe`、命令
   `"[INSTALLFOLDER]recraft.exe" "%1"`），对任意文件类型生效，PE/ELF 样本和 `.rcraft` 工程
@@ -66,11 +69,12 @@ pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
     -d DocsDir=docs -d IconPath=assets\recraft.ico `
     -d BannerBmp=... -d DialogBmp=... -o dist\recraft-v0.1.0-windows-x64.msi
   ```
-- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=0] [DESKTOPSHORTCUT=1]
+- 静默安装/卸载：`msiexec /i <msi> /qn [INSTALLFOLDER=<目录>] [ADDTOPATH=0] [DESKTOPSHORTCUT=0]
   [CONTEXTMENU=0]`；`msiexec /x {ProductCode} /qn`（ProductCode 见“应用和功能”登记项）。
-- `scripts/verify-msi.ps1` 总是检查结构与载荷（24 项表断言：per-machine、两个快捷方式、
-  CLI App Paths、Capabilities/RegisteredApplications、安装选项页与 PATH/桌面/右键菜单三个选项、
-  zh-CN 2052/936、`.rcraft` 关联、`MajorUpgrade`、运行时启动条件；`msiexec /a` 解包后与
+- `scripts/verify-msi.ps1` 总是检查结构与载荷（24 项表断言 + 选项属性默认值守卫：per-machine、
+  两个快捷方式、CLI App Paths、Capabilities/RegisteredApplications、安装选项页与
+  PATH/桌面/右键菜单三个选项（桌面默认勾选）、zh-CN 2052/936、`.rcraft` 关联、`MajorUpgrade`、
+  运行时启动条件；`msiexec /a` 解包后与
   `dist/ReCraft-<version>/` 逐字节比对），`-SkipInstall` 用于免提权环境。完整流程额外验证
   选项生效（PATH 条目、桌面快捷方式、右键菜单谓词及其命令、CLI 入口）以及卸载后目录/
   快捷方式/PATH/注册项的清理。
@@ -90,7 +94,7 @@ pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
 （`scripts/package.ps1`；版本号仍为 0.1.0，SHA-256 `D30F45C5DB24F554177F0BEE3F830B8AF4CA49CAE0DAAEA974F28286FDF6D12D`）
 在**干净 Win10 22H2 虚机**与**Win11 本机**各跑一遍完整流程：
 
-安装（默认选项：PATH 开、桌面快捷方式关）→ 文件与开始菜单/注册项 → 装好的 CLI
+安装（默认选项：PATH 开、桌面快捷方式开）→ 文件与开始菜单/注册项 → 装好的 CLI
 （`--version` / `info` / `import` / `analyze` / `metrics`）→ 启动 GUI（窗口出现、截图、
 `WM_CLOSE` 正常退出）→ 卸载 → 目录/快捷方式/PATH/“应用和功能”/App Paths/
 Capabilities/RegisteredApplications 清理。
@@ -267,6 +271,7 @@ Certum 开源证书或 Azure Artifact Signing，也不购买 OV/EV 证书。发�
 - 未做增量/自动更新；未做 MSIX。安装包只有 MSI 一种（按机器安装，需管理员）。
 - 发布 MSI 是中文向导；英文向导用 `scripts/package.ps1 -Culture en-US` 重打（产物同名，会
   覆盖中文包）。
-- PATH 默认加入**系统** PATH（可用 `ADDTOPATH=0` 关闭），卸载时移除；桌面快捷方式默认不建。
+- PATH 默认加入**系统** PATH（可用 `ADDTOPATH=0` 关闭），卸载时移除；桌面快捷方式默认创建
+  （可用 `DESKTOPSHORTCUT=0` 关闭）。
 - 卸载不删除 `%LOCALAPPDATA%\ReCraft`（布局/主题与最近项目），那是按用户的个人数据。
 - MSI 依赖固定的 WiX 5.0.2；发布前用 CI msi job 或 `verify-msi.ps1` 复验。

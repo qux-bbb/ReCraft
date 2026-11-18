@@ -81,12 +81,20 @@
     </Property>
     <Launch Condition="Installed OR VCRUNTIME140" Message="!(loc.VCRuntimeMissing)" />
 
-    <!-- Optional steps. PATH is on by default so `recraft-cli` works in any terminal right
-         after setup, and so is the Explorer right-click entry ("用 ReCraft 打开"); the
-         desktop shortcut is off by default. All three can be turned off/on on the options
-         page or from the command line (ADDTOPATH=0, DESKTOPSHORTCUT=1, CONTEXTMENU=0). -->
+    <!-- Optional steps, all three on by default: PATH so `recraft-cli` works in any terminal
+         right after setup, the desktop shortcut, and the Explorer right-click entry
+         ("用 ReCraft 打开"). Each can be turned off on the options page or from the command
+         line (ADDTOPATH=0, DESKTOPSHORTCUT=0, CONTEXTMENU=0).
+
+         Every default is "1", which is also the value its check box writes (CheckBox table).
+         Windows Installer draws a check box as ticked whenever its property is non-empty,
+         whatever the value is, while the component conditions below test for 1 - a "0"
+         default therefore showed a ticked box whose component was skipped (the desktop
+         shortcut did exactly that in 0.2.0). "Off" is the *empty* property, which is what
+         clearing the box or passing =0 leaves behind. Keep Secure="yes": the wizard sets
+         these in the UI sequence and they must survive into the elevated execute sequence. -->
     <Property Id="ADDTOPATH" Value="1" Secure="yes" />
-    <Property Id="DESKTOPSHORTCUT" Value="0" Secure="yes" />
+    <Property Id="DESKTOPSHORTCUT" Value="1" Secure="yes" />
     <Property Id="CONTEXTMENU" Value="1" Secure="yes" />
 
     <!-- Per-machine scope: files land in %ProgramFiles%\ReCraft and setup asks for

@@ -184,7 +184,7 @@ try {
     }
 
     # ---- install -------------------------------------------------------------------------
-    Write-Log "--- install (defaults: PATH on, context menu on, desktop shortcut off) ---"
+    Write-Log "--- install (defaults: PATH on, context menu on, desktop shortcut on) ---"
     $installLog = Join-Path $work 'install.log'
     $p = Start-Process -FilePath 'msiexec.exe' -Wait -PassThru -ArgumentList @(
         '/i', $Msi, '/qn', '/l*v', $installLog)
@@ -200,7 +200,7 @@ try {
 
     $links = @(Get-ChildItem -LiteralPath $startMenu -Filter 'ReCraft*.lnk' -ErrorAction SilentlyContinue)
     Check ($links.Count -eq 2) "Start-menu shortcuts present ($($links.Name -join ', '))"
-    Check (-not (Test-Path -LiteralPath $desktopShortcut)) 'no desktop shortcut by default (DESKTOPSHORTCUT unset)'
+    Check (Test-Path -LiteralPath $desktopShortcut) 'desktop shortcut created by default (DESKTOPSHORTCUT defaults to 1)'
 
     $machinePath = Get-MachinePathRaw
     Check (Test-PathEntry $machinePath $installDir) 'install folder added to the machine PATH'
