@@ -306,6 +306,7 @@ fn parses_pe32_image() {
     assert_eq!(image.size_of_image, 0x3000);
     assert_eq!(image.size_of_headers, 0x400);
     assert_eq!(image.subsystem, 3);
+    assert!(!image.is_dll, "an executable must not be marked as a DLL");
     assert_eq!(image.timestamp, 0x5f5e_1000);
     assert_eq!(image.file_size, FILE_SIZE as u64);
     assert_eq!(image.overlay_file_offset, None);
@@ -593,6 +594,20 @@ fn broken_pdata_degrades_to_empty_ranges() {
     put_u32(&mut bytes, directories + 24, 0x00ff_0000);
     let image = load(&bytes).expect("broken .pdata must not fail the load");
     assert!(image.pdata_functions.is_empty());
+}
+
+#[test]
+fn the_coff_dll_flag_is_reported() {
+    // `IMAGE_FILE_DLL` is what the naming layer keys on, so it must survive loading.
+    let mut bytes = build_pe(false);
+    let characteristics = DOS_STUB_SIZE + 4 + 18;
+    put_u16(&mut bytes, characteristics, 0x2102);
+    let image = load(&bytes).expect("a DLL must parse");
+    assert!(image.is_dll);
+
+    put_u16(&mut bytes, characteristics, 0x0102);
+    let image = load(&bytes).expect("an EXE must parse");
+    assert!(!image.is_dll);
 }
 
 #[test]

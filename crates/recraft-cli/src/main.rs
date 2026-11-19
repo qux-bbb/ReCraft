@@ -3245,8 +3245,15 @@ mod tests {
             resolve_address(&session, "0x10").unwrap(),
             Address::new(0x10)
         );
+        // The entry label follows IDA's convention: `start` for an EXE, `DllEntryPoint`
+        // for a DLL (the fixture falls back to kernel32.dll when notepad.exe is missing).
+        let entry_label = if session.image().is_dll {
+            "DllEntryPoint"
+        } else {
+            "start"
+        };
         assert_eq!(
-            resolve_address(&session, "start").unwrap(),
+            resolve_address(&session, entry_label).unwrap(),
             session.entry_point()
         );
         assert!(resolve_address(&session, "definitely_not_a_symbol").is_err());

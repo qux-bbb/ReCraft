@@ -160,7 +160,9 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    选中内容」追问。右上角 **⚙ Provider settings** 可配
    endpoint/model/密钥（保存在 `%LOCALAPPDATA%\ReCraft\ai-settings.json`）。
    助手只读：它给出的改名建议是正文里的文字，要改库仍按 `N`（或走 MCP 写工具）。
-6. **Strings/Imports** 页签与 **`X`** 交叉引用对话框展示引用与 API 分类；UI 支持 EN/zh-CN 切换。
+6. **Strings/Imports** 页签与 **`X`** 交叉引用对话框展示引用与 API 分类；**Exports** 页签在导出表之后
+   列出模块自身的入口点——EXE 读作 `start`、DLL 读作 `DllEntryPoint`（和 IDA 的 entry points
+   窗口一致，入口点排在最后一行；用户改名后这里跟着变）。UI 支持 EN/zh-CN 切换。
 
 ## 对接 MCP 客户端
 

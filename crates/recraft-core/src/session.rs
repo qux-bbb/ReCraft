@@ -237,8 +237,13 @@ impl Session {
         let json = json.ok_or_else(|| {
             Error::storage("project is missing image metadata (re-import the binary)")
         })?;
-        let image: Image = serde_json::from_str(&json)
+        let mut image: Image = serde_json::from_str(&json)
             .map_err(|error| Error::internal(format!("corrupt image metadata: {error}")))?;
+        // Projects imported before the DLL flag was stored carry no `is_dll`; the PE header
+        // in the stored image answers it without re-reading the image.
+        if !image.is_dll {
+            image.is_dll = stored_image_is_dll(&project).unwrap_or(false);
+        }
         let format = project
             .meta_string("format")?
             .and_then(|value| Format::from_meta(&value))
@@ -248,6 +253,9 @@ impl Session {
             .and_then(|value| Arch::from_name(&value))
             .unwrap_or(if image.is_64 { Arch::X64 } else { Arch::X86 });
         let segments = segments::from_image(&image);
+        // Best effort: a project that cannot take the cosmetic re-label (another writer holds
+        // the database) still opens; the next open retries it.
+        let _ = refresh_entry_name(project.conn(), &image);
         Ok(Self {
             mode: Mode::from_is_64(image.is_64),
             image,
@@ -1941,12 +1949,23 @@ fn perm_id(perm: segments::Perm) -> i64 {
     }
 }
 
+/// The loader name the entry point gets. IDA calls an executable's entry `start` and a
+/// DLL's entry `DllEntryPoint`; the label tells the reader which kind of image it is before
+/// any of it has been read.
+fn entry_name(image: &Image) -> &'static str {
+    if image.is_dll {
+        "DllEntryPoint"
+    } else {
+        "start"
+    }
+}
+
 fn install_initial_names(conn: &Connection, image: &Image) -> Result<()> {
     let mut statement = conn
         .prepare("INSERT OR IGNORE INTO name(addr, text, kind, flags) VALUES (?1, ?2, ?3, 0)")
         .map_err(command::db_err)?;
     // Names the container carries itself (ELF `.symtab`/`.dynsym`). They go in first so
-    // a real symbol at the entry point wins over the synthetic `start` label; PE leaves
+    // a real symbol at the entry point wins over the synthetic entry label; PE leaves
     // `symbols` empty, so its naming order is unchanged.
     for symbol in &image.symbols {
         if symbol.name.is_empty() || symbol.address.get() == 0 {
@@ -1964,7 +1983,7 @@ fn install_initial_names(conn: &Connection, image: &Image) -> Result<()> {
     statement
         .execute(params![
             image.entry_point.get() as i64,
-            "start",
+            entry_name(image),
             NAME_KIND_LOADER
         ])
         .map_err(command::db_err)?;
@@ -2004,6 +2023,53 @@ fn install_initial_names(conn: &Connection, image: &Image) -> Result<()> {
                 .map_err(command::db_err)?;
         }
     }
+    Ok(())
+}
+
+/// Whether the stored image carries the COFF DLL flag.
+///
+/// Only projects imported before [`Image::is_dll`] was stored in the metadata need this, so
+/// the two PE header words are read instead of the image: the DOS `e_lfanew`, then the COFF
+/// `Characteristics` field. Anything that is not a PE is not a DLL.
+fn stored_image_is_dll(project: &Project) -> Result<bool> {
+    let lfanew = project.read_image(0x3c, 4)?;
+    let Ok(lfanew) = <[u8; 4]>::try_from(lfanew.as_slice()) else {
+        return Ok(false);
+    };
+    let pe_offset = u64::from(u32::from_le_bytes(lfanew));
+    let header = project.read_image(pe_offset, 24)?;
+    if header.len() < 24 || &header[..4] != b"PE\0\0" {
+        return Ok(false);
+    }
+    Ok(u16::from_le_bytes([header[22], header[23]]) & recraft_format::IMAGE_FILE_DLL != 0)
+}
+
+/// Re-label the entry point of a project imported before DLLs were named the way IDA names
+/// them. Only the old synthetic loader label is touched: a real symbol, a user rename or an
+/// analysis name at the entry point always wins.
+fn refresh_entry_name(conn: &Connection, image: &Image) -> Result<()> {
+    if !image.is_dll {
+        return Ok(());
+    }
+    let current: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT text, kind FROM name WHERE addr = ?1",
+            [image.entry_point.get() as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(command::db_err)?;
+    let Some((text, kind)) = current else {
+        return Ok(());
+    };
+    if kind != NAME_KIND_LOADER || text != "start" {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE name SET text = ?1 WHERE addr = ?2",
+        params![entry_name(image), image.entry_point.get() as i64],
+    )
+    .map_err(command::db_err)?;
     Ok(())
 }
 
@@ -2113,10 +2179,37 @@ mod tests {
         None
     }
 
+    /// A small system DLL for the tests that need the DLL flag. Skips like [`sample_pe`].
+    fn sample_dll() -> Option<Vec<u8>> {
+        for path in [
+            "C:/Windows/System32/version.dll",
+            "C:/Windows/System32/winmm.dll",
+            "C:/Windows/System32/kernel32.dll",
+        ] {
+            if let Ok(bytes) = std::fs::read(path)
+                && !bytes.is_empty()
+            {
+                return Some(bytes);
+            }
+        }
+        None
+    }
+
     fn fixture(dir: &TempDir) -> Option<Session> {
         let bytes = sample_pe()?;
         let path = dir.path().join("test.rcraft");
         Some(Session::create(&path, &bytes, &mut |_, _| {}, &|| false).expect("create session"))
+    }
+
+    /// The loader label the entry point gets: IDA names an executable's entry `start` and a
+    /// DLL's entry `DllEntryPoint`. The fixture prefers notepad.exe but falls back to
+    /// kernel32.dll, so the expected label depends on the sample.
+    fn entry_label(session: &Session) -> &'static str {
+        if session.image().is_dll {
+            "DllEntryPoint"
+        } else {
+            "start"
+        }
     }
 
     #[test]
@@ -2129,7 +2222,10 @@ mod tests {
         assert_ne!(entry.get(), 0);
         assert_eq!(session.mode(), Mode::X64);
         assert!(!session.segments().is_empty());
-        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("start"));
+        assert_eq!(
+            session.name_at(entry).unwrap().as_deref(),
+            Some(entry_label(&session))
+        );
 
         let path = session.path().to_path_buf();
         drop(session);
@@ -2141,6 +2237,59 @@ mod tests {
         assert_eq!(lines[0].addr, entry);
         assert!(!lines[0].mnemonic.is_empty());
         assert_ne!(lines[0].len, 0);
+    }
+
+    #[test]
+    fn a_dll_entry_point_is_named_like_ida() {
+        let Some(bytes) = sample_dll() else {
+            return;
+        };
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dll.rcraft");
+        let session = Session::create(&path, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        assert!(session.image().is_dll);
+        let entry = session.entry_point();
+        assert_eq!(
+            session.name_at(entry).unwrap().as_deref(),
+            Some("DllEntryPoint")
+        );
+
+        // A project imported before this naming existed still carries `start`; opening it
+        // refreshes the derived loader label (a user rename would be left alone).
+        session
+            .project()
+            .conn()
+            .execute(
+                "UPDATE name SET text = 'start' WHERE addr = ?1",
+                [entry.get() as i64],
+            )
+            .unwrap();
+        drop(session);
+
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened.name_at(entry).unwrap().as_deref(),
+            Some("DllEntryPoint")
+        );
+        drop(reopened);
+
+        // A project imported before the flag was stored has no `is_dll` key in its metadata:
+        // the PE header in the stored image still answers it.
+        {
+            let project = Project::open(&path).unwrap();
+            let json = project.meta_string(IMAGE_META_KEY).unwrap().unwrap();
+            let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            value.as_object_mut().unwrap().remove("is_dll");
+            project
+                .set_meta_string(IMAGE_META_KEY, &value.to_string())
+                .unwrap();
+        }
+        let reopened = Session::open(&path).unwrap();
+        assert!(reopened.image().is_dll);
+        assert_eq!(
+            reopened.name_at(entry).unwrap().as_deref(),
+            Some("DllEntryPoint")
+        );
     }
 
     #[test]
@@ -2369,6 +2518,7 @@ mod tests {
             return;
         };
         let entry = session.entry_point();
+        let loader_label = entry_label(&session);
 
         session
             .execute(Command::Rename {
@@ -2402,7 +2552,10 @@ mod tests {
                 .is_none()
         );
         session.undo().unwrap();
-        assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("start"));
+        assert_eq!(
+            session.name_at(entry).unwrap().as_deref(),
+            Some(loader_label)
+        );
         assert!(session.can_redo().unwrap());
 
         session.redo().unwrap();
@@ -2416,7 +2569,10 @@ mod tests {
         // The journal survives reopening: undo still works on the loaded project.
         assert!(reopened.can_undo().unwrap());
         reopened.undo().unwrap();
-        assert_eq!(reopened.name_at(entry).unwrap().as_deref(), Some("start"));
+        assert_eq!(
+            reopened.name_at(entry).unwrap().as_deref(),
+            Some(loader_label)
+        );
         assert!(reopened.can_redo().unwrap());
 
         // A new command after undo discards the redo stack.
@@ -2436,6 +2592,7 @@ mod tests {
             return;
         };
         let entry = session.entry_point();
+        let loader_label = entry_label(&session);
 
         // The guard matches the loader name, so the write lands.
         session
@@ -2444,19 +2601,20 @@ mod tests {
                     addr: entry,
                     name: Some("first".to_owned()),
                 },
-                Some(Some("start".to_owned())),
+                Some(Some(loader_label.to_owned())),
             )
             .unwrap();
         assert_eq!(session.name_at(entry).unwrap().as_deref(), Some("first"));
 
-        // Same guard again: the previous value is no longer "start", so nothing changes.
+        // Same guard again: the previous value is no longer the loader name, so nothing
+        // changes.
         let error = session
             .execute_guarded(
                 Command::Rename {
                     addr: entry,
                     name: Some("second".to_owned()),
                 },
-                Some(Some("start".to_owned())),
+                Some(Some(loader_label.to_owned())),
             )
             .unwrap_err();
         assert!(error.to_string().contains("stale write"), "{error}");

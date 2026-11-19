@@ -177,6 +177,7 @@ mod tests {
             size_of_image: 0x3000,
             size_of_headers: 0x400,
             subsystem: 3,
+            is_dll: false,
             timestamp: 0,
             sections,
             imports: Vec::new(),

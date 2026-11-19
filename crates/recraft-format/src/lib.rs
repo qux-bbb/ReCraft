@@ -45,6 +45,9 @@ const MAX_EXPORTS: usize = 200_000;
 const MAX_NAME_LEN: usize = 512;
 const MAX_HINT_NAME_LEN: usize = 256;
 
+/// COFF `Characteristics` bit marking a DLL (rather than an EXE).
+pub const IMAGE_FILE_DLL: u16 = 0x2000;
+
 const IMAGE_SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
 const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 const IMAGE_SCN_MEM_READ: u32 = 0x4000_0000;
@@ -157,6 +160,10 @@ pub struct Image {
     pub size_of_image: u64,
     pub size_of_headers: u64,
     pub subsystem: u16,
+    /// The COFF header says this image is a DLL. The naming layer needs it: a DLL's
+    /// entry point is `DllEntryPoint`, an executable's is `start` (IDA's convention).
+    #[serde(default)]
+    pub is_dll: bool,
     pub timestamp: u32,
     pub sections: Vec<Section>,
     pub imports: Vec<ImportModule>,
@@ -370,7 +377,7 @@ pub fn load_pe(bytes: &[u8]) -> Result<Image> {
     let number_of_sections = read_u16(bytes, coff + 2)?;
     let timestamp = read_u32(bytes, coff + 4)?;
     let size_of_optional_header = usize::from(read_u16(bytes, coff + 16)?);
-    let _characteristics = read_u16(bytes, coff + 18)?;
+    let characteristics = read_u16(bytes, coff + 18)?;
 
     let optional = coff + 20;
     let optional_end = optional
@@ -521,6 +528,7 @@ pub fn load_pe(bytes: &[u8]) -> Result<Image> {
         size_of_image,
         size_of_headers,
         subsystem,
+        is_dll: characteristics & IMAGE_FILE_DLL != 0,
         timestamp,
         sections,
         imports,
@@ -1261,6 +1269,7 @@ mod tests {
             size_of_image: 0x3000,
             size_of_headers: 0x400,
             subsystem: 3,
+            is_dll: true,
             timestamp: 7,
             sections: Vec::new(),
             imports: Vec::new(),
@@ -1293,5 +1302,6 @@ mod tests {
         assert_eq!(back.debug_lines[0].line, 42);
         assert_eq!(back.overlay_file_offset, Some(0x2000));
         assert_eq!(back.warnings, image.warnings);
+        assert!(back.is_dll, "the DLL flag must survive the round trip");
     }
 }

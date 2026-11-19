@@ -2988,13 +2988,18 @@ impl ReCraftApp {
         }
     }
 
-    /// PE exports as (name, address, forwarder), shared by the Exports view and copy.
+    /// Exports as (name, address, forwarder), shared by the Exports view and copy.
+    ///
+    /// Like IDA's entry-points window this lists the module's own entry point as well as the
+    /// export table: `start` for an executable, `DllEntryPoint` for a DLL. The name comes from
+    /// the session, so a user rename shows through; it goes last because IDA's synthetic
+    /// ordinal for an entry point is its address, which sorts after every export ordinal.
     fn exports(&self) -> Vec<(String, Address, Option<String>)> {
         let Some(session) = self.session.as_ref() else {
             return Vec::new();
         };
         let image = session.image();
-        image
+        let mut rows: Vec<(String, Address, Option<String>)> = image
             .exports
             .iter()
             .map(|export| {
@@ -3005,7 +3010,19 @@ impl ReCraftApp {
                     .unwrap_or_else(|| format!("#{}", export.ordinal));
                 (name, Address::new(va), export.forwarder.clone())
             })
-            .collect()
+            .collect();
+        let entry = image.entry_point;
+        // An export already pointing at the entry covers the row; adding it twice would give
+        // two rows the same address, which the address-keyed selection cannot tell apart.
+        if entry.get() != 0 && !rows.iter().any(|(_, address, _)| *address == entry) {
+            let name = session
+                .name_at(entry)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| format!("sub_{:x}", entry.get()));
+            rows.push((name, entry, None));
+        }
+        rows
     }
 
     // ---------------------------------------------------------- list keyboard --
@@ -5685,8 +5702,9 @@ impl ReCraftApp {
         }
     }
 
-    /// PE exports list (document tab, like IDA's Exports window): name, address and
-    /// forwarder columns, row cursor on click, jump on Enter or double click.
+    /// Exports list (document tab, like IDA's entry-points window): name, address and
+    /// forwarder columns, with the module's entry point (`start` / `DllEntryPoint`) as the
+    /// last row. Row cursor on click, jump on Enter or double click.
     fn exports_list(&mut self, ui: &mut egui::Ui, action: &mut Action) {
         let pal = self.palette();
         if self.session.is_none() {
@@ -16582,6 +16600,37 @@ mod tests {
                 .find_tab(&Pane::GraphOverview)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_exports_view_ends_with_the_entry_point_row() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("exports-entry.rcraft");
+        let session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+
+        let session = app.session.as_ref().unwrap();
+        let entry = session.entry_point();
+        let label = session.name_at(entry).unwrap().expect("entry has a name");
+        let rows = app.exports();
+        assert_eq!(
+            rows.last(),
+            Some(&(label, entry, None)),
+            "the entry point is the last row, like IDA's entry-points window"
+        );
+        assert!(
+            rows.len() >= session.image().exports.len(),
+            "the export table rows are still there"
+        );
+        app.session = None;
+        assert!(app.exports().is_empty(), "no project, no exports");
     }
 
     #[test]
