@@ -4,7 +4,7 @@
 # Build the Go evaluation corpus (keeps pclntab, which the runtime needs even when
 # stripped, so `-s -w` is intentionally not used for the main artifact).
 #
-#   pwsh -File corpus/build-go.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File corpus/build-go.ps1
 #
 # Output: corpus/build/go/corpus-go.exe
 

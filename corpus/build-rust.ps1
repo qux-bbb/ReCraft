@@ -3,7 +3,7 @@
 #
 # Build the Rust evaluation corpus as a Windows PE cdylib.
 #
-#   pwsh -File corpus/build-rust.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File corpus/build-rust.ps1
 #
 # Output: corpus/build/rust/corpus-rust.dll
 #

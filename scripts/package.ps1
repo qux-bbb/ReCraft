@@ -8,11 +8,11 @@
 #   dist/recraft-v<version>-windows-x64.msi     WiX v5 MSI installer (needs the pinned
 #                                               `wix` dotnet tool, see .config/dotnet-tools.json)
 #
-#   pwsh -File scripts/package.ps1
-#   pwsh -File scripts/package.ps1 -NoBuild       # reuse target\release
-#   pwsh -File scripts/package.ps1 -NoMsi         # zip only (no dotnet/WiX toolchain)
-#   pwsh -File scripts/package.ps1 -RequireMsi    # fail if the WiX toolchain is missing (CI)
-#   pwsh -File scripts/package.ps1 -Culture en-US # English wizard instead of the zh-CN default
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+#     -NoBuild          reuse target\release
+#     -NoMsi            zip only (no dotnet/WiX toolchain)
+#     -RequireMsi       fail if the WiX toolchain is missing (CI)
+#     -Culture en-US    English wizard instead of the zh-CN default
 #
 # The MSI follows the installation conventions of the PhotoCraft project
 # (storytold/photocraft): the project's own wizard art drawn from assets/recraft.png, a

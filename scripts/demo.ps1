@@ -4,9 +4,10 @@
 # Ten-minute demo walkthrough (DESIGN M4): import -> analyze -> pseudocode ->
 # rename / prototype / struct type -> AI propose/apply -> MCP -> metrics.
 #
-#   pwsh -File scripts/demo.ps1                 # corpus.exe if built, else notepad
-#   pwsh -File scripts/demo.ps1 -PEFile C:\Windows\System32\notepad.exe
-#   pwsh -File scripts/demo.ps1 -Keep           # keep the demo project for the GUI
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1
+#     default sample: corpus.exe if built, else notepad
+#     -PEFile C:\Windows\System32\notepad.exe
+#     -Keep    keep the demo project for the GUI
 #
 # The script is read-only w.r.t. the repository: everything happens in a temp project.
 

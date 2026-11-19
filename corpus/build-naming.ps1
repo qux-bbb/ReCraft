@@ -3,8 +3,9 @@
 #
 # Build the naming-accuracy benchmark binary (see docs/AI.md).
 #
-#   pwsh -File corpus/build-naming.ps1            # x64
-#   pwsh -File corpus/build-naming.ps1 -Arch x86  # also x86
+#   powershell -NoProfile -ExecutionPolicy Bypass -File corpus/build-naming.ps1
+#     x64 (default)
+#     -Arch x86    also x86
 #
 # Unlike corpus/build.ps1 this binary links the CRT and real Win32 APIs: the benchmark
 # measures naming from API tags, string literals and body shape, not from a CRT-free toy.

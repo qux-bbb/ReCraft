@@ -8,8 +8,8 @@
 #   - the extracted binaries actually run: PE info, import + analyze + decompile,
 #     AI provider defaults offline, metrics JSON.
 #
-#   pwsh -File scripts/verify-package.ps1
-#   pwsh -File scripts/verify-package.ps1 -Zip dist\recraft-v0.1.0-windows-x64.zip
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-package.ps1
+#     -Zip dist\recraft-v0.1.0-windows-x64.zip
 
 [CmdletBinding()]
 param(

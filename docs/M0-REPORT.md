@@ -58,8 +58,10 @@
 ```powershell
 cargo build --workspace
 cargo test --workspace
-pwsh -File scripts/e2e.ps1                     # 端到端
-pwsh -File scripts/e2e.ps1 -LargeOverlayMB 1024 # 1 GiB 冒烟（约 5 s 导入）
+# 端到端
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e.ps1
+# 1 GiB 冒烟（约 5 s 导入）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e.ps1 -LargeOverlayMB 1024
 
 cargo run -p recraft-cli -- import C:\Windows\System32\notepad.exe -o notepad.rcraft
 cargo run -p recraft-cli -- disasm notepad.rcraft --addr entry --count 40

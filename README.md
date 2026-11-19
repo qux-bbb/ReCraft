@@ -203,11 +203,16 @@ lint（L1+L2）与 160 份 golden，ELF 版跑全量 lint、结构化率与覆�
 ### 打包
 
 ```powershell
-pwsh -File scripts/package.ps1 -NoMsi         # release build + green zip + SHA256SUMS
-# dist/recraft-v0.2.0-windows-x64.zip, dist/ReCraft-0.2.0/, dist/SHA256SUMS.txt
-pwsh -File scripts/package.ps1                # also builds the MSI when the WiX toolchain is there
-# dist/recraft-v0.2.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
-pwsh -File scripts/verify-msi.ps1             # MSI: structure + payload + install/uninstall (elevated)
+# release build + green zip + SHA256SUMS
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1 -NoMsi
+#   → dist/recraft-v0.2.0-windows-x64.zip, dist/ReCraft-0.2.0/, dist/SHA256SUMS.txt
+
+# also builds the MSI when the WiX toolchain is there
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+#   → dist/recraft-v0.2.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+
+# MSI: structure + payload + install/uninstall (elevated)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-msi.ps1
 ```
 
 MSI 需要 `dotnet tool restore` 还原仓库内固定的 WiX 5.0.2（见 `.config/dotnet-tools.json`）；
@@ -256,7 +261,8 @@ CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产�
 ### 演示
 
 ```powershell
-pwsh -File scripts/demo.ps1 -Keep     # 9-step CLI walkthrough, then open the GUI
+# 9-step CLI walkthrough, then open the GUI
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1 -Keep
 ```
 
 完整的 10 分钟脚本（CLI + GUI + MCP 客户端 + 本地 LLM）见

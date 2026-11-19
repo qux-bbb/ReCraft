@@ -6,7 +6,7 @@
 # we rely on. Golden snapshots are generated output and are covered by the repository
 # license instead of per-file headers.
 #
-#   pwsh -File scripts/check-license.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-license.ps1
 
 [CmdletBinding()]
 param()

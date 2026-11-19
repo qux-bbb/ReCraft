@@ -3,9 +3,10 @@
 #
 # End-to-end acceptance test for the M0 walking skeleton.
 #
-#   pwsh -File scripts/e2e.ps1                 # default: notepad.exe
-#   pwsh -File scripts/e2e.ps1 -PEFile x.exe   # custom sample
-#   pwsh -File scripts/e2e.ps1 -LargeOverlayMB 1024   # 1 GiB overlay smoke
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e.ps1
+#     default sample: notepad.exe
+#     -PEFile x.exe            custom sample
+#     -LargeOverlayMB 1024     1 GiB overlay smoke
 #
 # Exits non-zero on the first failed assertion.
 

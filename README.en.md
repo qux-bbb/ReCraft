@@ -215,11 +215,16 @@ command that would run it.
 ### Packaging
 
 ```powershell
-pwsh -File scripts/package.ps1 -NoMsi         # release build + green zip + SHA256SUMS
-# dist/recraft-v0.2.0-windows-x64.zip, dist/ReCraft-0.2.0/, dist/SHA256SUMS.txt
-pwsh -File scripts/package.ps1                # also builds the MSI when the WiX toolchain is there
-# dist/recraft-v0.2.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
-pwsh -File scripts/verify-msi.ps1             # MSI: structure + payload + install/uninstall (elevated)
+# release build + green zip + SHA256SUMS
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1 -NoMsi
+#   → dist/recraft-v0.2.0-windows-x64.zip, dist/ReCraft-0.2.0/, dist/SHA256SUMS.txt
+
+# also builds the MSI when the WiX toolchain is there
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+#   → dist/recraft-v0.2.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+
+# MSI: structure + payload + install/uninstall (elevated)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-msi.ps1
 ```
 
 The MSI uses the WiX 5.0.2 tool pinned in `.config/dotnet-tools.json` (`dotnet tool
@@ -275,7 +280,8 @@ SmartScreen “unknown publisher” prompt.
 ### Demo
 
 ```powershell
-pwsh -File scripts/demo.ps1 -Keep     # 9-step CLI walkthrough, then open the GUI
+# 9-step CLI walkthrough, then open the GUI
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1 -Keep
 ```
 
 The full 10-minute script (CLI + GUI + MCP client + local LLM) is in

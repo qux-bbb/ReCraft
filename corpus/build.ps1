@@ -3,8 +3,9 @@
 #
 # Build the M1 evaluation corpus with MSVC, without the CRT.
 #
-#   pwsh -File corpus/build.ps1                # x64 Release
-#   pwsh -File corpus/build.ps1 -Arch x86      # also x86 (no .pdata ground truth)
+#   powershell -NoProfile -ExecutionPolicy Bypass -File corpus/build.ps1
+#     x64 Release (default)
+#     -Arch x86    also x86 (no .pdata ground truth)
 #
 # Output: corpus/build/<arch>/corpus.exe
 

@@ -12,9 +12,11 @@
 ## 一键演示
 
 ```powershell
-pwsh -File scripts/demo.ps1            # corpus 存在则用它，否则 notepad
-pwsh -File scripts/demo.ps1 -Keep      # 保留项目，接着开 GUI
-pwsh -File scripts/demo.ps1 -PEFile C:\Windows\System32\notepad.exe
+# corpus 存在则用它，否则 notepad
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1
+# 保留项目，接着开 GUI
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1 -Keep
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1 -PEFile C:\Windows\System32\notepad.exe
 ```
 
 脚本依次展示（每步打印实际命令与输出，最后 `DEMO PASS`）：

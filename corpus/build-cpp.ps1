@@ -3,7 +3,7 @@
 #
 # Build the C++ demangling corpus with MSVC (no CRT).
 #
-#   pwsh -File corpus/build-cpp.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File corpus/build-cpp.ps1
 #
 # Output: corpus/build/cpp/corpus-cpp.dll
 

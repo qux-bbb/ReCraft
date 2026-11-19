@@ -3,9 +3,10 @@
 #
 # 1 GiB performance gate (DESIGN §3.3 / §14 M3).
 #
-#   pwsh -File scripts/bench-large.ps1                     # 1 GiB overlay, default thresholds
-#   pwsh -File scripts/bench-large.ps1 -OverlayMB 256      # faster smoke
-#   pwsh -File scripts/bench-large.ps1 -Json               # machine-readable result
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bench-large.ps1
+#     default: 1 GiB overlay, default thresholds
+#     -OverlayMB 256    faster smoke
+#     -Json             machine-readable result
 #
 # Measures:
 #   - import wall time (target < 120 s)

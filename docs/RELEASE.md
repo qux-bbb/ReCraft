@@ -12,14 +12,20 @@
 | `dist/recraft-v<version>-windows-x64.msi` | WiX v5 MSI 安装器（仓库内固定 WiX 5.0.2 可用时生成；CI msi job 必建） |
 
 ```powershell
-pwsh -File scripts/package.ps1                 # release build + zip +（检测到 WiX 时）MSI
-pwsh -File scripts/package.ps1 -NoBuild        # 复用 target\release
-pwsh -File scripts/package.ps1 -NoMsi          # 仅 zip（无 dotnet/WiX 的机器；CI package job）
-pwsh -File scripts/package.ps1 -RequireMsi     # WiX 5 缺失则失败（CI msi job）
-pwsh -File scripts/verify-package.ps1          # zip + MSI 的哈希/条目/包内二进制
-pwsh -File scripts/verify-msi.ps1              # MSI：结构+载荷+安装/卸载（需提权提示符）
-pwsh -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
-                                               # 干净机：安装→CLI→GUI→卸载→清理（需提权提示符）
+# release build + zip +（检测到 WiX 时）MSI
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+# 复用 target\release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1 -NoBuild
+# 仅 zip（无 dotnet/WiX 的机器；CI package job）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1 -NoMsi
+# WiX 5 缺失则失败（CI msi job）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1 -RequireMsi
+# zip + MSI 的哈希/条目/包内二进制
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-package.ps1
+# MSI：结构+载荷+安装/卸载（需提权提示符）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-msi.ps1
+# 干净机：安装→CLI→GUI→卸载→清理（需提权提示符）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
 ```
 
 版本来自 workspace `Cargo.toml` 的 `version`；可用 `-Version` 覆盖。`dist` 里上一次运行的
@@ -250,7 +256,7 @@ Certum 开源证书或 Azure Artifact Signing，也不购买 OV/EV 证书。发�
 
 1. `cargo test --workspace`、`scripts/e2e.ps1`、`scripts/bench-large.ps1` 全绿。
 2. 更新 `CHANGELOG.md` 与 `docs/M*.md` 状态。
-3. `pwsh -File scripts/package.ps1`（MSI 需要 `dotnet tool restore`；CI msi job 自动完成）。
+3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1`（MSI 需要 `dotnet tool restore`；CI msi job 自动完成）。
 4. `scripts/verify-package.ps1` + 提权提示符下的 `scripts/verify-msi.ps1` 全过；
    校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
 5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
