@@ -8,7 +8,7 @@
 //! commands, so undo/redo behave exactly like the CLI.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -1752,6 +1752,9 @@ pub struct ReCraftApp {
     graph_overview_fraction: f32,
     /// Block the graph view should centre on its next frame (set by an overview click).
     graph_center_on: Option<Address>,
+    /// Blocks the user dragged to another place, keyed by block start and stored in layout
+    /// units (zoom 1). IDA keeps a hand-arranged graph until the function is reopened.
+    graph_offsets: HashMap<u64, egui::Vec2>,
     analysis: Option<AnalysisJob>,
     ai_status: String,
     ai_mode: AiMode,
@@ -1885,6 +1888,7 @@ impl Default for ReCraftApp {
             graph_viewport: None,
             graph_overview_fraction: GRAPH_OVERVIEW_SPLIT,
             graph_center_on: None,
+            graph_offsets: HashMap::new(),
             cfg_dirty: false,
             analysis: None,
             ai_status: String::new(),
@@ -2182,6 +2186,7 @@ impl ReCraftApp {
         self.graph_scroll = egui::Vec2::ZERO;
         self.graph_pending_offset = None;
         self.graph_center_pending = false;
+        self.graph_offsets.clear();
 
         self.history.clear();
         self.history_pos = 0;
@@ -5837,7 +5842,8 @@ impl ReCraftApp {
         if cfg.blocks.is_empty() {
             return;
         }
-        let (local, canvas) = graph_layout(&cfg, 1.0);
+        let (mut local, natural) = graph_layout(&cfg, 1.0);
+        let canvas = apply_graph_offsets(&cfg, &mut local, natural, &self.graph_offsets, 1.0);
         let width = ui.available_width().max(80.0);
         let height = ui.available_height().max(80.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
@@ -7799,7 +7805,14 @@ impl ReCraftApp {
         let text_size = 11.0 * zoom;
         let pad = 10.0 * zoom;
         let max_lines = 10usize;
-        let (local, canvas) = graph_layout(&cfg, zoom);
+        let (local, natural) = graph_layout(&cfg, zoom);
+        // Hand-placed blocks (dragging a node) shift the laid-out rectangles; the canvas
+        // grows so a block pulled to the bottom/right stays scrollable into view.
+        let mut placed = local.clone();
+        let canvas = apply_graph_offsets(&cfg, &mut placed, natural, &self.graph_offsets, zoom);
+        // IDA prints `loc_…:` inside a block only when a branch jumps to it, not when it is
+        // merely fallen through to.
+        let labelled = branch_targets(&cfg);
         let selected = self
             .disasm_rows
             .get(self.selected)
@@ -7865,14 +7878,14 @@ impl ReCraftApp {
                     block.start.get() <= addr.get() && addr.get() < block.end.get()
                 })
             {
-                ui.scroll_to_rect(local[index].translate(origin), Some(egui::Align::Center));
+                ui.scroll_to_rect(placed[index].translate(origin), Some(egui::Align::Center));
             }
             // Edges first, so frames paint on top (IDA draws them under the blocks).
             for block in &cfg.blocks {
-                let source = local[block.index];
+                let source = placed[block.index];
                 let mut track = 0usize;
                 for &(target, kind) in &block.edges {
-                    let Some(&target_rect) = local.get(target) else {
+                    let Some(&target_rect) = placed.get(target) else {
                         continue;
                     };
                     let color = edge_color(kind);
@@ -7936,8 +7949,11 @@ impl ReCraftApp {
                 }
             }
             for (index, block) in cfg.blocks.iter().enumerate() {
-                let rect = local[index].translate(origin);
+                let rect = placed[index].translate(origin);
                 let is_entry = index == cfg.entry;
+                // IDA's `loc_…:` label opens the body of a block a branch jumps to.
+                let label = (labelled[index] && !is_entry).then(|| label_text(block.start.get()));
+                let body_top = header_h + pad;
                 let current = selected
                     .and_then(|addr| block.insns.iter().position(|insn| insn.addr.get() == addr));
                 // IDA's block: drop shadow, white body, hairline frame, teal header.
@@ -7978,8 +7994,18 @@ impl ReCraftApp {
                         pal.comment,
                     );
                 }
+                if let Some(label) = label.as_deref() {
+                    painter.text(
+                        rect.min + egui::vec2(pad, body_top),
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        mono.clone(),
+                        pal.name,
+                    );
+                }
+                let label_lines = usize::from(label.is_some());
                 if let Some(line_index) = current {
-                    let y = rect.min.y + header_h + pad + line_index as f32 * line_h;
+                    let y = rect.min.y + body_top + (label_lines + line_index) as f32 * line_h;
                     painter.rect_filled(
                         egui::Rect::from_min_size(
                             egui::pos2(rect.min.x + 1.0, y),
@@ -8005,7 +8031,11 @@ impl ReCraftApp {
                     }
                     let galley = painter.layout_job(job);
                     painter.galley(
-                        rect.min + egui::vec2(pad, header_h + pad + line_index as f32 * line_h),
+                        rect.min
+                            + egui::vec2(
+                                pad,
+                                body_top + (label_lines + line_index) as f32 * line_h,
+                            ),
                         galley,
                         pal.text,
                     );
@@ -8019,14 +8049,33 @@ impl ReCraftApp {
                         Color32::from_gray(0x90),
                     );
                 }
-                let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click());
+                let response =
+                    ui.interact(rect, ui.id().with(("cfg", index)), Sense::click_and_drag());
+                if response.dragged() {
+                    // IDA lets a block be dragged to another place; the position sticks for
+                    // the session and the edges follow the frame on the next repaint.
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let base = local[index];
+                    let mut offset = self
+                        .graph_offsets
+                        .get(&block.start.get())
+                        .copied()
+                        .unwrap_or_default()
+                        + response.drag_delta() / zoom;
+                    // No negative canvas: a block may not be pushed out of reach to the top
+                    // or the left. The bound is a screen margin, so divide the zoom back out
+                    // of the stored (zoom-1) offset.
+                    offset.x = offset.x.max((8.0 - base.min.x) / zoom);
+                    offset.y = offset.y.max((8.0 - base.min.y) / zoom);
+                    self.graph_offsets.insert(block.start.get(), offset);
+                }
                 if response.clicked() {
                     *action = Action::Navigate(block.start);
                 }
                 if response.double_clicked() {
                     *action = Action::NavigateToDisasm(block.start);
                 }
-                if response.hovered() {
+                if response.hovered() && !response.dragged() {
                     let tooltip = block
                         .insns
                         .iter()
@@ -10834,6 +10883,56 @@ fn paint_dashed_rect(
     }
 }
 
+/// Label line IDA prints inside a graph block for an unnamed jump target.
+fn label_text(addr: u64) -> String {
+    format!("loc_{addr:x}:")
+}
+
+/// Blocks a branch jumps to. IDA opens such a block with its `loc_…:` label; a block that
+/// is only fallen through to has no label line.
+fn branch_targets(cfg: &recraft_analysis::Cfg) -> Vec<bool> {
+    let mut targets = vec![false; cfg.blocks.len()];
+    for block in &cfg.blocks {
+        for &(target, kind) in &block.edges {
+            if matches!(
+                kind,
+                recraft_analysis::EdgeKind::Taken
+                    | recraft_analysis::EdgeKind::Unconditional
+                    | recraft_analysis::EdgeKind::JumpTable
+            ) && let Some(slot) = targets.get_mut(target)
+            {
+                *slot = true;
+            }
+        }
+    }
+    targets
+}
+
+/// Shift the laid-out blocks by the positions the user dragged them to and grow the canvas,
+/// so a block moved toward the bottom/right edge can still be scrolled into view.
+fn apply_graph_offsets(
+    cfg: &recraft_analysis::Cfg,
+    rects: &mut [egui::Rect],
+    canvas: egui::Vec2,
+    offsets: &HashMap<u64, egui::Vec2>,
+    zoom: f32,
+) -> egui::Vec2 {
+    if offsets.is_empty() {
+        return canvas;
+    }
+    let margin = 24.0 * zoom;
+    let mut canvas = canvas;
+    for (index, block) in cfg.blocks.iter().enumerate() {
+        let Some(offset) = offsets.get(&block.start.get()) else {
+            continue;
+        };
+        rects[index] = rects[index].translate(*offset * zoom);
+        canvas.x = canvas.x.max(rects[index].max.x + margin);
+        canvas.y = canvas.y.max(rects[index].max.y + margin);
+    }
+    canvas
+}
+
 /// Lay out the CFG the way IDA's graph does: one row per flow rank, top to bottom, with
 /// the blocks of a row ordered by where their predecessors sit and the whole row centred.
 /// The overview minimap uses the same geometry, so it stays a faithful miniature.
@@ -10859,18 +10958,29 @@ fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egu
     // IDA sizes a block to its text (a one-instruction block is a small box, not a 300 px
     // stamp). Consolas advances ~0.55 em, so the widest displayed line plus padding is the
     // width; comments are left out so a long trailing comment cannot stretch the graph.
+    let labelled = branch_targets(cfg);
+    let label_of = |block: &recraft_analysis::BasicBlock| {
+        labelled.get(block.index).copied().unwrap_or(false) && block.index != cfg.entry
+    };
     let width_of = |block: &recraft_analysis::BasicBlock| {
-        let cells = block
+        let mut cells = block
             .insns
             .iter()
             .take(MAX_LINES)
             .map(|insn| insn.text.split(';').next().unwrap_or("").chars().count())
             .max()
             .unwrap_or(0);
+        if label_of(block) {
+            cells = cells.max(label_text(block.start.get()).chars().count());
+        }
         (cells as f32 * 11.0 * 0.55 + 22.0).clamp(150.0, 520.0) * zoom
     };
     let height_of = |block: &recraft_analysis::BasicBlock| {
-        header_h + block.insns.len().min(MAX_LINES) as f32 * line_h + pad * 2.0 + 4.0 * zoom
+        header_h
+            + block.insns.len().min(MAX_LINES) as f32 * line_h
+            + if label_of(block) { line_h } else { 0.0 }
+            + pad * 2.0
+            + 4.0 * zoom
     };
     let row_width = |row: &[usize]| {
         row.iter()
@@ -17874,6 +17984,151 @@ mod tests {
         assert!((rects[0].center().x - canvas.x * 0.5).abs() < 1.0);
         assert!(canvas.x > rects[1].max.x, "canvas must contain the nodes");
         assert!(canvas.y > rects[3].max.y);
+        // A branch target carries IDA's `loc_…:` line, so it is one line taller than the
+        // entry block with the same single instruction.
+        assert_eq!(rects[1].height() - rects[0].height(), 14.0);
+        assert_eq!(label_text(0x140001466), "loc_140001466:");
+    }
+
+    #[test]
+    fn dragging_a_block_moves_it_and_keeps_the_edges_attached() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn, EdgeKind};
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + 1),
+            insns: vec![CfgInsn {
+                addr: Address::new(start),
+                text: "ret".to_owned(),
+            }],
+            edges,
+        };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(0, 0x1000, vec![(1, EdgeKind::Unconditional)]),
+                block(1, 0x1001, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let mut app = ReCraftApp {
+            cfg: Some(cfg),
+            view_mode: ViewMode::Graph,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let mut action = Action::None;
+        let mut frame = |app: &mut ReCraftApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.graph_view(ui, &mut action));
+            output.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        // The blocks are the interactive rectangles that are not the canvas.
+        let node = ctx
+            .interactive_rects_last_pass()
+            .into_iter()
+            .filter(|rect| rect.width() < 600.0 && rect.height() < 400.0)
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .expect("the graph draws its blocks as interactive rectangles");
+        let from = node.center();
+        let to = from + egui::vec2(60.0, 40.0);
+        let press = |pos: egui::Pos2, pressed: bool| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        frame(&mut app, press(from, true));
+        frame(&mut app, vec![egui::Event::PointerMoved(to)]);
+        frame(&mut app, press(to, false));
+        assert_eq!(app.graph_offsets.len(), 1, "one block was dragged");
+        let offset = *app.graph_offsets.values().next().unwrap();
+        assert!(
+            (offset - egui::vec2(60.0, 40.0)).length() < 2.0,
+            "the block follows the pointer: {offset:?}"
+        );
+    }
+
+    #[test]
+    fn graph_labels_only_land_on_branch_targets() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn, EdgeKind};
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + 1),
+            insns: vec![CfgInsn {
+                addr: Address::new(start),
+                text: "ret".to_owned(),
+            }],
+            edges,
+        };
+        // 0 branches to 1 (taken) and falls through to 2; 3 is only reached by a jump table.
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(
+                    0,
+                    0x1000,
+                    vec![
+                        (1, EdgeKind::Taken),
+                        (2, EdgeKind::NotTaken),
+                        (3, EdgeKind::JumpTable),
+                    ],
+                ),
+                block(1, 0x1001, Vec::new()),
+                block(2, 0x1002, Vec::new()),
+                block(3, 0x1003, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        assert_eq!(branch_targets(&cfg), vec![false, true, false, true]);
+    }
+
+    #[test]
+    fn dragged_blocks_move_and_grow_the_canvas() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn};
+        let block = |index: usize, start: u64| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + 1),
+            insns: vec![CfgInsn {
+                addr: Address::new(start),
+                text: "ret".to_owned(),
+            }],
+            edges: Vec::new(),
+        };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![block(0, 0x1000), block(1, 0x1001)],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let (mut rects, canvas) = graph_layout(&cfg, 1.0);
+        let before = rects[0];
+        let mut offsets = HashMap::new();
+        offsets.insert(0x1000u64, egui::vec2(40.0, 30.0));
+        let grown = apply_graph_offsets(&cfg, &mut rects, canvas, &offsets, 1.0);
+        assert_eq!(rects[0].min, before.min + egui::vec2(40.0, 30.0));
+        assert!(
+            grown.y >= rects[0].max.y + 24.0,
+            "the canvas must grow so a dragged block stays reachable"
+        );
     }
 
     #[test]
