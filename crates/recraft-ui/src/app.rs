@@ -1752,9 +1752,10 @@ pub struct ReCraftApp {
     graph_overview_fraction: f32,
     /// Block the graph view should centre on its next frame (set by an overview click).
     graph_center_on: Option<Address>,
-    /// Blocks the user dragged to another place, keyed by block start and stored in layout
-    /// units (zoom 1). IDA keeps a hand-arranged graph until the function is reopened.
-    graph_offsets: HashMap<u64, egui::Vec2>,
+    /// Blocks the user dragged to another place, keyed by (function start, block start) and
+    /// stored in layout units (zoom 1). IDA keeps each graph's hand-arranged layout for as
+    /// long as the graph stays open; here it lasts for the session, per function.
+    graph_offsets: HashMap<(u64, u64), egui::Vec2>,
     analysis: Option<AnalysisJob>,
     ai_status: String,
     ai_mode: AiMode,
@@ -7774,7 +7775,8 @@ impl ReCraftApp {
         }
         let edge_color = |kind: recraft_analysis::EdgeKind| graph_edge_color(pal, kind);
         // Opening another function starts at 100 % with the graph centred in the pane,
-        // like IDA opening a graph window.
+        // like IDA opening a graph window. Hand-placed blocks keep their positions: the
+        // offsets are keyed by function, so coming back finds the layout as it was left.
         if self.graph_shown_for != Some(cfg.function) {
             self.graph_shown_for = Some(cfg.function);
             self.graph_zoom = 1.0;
@@ -8056,18 +8058,15 @@ impl ReCraftApp {
                     // the session and the edges follow the frame on the next repaint.
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                     let base = local[index];
-                    let mut offset = self
-                        .graph_offsets
-                        .get(&block.start.get())
-                        .copied()
-                        .unwrap_or_default()
+                    let slot = (cfg.function.get(), block.start.get());
+                    let mut offset = self.graph_offsets.get(&slot).copied().unwrap_or_default()
                         + response.drag_delta() / zoom;
                     // No negative canvas: a block may not be pushed out of reach to the top
                     // or the left. The bound is a screen margin, so divide the zoom back out
                     // of the stored (zoom-1) offset.
                     offset.x = offset.x.max((8.0 - base.min.x) / zoom);
                     offset.y = offset.y.max((8.0 - base.min.y) / zoom);
-                    self.graph_offsets.insert(block.start.get(), offset);
+                    self.graph_offsets.insert(slot, offset);
                 }
                 if response.clicked() {
                     *action = Action::Navigate(block.start);
@@ -10914,16 +10913,17 @@ fn apply_graph_offsets(
     cfg: &recraft_analysis::Cfg,
     rects: &mut [egui::Rect],
     canvas: egui::Vec2,
-    offsets: &HashMap<u64, egui::Vec2>,
+    offsets: &HashMap<(u64, u64), egui::Vec2>,
     zoom: f32,
 ) -> egui::Vec2 {
-    if offsets.is_empty() {
+    let function = cfg.function.get();
+    if !offsets.keys().any(|(owner, _)| *owner == function) {
         return canvas;
     }
     let margin = 24.0 * zoom;
     let mut canvas = canvas;
     for (index, block) in cfg.blocks.iter().enumerate() {
-        let Some(offset) = offsets.get(&block.start.get()) else {
+        let Some(offset) = offsets.get(&(function, block.start.get())) else {
             continue;
         };
         rects[index] = rects[index].translate(*offset * zoom);
@@ -18122,13 +18122,22 @@ mod tests {
         let (mut rects, canvas) = graph_layout(&cfg, 1.0);
         let before = rects[0];
         let mut offsets = HashMap::new();
-        offsets.insert(0x1000u64, egui::vec2(40.0, 30.0));
+        offsets.insert((0x1000u64, 0x1000u64), egui::vec2(40.0, 30.0));
         let grown = apply_graph_offsets(&cfg, &mut rects, canvas, &offsets, 1.0);
         assert_eq!(rects[0].min, before.min + egui::vec2(40.0, 30.0));
         assert!(
             grown.y >= rects[0].max.y + 24.0,
             "the canvas must grow so a dragged block stays reachable"
         );
+
+        // The same block address in another function keeps its own layout: dragging a block
+        // in one graph must not move a block of a different graph.
+        let (mut other, other_canvas) = graph_layout(&cfg, 1.0);
+        let mut foreign = HashMap::new();
+        foreign.insert((0x2000u64, 0x1000u64), egui::vec2(40.0, 30.0));
+        let unchanged = apply_graph_offsets(&cfg, &mut other, other_canvas, &foreign, 1.0);
+        assert_eq!(other[0].min, before.min);
+        assert_eq!(unchanged, other_canvas);
     }
 
     #[test]
