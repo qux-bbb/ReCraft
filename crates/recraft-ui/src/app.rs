@@ -7824,7 +7824,6 @@ impl ReCraftApp {
         let line_h = 14.0 * zoom;
         let text_size = 11.0 * zoom;
         let pad = 10.0 * zoom;
-        let max_lines = 10usize;
         let (local, natural) = graph_layout(&cfg, zoom);
         // Hand-placed blocks (dragging a node) shift the laid-out rectangles; the canvas
         // grows so a block pulled to the bottom/right stays scrollable into view.
@@ -7901,6 +7900,15 @@ impl ReCraftApp {
                 ui.scroll_to_rect(placed[index].translate(origin), Some(egui::Align::Center));
             }
             // Edges first, so frames paint on top (IDA draws them under the blocks).
+            // A double-click on an edge follows it to the target block; the pick only runs
+            // on that frame, so the paths are collected just when they are needed.
+            let pick_edge = response.double_clicked()
+                && pointer.is_some_and(|pos| {
+                    !placed
+                        .iter()
+                        .any(|rect| rect.translate(origin).contains(pos))
+                });
+            let mut edge_hits: Vec<(egui::Pos2, egui::Pos2, Address)> = Vec::new();
             for block in &cfg.blocks {
                 let source = placed[block.index];
                 let mut track = 0usize;
@@ -7910,66 +7918,43 @@ impl ReCraftApp {
                     };
                     let color = edge_color(kind);
                     let stroke = egui::Stroke::new((1.4 * zoom).max(1.0), color);
-                    if target_rect.min.y > source.max.y + 6.0 * zoom {
-                        // Forward edge: straight down out of the source, across, then down
-                        // into the target's top edge. Each edge of one block gets its own
-                        // track so a two-way branch does not draw both lines on top of
-                        // each other.
-                        let sx = source.center().x + origin.x;
-                        let dx = target_rect.center().x + origin.x;
-                        let top = source.max.y + origin.y;
-                        let bottom = target_rect.min.y + origin.y;
-                        let mid = (top + (16.0 + track as f32 * 7.0) * zoom)
-                            .min(bottom - 11.0 * zoom)
-                            .max(top + 4.0 * zoom);
-                        painter.add(egui::epaint::PathShape::line(
-                            vec![
-                                egui::pos2(sx, top),
-                                egui::pos2(sx, mid),
-                                egui::pos2(dx, mid),
-                                egui::pos2(dx, bottom - 9.0 * zoom),
-                            ],
-                            stroke,
-                        ));
-                        paint_graph_arrow(
-                            &painter,
-                            egui::pos2(dx, bottom),
-                            egui::vec2(0.0, 1.0),
-                            color,
-                            zoom,
-                        );
-                    } else {
-                        // Back edge (or a jump inside one row): leave the bottom, run down
-                        // the right-hand margin and come back in through the target's
-                        // right edge, the way IDA wraps loop edges.
-                        let lane = source.max.x.max(target_rect.max.x)
-                            + origin.x
-                            + (20.0 + track as f32 * 9.0) * zoom;
-                        let out = source.max.y + origin.y;
-                        let y = target_rect.center().y + origin.y;
-                        painter.add(egui::epaint::PathShape::line(
-                            vec![
-                                egui::pos2(source.center().x + origin.x, out),
-                                egui::pos2(source.center().x + origin.x, out + 13.0 * zoom),
-                                egui::pos2(lane, out + 13.0 * zoom),
-                                egui::pos2(lane, y),
-                                egui::pos2(target_rect.max.x + origin.x + 9.0 * zoom, y),
-                            ],
-                            stroke,
-                        ));
-                        paint_graph_arrow(
-                            &painter,
-                            egui::pos2(target_rect.max.x + origin.x, y),
-                            egui::vec2(-1.0, 0.0),
-                            color,
-                            zoom,
-                        );
+                    let (points, tip, dir) =
+                        graph_edge_route(source, target_rect, origin, track, zoom);
+                    if pick_edge {
+                        let address = cfg.blocks[target].start;
+                        for segment in points.windows(2) {
+                            edge_hits.push((segment[0], segment[1], address));
+                        }
+                        // The arrowhead sticks out beyond the last drawn point.
+                        if let Some(last) = points.last() {
+                            edge_hits.push((*last, tip, address));
+                        }
                     }
+                    painter.add(egui::epaint::PathShape::line(points, stroke));
+                    paint_graph_arrow(&painter, tip, dir, color, zoom);
                     track += 1;
+                }
+            }
+            if pick_edge && let Some(pos) = pointer {
+                let mut best: Option<(f32, Address)> = None;
+                for &(a, b, address) in &edge_hits {
+                    let distance = distance_to_segment(pos, a, b);
+                    if distance <= 6.0 * zoom && best.is_none_or(|(closest, _)| distance < closest)
+                    {
+                        best = Some((distance, address));
+                    }
+                }
+                if let Some((_, address)) = best {
+                    *action = Action::GraphGoTo(address);
                 }
             }
             for (index, block) in cfg.blocks.iter().enumerate() {
                 let rect = placed[index].translate(origin);
+                // A block now shows every instruction, so a big function can lay out tens of
+                // thousands of lines: only shape the text of blocks the pane actually shows.
+                if !clip.intersects(rect) {
+                    continue;
+                }
                 let is_entry = index == cfg.entry;
                 // IDA's `loc_…:` label opens the body of a block a branch jumps to.
                 let label = (labelled[index] && !is_entry).then(|| label_text(block.start.get()));
@@ -8035,7 +8020,20 @@ impl ReCraftApp {
                         pal.graph_current_line,
                     );
                 }
-                for (line_index, insn) in block.insns.iter().take(max_lines).enumerate() {
+                // A block can be hundreds of lines tall now that nothing is truncated; shape
+                // only the lines the pane actually shows.
+                let body_y = rect.min.y + body_top;
+                let first_line = (((clip.min.y - body_y) / line_h).floor().max(0.0) as usize)
+                    .min(block.insns.len());
+                let last_line = ((((clip.max.y - body_y) / line_h).ceil().max(0.0)) as usize)
+                    .min(block.insns.len());
+                for (line_index, insn) in block
+                    .insns
+                    .iter()
+                    .enumerate()
+                    .skip(first_line)
+                    .take(last_line.saturating_sub(first_line))
+                {
                     let mut job = LayoutJob::default();
                     let (mnemonic, operands) = match insn.text.split_once(' ') {
                         Some((mnemonic, rest)) => (mnemonic, rest),
@@ -8058,15 +8056,6 @@ impl ReCraftApp {
                             ),
                         galley,
                         pal.text,
-                    );
-                }
-                if block.insns.len() > max_lines {
-                    painter.text(
-                        rect.left_bottom() + egui::vec2(pad, -pad - line_h * 0.2),
-                        egui::Align2::LEFT_BOTTOM,
-                        format!("… {} more", block.insns.len() - max_lines),
-                        FontId::proportional(text_size * 0.85),
-                        Color32::from_gray(0x90),
                     );
                 }
                 let response =
@@ -10844,6 +10833,67 @@ fn graph_edge_color(pal: Palette, kind: recraft_analysis::EdgeKind) -> Color32 {
     }
 }
 
+/// Route one graph edge the way IDA does: forward edges leave the source's bottom edge,
+/// step across at a track line and drop into the target's top edge; back edges (and jumps
+/// inside one row) run down the right margin and come back in through the target's right
+/// edge. Returns the polyline plus the arrowhead's tip and direction.
+fn graph_edge_route(
+    source: egui::Rect,
+    target: egui::Rect,
+    origin: egui::Vec2,
+    track: usize,
+    zoom: f32,
+) -> (Vec<egui::Pos2>, egui::Pos2, egui::Vec2) {
+    if target.min.y > source.max.y + 6.0 * zoom {
+        // Forward edge: straight down out of the source, across, then down into the
+        // target's top edge. Each edge of one block gets its own track so a two-way branch
+        // does not draw both lines on top of each other.
+        let sx = source.center().x + origin.x;
+        let dx = target.center().x + origin.x;
+        let top = source.max.y + origin.y;
+        let bottom = target.min.y + origin.y;
+        let mid = (top + (16.0 + track as f32 * 7.0) * zoom)
+            .min(bottom - 11.0 * zoom)
+            .max(top + 4.0 * zoom);
+        (
+            vec![
+                egui::pos2(sx, top),
+                egui::pos2(sx, mid),
+                egui::pos2(dx, mid),
+                egui::pos2(dx, bottom - 9.0 * zoom),
+            ],
+            egui::pos2(dx, bottom),
+            egui::vec2(0.0, 1.0),
+        )
+    } else {
+        let lane = source.max.x.max(target.max.x) + origin.x + (20.0 + track as f32 * 9.0) * zoom;
+        let out = source.max.y + origin.y;
+        let y = target.center().y + origin.y;
+        (
+            vec![
+                egui::pos2(source.center().x + origin.x, out),
+                egui::pos2(source.center().x + origin.x, out + 13.0 * zoom),
+                egui::pos2(lane, out + 13.0 * zoom),
+                egui::pos2(lane, y),
+                egui::pos2(target.max.x + origin.x + 9.0 * zoom, y),
+            ],
+            egui::pos2(target.max.x + origin.x, y),
+            egui::vec2(-1.0, 0.0),
+        )
+    }
+}
+
+/// Distance from `point` to the segment `a`–`b`, used to hit-test a double-clicked edge.
+fn distance_to_segment(point: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let length_sq = ab.length_sq();
+    if length_sq <= f32::EPSILON {
+        return (point - a).length();
+    }
+    let t = ((point - a).dot(ab) / length_sq).clamp(0.0, 1.0);
+    (point - (a + ab * t)).length()
+}
+
 /// Solid arrowhead at `tip` pointing along `dir` (IDA draws a fat triangle where an edge
 /// lands on its target block).
 fn paint_graph_arrow(
@@ -10955,7 +11005,6 @@ fn apply_graph_offsets(
 /// the blocks of a row ordered by where their predecessors sit and the whole row centred.
 /// The overview minimap uses the same geometry, so it stays a faithful miniature.
 fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egui::Vec2) {
-    const MAX_LINES: usize = 10;
     // Blocks per visual row inside one flow layer (wraps wide jump-table fans).
     const MAX_PER_ROW: usize = 4;
     let header_h = 18.0 * zoom;
@@ -10975,7 +11024,7 @@ fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egu
     }
     // IDA sizes a block to its text (a one-instruction block is a small box, not a 300 px
     // stamp). Consolas advances ~0.55 em, so the widest displayed line plus padding is the
-    // width; comments are left out so a long trailing comment cannot stretch the graph.
+    // width.
     let labelled = branch_targets(cfg);
     let label_of = |block: &recraft_analysis::BasicBlock| {
         labelled.get(block.index).copied().unwrap_or(false) && block.index != cfg.entry
@@ -10984,7 +11033,6 @@ fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egu
         let mut cells = block
             .insns
             .iter()
-            .take(MAX_LINES)
             .map(|insn| insn.text.split(';').next().unwrap_or("").chars().count())
             .max()
             .unwrap_or(0);
@@ -10993,9 +11041,10 @@ fn graph_layout(cfg: &recraft_analysis::Cfg, zoom: f32) -> (Vec<egui::Rect>, egu
         }
         (cells as f32 * 11.0 * 0.55 + 22.0).clamp(150.0, 520.0) * zoom
     };
+    // IDA shows a block in full; no instruction is dropped, so a long block is a tall node.
     let height_of = |block: &recraft_analysis::BasicBlock| {
         header_h
-            + block.insns.len().min(MAX_LINES) as f32 * line_h
+            + block.insns.len() as f32 * line_h
             + if label_of(block) { line_h } else { 0.0 }
             + pad * 2.0
             + 4.0 * zoom
@@ -18108,6 +18157,110 @@ mod tests {
         assert!(
             (offset - egui::vec2(60.0, 40.0)).length() < 2.0,
             "the block follows the pointer: {offset:?}"
+        );
+    }
+
+    #[test]
+    fn graph_blocks_show_every_instruction() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn};
+        let block = |index: usize, start: u64, count: usize| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + count as u64),
+            insns: (0..count)
+                .map(|offset| CfgInsn {
+                    addr: Address::new(start + offset as u64),
+                    text: "nop".to_owned(),
+                })
+                .collect(),
+            edges: Vec::new(),
+        };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![block(0, 0x1000, 25), block(1, 0x2000, 5)],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let (rects, _) = graph_layout(&cfg, 1.0);
+        assert_eq!(
+            rects[0].height() - rects[1].height(),
+            20.0 * 14.0,
+            "a block grows a line for every instruction it shows: nothing is truncated"
+        );
+    }
+
+    #[test]
+    fn double_clicking_an_edge_follows_it_to_the_target_block() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn, EdgeKind};
+        let block = |index: usize, start: u64, edges: Vec<(usize, EdgeKind)>| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + 1),
+            insns: vec![CfgInsn {
+                addr: Address::new(start),
+                text: "ret".to_owned(),
+            }],
+            edges,
+        };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![
+                block(0, 0x1000, vec![(1, EdgeKind::Unconditional)]),
+                block(1, 0x1001, Vec::new()),
+            ],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let mut app = ReCraftApp {
+            cfg: Some(cfg),
+            view_mode: ViewMode::Graph,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let mut action = Action::None;
+        let mut frame = |app: &mut ReCraftApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.graph_view(ui, &mut action));
+            output.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        let mut nodes: Vec<egui::Rect> = ctx
+            .interactive_rects_last_pass()
+            .into_iter()
+            .filter(|rect| rect.width() < 600.0 && rect.height() < 400.0)
+            .collect();
+        nodes.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+        assert!(nodes.len() >= 2, "the two blocks are interactive");
+        let (source, target) = (nodes[0], nodes[1]);
+        // The two blocks are centred on the canvas, so the edge runs straight down between
+        // them: pick a point on that vertical stretch.
+        let pos = egui::pos2(source.center().x, (source.max.y + target.min.y) * 0.5);
+        let click = |pressed: bool| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        frame(&mut app, click(true));
+        frame(&mut app, click(false));
+        frame(&mut app, click(true));
+        frame(&mut app, click(false));
+        assert_eq!(
+            action,
+            Action::GraphGoTo(Address::new(0x1001)),
+            "double-clicking the edge must follow it to the target block"
         );
     }
 
