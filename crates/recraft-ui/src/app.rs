@@ -7802,22 +7802,28 @@ impl ReCraftApp {
             self.graph_pending_offset = None;
             self.graph_center_pending = true;
         }
-        // Ctrl+wheel zooms around the pointer instead of scrolling the canvas (IDA's
-        // graph gesture). The wheel delta is consumed here so the scroll area stays put.
+        // Ctrl+wheel zooms around the pointer, like IDA's graph. egui turns its zoom
+        // modifier (Ctrl on Windows, Cmd on macOS) into a zoom-factor delta instead of a
+        // scroll, so that is how the gesture arrives; platforms whose zoom modifier is not
+        // Ctrl still send a plain Ctrl+scroll, which the fallback handles.
         let mut forced_offset = self.graph_pending_offset.take();
-        let wheel = ui.input(|input| input.smooth_scroll_delta.y);
         let pointer = ui.input(|input| input.pointer.hover_pos());
-        if ui.input(|input| input.modifiers.ctrl)
-            && wheel != 0.0
+        let zoom_gesture = ui.input(|input| input.zoom_delta());
+        let ctrl_wheel = ui.input(|input| input.modifiers.ctrl);
+        let wheel = ui.input(|input| input.smooth_scroll_delta.y);
+        let mut factor = None;
+        if (zoom_gesture - 1.0).abs() > f32::EPSILON {
+            factor = Some(zoom_gesture);
+        } else if ctrl_wheel && wheel != 0.0 {
+            // The scroll is consumed here so the canvas does not pan as well.
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+            factor = Some((wheel * 0.0025).exp());
+        }
+        if let Some(factor) = factor
             && let (Some(viewport), Some(pointer)) = (self.graph_viewport, pointer)
             && viewport.contains(pointer)
         {
-            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
-            forced_offset = self.zoom_graph(
-                (wheel * 0.0025).exp(),
-                Some(pointer - viewport.min),
-                viewport,
-            );
+            forced_offset = self.zoom_graph(factor, Some(pointer - viewport.min), viewport);
         }
         let zoom = self.graph_zoom;
         let header_h = 18.0 * zoom;
@@ -18261,6 +18267,83 @@ mod tests {
             action,
             Action::GraphGoTo(Address::new(0x1001)),
             "double-clicking the edge must follow it to the target block"
+        );
+    }
+
+    #[test]
+    fn ctrl_wheel_zooms_the_graph_around_the_pointer() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn};
+        let block = |index: usize, start: u64| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + 1),
+            insns: vec![CfgInsn {
+                addr: Address::new(start),
+                text: "ret".to_owned(),
+            }],
+            edges: Vec::new(),
+        };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            blocks: vec![block(0, 0x1000), block(1, 0x2000)],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let mut app = ReCraftApp {
+            cfg: Some(cfg),
+            view_mode: ViewMode::Graph,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let mut action = Action::None;
+        let mut clock = 0.0f64;
+        let mut frame = |app: &mut ReCraftApp, events: Vec<egui::Event>| {
+            clock += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                time: Some(clock),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.graph_view(ui, &mut action));
+            output.textures_delta.clear();
+        };
+        let wheel = |modifiers: egui::Modifiers| egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        };
+        let pointer = egui::pos2(300.0, 300.0);
+        frame(&mut app, Vec::new());
+        // A plain wheel scrolls the canvas and leaves the scale alone.
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                wheel(egui::Modifiers::NONE),
+            ],
+        );
+        frame(&mut app, Vec::new());
+        assert_eq!(app.graph_zoom, 1.0, "the wheel alone must not zoom");
+        // egui reports the zoom-modifier wheel as a zoom-factor delta, and the graph has to
+        // consume that as its own scale (IDA's Ctrl+wheel).
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                wheel(egui::Modifiers::CTRL),
+            ],
+        );
+        frame(&mut app, Vec::new());
+        assert!(
+            app.graph_zoom > 1.05,
+            "Ctrl+wheel must scale the graph up, got {}",
+            app.graph_zoom
         );
     }
 
