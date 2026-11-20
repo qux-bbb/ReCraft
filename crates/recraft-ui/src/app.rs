@@ -1731,12 +1731,11 @@ pub struct ReCraftApp {
     /// Graph-view zoom factor (0.1..=4.0, IDA's range), adjusted by Ctrl+wheel, the
     /// on-pane +/- controls or *Fit*.
     graph_zoom: f32,
-    /// Function the zoom/scroll state belongs to; a new graph re-centres at 100 %.
+    /// Function the zoom/pan state belongs to; a new graph re-centres at 100 %.
     graph_shown_for: Option<Address>,
-    /// Scroll offset of the graph canvas, kept so Ctrl+wheel can anchor the cursor.
-    graph_scroll: egui::Vec2,
-    /// Scroll offset to apply on the next frame (zoom buttons keep the pane centre fixed).
-    graph_pending_offset: Option<egui::Vec2>,
+    /// Where the graph's top-left sits inside the pane (screen points). IDA pans its graph
+    /// freely with the left button, so the view is not limited to a scroll range.
+    graph_pan: egui::Vec2,
     /// Centre the graph on its next frame (after opening or *Fit*, like IDA).
     graph_center_pending: bool,
     /// Graph or text mode of the single Code View pane.
@@ -1880,8 +1879,7 @@ impl Default for ReCraftApp {
             cfg_for: None,
             graph_zoom: 1.0,
             graph_shown_for: None,
-            graph_scroll: egui::Vec2::ZERO,
-            graph_pending_offset: None,
+            graph_pan: egui::Vec2::ZERO,
             graph_center_pending: false,
             view_mode: ViewMode::Graph,
             mono_zoom: 1.0,
@@ -2184,8 +2182,7 @@ impl ReCraftApp {
         self.graph_visible = None;
         self.graph_viewport = None;
         self.graph_shown_for = None;
-        self.graph_scroll = egui::Vec2::ZERO;
-        self.graph_pending_offset = None;
+        self.graph_pan = egui::Vec2::ZERO;
         self.graph_center_pending = false;
         self.graph_offsets.clear();
 
@@ -7798,32 +7795,34 @@ impl ReCraftApp {
         if self.graph_shown_for != Some(cfg.function) {
             self.graph_shown_for = Some(cfg.function);
             self.graph_zoom = 1.0;
-            self.graph_scroll = egui::Vec2::ZERO;
-            self.graph_pending_offset = None;
+            self.graph_pan = egui::Vec2::ZERO;
             self.graph_center_pending = true;
         }
         // Ctrl+wheel zooms around the pointer, like IDA's graph. egui turns its zoom
         // modifier (Ctrl on Windows, Cmd on macOS) into a zoom-factor delta instead of a
         // scroll, so that is how the gesture arrives; platforms whose zoom modifier is not
         // Ctrl still send a plain Ctrl+scroll, which the fallback handles.
-        let mut forced_offset = self.graph_pending_offset.take();
         let pointer = ui.input(|input| input.pointer.hover_pos());
+        let over_pane = self
+            .graph_viewport
+            .zip(pointer)
+            .is_some_and(|(viewport, pointer)| viewport.contains(pointer));
         let zoom_gesture = ui.input(|input| input.zoom_delta());
         let ctrl_wheel = ui.input(|input| input.modifiers.ctrl);
-        let wheel = ui.input(|input| input.smooth_scroll_delta.y);
+        let wheel = ui.input(|input| input.smooth_scroll_delta);
         let mut factor = None;
         if (zoom_gesture - 1.0).abs() > f32::EPSILON {
             factor = Some(zoom_gesture);
-        } else if ctrl_wheel && wheel != 0.0 {
-            // The scroll is consumed here so the canvas does not pan as well.
-            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
-            factor = Some((wheel * 0.0025).exp());
+        } else if ctrl_wheel && wheel.y != 0.0 {
+            factor = Some((wheel.y * 0.0025).exp());
         }
-        if let Some(factor) = factor
+        if over_pane
+            && let Some(factor) = factor
             && let (Some(viewport), Some(pointer)) = (self.graph_viewport, pointer)
-            && viewport.contains(pointer)
         {
-            forced_offset = self.zoom_graph(factor, Some(pointer - viewport.min), viewport);
+            // Consume the scroll so the canvas does not pan as well.
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+            self.zoom_graph(factor, Some(pointer - viewport.min), viewport);
         }
         let zoom = self.graph_zoom;
         let header_h = 18.0 * zoom;
@@ -7832,7 +7831,7 @@ impl ReCraftApp {
         let pad = 10.0 * zoom;
         let (local, natural) = graph_layout(&cfg, zoom);
         // Hand-placed blocks (dragging a node) shift the laid-out rectangles; the canvas
-        // grows so a block pulled to the bottom/right stays scrollable into view.
+        // grows so a block pulled to the bottom/right stays reachable.
         let mut placed = local.clone();
         let canvas = apply_graph_offsets(&cfg, &mut placed, natural, &self.graph_offsets, zoom);
         // IDA prints `loc_…:` inside a block only when a branch jumps to it, not when it is
@@ -7843,263 +7842,254 @@ impl ReCraftApp {
             .get(self.selected)
             .map(|line| line.addr.get());
         let mono = FontId::monospace(text_size);
-        let mut visible_rect = None;
-        // Reserve a line for the legend/zoom strip: the canvas must not push it off the
-        // pane (IDA's graph fills the tab and keeps its status line visible).
+        // The graph is a freely pannable canvas, not a scroll area: IDA draws no
+        // scrollbars, the wheel scrolls and the left button pans in any direction.
         let strip_h = 26.0;
-        let mut area = egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .max_height((ui.available_height() - strip_h).max(80.0));
-        if let Some(offset) = forced_offset {
-            area = area.scroll_offset(offset);
+        let size = egui::vec2(
+            ui.available_width(),
+            (ui.available_height() - strip_h).max(80.0),
+        );
+        let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
+        let viewport = response.rect;
+        let clip = viewport;
+        self.graph_viewport = Some(viewport);
+        painter.rect_filled(viewport, 0.0, pal.graph_background);
+        // The wheel pans the graph (Shift turns it horizontal; egui already folds the two
+        // axes into one delta). A positive delta moves the content down, exactly how far
+        // the pan has to grow. Only while the pointer is over the pane, so wheeling the
+        // Functions list or the AI panel still scrolls those. Ctrl+wheel was handled above.
+        let scroll = ui.input(|input| input.smooth_scroll_delta);
+        if scroll != egui::Vec2::ZERO && pointer.is_some_and(|pos| viewport.contains(pos)) {
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+            self.graph_pan += scroll;
         }
-        let output = area.show(ui, |ui| {
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(
-                    canvas.x.max(ui.available_width()),
-                    canvas.y.max(ui.available_height()),
-                ),
-                Sense::click_and_drag(),
-            );
-            let origin = response.rect.min.to_vec2();
-            let clip = ui.clip_rect();
-            self.graph_viewport = Some(clip);
-            painter.rect_filled(response.rect, 0.0, pal.graph_background);
-            // IDA pans a graph by dragging the canvas; the wheel still scrolls and
-            // Ctrl+wheel zooms.
-            if response.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                ui.scroll_with_delta(-response.drag_delta());
-            }
-            // The visible rectangle is stored in unzoomed layout coordinates: the overview
-            // draws the 1.0 layout, so a zoomed view must not shrink or grow its frame.
-            let inverse = 1.0 / zoom;
-            visible_rect = Some(egui::Rect::from_min_max(
-                egui::pos2(
-                    (clip.min.x - origin.x) * inverse,
-                    (clip.min.y - origin.y) * inverse,
-                ),
-                egui::pos2(
-                    (clip.max.x - origin.x) * inverse,
-                    (clip.max.y - origin.y) * inverse,
-                ),
-            ));
-            if self.graph_center_pending {
-                // Centre a graph that fits; when it is taller than the pane, line up its
-                // top edge so the entry block (and its header) is visible, like IDA.
-                let viewport = clip.size();
-                let target = if canvas.x <= viewport.x && canvas.y <= viewport.y {
-                    response.rect
+        // IDA pans the graph by dragging with the left button held: the content follows the
+        // pointer, in any direction, with no scroll range to hit.
+        if response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            self.graph_pan += response.drag_delta();
+        }
+        // Centre the whole graph (opening a function, or *Fit*): centred when it fits and
+        // top-aligned when it is taller than the pane so the entry block stays visible.
+        if self.graph_center_pending {
+            self.graph_pan = egui::vec2(
+                (viewport.width() - canvas.x) * 0.5,
+                if canvas.y <= viewport.height() {
+                    (viewport.height() - canvas.y) * 0.5
                 } else {
-                    egui::Rect::from_min_size(response.rect.min, egui::vec2(canvas.x, viewport.y))
-                };
-                ui.scroll_to_rect(target, Some(egui::Align::Center));
-                self.graph_center_pending = false;
-            }
-            // An overview click asks the graph to centre one block without leaving
-            // graph mode (IDA pans the graph instead of switching to the listing).
-            if let Some(addr) = self.graph_center_on.take()
-                && let Some(index) = cfg.blocks.iter().position(|block| {
-                    block.start.get() <= addr.get() && addr.get() < block.end.get()
-                })
-            {
-                ui.scroll_to_rect(placed[index].translate(origin), Some(egui::Align::Center));
-            }
-            // Edges first, so frames paint on top (IDA draws them under the blocks).
-            // A double-click on an edge follows it to the target block; the pick only runs
-            // on that frame, so the paths are collected just when they are needed.
-            let pick_edge = response.double_clicked()
-                && pointer.is_some_and(|pos| {
-                    !placed
-                        .iter()
-                        .any(|rect| rect.translate(origin).contains(pos))
-                });
-            let mut edge_hits: Vec<(egui::Pos2, egui::Pos2, Address)> = Vec::new();
-            for block in &cfg.blocks {
-                let source = placed[block.index];
-                let mut track = 0usize;
-                for &(target, kind) in &block.edges {
-                    let Some(&target_rect) = placed.get(target) else {
-                        continue;
-                    };
-                    let color = edge_color(kind);
-                    let stroke = egui::Stroke::new((1.4 * zoom).max(1.0), color);
-                    let (points, tip, dir) =
-                        graph_edge_route(source, target_rect, origin, track, zoom);
-                    if pick_edge {
-                        let address = cfg.blocks[target].start;
-                        for segment in points.windows(2) {
-                            edge_hits.push((segment[0], segment[1], address));
-                        }
-                        // The arrowhead sticks out beyond the last drawn point.
-                        if let Some(last) = points.last() {
-                            edge_hits.push((*last, tip, address));
-                        }
-                    }
-                    painter.add(egui::epaint::PathShape::line(points, stroke));
-                    paint_graph_arrow(&painter, tip, dir, color, zoom);
-                    track += 1;
-                }
-            }
-            if pick_edge && let Some(pos) = pointer {
-                let mut best: Option<(f32, Address)> = None;
-                for &(a, b, address) in &edge_hits {
-                    let distance = distance_to_segment(pos, a, b);
-                    if distance <= 6.0 * zoom && best.is_none_or(|(closest, _)| distance < closest)
-                    {
-                        best = Some((distance, address));
-                    }
-                }
-                if let Some((_, address)) = best {
-                    *action = Action::GraphGoTo(address);
-                }
-            }
-            for (index, block) in cfg.blocks.iter().enumerate() {
-                let rect = placed[index].translate(origin);
-                // A block now shows every instruction, so a big function can lay out tens of
-                // thousands of lines: only shape the text of blocks the pane actually shows.
-                if !clip.intersects(rect) {
+                    0.0
+                },
+            );
+            self.graph_center_pending = false;
+        }
+        // An overview click (or an edge double-click) centres one block without leaving
+        // graph mode (IDA pans the graph instead of switching to the listing).
+        if let Some(addr) = self.graph_center_on.take()
+            && let Some(index) = cfg
+                .blocks
+                .iter()
+                .position(|block| block.start.get() <= addr.get() && addr.get() < block.end.get())
+        {
+            self.graph_pan = viewport.size() * 0.5 - placed[index].center().to_vec2();
+        }
+        self.graph_pan = clamp_graph_pan(self.graph_pan, canvas, viewport.size());
+        let origin = viewport.min.to_vec2() + self.graph_pan;
+        // The visible rectangle is stored in unzoomed layout coordinates: the overview
+        // draws the 1.0 layout, so a zoomed view must not shrink or grow its frame.
+        let inverse = 1.0 / zoom;
+        let visible_rect = egui::Rect::from_min_max(
+            egui::pos2(-self.graph_pan.x * inverse, -self.graph_pan.y * inverse),
+            egui::pos2(
+                (viewport.width() - self.graph_pan.x) * inverse,
+                (viewport.height() - self.graph_pan.y) * inverse,
+            ),
+        );
+        // Edges first, so frames paint on top (IDA draws them under the blocks).
+        // A double-click on an edge follows it to the target block; the pick only runs
+        // on that frame, so the paths are collected just when they are needed.
+        let pick_edge = response.double_clicked()
+            && pointer.is_some_and(|pos| {
+                !placed
+                    .iter()
+                    .any(|rect| rect.translate(origin).contains(pos))
+            });
+        let mut edge_hits: Vec<(egui::Pos2, egui::Pos2, Address)> = Vec::new();
+        for block in &cfg.blocks {
+            let source = placed[block.index];
+            let mut track = 0usize;
+            for &(target, kind) in &block.edges {
+                let Some(&target_rect) = placed.get(target) else {
                     continue;
+                };
+                let color = edge_color(kind);
+                let stroke = egui::Stroke::new((1.4 * zoom).max(1.0), color);
+                let (points, tip, dir) = graph_edge_route(source, target_rect, origin, track, zoom);
+                if pick_edge {
+                    let address = cfg.blocks[target].start;
+                    for segment in points.windows(2) {
+                        edge_hits.push((segment[0], segment[1], address));
+                    }
+                    // The arrowhead sticks out beyond the last drawn point.
+                    if let Some(last) = points.last() {
+                        edge_hits.push((*last, tip, address));
+                    }
                 }
-                let is_entry = index == cfg.entry;
-                // IDA's `loc_…:` label opens the body of a block a branch jumps to.
-                let label = (labelled[index] && !is_entry).then(|| label_text(block.start.get()));
-                let body_top = header_h + pad;
-                let current = selected
-                    .and_then(|addr| block.insns.iter().position(|insn| insn.addr.get() == addr));
-                // IDA's block: drop shadow, white body, hairline frame, teal header.
-                // The cursor is a grey band over its instruction, not a tinted frame.
-                painter.rect_filled(
-                    rect.translate(egui::vec2(2.0, 2.0) * zoom),
-                    0.0,
-                    pal.graph_shadow,
-                );
-                painter.rect_filled(rect, 0.0, pal.graph_node);
-                painter.rect_stroke(
-                    rect,
-                    0.0,
-                    egui::Stroke::new(1.0, pal.graph_border),
-                    egui::StrokeKind::Inside,
-                );
-                let header =
-                    egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
-                painter.rect_filled(header, 0.0, pal.graph_header);
-                painter.hline(
-                    header.x_range(),
-                    header.max.y,
-                    egui::Stroke::new(1.0, pal.graph_border),
-                );
+                painter.add(egui::epaint::PathShape::line(points, stroke));
+                paint_graph_arrow(&painter, tip, dir, color, zoom);
+                track += 1;
+            }
+        }
+        if pick_edge && let Some(pos) = pointer {
+            let mut best: Option<(f32, Address)> = None;
+            for &(a, b, address) in &edge_hits {
+                let distance = distance_to_segment(pos, a, b);
+                if distance <= 6.0 * zoom && best.is_none_or(|(closest, _)| distance < closest) {
+                    best = Some((distance, address));
+                }
+            }
+            if let Some((_, address)) = best {
+                *action = Action::GraphGoTo(address);
+            }
+        }
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            let rect = placed[index].translate(origin);
+            // A block now shows every instruction, so a big function can lay out tens of
+            // thousands of lines: only shape the text of blocks the pane actually shows.
+            if !clip.intersects(rect) {
+                continue;
+            }
+            let is_entry = index == cfg.entry;
+            // IDA's `loc_…:` label opens the body of a block a branch jumps to.
+            let label = (labelled[index] && !is_entry).then(|| label_text(block.start.get()));
+            let body_top = header_h + pad;
+            let current = selected
+                .and_then(|addr| block.insns.iter().position(|insn| insn.addr.get() == addr));
+            // IDA's block: drop shadow, white body, hairline frame, teal header.
+            // The cursor is a grey band over its instruction, not a tinted frame.
+            painter.rect_filled(
+                rect.translate(egui::vec2(2.0, 2.0) * zoom),
+                0.0,
+                pal.graph_shadow,
+            );
+            painter.rect_filled(rect, 0.0, pal.graph_node);
+            painter.rect_stroke(
+                rect,
+                0.0,
+                egui::Stroke::new(1.0, pal.graph_border),
+                egui::StrokeKind::Inside,
+            );
+            let header = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
+            painter.rect_filled(header, 0.0, pal.graph_header);
+            painter.hline(
+                header.x_range(),
+                header.max.y,
+                egui::Stroke::new(1.0, pal.graph_border),
+            );
+            painter.text(
+                header.min + egui::vec2(6.0, 1.0),
+                egui::Align2::LEFT_TOP,
+                format!("{:#x}", block.start.get()),
+                FontId::monospace(text_size * 0.92),
+                pal.graph_header_text,
+            );
+            if is_entry {
                 painter.text(
-                    header.min + egui::vec2(6.0, 1.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("{:#x}", block.start.get()),
-                    FontId::monospace(text_size * 0.92),
-                    pal.graph_header_text,
+                    header.right_center() - egui::vec2(4.0, 0.0),
+                    egui::Align2::RIGHT_CENTER,
+                    self.t("graph_entry").as_str(),
+                    FontId::proportional(text_size * 0.85),
+                    pal.comment,
                 );
-                if is_entry {
-                    painter.text(
-                        header.right_center() - egui::vec2(4.0, 0.0),
-                        egui::Align2::RIGHT_CENTER,
-                        self.t("graph_entry").as_str(),
-                        FontId::proportional(text_size * 0.85),
-                        pal.comment,
-                    );
+            }
+            if let Some(label) = label.as_deref() {
+                painter.text(
+                    rect.min + egui::vec2(pad, body_top),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    mono.clone(),
+                    pal.name,
+                );
+            }
+            let label_lines = usize::from(label.is_some());
+            if let Some(line_index) = current {
+                let y = rect.min.y + body_top + (label_lines + line_index) as f32 * line_h;
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x + 1.0, y),
+                        egui::vec2(rect.width() - 2.0, line_h),
+                    ),
+                    0.0,
+                    pal.graph_current_line,
+                );
+            }
+            // A block can be hundreds of lines tall now that nothing is truncated; shape
+            // only the lines the pane actually shows.
+            let body_y = rect.min.y + body_top;
+            let first_line =
+                (((clip.min.y - body_y) / line_h).floor().max(0.0) as usize).min(block.insns.len());
+            let last_line = ((((clip.max.y - body_y) / line_h).ceil().max(0.0)) as usize)
+                .min(block.insns.len());
+            for (line_index, insn) in block
+                .insns
+                .iter()
+                .enumerate()
+                .skip(first_line)
+                .take(last_line.saturating_sub(first_line))
+            {
+                let mut job = LayoutJob::default();
+                let (mnemonic, operands) = match insn.text.split_once(' ') {
+                    Some((mnemonic, rest)) => (mnemonic, rest),
+                    None => (insn.text.as_str(), ""),
+                };
+                append(&mut job, mnemonic, pal.mnemonic, &mono);
+                append(&mut job, " ", pal.text, &mono);
+                if let Some((operands, comment)) = operands.split_once(';') {
+                    append_operands(&mut job, operands, pal, &mono);
+                    append(&mut job, &format!("; {comment}"), pal.comment, &mono);
+                } else {
+                    append_operands(&mut job, operands, pal, &mono);
                 }
-                if let Some(label) = label.as_deref() {
-                    painter.text(
-                        rect.min + egui::vec2(pad, body_top),
-                        egui::Align2::LEFT_TOP,
-                        label,
-                        mono.clone(),
-                        pal.name,
-                    );
-                }
-                let label_lines = usize::from(label.is_some());
-                if let Some(line_index) = current {
-                    let y = rect.min.y + body_top + (label_lines + line_index) as f32 * line_h;
-                    painter.rect_filled(
-                        egui::Rect::from_min_size(
-                            egui::pos2(rect.min.x + 1.0, y),
-                            egui::vec2(rect.width() - 2.0, line_h),
-                        ),
-                        0.0,
-                        pal.graph_current_line,
-                    );
-                }
-                // A block can be hundreds of lines tall now that nothing is truncated; shape
-                // only the lines the pane actually shows.
-                let body_y = rect.min.y + body_top;
-                let first_line = (((clip.min.y - body_y) / line_h).floor().max(0.0) as usize)
-                    .min(block.insns.len());
-                let last_line = ((((clip.max.y - body_y) / line_h).ceil().max(0.0)) as usize)
-                    .min(block.insns.len());
-                for (line_index, insn) in block
+                let galley = painter.layout_job(job);
+                painter.galley(
+                    rect.min
+                        + egui::vec2(pad, body_top + (label_lines + line_index) as f32 * line_h),
+                    galley,
+                    pal.text,
+                );
+            }
+            let response = ui.interact(rect, ui.id().with(("cfg", index)), Sense::click_and_drag());
+            if response.dragged() {
+                // IDA lets a block be dragged to another place; the position sticks for
+                // the session and the edges follow the frame on the next repaint.
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                let base = local[index];
+                let slot = (cfg.function.get(), block.start.get());
+                let mut offset = self.graph_offsets.get(&slot).copied().unwrap_or_default()
+                    + response.drag_delta() / zoom;
+                // No negative canvas: a block may not be pushed out of reach to the top
+                // or the left. The bound is a screen margin, so divide the zoom back out
+                // of the stored (zoom-1) offset.
+                offset.x = offset.x.max((8.0 - base.min.x) / zoom);
+                offset.y = offset.y.max((8.0 - base.min.y) / zoom);
+                self.graph_offsets.insert(slot, offset);
+            }
+            if response.clicked() {
+                *action = Action::Navigate(block.start);
+            }
+            if response.double_clicked() {
+                *action = Action::NavigateToDisasm(block.start);
+            }
+            if response.hovered() && !response.dragged() {
+                let tooltip = block
                     .insns
                     .iter()
-                    .enumerate()
-                    .skip(first_line)
-                    .take(last_line.saturating_sub(first_line))
-                {
-                    let mut job = LayoutJob::default();
-                    let (mnemonic, operands) = match insn.text.split_once(' ') {
-                        Some((mnemonic, rest)) => (mnemonic, rest),
-                        None => (insn.text.as_str(), ""),
-                    };
-                    append(&mut job, mnemonic, pal.mnemonic, &mono);
-                    append(&mut job, " ", pal.text, &mono);
-                    if let Some((operands, comment)) = operands.split_once(';') {
-                        append_operands(&mut job, operands, pal, &mono);
-                        append(&mut job, &format!("; {comment}"), pal.comment, &mono);
-                    } else {
-                        append_operands(&mut job, operands, pal, &mono);
-                    }
-                    let galley = painter.layout_job(job);
-                    painter.galley(
-                        rect.min
-                            + egui::vec2(
-                                pad,
-                                body_top + (label_lines + line_index) as f32 * line_h,
-                            ),
-                        galley,
-                        pal.text,
-                    );
-                }
-                let response =
-                    ui.interact(rect, ui.id().with(("cfg", index)), Sense::click_and_drag());
-                if response.dragged() {
-                    // IDA lets a block be dragged to another place; the position sticks for
-                    // the session and the edges follow the frame on the next repaint.
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    let base = local[index];
-                    let slot = (cfg.function.get(), block.start.get());
-                    let mut offset = self.graph_offsets.get(&slot).copied().unwrap_or_default()
-                        + response.drag_delta() / zoom;
-                    // No negative canvas: a block may not be pushed out of reach to the top
-                    // or the left. The bound is a screen margin, so divide the zoom back out
-                    // of the stored (zoom-1) offset.
-                    offset.x = offset.x.max((8.0 - base.min.x) / zoom);
-                    offset.y = offset.y.max((8.0 - base.min.y) / zoom);
-                    self.graph_offsets.insert(slot, offset);
-                }
-                if response.clicked() {
-                    *action = Action::Navigate(block.start);
-                }
-                if response.double_clicked() {
-                    *action = Action::NavigateToDisasm(block.start);
-                }
-                if response.hovered() && !response.dragged() {
-                    let tooltip = block
-                        .insns
-                        .iter()
-                        .map(|insn| insn.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    response.on_hover_text(tooltip);
-                }
+                    .map(|insn| insn.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                response.on_hover_text(tooltip);
             }
-        });
-        self.graph_visible = visible_rect;
-        self.graph_scroll = output.state.offset;
+        }
+        self.graph_visible = Some(visible_rect);
         ui.separator();
         // The legend and the zoom controls live on one status line under the canvas, the
         // way IDA keeps the graph itself free of toolbars.
@@ -8162,10 +8152,10 @@ impl ReCraftApp {
         };
         match zoom_action {
             GraphZoom::In => {
-                self.graph_pending_offset = self.zoom_graph(1.1, None, viewport);
+                self.zoom_graph(1.1, None, viewport);
             }
             GraphZoom::Out => {
-                self.graph_pending_offset = self.zoom_graph(1.0 / 1.1, None, viewport);
+                self.zoom_graph(1.0 / 1.1, None, viewport);
             }
             GraphZoom::Fit => {
                 // IDA's *Fit* scales the whole graph into the pane instead of returning
@@ -8179,23 +8169,18 @@ impl ReCraftApp {
         }
     }
 
-    /// Scale the graph around `anchor` (a point in pane coordinates) and return the scroll
-    /// offset that keeps the anchored content under it. `None` means the zoom was clipped.
-    fn zoom_graph(
-        &mut self,
-        factor: f32,
-        anchor: Option<egui::Vec2>,
-        viewport: egui::Rect,
-    ) -> Option<egui::Vec2> {
+    /// Scale the graph around `anchor` (a point in pane coordinates) and move the pan so the
+    /// content under it stays put, the way IDA's Ctrl+wheel does.
+    fn zoom_graph(&mut self, factor: f32, anchor: Option<egui::Vec2>, viewport: egui::Rect) {
         let old = self.graph_zoom;
         let new = (old * factor).clamp(GRAPH_ZOOM_MIN, GRAPH_ZOOM_MAX);
         if (new - old).abs() <= f32::EPSILON {
-            return None;
+            return;
         }
         let anchor = anchor.unwrap_or(viewport.size() * 0.5);
-        let content = (anchor + self.graph_scroll) / old;
+        let content = (anchor - self.graph_pan) / old;
         self.graph_zoom = new;
-        Some((content * new - anchor).max(egui::Vec2::ZERO))
+        self.graph_pan = anchor - content * new;
     }
 
     /// First-run experience: quick actions, recent projects and a shortcut cheat sheet.
@@ -10837,6 +10822,27 @@ fn graph_edge_color(pal: Palette, kind: recraft_analysis::EdgeKind) -> Color32 {
         recraft_analysis::EdgeKind::Unconditional => pal.edge_jump,
         recraft_analysis::EdgeKind::JumpTable => pal.edge_jump_table,
     }
+}
+
+/// Keep at least a corner of the graph inside the pane on each axis, so a panned, dragged or
+/// zoomed graph can never be lost off-screen (IDA lets the graph move freely inside the
+/// window, but not disappear).
+fn clamp_graph_pan(pan: egui::Vec2, canvas: egui::Vec2, viewport: egui::Vec2) -> egui::Vec2 {
+    const KEEP: f32 = 60.0;
+    fn axis(value: f32, content: f32, viewport: f32) -> f32 {
+        let keep = KEEP.min(content).min(viewport);
+        let min = keep - content;
+        let max = viewport - keep;
+        if min <= max {
+            value.clamp(min, max)
+        } else {
+            (min + max) * 0.5
+        }
+    }
+    egui::vec2(
+        axis(pan.x, canvas.x, viewport.x),
+        axis(pan.y, canvas.y, viewport.y),
+    )
 }
 
 /// Route one graph edge the way IDA does: forward edges leave the source's bottom edge,
@@ -18430,28 +18436,120 @@ mod tests {
         let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
         let mut app = ReCraftApp {
             graph_zoom: 1.0,
-            graph_scroll: egui::vec2(120.0, 80.0),
+            graph_pan: egui::vec2(-120.0, -80.0),
             ..ReCraftApp::default()
         };
         let anchor = egui::vec2(300.0, 200.0);
-        let content = (anchor + app.graph_scroll) / app.graph_zoom;
-        let offset = app
-            .zoom_graph(2.0, Some(anchor), viewport)
-            .expect("zooming inside the range must move the scale");
+        // Content point under the pointer before the zoom.
+        let content = (anchor - app.graph_pan) / app.graph_zoom;
+        app.zoom_graph(2.0, Some(anchor), viewport);
         // Ctrl+wheel keeps the content under the pointer fixed, like IDA's graph zoom.
         assert!(
-            (content * app.graph_zoom - offset - anchor).length() < 0.01,
+            (app.graph_pan + content * app.graph_zoom - anchor).length() < 0.01,
             "the anchored point must stay under the pointer"
         );
         // IDA's graph range: 10 % up to 400 %.
-        assert!(app.zoom_graph(100.0, None, viewport).is_some());
+        app.zoom_graph(100.0, None, viewport);
         assert_eq!(app.graph_zoom, GRAPH_ZOOM_MAX);
-        assert!(
-            app.zoom_graph(2.0, None, viewport).is_none(),
-            "a clipped zoom must leave both the scale and the scroll offset alone"
+        let pan = app.graph_pan;
+        app.zoom_graph(2.0, None, viewport);
+        assert_eq!(
+            app.graph_zoom, GRAPH_ZOOM_MAX,
+            "a clipped zoom must leave the scale alone"
         );
-        assert!(app.zoom_graph(0.0001, None, viewport).is_some());
+        assert_eq!(app.graph_pan, pan, "and must not move the graph either");
+        app.zoom_graph(0.0001, None, viewport);
         assert_eq!(app.graph_zoom, GRAPH_ZOOM_MIN);
+    }
+
+    #[test]
+    fn dragging_the_canvas_pans_the_graph_in_any_direction() {
+        use recraft_analysis::{BasicBlock, Cfg, CfgInsn};
+        let block = |index: usize, start: u64, count: usize| BasicBlock {
+            index,
+            start: Address::new(start),
+            end: Address::new(start + count as u64),
+            insns: (0..count)
+                .map(|offset| CfgInsn {
+                    addr: Address::new(start + offset as u64),
+                    text: "nop".to_owned(),
+                })
+                .collect(),
+            edges: Vec::new(),
+        };
+        let cfg = Cfg {
+            function: Address::new(0x1000),
+            entry: 0,
+            // Two tall blocks, so the graph is bigger than the drag and no clamp kicks in.
+            blocks: vec![block(0, 0x1000, 20), block(1, 0x2000, 20)],
+            external: Vec::new(),
+            jump_tables: Default::default(),
+        };
+        let mut app = ReCraftApp {
+            cfg: Some(cfg),
+            view_mode: ViewMode::Graph,
+            ..ReCraftApp::default()
+        };
+        let ctx = egui::Context::default();
+        let mut action = Action::None;
+        let mut clock = 0.0f64;
+        let mut frame = |app: &mut ReCraftApp, events: Vec<egui::Event>| {
+            clock += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                time: Some(clock),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.graph_view(ui, &mut action));
+            output.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        // Drag an empty part of the canvas (the graph is centred, so the bottom-right
+        // corner has no block under it).
+        let from = egui::pos2(780.0, 600.0);
+        let to = egui::pos2(700.0, 520.0);
+        let before = app.graph_pan;
+        let press = |pos: egui::Pos2, pressed: bool| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        frame(&mut app, press(from, true));
+        frame(&mut app, vec![egui::Event::PointerMoved(to)]);
+        frame(&mut app, press(to, false));
+        let moved = app.graph_pan - before;
+        assert!(
+            (moved - egui::vec2(-80.0, -80.0)).length() < 2.0,
+            "the canvas must follow the pointer in both axes, got {moved:?}"
+        );
+        // The wheel scrolls the same canvas: a downward notch moves the graph up.
+        let before_wheel = app.graph_pan.y;
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(to),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame(&mut app, Vec::new());
+        assert!(
+            app.graph_pan.y < before_wheel,
+            "a wheel-down must scroll the graph down ({before_wheel} -> {})",
+            app.graph_pan.y
+        );
     }
 
     #[test]
