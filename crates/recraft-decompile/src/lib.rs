@@ -15,6 +15,7 @@
 /// Version of the emitter, used to key the rendered-pseudocode cache.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use recraft_common::{Address, Error, Result};
@@ -43,6 +44,36 @@ pub use quality::{
     write_golden, write_golden_limited,
 };
 pub use structuring::{pseudocode_l1, pseudocode_l2};
+
+/// How the rendered function uses one stack slot.
+///
+/// A direct slot access prints as the bare name (`var_30 = 0x8007029c;`), so the width the
+/// instruction used is not visible in the text. The L2 declaration list needs it anyway
+/// (`uint32 var_30;  // [rsp+30h]`), so the printer records it while rendering.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SlotUse {
+    /// Widest access width in bytes (0 when the slot is only addressed).
+    pub width: u8,
+    /// The body loads from the slot.
+    pub read: bool,
+    /// The body stores into the slot.
+    pub written: bool,
+    /// The address is taken (`&var_20`), so the slot is a memory object.
+    pub addressed: bool,
+    /// The body indexes the slot by a runtime value (`*(u8*)(&var_20 + i)`).
+    pub indexed: bool,
+    /// The slot is the outgoing argument area just below the frame (`push value`), so it
+    /// belongs to the callee, not to this function's locals.
+    pub outgoing: bool,
+}
+
+impl SlotUse {
+    /// True when the body accesses the slot itself (a load or a store), so the recorded width
+    /// makes it a scalar; a slot only ever addressed is a memory object, not a scalar.
+    pub fn direct(&self) -> bool {
+        self.width > 0 && (self.read || self.written)
+    }
+}
 
 /// One block's lifted statements plus its terminating flow (used by L1/L2).
 pub(crate) struct BlockLift {
@@ -77,6 +108,9 @@ pub(crate) struct BlockLift {
     /// Quoted C string literals rendered for this block, with the address of the data
     /// each one names. Lets a view link `"text"` back to the string it quotes.
     pub literals: Vec<(String, Address)>,
+    /// Stack slots the block names (`var_20`), with how the block uses them. The L2
+    /// declaration list types them from these widths.
+    pub slots: BTreeMap<String, SlotUse>,
 }
 
 /// `__chkstk` saves `r10`/`r11` just below the stack pointer after subtracting the probe
@@ -168,6 +202,7 @@ pub(crate) fn lift_block(
             alias_writes: Vec::new(),
             arg_writes: Vec::new(),
             literals: Vec::new(),
+            slots: BTreeMap::new(),
         });
     }
     let mut lifter = Lifter::with_abi(call_abi(session));
@@ -213,6 +248,7 @@ pub(crate) fn lift_block(
             alias_writes: Vec::new(),
             arg_writes: Vec::new(),
             literals: Vec::new(),
+            slots: BTreeMap::new(),
         });
     }
 
@@ -341,6 +377,7 @@ pub(crate) fn lift_block(
         entry_aliases: entry_aliases.cloned().unwrap_or_default(),
         stack_args: BTreeMap::new(),
         last_values: BTreeMap::new(),
+        slots: RefCell::new(BTreeMap::new()),
     };
 
     let mut statements: Vec<PseudoLine> = Vec::new();
@@ -493,6 +530,17 @@ pub(crate) fn lift_block(
             if printer.is_noop_write(stmt) || is_padding_intrinsic(stmt) {
                 continue;
             }
+            // `push` writes just below the frame: that area holds the callee's arguments, not
+            // locals, so the slot must not be declared as one.
+            if let Stmt::Store { addr, .. } = stmt
+                && let Some(Stmt::WriteReg { reg, value }) = item.stmts.get(stmt_index + 1)
+                && reg.base == Reg::Rsp
+                && addr == value
+                && let Some((base, offset)) = printer.stack_slot(*addr)
+                && let Some(name) = printer.stack_reference(base, offset)
+            {
+                printer.mark_outgoing(&name);
+            }
             // The analysis pass skips formatting: only the effects are used.
             let text = if render {
                 printer.stmt(stmt)
@@ -581,6 +629,7 @@ pub(crate) fn lift_block(
         alias_writes: alias_effect.into_iter().collect(),
         arg_writes,
         literals: literal_references(&literals),
+        slots: printer.slots.take(),
     })
 }
 
@@ -1316,6 +1365,7 @@ fn render_lifted(
         pointer_offsets: BTreeMap::new(),
         stack_args: BTreeMap::new(),
         last_values: BTreeMap::new(),
+        slots: RefCell::new(BTreeMap::new()),
     };
     let lines = printer.render(&lifted);
     Ok(Pseudocode {
@@ -1691,9 +1741,39 @@ struct Printer<'a> {
     /// carried through a copy into a stack argument keeps its expression
     /// (`rcx = &var_60; var_28 = rcx;` records `&var_60`).
     last_values: BTreeMap<Reg, String>,
+    /// Stack slots named in the rendered text, with how they are used. The renderer only
+    /// has `&self`, so the map is filled through a cell.
+    slots: RefCell<BTreeMap<String, SlotUse>>,
 }
 
 impl Printer<'_> {
+    /// Record one use of the stack slot `name` (already rendered, e.g. `var_20`). `width` is
+    /// the access width in bytes, 0 for an address-of use.
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn note_slot(
+        &self,
+        name: &str,
+        width: u8,
+        read: bool,
+        written: bool,
+        addressed: bool,
+        indexed: bool,
+    ) {
+        let mut slots = self.slots.borrow_mut();
+        let slot = slots.entry(name.to_owned()).or_default();
+        slot.width = slot.width.max(width);
+        slot.read |= read;
+        slot.written |= written;
+        slot.addressed |= addressed;
+        slot.indexed |= indexed;
+    }
+
+    /// Mark `name` as the outgoing argument area a `push` wrote.
+    fn mark_outgoing(&self, name: &str) {
+        let mut slots = self.slots.borrow_mut();
+        slots.entry(name.to_owned()).or_default().outgoing = true;
+    }
+
     fn render(&mut self, lifted: &[LiftedInsn]) -> Vec<PseudoLine> {
         let mut lines = Vec::new();
         for insn in lifted {
@@ -2292,6 +2372,8 @@ impl Printer<'_> {
             return None;
         }
         let name = self.stack_reference(base, disp)?;
+        // The slot is addressed, not read: the width belongs to the element the index picks.
+        self.note_slot(&name, 0, false, false, true, true);
         Some(format!(
             "*({}*)(&{name} + {})",
             Self::scalar_type(size),
@@ -2379,6 +2461,7 @@ impl Printer<'_> {
             && let Some((base, offset)) = self.stack_slot(id)
             && let Some(name) = self.stack_reference(base, offset)
         {
+            self.note_slot(&name, 0, false, false, true, false);
             return format!("&{name}");
         }
         self.expr(id)
@@ -2403,6 +2486,7 @@ impl Printer<'_> {
                 if let Some((base, offset)) = self.stack_slot(*addr)
                     && let Some(name) = self.stack_reference(base, offset)
                 {
+                    self.note_slot(&name, *size, false, true, false, false);
                     format!("{name} = {}", self.value_expr(*value))
                 } else if let Some(index) = self.array_access(*addr, *size) {
                     format!("{index} = {}", self.value_expr(*value))
@@ -2421,6 +2505,7 @@ impl Printer<'_> {
                 if let Some((base, offset)) = self.stack_slot(*addr)
                     && let Some(name) = self.stack_reference(base, offset)
                 {
+                    self.note_slot(&name, *size, false, true, false, false);
                     format!("{name} = {}", self.value_expr(*value))
                 } else if let Some(index) = self.array_access(*addr, *size) {
                     format!("{index} = {}", self.value_expr(*value))
@@ -2577,12 +2662,14 @@ impl Printer<'_> {
             && self.pointer_offsets.contains_key(&view.base)
             && let Some(name) = self.stack_reference(view.base, 0)
         {
+            self.note_slot(&name, 0, false, false, true, false);
             return format!("&{name}");
         }
         if !matches!(self.exprs[id as usize], Expr::Reg(_))
             && let Some((base, offset)) = self.stack_slot(id)
             && let Some(name) = self.stack_reference(base, offset)
         {
+            self.note_slot(&name, 0, false, false, true, false);
             return format!("&{name}");
         }
         self.expr(id)
@@ -2683,6 +2770,7 @@ impl Printer<'_> {
                 if let Some((base, offset)) = self.stack_slot(*addr)
                     && let Some(name) = self.stack_reference(base, offset)
                 {
+                    self.note_slot(&name, *size, true, false, false, false);
                     name
                 } else if let Some(index) = self.indexed_stack_access(*addr, *size) {
                     index
@@ -2698,6 +2786,7 @@ impl Printer<'_> {
                 if let Some((base, offset)) = self.stack_slot(*addr)
                     && let Some(name) = self.stack_reference(base, offset)
                 {
+                    self.note_slot(&name, *size, true, false, false, false);
                     name
                 } else if let Some(index) = self.indexed_stack_access(*addr, *size) {
                     index
@@ -2859,6 +2948,7 @@ mod tests {
             pointer_offsets: BTreeMap::new(),
             stack_args: BTreeMap::new(),
             last_values: BTreeMap::new(),
+            slots: RefCell::new(BTreeMap::new()),
         };
         printer.written.insert(Reg::Rbp);
         assert_eq!(printer.stack_reference(Reg::Rbp, 0x18), None);

@@ -15,6 +15,8 @@
 //!
 //! * widths are tracked in bytes; a value read wider than it was written is widened, and a
 //!   narrow read becomes an explicit cast, so `(uint32)v3` still says "low 32 bits";
+//! * a declaration carries the register the value lives in (`uint64 v3; // rax`), the way
+//!   IDA labels a local's storage, so the reader can map a local back to the machine state;
 //! * 8/16-bit writes (and the high-byte registers) preserve the rest of the register, so
 //!   they are modelled as a read-modify-write of the previous value;
 //! * calls return in `rax`; a call whose result is actually read becomes an assignment
@@ -269,7 +271,7 @@ fn drop_write_only_locals(lines: &mut Vec<PseudoLine>) {
             .get(position + 1)
             .is_some_and(|line| line.text.contains('(') && mentions_name(&line.text, &value));
         let safe = lines.get(position.wrapping_sub(1)).is_some_and(|line| {
-            let text = line.text.trim_end();
+            let text = declaration_code(&line.text);
             text.ends_with('{') || text.ends_with(';') || text.ends_with('}') || text.ends_with(':')
         });
         if !carries || !safe {
@@ -491,10 +493,7 @@ fn inline_literal_locals_once(lines: &mut Vec<PseudoLine>) -> bool {
         // Removing the assignment must not leave a braceless body or a dangling `else`. A
         // comment above the definition is not part of the block structure.
         let previous_safe = definition_index == 0
-            || lines[definition_index - 1]
-                .text
-                .trim_end()
-                .ends_with(['{', ';', '}', ':'])
+            || declaration_code(&lines[definition_index - 1].text).ends_with(['{', ';', '}', ':'])
             || lines[definition_index - 1]
                 .text
                 .trim_start()
@@ -527,8 +526,27 @@ fn is_literal_text(text: &str) -> bool {
     (text.starts_with('"') || text.starts_with("L\"")) && text.ends_with('"') && text.len() > 2
 }
 
+/// The line without the location comment a declaration carries.
+///
+/// Passes that reason about statement boundaries must still see a declaration as a
+/// statement that ends with `;`, although the view prints `// rax` behind it.
+fn declaration_code(text: &str) -> &str {
+    let text = text.trim_end();
+    if declaration_name(text).is_none() {
+        return text;
+    }
+    text.split_once("//")
+        .map_or(text, |(code, _)| code.trim_end())
+}
+
 /// The name a declaration line introduces: uint32 v4; -> v4.
-fn declaration_name(text: &str) -> Option<String> {
+pub(crate) fn declaration_name(text: &str) -> Option<String> {
+    // A declaration carries its IDA-style location comment (`uint32 v4;  // rax`); the
+    // comment is not part of the declaration.
+    let text = match text.split_once("//") {
+        Some((code, _)) => code.trim_end(),
+        None => text,
+    };
     if !text.ends_with(';') || text.contains('=') || text.contains('(') {
         return None;
     }
@@ -823,6 +841,8 @@ struct LinearVar {
     signed: u32,
     unsigned: u32,
     reads: u32,
+    /// Register the value was defined in, for the declaration's location comment.
+    reg: Reg,
 }
 
 /// Recover locals for a function whose control flow could not be parsed exactly.
@@ -844,7 +864,7 @@ fn recover_linear(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
     let mut vars: Vec<LinearVar> = Vec::new();
     let mut names: Vec<Option<String>> = Vec::new();
     let mut pools: HashMap<(u8, bool), Vec<String>> = HashMap::new();
-    let mut declarations: Vec<(usize, String)> = Vec::new();
+    let mut declarations: Vec<(usize, String, String)> = Vec::new();
     let mut next_name = 1usize;
     let mut env = [NONE; REGS];
     let mut run_start = 0usize;
@@ -868,6 +888,7 @@ fn recover_linear(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
                     &mut declarations,
                     run_start,
                     &mut next_name,
+                    is_64,
                 );
                 run_start = vars.len();
                 plans.push(LinearKind::Control(Vec::new()));
@@ -907,6 +928,7 @@ fn recover_linear(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
                             signed: 0,
                             unsigned: 0,
                             reads: 0,
+                            reg: token.reg,
                         });
                         names.push(None);
                         var
@@ -996,6 +1018,7 @@ fn recover_linear(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
                         signed: 0,
                         unsigned: 0,
                         reads: 0,
+                        reg: Reg::Rax,
                     });
                     names.push(None);
                     env[Reg::Rax as usize] = var;
@@ -1036,6 +1059,7 @@ fn recover_linear(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
             &mut declarations,
             run_start,
             &mut next_name,
+            is_64,
         );
         run_start = vars.len();
         env = [NONE; REGS];
@@ -1048,16 +1072,19 @@ fn recover_linear(lines: &mut Vec<PseudoLine>, is_64: bool) -> bool {
         &mut declarations,
         run_start,
         &mut next_name,
+        is_64,
     );
     if !changed {
         return false;
     }
-    declarations.sort_by_key(|(number, _)| *number);
+    declarations.sort_by_key(|(number, _, _)| *number);
+    // The pool hands a name to a later run once its value died, so the same name can be
+    // declared twice; one declaration per name, with the location the first one had.
     declarations.dedup_by(|left, right| left.1 == right.1);
 
     let mut out: Vec<PseudoLine> = Vec::with_capacity(lines.len() + declarations.len());
     out.extend_from_slice(&lines[..=signature]);
-    for (_, declaration) in &declarations {
+    for (_, _, declaration) in &declarations {
         out.push(PseudoLine {
             addr: lines[signature].addr,
             text: declaration.clone(),
@@ -1121,9 +1148,10 @@ fn finish_linear_run(
     vars: &[LinearVar],
     names: &mut [Option<String>],
     pools: &mut HashMap<(u8, bool), Vec<String>>,
-    declarations: &mut Vec<(usize, String)>,
+    declarations: &mut Vec<(usize, String, String)>,
     run_start: usize,
     next_name: &mut usize,
+    is_64: bool,
 ) {
     let mut assigned: Vec<((u8, bool), String)> = Vec::new();
     for id in run_start..vars.len() {
@@ -1144,7 +1172,12 @@ fn finish_linear_run(
         let number: usize = name[1..].parse().unwrap_or(0);
         declarations.push((
             number,
-            format!("    {} {};", type_name(var.width, signed), name),
+            name.clone(),
+            local_declaration(
+                type_name(var.width, signed),
+                &name,
+                &local_home(var.reg, is_64),
+            ),
         ));
         names[id] = Some(name.clone());
         assigned.push((key, name));
@@ -1593,6 +1626,35 @@ fn type_name(width: u8, signed: bool) -> &'static str {
         (1, false) => "uint8",
         _ => "uint64",
     }
+}
+
+/// Column where the IDA-style location comment after a local declaration starts.
+///
+/// IDA prints the storage of a recovered local next to its declaration (`__int64 v1;
+/// // rax`), and a fixed column keeps the comments aligned although the names differ in
+/// length.
+const LOCATION_COLUMN: usize = 50;
+
+/// The register a recovered local lives in, spelled like the view spells registers.
+///
+/// 64-bit code always names the full register, the way IDA writes `// rbx` for a 4-byte
+/// local too (`unsigned int v2; // rbx`); x86 uses the 32-bit view, which is the only one
+/// there.
+fn local_home(reg: Reg, is_64: bool) -> String {
+    if is_64 {
+        reg.name64().to_owned()
+    } else {
+        reg.name_width(4).to_owned()
+    }
+}
+
+/// A declaration line followed by the location comment: `    uint64 v3;` → `… v3;  // rax`.
+///
+/// Shared with the stack-slot declarations, which use the same column and comment shape.
+pub(crate) fn local_declaration(ty: &str, name: &str, home: &str) -> String {
+    let head = format!("    {ty} {name};");
+    let padding = LOCATION_COLUMN.saturating_sub(head.len()).max(1);
+    format!("{head}{}// {home}", " ".repeat(padding))
 }
 
 // ---------------------------------------------------------------------------
@@ -2635,6 +2697,19 @@ impl Vars {
     }
 }
 
+/// Remember `reg` as the register the local `root` was born in, unless an earlier
+/// definition already named one. `key` is the occurrence's `(line, column)` in the text.
+fn record_home(
+    homes: &mut [Option<(usize, usize, Reg)>],
+    root: usize,
+    key: (usize, usize),
+    reg: Reg,
+) {
+    if homes[root].is_none_or(|(line, start, _)| key < (line, start)) {
+        homes[root] = Some((key.0, key.1, reg));
+    }
+}
+
 struct Program {
     nodes: Vec<Node>,
     /// Final union-find root of every original variable id.
@@ -2952,6 +3027,51 @@ impl Program {
             .map(|root| signed_uses[root] > 0 && unsigned_uses[root] == 0)
             .collect();
 
+        // Where each local lives, for the declaration comment. A definition is the value's
+        // home; a value the body only reads keeps the register it was read from. The first
+        // definition in source order wins, so a value copied between registers is reported
+        // where it was born.
+        let mut homes: Vec<Option<(usize, usize, Reg)>> = vec![None; total];
+        for node in &nodes {
+            if let Some(write) = &node.write {
+                let key = (node.line, write.start);
+                let root = roots[node.write_var];
+                if !raw[root] {
+                    record_home(&mut homes, root, key, write.reg);
+                }
+                // A partial write also observes the value it keeps the upper bits of.
+                if write.partial && write.prev != NONE {
+                    let prev = roots[write.prev];
+                    if !raw[prev] {
+                        record_home(&mut homes, prev, key, write.reg);
+                    }
+                }
+            }
+            if node.call_used {
+                let root = roots[node.call_var];
+                if !raw[root] {
+                    record_home(&mut homes, root, (node.line, node.call_span.0), Reg::Rax);
+                }
+            }
+        }
+        // A value the body only reads has no definition to name: report the register the
+        // first read named it in.
+        let mut read_homes: Vec<Option<(usize, usize, Reg)>> = vec![None; total];
+        for node in &nodes {
+            for read in &node.reads {
+                let root = roots[read.var];
+                if raw[root] {
+                    continue;
+                }
+                record_home(&mut read_homes, root, (node.line, read.start), read.reg);
+            }
+        }
+        for root in 0..total {
+            if homes[root].is_none() {
+                homes[root] = read_homes[root];
+            }
+        }
+
         // Name the locals in source order.
         let mut occurrences: Vec<(usize, usize, usize)> = Vec::new();
         for node in &nodes {
@@ -3006,10 +3126,12 @@ impl Program {
             }
             if let Some(name) = &names[root] {
                 let number: usize = name[1..].parse().unwrap_or(0);
-                declarations.push((
-                    number,
-                    format!("    {} {};", type_name(widths[root], signed[root]), name),
-                ));
+                let ty = type_name(widths[root], signed[root]);
+                let text = match homes[root] {
+                    Some((_, _, reg)) => local_declaration(ty, name, &local_home(reg, is_64)),
+                    None => format!("    {ty} {name};"),
+                };
+                declarations.push((number, text));
             }
         }
         declarations.sort_by_key(|(number, _)| *number);
@@ -3802,5 +3924,57 @@ mod tests {
         ];
         assert!(recover_variables(&mut lines, true, false));
         assert_eq!(lines[0].text, "// L2 params: arg1, arg2");
+    }
+
+    #[test]
+    fn declarations_carry_the_register_the_local_lives_in() {
+        // `v1` is born in rax and copied into rcx, so the copy reports its own register: the
+        // comment names where a value is defined, not where it was read last.
+        let text = run(&["    rax = arg1;", "    rcx = rax;", "    return rcx;"]);
+        let declarations: Vec<&str> = text.lines().skip(1).take(2).collect();
+        assert_eq!(declarations.len(), 2, "{text}");
+        assert!(declarations[0].starts_with("    uint64 v1;"), "{text}");
+        assert!(declarations[0].ends_with("// rax"), "{text}");
+        assert!(declarations[1].ends_with("// rcx"), "{text}");
+        // The comment sits at the IDA column, so the declarations line up.
+        assert_eq!(declarations[0].find("//"), Some(LOCATION_COLUMN), "{text}");
+    }
+
+    #[test]
+    fn a_call_result_reports_the_register_it_returns_in() {
+        let text = run(&["    sub_1000();", "    return rax;"]);
+        assert!(text.contains("// rax"), "{text}");
+    }
+
+    #[test]
+    fn a_32_bit_function_names_32_bit_registers() {
+        let mut lines = vec![
+            line(0x1000, "int32 foo(void) {"),
+            line(0x1001, "    eax = 1;"),
+            line(0x1002, "    return eax;"),
+            line(0x1003, "}"),
+        ];
+        assert!(recover_variables(&mut lines, false, false));
+        assert!(
+            lines.iter().any(|line| line.text.ends_with("// eax")),
+            "{:?}",
+            lines.iter().map(|line| &line.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_straight_line_fallback_reports_the_register_too() {
+        let mut lines = vec![
+            line(0x1000, "int64 foo(void) {"),
+            line(0x1001, "    rax = 1;"),
+            line(0x1002, "    return rax;"),
+            line(0x1003, "}"),
+        ];
+        assert!(recover_linear(&mut lines, true));
+        assert_eq!(
+            declaration_name(lines[1].text.trim()).as_deref(),
+            Some("v1")
+        );
+        assert!(lines[1].text.ends_with("// rax"), "{}", lines[1].text);
     }
 }

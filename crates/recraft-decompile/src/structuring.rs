@@ -166,6 +166,268 @@ fn relabel_frame_slots(lines: &mut [PseudoLine], frame: i64) {
     }
 }
 
+/// Declare the function's stack slots above the body, the way IDA lists locals.
+///
+/// The body names frame slots `var_XX` (`fgets(&var_20, …)`), and IDA declares them with the
+/// storage behind a comment: `_QWORD v4; // [rsp+20h] [rbp-108h]`. The type is the widest
+/// access the printer recorded for the slot, and a slot the body treats as a memory object
+/// (its address taken or a runtime index into it) becomes a byte array sized by the frame
+/// layout. Slots the function never writes or addresses are the caller's stack arguments, and
+/// a function whose prologue does not prove a local area keeps them all undeclared.
+fn declare_stack_slots(
+    lines: &mut Vec<PseudoLine>,
+    slots: &BTreeMap<String, crate::SlotUse>,
+    area: Option<LocalArea>,
+    is_64: bool,
+) {
+    let Some(signature) = lines.iter().position(|line| line.text.ends_with(") {")) else {
+        return;
+    };
+    // Without a measured area there is no way to tell a local from the caller's stack
+    // argument at the same offset (a prologue that only pushes registers has neither).
+    let Some(area) = area else {
+        return;
+    };
+    // The body's slot tokens: the names the emitter gave the frame slots. Only the body names
+    // them (the declaration block above it has no `var_` names yet).
+    let mut used: BTreeMap<i64, (String, crate::SlotUse)> = BTreeMap::new();
+    for line in lines.iter().skip(signature + 1) {
+        for (token, addressed) in slot_tokens(&line.text) {
+            let Some(offset) = slot_key(token) else {
+                continue;
+            };
+            let mut use_ = slots.get(token).copied().unwrap_or_default();
+            // `&var_XX + 8` is an address past the slot's first byte; the printer renders it
+            // from the expression tree, not through the slot, so the text is the only signal.
+            use_.addressed |= addressed;
+            let slot = used
+                .entry(offset)
+                .or_insert_with(|| (token.to_owned(), use_));
+            slot.1.read |= use_.read;
+            slot.1.written |= use_.written;
+            slot.1.addressed |= use_.addressed;
+            slot.1.indexed |= use_.indexed;
+            slot.1.width = slot.1.width.max(use_.width);
+        }
+    }
+    // A slot the function never writes and never addresses is the caller's stack argument:
+    // the signature already names it when it is recovered, so it is not a local.
+    let mut locals: Vec<(i64, String, crate::SlotUse)> = used
+        .iter()
+        .filter(|(offset, (_, use_))| {
+            let local = (use_.written || use_.addressed) && !use_.outgoing;
+            local && **offset >= 0 && **offset < area.size
+        })
+        .map(|(offset, (name, use_))| (*offset, name.clone(), *use_))
+        .collect();
+    locals.sort_by_key(|(offset, _, _)| *offset);
+    // The object extends to the next slot the body names, or to the top of the local area:
+    // that is the only size the frame layout proves (IDA sizes stack variables the same way).
+    let offsets: Vec<i64> = used
+        .keys()
+        .copied()
+        .filter(|offset| *offset >= 0 && *offset < area.size)
+        .collect();
+    let word = if is_64 { 8u8 } else { 4 };
+    let (sp, fp) = if is_64 {
+        ("rsp", "rbp")
+    } else {
+        ("esp", "ebp")
+    };
+    let mut declarations: Vec<String> = Vec::with_capacity(locals.len());
+    for (offset, name, use_) in &locals {
+        let extent = offsets
+            .iter()
+            .find(|next| *next > offset)
+            .map(|next| next - offset)
+            .or_else(|| Some(area.size - offset))
+            .filter(|extent| *extent > 0);
+        // IDA spells the stack the way the architecture does: `[rsp+20h] [rbp-108h]` on x64,
+        // `[esp+20h] [ebp-108h]` on x86.
+        let home = match area.rbp {
+            Some(rbp) if *offset < rbp => {
+                format!("[{sp}+{offset:x}h] [{fp}-{:x}h]", rbp - offset)
+            }
+            _ => format!("[{sp}+{offset:x}h]"),
+        };
+        let aggregate = !use_.direct()
+            && (use_.addressed || use_.indexed)
+            && extent.is_some_and(|extent| extent > i64::from(word));
+        let declaration = if aggregate {
+            let size = extent.unwrap_or(0);
+            crate::variables::local_declaration("uint8", &format!("{name}[{size:#x}]"), &home)
+        } else {
+            // The printer records the width of every real access; a slot it only sees
+            // addressed has none, and a machine word is the only width left to assume.
+            let mut width = if use_.width > 0 { use_.width } else { word };
+            width = width.next_power_of_two();
+            if let Some(extent) = extent {
+                width = width.min(u8::try_from(extent).unwrap_or(u8::MAX));
+            }
+            crate::variables::local_declaration(c_type(width), name, &home)
+        };
+        declarations.push(declaration);
+    }
+    if declarations.is_empty() {
+        return;
+    }
+    // Declarations follow the signature, after the register locals the value flow declared.
+    let mut at = signature + 1;
+    while at < lines.len() && crate::variables::declaration_name(lines[at].text.trim()).is_some() {
+        at += 1;
+    }
+    let addr = lines[signature].addr;
+    for (index, text) in declarations.into_iter().enumerate() {
+        lines.insert(at + index, PseudoLine { addr, text });
+    }
+}
+
+/// The local part of a function's stack frame, measured from the bottom of the frame.
+#[derive(Clone, Copy)]
+struct LocalArea {
+    /// Offset one past the last local byte (`sub rsp, N` with no saved registers is `N`).
+    size: i64,
+    /// Depth of `rbp` below the bottom of the frame, when the prologue established one. The
+    /// saved registers live above it, so `[rbp-XXh]` stops short of `size`.
+    rbp: Option<i64>,
+}
+
+/// Measure the function's local area from its prologue.
+///
+/// This is what the slot names are relative to (the printer normalises every slot by the
+/// deepest `rsp`), so the last local extends to the bottom of the area: `push rdi; sub rsp,
+/// 0x120` keeps 0x120 bytes of locals below the saved register, which is exactly the buffer
+/// `fgets(&var_20, 0x100, …)` fills.
+fn local_area(session: &dyn SessionView, cfg: &Cfg, is_64: bool) -> Option<LocalArea> {
+    let word = if is_64 { 8i64 } else { 4 };
+    let (stack_pointer, frame_pointer) = if is_64 {
+        (iced_x86::Register::RSP, iced_x86::Register::RBP)
+    } else {
+        (iced_x86::Register::ESP, iced_x86::Register::EBP)
+    };
+    let mut depth = 0i64;
+    let mut saved = 0i64;
+    // Depth at which `mov rbp, rsp` established the frame pointer; pushes after it would put
+    // the saved registers below the pointer, where its depth is no longer the frame top.
+    let mut frame_pointer_depth: Option<i64> = None;
+    let block = cfg.blocks.first()?;
+    for (index, cfg_insn) in block.insns.iter().enumerate() {
+        if index >= 24 {
+            break;
+        }
+        let insn = session.insn_at(cfg_insn.addr).ok()??;
+        if insn.is_invalid() {
+            return None;
+        }
+        match insn.mnemonic() {
+            iced_x86::Mnemonic::Push => {
+                if frame_pointer_depth.is_some() {
+                    frame_pointer_depth = None;
+                }
+                depth += word;
+                saved += word;
+            }
+            iced_x86::Mnemonic::Sub
+                if insn.op_register(0) == stack_pointer
+                    && let Some(size) = immediate_operand(&insn) =>
+            {
+                depth += size;
+            }
+            iced_x86::Mnemonic::Mov
+                if insn.op_register(0) == frame_pointer && insn.op_register(1) == stack_pointer =>
+            {
+                frame_pointer_depth = Some(depth);
+            }
+            iced_x86::Mnemonic::Nop | iced_x86::Mnemonic::Mov | iced_x86::Mnemonic::Lea => {}
+            _ => break,
+        }
+    }
+    if depth <= saved {
+        return None;
+    }
+    let size = depth - saved;
+    // The frame pointer sits at the top of that area (the saved registers are above it), so
+    // the deepest slot is `[rbp - size]`.
+    let rbp = frame_pointer_depth.map(|_| size);
+    Some(LocalArea { size, rbp })
+}
+
+/// The immediate operand of an instruction whose first operand is a stack adjustment.
+fn immediate_operand(insn: &recraft_decode::Insn) -> Option<i64> {
+    Some(match insn.op_kind(1) {
+        iced_x86::OpKind::Immediate8 => i64::from(insn.immediate8()),
+        iced_x86::OpKind::Immediate8to32 => i64::from(insn.immediate8to32()),
+        iced_x86::OpKind::Immediate8to64 => insn.immediate8to64(),
+        iced_x86::OpKind::Immediate16 => i64::from(insn.immediate16()),
+        iced_x86::OpKind::Immediate32 => i64::from(insn.immediate32()),
+        iced_x86::OpKind::Immediate32to64 => insn.immediate32to64(),
+        iced_x86::OpKind::Immediate64 => insn.immediate64() as i64,
+        _ => return None,
+    })
+}
+
+/// C spelling of a slot width in bytes (see `SlotUse::width`).
+fn c_type(width: u8) -> &'static str {
+    match width {
+        0 | 1 => "uint8",
+        2 => "uint16",
+        3 | 4 => "uint32",
+        5..=8 => "uint64",
+        _ => "__m128",
+    }
+}
+
+/// The `var_XX` / `var_nXX` tokens of a line, with whether the token is addressed (`&var_X`),
+/// skipping string literals and comments.
+fn slot_tokens(text: &str) -> Vec<(&str, bool)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index += 2;
+                    } else if bytes[index] == b'"' {
+                        index += 1;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => break,
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let start = index;
+                index += 1;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+                let token = &text[start..index];
+                if token.starts_with("var_") && slot_key(token).is_some() {
+                    let addressed = text[..start].trim_end().ends_with('&');
+                    out.push((token, addressed));
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    out
+}
+
+/// Byte offset of a slot name from the bottom of the frame (`var_n8` is -8).
+fn slot_key(name: &str) -> Option<i64> {
+    if let Some(hex) = name.strip_prefix("var_n") {
+        return i64::from_str_radix(hex, 16).ok().map(|offset| -offset);
+    }
+    let hex = name.strip_prefix("var_")?;
+    i64::from_str_radix(hex, 16).ok()
+}
+
 fn structure(
     session: &dyn SessionView,
     start: Address,
@@ -427,6 +689,23 @@ fn structure(
     }
     bodies = seeded;
     mark("seeded lift");
+    // Stack slots the body names, with the widths and uses the printer recorded while
+    // rendering: a direct slot access prints as a bare name, so the declaration list above
+    // the body could not tell a `_QWORD` slot from a byte.
+    let mut slots: BTreeMap<String, crate::SlotUse> = BTreeMap::new();
+    for body in &bodies {
+        for (name, use_) in &body.slots {
+            let slot = slots.entry(name.clone()).or_default();
+            *slot = crate::SlotUse {
+                width: slot.width.max(use_.width),
+                read: slot.read || use_.read,
+                written: slot.written || use_.written,
+                addressed: slot.addressed || use_.addressed,
+                indexed: slot.indexed || use_.indexed,
+                outgoing: slot.outgoing || use_.outgoing,
+            };
+        }
+    }
     // Callees that are variadic take their argument count from their format string; the
     // prologue is the only signal an unsymbolised binary gives (see `is_variadic_target`).
     let mut variadic: BTreeSet<String> = BTreeSet::new();
@@ -786,6 +1065,15 @@ fn structure(
             &mut lines,
             session.image().is_64,
             crate::sysv_frames(session),
+        );
+        // The frame slots the body names are locals too, and IDA declares them with their
+        // storage behind a comment (`uint64 var_20; // [rsp+20h] [rbp-108h]`). Runs before
+        // the user renames and the frame relabel so both reach the declaration lines.
+        declare_stack_slots(
+            &mut lines,
+            &slots,
+            local_area(session, &cfg, session.image().is_64),
+            session.image().is_64,
         );
         apply_user_var_names(&mut lines, session, start);
     }
@@ -11312,6 +11600,7 @@ mod tests {
                 alias_writes: Vec::new(),
                 arg_writes: Vec::new(),
                 literals: Vec::new(),
+                slots: BTreeMap::new(),
             }
         }
         let entry = body(vec![(0x10, Reg::Rbx), (0x11, Reg::Rdi)], Vec::new());
@@ -11609,6 +11898,7 @@ mod tests {
                 alias_writes: Vec::new(),
                 arg_writes,
                 literals: Vec::new(),
+                slots: BTreeMap::new(),
             };
         // Block 0 loads rcx from rbx; block 1 overwrites rbx, so block 2 cannot trust it.
         let bodies = vec![
@@ -12284,6 +12574,7 @@ mod tests {
             arg_writes: Vec::new(),
             alias_writes: Vec::new(),
             literals: Vec::new(),
+            slots: BTreeMap::new(),
         };
         let bodies = vec![
             lift("prologue();", None, Flow::Fallthrough),
@@ -13809,5 +14100,128 @@ mod tests {
         // Folding it would emit `do { … } else { … } while (1);`, which is not valid C.
         assert_eq!(fold_backward_gotos_into_loops(&mut lines), 0);
         assert!(lines[5].text.contains("goto loc_20;"));
+    }
+
+    fn slot_use(width: u8, read: bool, written: bool, addressed: bool) -> crate::SlotUse {
+        crate::SlotUse {
+            width,
+            read,
+            written,
+            addressed,
+            indexed: false,
+            outgoing: false,
+        }
+    }
+
+    /// Declare the slots one synthetic function body names.
+    fn declared(
+        body: &[&str],
+        slots: &[(&str, crate::SlotUse)],
+        area: Option<LocalArea>,
+        is_64: bool,
+    ) -> Vec<String> {
+        let map: BTreeMap<String, crate::SlotUse> = slots
+            .iter()
+            .map(|(name, use_)| ((*name).to_owned(), *use_))
+            .collect();
+        let mut lines = vec![test_line("int32 sub_1000(void) {")];
+        lines.extend(body.iter().map(|text| test_line(text)));
+        lines.push(test_line("}"));
+        declare_stack_slots(&mut lines, &map, area, is_64);
+        lines.into_iter().map(|line| line.text).collect()
+    }
+
+    #[test]
+    fn a_buffer_slot_is_a_byte_array_sized_by_the_frame() {
+        // The address is taken but the slot is never read directly: it is a memory object, and
+        // its size is the room the frame gives it (`fgets(&var_20, 0x100, …)`).
+        let lines = declared(
+            &["    v1 = fgets(&var_20, 0x100, v5);"],
+            &[("var_20", slot_use(0, false, false, true))],
+            Some(LocalArea {
+                size: 0x120,
+                rbp: None,
+            }),
+            true,
+        );
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(
+            lines[1].starts_with("    uint8 var_20[0x100];"),
+            "{lines:?}"
+        );
+        assert!(lines[1].ends_with("// [rsp+20h]"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_scalar_slot_keeps_its_width_and_reports_the_frame_pointer_depth() {
+        let lines = declared(
+            &["    var_20 = v1;"],
+            &[("var_20", slot_use(4, true, true, false))],
+            Some(LocalArea {
+                size: 0x30,
+                rbp: Some(0x30),
+            }),
+            true,
+        );
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines[1].starts_with("    uint32 var_20;"), "{lines:?}");
+        assert!(lines[1].ends_with("// [rsp+20h] [rbp-10h]"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_stack_argument_is_not_declared_as_a_local() {
+        // The body only reads the caller's slot: an incoming argument, not a local.
+        let lines = declared(
+            &["    v1 = var_30;"],
+            &[("var_30", slot_use(8, true, false, false))],
+            Some(LocalArea {
+                size: 0x30,
+                rbp: None,
+            }),
+            true,
+        );
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[1].contains("v1 = var_30;"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_outgoing_push_area_is_not_declared() {
+        let mut use_ = slot_use(4, false, true, false);
+        use_.outgoing = true;
+        let lines = declared(
+            &["    var_0 = v1;"],
+            &[("var_0", use_)],
+            Some(LocalArea { size: 8, rbp: None }),
+            false,
+        );
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[1].contains("var_0 = v1;"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_function_without_a_measured_area_declares_nothing() {
+        let lines = declared(
+            &["    var_20 = v1;"],
+            &[("var_20", slot_use(8, true, true, false))],
+            None,
+            true,
+        );
+        assert_eq!(lines.len(), 3, "{lines:?}");
+    }
+
+    #[test]
+    fn x86_declarations_spell_the_stack_pointer_register() {
+        let lines = declared(
+            &["    var_8 = v1;"],
+            &[("var_8", slot_use(4, true, true, false))],
+            Some(LocalArea {
+                size: 0x20,
+                rbp: None,
+            }),
+            false,
+        );
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines[1].starts_with("    uint32 var_8;"), "{lines:?}");
+        assert!(lines[1].ends_with("// [esp+8h]"), "{lines:?}");
     }
 }
