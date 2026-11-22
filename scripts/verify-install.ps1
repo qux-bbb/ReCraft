@@ -14,7 +14,7 @@
 #   vmrun -T ws -gu <user> -gp <pass> runProgramInGuest <vmx> -interactive cmd.exe /c run.bat
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1 `
-#       -Msi dist\recraft-v0.1.0-windows-x64.msi
+#       -Msi dist\recraft-v<version>-windows-x64.msi
 #   ... -OutDir .tmp\verify-install    # default: <repo>\.tmp\verify-install
 #   ... -SkipGui                       # headless runs
 #
@@ -231,7 +231,7 @@ try {
     $cli = Join-Path $installDir 'recraft-cli.exe'
     $ErrorActionPreference = 'Continue'
     $versionOut = (& $cli --version 2>$null) -join ' '
-    Check ($versionOut -match '0\.1\.0') "recraft-cli --version ($versionOut)"
+    Check ($versionOut -match [regex]::Escape($ExpectedVersion)) "recraft-cli --version ($versionOut)"
     $info = (& $cli info (Join-Path $env:SystemRoot 'System32\notepad.exe') 2>$null) -join "`n"
     Check ($info -match 'PE32') 'recraft-cli info notepad.exe reports a PE image'
     $project = Join-Path $work 'notepad.rcraft'

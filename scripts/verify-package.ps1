@@ -9,7 +9,7 @@
 #     AI provider defaults offline, metrics JSON.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-package.ps1
-#     -Zip dist\recraft-v0.1.0-windows-x64.zip
+#     -Zip dist\recraft-v<version>-windows-x64.zip
 
 [CmdletBinding()]
 param(

@@ -21,7 +21,7 @@
 #
 #   powershell -File scripts/verify-msi.ps1                 # full run (needs elevation)
 #   powershell -File scripts/verify-msi.ps1 -SkipInstall     # structure + payload only
-#   powershell -File scripts/verify-msi.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
+#   powershell -File scripts/verify-msi.ps1 -Msi dist\recraft-v<version>-windows-x64.msi
 #   powershell -File scripts/verify-msi.ps1 -Culture en-US   # English build
 
 [CmdletBinding()]

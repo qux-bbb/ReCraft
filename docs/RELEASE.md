@@ -25,7 +25,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-package.ps1
 # MSI：结构+载荷+安装/卸载（需提权提示符）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-msi.ps1
 # 干净机：安装→CLI→GUI→卸载→清理（需提权提示符）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1 -Msi dist\recraft-v0.1.0-windows-x64.msi
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1 -Msi dist\recraft-v0.3.0-windows-x64.msi
 ```
 
 版本来自 workspace `Cargo.toml` 的 `version`；可用 `-Version` 覆盖。`dist` 里上一次运行的
@@ -254,22 +254,117 @@ Certum 开源证书或 Azure Artifact Signing，也不购买 OV/EV 证书。发�
 
 ## 发布清单
 
-1. `cargo test --workspace`、`scripts/e2e.ps1`、`scripts/bench-large.ps1` 全绿。
-2. 更新 `CHANGELOG.md` 与 `docs/M*.md` 状态。
-3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1`（MSI 需要 `dotnet tool restore`；CI msi job 自动完成）。
-4. `scripts/verify-package.ps1` + 提权提示符下的 `scripts/verify-msi.ps1` 全过；
-   校验 `SHA256SUMS.txt`；上传 zip/MSI/校验和。
-5. 明确 AGPL-3.0-only（`LICENSE`/`README`），**不包含**任何样本二进制。
-6. 干净机的安装→启动 UI→卸载已复验（见上节 2026-11-12：Win10 22H2 虚机 + Win11 25H2 本机）；
-   签名已废弃：发布物保持未签名，无需为签名重打产物。
-7. 打附注标签并推送：`git tag -a v0.2.0 -m "ReCraft 0.2.0"` +
-   `git push origin main v0.2.0`；用 CHANGELOG 的 0.2.0 节作为 Release notes
-   （`gh release create v0.2.0 --notes-file <utf8 临时文件> <zip> <msi> SHA256SUMS.txt`）。
-   发布后把 README / ROADMAP / M4 里“公开预览待…”的状态行改成已发布版本。
+下面是 0.3.0 这一轮的实际清单（2026-11-22 定，版本号已经用户确认）；换版本时把 `0.3.0` /
+`v0.3.0` 整体替换即可。每步都必须做完才进下一步，前一步不过不要在后一步上打补丁。
+
+### 0. 前置
+
+- 版本号已由用户拍板：**0.3.0**。没有这句话不动 `Cargo.toml`、不打标签、不建 Release。
+- 工作区干净（`git status --short` 只剩本轮要提交的改动），本地提交全部就绪。
+- `git ls-remote --tags origin` 确认远端只有 `v0.1.0` / `v0.2.0`，新标签不会与历史号冲突
+  （开发中期的 0.3.x/0.4.x 是已作废的本地标签，从未推送）。
+
+### 1. 全量门禁
+
+```powershell
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+```powershell
+# 反编译器三层：lint → golden → metrics，任一层解释不通就停
+# 用 debug 产物：这一轮还没打包，别误用 dist 里上一轮遗留的 release 二进制
+target\debug\recraft-cli.exe lint     <project>
+target\debug\recraft-cli.exe golden  <project> --dir tests/golden\<set> --check
+target\debug\recraft-cli.exe metrics <project>
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\e2e.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bench-large.ps1
+```
+
+`e2e.ps1` 与 `bench-large.ps1` 默认拿 `notepad.exe` 当样本（`-PEFile` 可换），自己造 1 GiB
+overlay，不依赖语料；三层门禁用的语料工程由 `corpus\build.ps1` 生成（需 MSVC）。CI 对应的
+job：`check`（Windows）、`core`（Linux）、`licenses`。
+
+### 2. 版本与文档
+
+- `Cargo.toml` 的 workspace `version` 改成 `0.3.0`：14 个 crate 全部继承，`Cargo.lock` 里
+  对应条目随之刷新，改完 `cargo build -p recraft-ui -p recraft-cli` 确认 lock 已更新。
+- `CHANGELOG.md`：`## [Unreleased]` 改成 `## [0.3.0] - <发布日>`，标题下补一句总述
+  （照 0.2.0 段的体例），文末补链接定义
+  `[0.3.0]: https://github.com/qux-bbb/ReCraft/releases/tag/v0.3.0`。
+- 状态行口径：`README.md`、`README.en.md`、`docs/FAQ.md`、`docs/M4.md`（`docs/ROADMAP.md`
+  的发布记录留到第 6 步，等打包有了体积再写）。
+- 本文档与 README 里 dist 文件名示例（`-Msi dist\…`）跟着换成 `v0.3.0`。
+- **不改**历史叙述里的旧版本号：`docs/DECBENCH.md`、`docs/UI.md`、
+  `docs/adr/ADR-015-decoder-abstraction.md`、`docs/ROADMAP.md` 的波次记录都是历史事实。
+
+### 3. 打包
+
+```powershell
+dotnet tool restore   # 仓库钉的 WiX 5.0.2
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -RequireMsi
+```
+
+产物：`dist\ReCraft-0.3.0\`（绿色目录，含 `VERSION.txt`）、
+`dist\recraft-v0.3.0-windows-x64.zip`、同版本 `.msi`、`dist\SHA256SUMS.txt`（含两个 exe）。
+CI 侧同一件事由 `package` / `msi` 两个 job 完成。
+
+### 4. 验证
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-package.ps1
+# 需提权提示符
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-msi.ps1
+# 干净机：安装→CLI→GUI→卸载→清理
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-install.ps1 -Msi dist\recraft-v0.3.0-windows-x64.msi
+# 优先用 target\release 的二进制，断言 MCP serverInfo
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\demo.ps1
+```
+
+再手工过两处本版新增项：MSI 三个复选框默认全勾且桌面图标真的出现；任意文件右键有
+「用 ReCraft 打开」（Windows 11 在「显示更多选项」里）。
+
+### 5. 推送与发布
+
+```powershell
+git push origin main
+git tag -a v0.3.0 -m "ReCraft 0.3.0"
+git push origin v0.3.0
+gh release create v0.3.0 --notes-file <notes.md> <zip> <msi> SHA256SUMS.txt
+```
+
+- Release notes 用 CHANGELOG 的 `0.3.0` 节；临时文件必须 UTF-8 无 BOM
+  （PS 5.1 的 `>` 会写成 UTF-16 或 GBK）。
+- 明确 AGPL-3.0-only（`LICENSE` / `README`），发布物**不含任何样本二进制**。
+- 发布物保持未签名（2026-11-14 决定），完整性凭据只有 `SHA256SUMS.txt`；
+  签名若重启见上节，`signtool` 签两个 exe 与 MSI 后重打产物并更新校验和。
+
+### 6. 发布后
+
+- Release 页面三个附件齐全，且与 `SHA256SUMS.txt` 对得上。
+- `docs/ROADMAP.md`、`docs/M4.md` 补产物体积与日期。
+- 新开一个空的 `## [Unreleased]` 供下一批累积。
+
+### 已知坑
+
+1. **MSI 选项属性必须默认 `1`**：复选框只要属性非空就画成勾选，而组件只在 `属性 = 1`
+   时安装，写 `0` 会「框勾着但不装」（0.2.0 的桌面快捷方式就是这么坏的）。`verify-msi.ps1`
+   已有「不得默认 0」的守卫，别在 wxs 里改回去。
+2. **本机只有 PS 5.1**：一律 `powershell -NoProfile -ExecutionPolicy Bypass -File`；
+   脚本里写文件用 `[System.IO.File]::WriteAllText` + `UTF8Encoding($false)`，
+   不要用 `>` / `Set-Content`（GBK 会把中文写成 mojibake）。
+3. **`package.ps1` 会清 `dist` 里上一轮的 msi/setup**，但 `artifacts\` 下从 CI 下载的产物
+   要手清，别混进 Release。
+4. **MSI 的 `ProductVersion` 是数字三段**，预发布后缀会被截掉——发纯数字版本最省事。
 
 **版本号由用户拍板**：`Cargo.toml` 的 `version` 每次改动、每个标签、每次 GitHub Release 前
 都必须先得到用户的明确同意，不得自行推进版本号（2026-11-15 约定；此前的 0.2.0→0.4.1 中间
-版本号因此被收回成单一的 0.2.0）。
+版本号因此被收回成单一的 0.2.0）。**0.3.0 已于 2026-11-22 经用户确认**，用于 0.2.0 之后的
+这一批（列表/图形/反汇编的 IDA 对齐、导出入口点、反编译变量注释、右键动词等）。
 
 ## 限制
 

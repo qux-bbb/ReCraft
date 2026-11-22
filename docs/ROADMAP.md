@@ -129,6 +129,13 @@
   `verify-msi.ps1`（21 项表断言 + 载荷与 dist 逐字节一致）/ `demo.ps1`（MCP
   `serverInfo.version` = 0.2.0）全 PASS，tag `v0.2.0`。内容为 W1–W6 全部，含 AArch64
   解码器切到 capstone、A64 的 sp/SIMD/movk 修正与图标回到 v1。
+- **0.3.0 已打包（2026-11-22）**：`dist/recraft-v0.3.0-windows-x64.zip` 17.5 MiB、
+  `.msi` 15.5 MiB、`SHA256SUMS.txt`；`package.ps1` / `verify-package.ps1`（506 函数）/
+  `verify-msi.ps1 -SkipInstall`（25 项表断言 + 载荷与 dist 逐字节一致）/ `demo.ps1`
+  （MCP `serverInfo.version` = 0.3.0）全 PASS；安装/卸载待提权复验，tag `v0.3.0` 待发。
+  内容为 0.2.0 之后的 40 个提交：列表/图形/数据区按 IDA 重做、行构建下沉 `recraft-core`、
+  `C`/`D`/`U`/`A` 的 item 语义、局部变量位置注释、导出窗格入口点、安装包右键动词与
+  桌面快捷方式修复。
 - 六波全部收口（2026-11-14）：W1–W6 全部并入 0.2.0 发布；开发中期按波次打的 0.3.x/0.4.x
   标签与产物在发布前作废。P 线的 DecBench 见上，签名已废弃。
 

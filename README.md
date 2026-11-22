@@ -4,8 +4,9 @@
 
 **简体中文** | [English](README.en.md)
 
-> **状态：0.2.0（技术预览）已发布** —— 0.1.0 之后的全部工作（W1–W6、ARM64、capstone 解码器）
-> 一次收口，发布包见 [Releases](https://github.com/qux-bbb/ReCraft/releases)。
+> **状态：0.3.0（技术预览）已发布** —— 0.2.0 之后的列表/图形/数据区按 IDA 重做、行构建下沉
+> core（CLI/MCP 与 GUI 同一份列表）、局部变量位置注释与安装包右键动词一次收口，发布包见
+> [Releases](https://github.com/qux-bbb/ReCraft/releases)。
 > 支持导入/分析 PE32/PE32+（x64 + Win32）、ELF32/ELF64（i386 + x86-64）与
 > **ARM64（ELF/PE，AArch64）**；带签名、ABI 和类型的结构化伪 C（“带签名”指函数签名，不是代码签名）；通过带撤销的
 > 日志命令总线执行重命名/注释/原型/结构体类型/栈变量命名/字符串编辑；MCP 服务器（默认只读，
@@ -205,11 +206,11 @@ lint（L1+L2）与 160 份 golden，ELF 版跑全量 lint、结构化率与覆�
 ```powershell
 # release build + green zip + SHA256SUMS
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1 -NoMsi
-#   → dist/recraft-v0.2.0-windows-x64.zip, dist/ReCraft-0.2.0/, dist/SHA256SUMS.txt
+#   → dist/recraft-v0.3.0-windows-x64.zip, dist/ReCraft-0.3.0/, dist/SHA256SUMS.txt
 
 # also builds the MSI when the WiX toolchain is there
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
-#   → dist/recraft-v0.2.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
+#   → dist/recraft-v0.3.0-windows-x64.msi (WiX v5, per-machine to %ProgramFiles%\ReCraft, one UAC prompt)
 
 # MSI: structure + payload + install/uninstall (elevated)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-msi.ps1
@@ -224,11 +225,11 @@ CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产�
 预览二进制**没有代码签名**（刻意决定：2026-11-14 起签名不在计划内，见
 [`docs/RELEASE.md`](docs/RELEASE.md)）。Windows SmartScreen 会显示“未知发布者”：
 
-1. 下载 `recraft-v0.2.0-windows-x64.zip` 或 `recraft-v0.2.0-windows-x64.msi`，以及
+1. 下载 `recraft-v0.3.0-windows-x64.zip` 或 `recraft-v0.3.0-windows-x64.msi`，以及
    `SHA256SUMS.txt`。
 2. 运行前先校验下载：
    ```powershell
-   Get-FileHash .\recraft-v0.2.0-windows-x64.msi -Algorithm SHA256
+   Get-FileHash .\recraft-v0.3.0-windows-x64.msi -Algorithm SHA256
    # 与 SHA256SUMS.txt 中对应行比较
    ```
 3. 如果出现 SmartScreen：**更多信息 → 仍要运行**。MSI 安装到
