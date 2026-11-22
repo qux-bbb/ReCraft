@@ -296,6 +296,11 @@ job：`check`（Windows）、`core`（Linux）、`licenses`。
 - `CHANGELOG.md`：`## [Unreleased]` 改成 `## [0.3.0] - <发布日>`，标题下补一句总述
   （照 0.2.0 段的体例），文末补链接定义
   `[0.3.0]: https://github.com/qux-bbb/ReCraft/releases/tag/v0.3.0`。
+- **打包前先把这一版的那一节定稿。** 节内顺序固定 `新增 → 变更 → 修复 → 界面`（与 0.2.0 节
+  和 Keep a Changelog 一致），措辞与对外口径（例如说明里不写具体 IDA 版本号）也一并确认：
+  `dist` 里的 zip/MSI 会带走打包那一刻的 `CHANGELOG.md`，发布后再改仓库只会留下「说明已改、
+  包内仍旧」——tag 与附件不可回改，真要一致就得重打产物、换 `SHA256SUMS.txt` 并替换已发布的
+  附件（0.3.0 就漏了这一步：说明事后改成无版本号、节序也调过，但包内 CHANGELOG 仍是旧文本）。
 - 状态行口径：`README.md`、`README.en.md`、`docs/FAQ.md`、`docs/M4.md`（`docs/ROADMAP.md`
   的发布记录留到第 6 步，等打包有了体积再写）。
 - 本文档与 README 里 dist 文件名示例（`-Msi dist\…`）跟着换成 `v0.3.0`。
