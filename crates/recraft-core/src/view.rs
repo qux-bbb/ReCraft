@@ -164,6 +164,13 @@ pub struct StringEntry {
     pub kind: i64,
 }
 
+/// `string.kind` bit for a string the user created (IDA's `A`).
+///
+/// Analysis rewrites the derived rows on every run; a row carrying this bit is user data,
+/// so the rewrite keeps it (see `Session::replace_auto_strings`). The low bits stay free
+/// for analysis categories.
+pub const STRING_KIND_USER: i64 = 1 << 16;
+
 /// A user edit on one extracted string: replacement text and/or a deletion marker.
 ///
 /// Analysis owns the derived `string` table; this record is user data, so a rebuild keeps

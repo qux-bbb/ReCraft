@@ -28,10 +28,16 @@ const PAGE_FLAG_BYTES: usize = PAGE_BYTES as usize / 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum CodeData {
+    /// No user decision: the byte belongs to whatever analysis derives for it. This is the
+    /// state every byte starts in, so it must stay the default.
     #[default]
     Unknown = 0,
     Code = 1,
     Data = 2,
+    /// The user removed the item here (IDA's `U`). The byte belongs to no item, so the
+    /// listing shows it as one undefined `db` row and no derived source (string table,
+    /// instruction sweep, xref typing) may claim it.
+    Undefined = 3,
 }
 
 impl CodeData {
@@ -40,6 +46,7 @@ impl CodeData {
         match bits & 0b11 {
             1 => CodeData::Code,
             2 => CodeData::Data,
+            3 => CodeData::Undefined,
             _ => CodeData::Unknown,
         }
     }
@@ -82,6 +89,15 @@ impl Flags {
         }
     }
 
+    /// One byte the user undefined (IDA's `U`): no item, no head, no length.
+    #[inline]
+    pub const fn undefined() -> Self {
+        Flags {
+            kind: CodeData::Undefined,
+            head: false,
+        }
+    }
+
     #[inline]
     pub const fn is_code(self) -> bool {
         matches!(self.kind, CodeData::Code)
@@ -90,6 +106,11 @@ impl Flags {
     #[inline]
     pub const fn is_data(self) -> bool {
         matches!(self.kind, CodeData::Data)
+    }
+
+    #[inline]
+    pub const fn is_undefined(self) -> bool {
+        matches!(self.kind, CodeData::Undefined)
     }
 
     #[inline]
@@ -265,6 +286,8 @@ impl FlagsStore {
             }
             CodeData::Data => vec![Flags::data(); len as usize],
             CodeData::Unknown => vec![Flags::UNKNOWN; len as usize],
+            // Undefined bytes are one-byte items: no head, no length of their own.
+            CodeData::Undefined => vec![Flags::undefined(); len as usize],
         };
         self.write(conn, start, &flags)
     }
@@ -350,6 +373,33 @@ mod tests {
             assert_eq!(flags.head, offset == 0);
         }
         assert_eq!(store.cached_pages(), 2);
+    }
+
+    /// IDA's `U` value has to survive the nibble encoding: `3` used to fall back to
+    /// `Unknown`, which would make an undefined byte indistinguishable from one analysis
+    /// never touched.
+    #[test]
+    fn undefined_roundtrips_through_the_nibble() {
+        let conn = conn();
+        let mut store = FlagsStore::new(4);
+        let addr = Address::new(0x3000);
+        store.fill(&conn, addr, 2, CodeData::Undefined).unwrap();
+        assert!(store.get(&conn, addr).unwrap().is_undefined());
+        assert!(!store.get(&conn, addr).unwrap().head);
+        assert!(
+            store
+                .get(&conn, Address::new(0x3001))
+                .unwrap()
+                .is_undefined()
+        );
+        // The neighbour stays untouched, and a reload sees the same bytes.
+        assert_eq!(
+            store.get(&conn, Address::new(0x3002)).unwrap(),
+            Flags::UNKNOWN
+        );
+        let mut reloaded = FlagsStore::new(4);
+        assert!(reloaded.get(&conn, addr).unwrap().is_undefined());
+        assert_eq!(reloaded.get(&conn, addr).unwrap().to_nibble(), 3);
     }
 
     #[test]

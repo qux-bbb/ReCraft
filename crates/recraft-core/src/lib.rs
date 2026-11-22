@@ -24,8 +24,14 @@ pub use command::{
 };
 pub use flags::{CodeData, Flags, FlagsStore, PAGE_BYTES};
 // IDA's auto name for a string literal, shared by the listing (operand names) and the
-// disassembly view (a `db '…',0` row's name), so the two cannot drift.
-pub use listing::data_name_for_literal;
+// disassembly view (a `db '…',0` row's name), so the two cannot drift. The row walk and the
+// data-item formatting live here too: the GUI, the CLI and the MCP tools draw the same
+// listing from them.
+pub use listing::{
+    ListingHints, ListingString, align_operand, c_literal_bytes, data_name_for_literal,
+    data_offset_target, db_byte_operand, format_db_bytes, hex_value, short_literal_len,
+    string_terminator_len, typed_item_kind,
+};
 // Loaders live in `recraft-format`; front ends and the decompiler read them through
 // the session, so the vocabulary is re-exported here.
 pub use plt::PltStub;
@@ -34,4 +40,6 @@ pub use script::{COMMAND_TYPES, parse_command, resolve_address};
 pub use segments::{Perm, Segment, SegmentKind};
 pub use session::{FUNC_FLAG_AUTO, Session, UndoRecord, UndoReport};
 pub use snapshot::SessionSnapshot;
-pub use view::{DisasmLine, FunctionInfo, SessionView, StringEntry, StringOverride, XrefEntry};
+pub use view::{
+    DisasmLine, FunctionInfo, STRING_KIND_USER, SessionView, StringEntry, StringOverride, XrefEntry,
+};

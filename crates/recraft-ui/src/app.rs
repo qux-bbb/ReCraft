@@ -8,7 +8,7 @@
 //! commands, so undo/redo behave exactly like the CLI.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -19,9 +19,11 @@ use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Key, RichText, Sense};
 
 use recraft_common::{Address, AddressRange};
+#[cfg(test)]
+use recraft_core::data_name_for_literal;
 use recraft_core::{
-    CodeData, Command, CommentKind, DisasmLine, Flags, FunctionInfo, Session, StructDef,
-    StructField, XrefEntry, data_name_for_literal,
+    CodeData, Command, CommentKind, DisasmLine, FunctionInfo, ListingHints, ListingString, Session,
+    StructDef, StructField, XrefEntry, string_terminator_len,
 };
 use recraft_decompile::PseudoLine;
 
@@ -32,9 +34,6 @@ const DISASM_ROWS: usize = 400;
 const DISASM_SCROLL_ROWS: usize = 50;
 /// Distance from a window edge (in rows) at which the wheel loads the next page.
 const DISASM_SCROLL_MARGIN_ROWS: f32 = 3.0;
-/// Cap on row-boundary steps when a data window is paged backwards, so a huge segment
-/// cannot stall the UI.
-const DATA_WALK_LIMIT: usize = 200_000;
 /// Cells IDA leaves between the address column and the instruction column: a constant gap,
 /// so `.text:` (22 cells) starts its text at 39 and `.rdata:` (23) at 40.
 const DISASM_INSN_GAP: usize = 17;
@@ -710,10 +709,6 @@ struct StringRow {
     kind: i64,
     segment: String,
     text: String,
-    /// First 15 bytes, for the `db` rows shown when navigating here.
-    raw: Vec<u8>,
-    /// Resolved symbol name at the address, if any.
-    name: Option<String>,
     /// The user replaced the decoded text with their own (see `string_override`).
     overridden: bool,
 }
@@ -845,131 +840,53 @@ fn string_row_at(strings: &[StringRow], addr: Address) -> Option<(usize, u32)> {
     (offset < u64::from(row.len)).then_some((index, offset as u32))
 }
 
-/// Bytes a literal occupies beyond its text: UTF-16LE literals end in two NUL bytes.
-fn string_terminator_len(enc: i64) -> u64 {
-    if enc == recraft_analysis::STRING_ENC_UTF16LE {
-        2
-    } else {
-        1
+/// Text length of the NUL-terminated printable run that starts at `addr`, if the bytes
+/// there can be an ASCII string (IDA's `A`).
+///
+/// The run must end on a NUL inside the window: a printable stretch that only stops at the
+/// segment end is a blob, and putting a string item over it would hide real data. IDA's
+/// default `StrlitChars` control characters count as text, so a CRLF-separated message stays
+/// one string.
+fn infer_ascii_string(session: &mut Session, addr: Address) -> Option<u32> {
+    const MAX_CHARS: usize = 4096;
+    let mut bytes = vec![0u8; MAX_CHARS + 1];
+    let read = session.read_at(addr, &mut bytes).ok()?;
+    bytes.truncate(read);
+    let len = bytes
+        .iter()
+        .take_while(|byte| is_string_text_byte(**byte))
+        .count();
+    if len == 0 || bytes.get(len) != Some(&0) {
+        return None;
     }
+    u32::try_from(len).ok()
+}
+
+/// Bytes an ASCII literal accepts: printable ASCII plus IDA's default `StrlitChars`
+/// (`\a \b \t \n \v \f \r ESC`).
+fn is_string_text_byte(byte: u8) -> bool {
+    matches!(byte, 0x20..=0x7e | 0x07..=0x0d | 0x1b)
 }
 
 /// IDA's auto name for a data item, shared with the listing's operand names.
 ///
 /// [`data_name_for_literal`] owns the rule (the listing prints the same name in front of a
-/// `lea` that reaches the literal); this alias keeps the data-row code readable.
+/// `lea` that reaches the literal); the row walk in `recraft-core` calls it directly, and
+/// this alias keeps the data-item tests readable.
+#[cfg(test)]
 fn ida_data_name(text: &str, addr: Address) -> String {
     data_name_for_literal(text, addr)
 }
 
-/// Length of a short NUL-terminated literal at the start of `bytes`, terminator included.
-///
-/// Below the Strings window's minimum length such runs never reach the `string` table, but
-/// IDA still shows the referenced ones as items (`asc_140018448 db 0Dh,0Ah,0`) instead of
-/// folding them into a raw byte row.
-fn short_literal_len(bytes: &[u8]) -> Option<usize> {
-    let end = bytes.iter().take(8).position(|byte| *byte == 0)?;
-    if end == 0 {
-        return None;
+/// IDA's character annotation for one raw byte: a single `db` byte spells out the character
+/// it stands for (`db  3Dh ; =`). [`DisasmLine::byte_char`] owns the rule in `recraft-core`;
+/// this only turns it into the listing's `" ; X"` suffix, quoting a space.
+fn byte_char_field(line: &DisasmLine) -> String {
+    match line.byte_char() {
+        Some(' ') => " ; ' '".to_owned(),
+        Some(ch) => format!(" ; {ch}"),
+        None => String::new(),
     }
-    let text = &bytes[..end];
-    let printable = text
-        .iter()
-        .all(|byte| matches!(*byte, b'\t' | b'\n' | b'\r') || (0x20..0x7f).contains(byte));
-    printable.then_some(end + 1)
-}
-
-/// `align` operand for a padding run: the number of bytes the run covers (`align 3`,
-/// `align 5`), which says more than IDA's power-of-two form (`align 8`, `align 10h`).
-fn align_operand(len: u64) -> String {
-    len.to_string()
-}
-
-/// Two-digit hex with IDA's `h` suffix, plus the leading zero IDA adds when the first digit
-/// is a letter (`0FFh`, `0Ah`).
-fn hex_byte(byte: u8) -> String {
-    if byte < 0xA0 {
-        format!("{byte:02X}h")
-    } else {
-        format!("0{byte:02X}h")
-    }
-}
-
-/// IDA's directive and auto-name prefix for a data item read as `size` bytes.
-fn typed_item_kind(size: usize) -> (&'static str, &'static str) {
-    match size {
-        16 => ("xmmword", "xmmword_"),
-        8 => ("dq", "qword_"),
-        4 => ("dd", "dword_"),
-        2 => ("dw", "word_"),
-        _ => ("db", "byte_"),
-    }
-}
-
-/// Address a 4/8-byte item holds (little-endian), when the value could name one.
-fn data_offset_target(bytes: &[u8]) -> Option<Address> {
-    let mut value = 0u64;
-    for (index, byte) in bytes.iter().enumerate().take(8) {
-        value |= u64::from(*byte) << (index * 8);
-    }
-    (value != 0).then(|| Address::new(value))
-}
-
-/// Big-endian hex text of a little-endian value, IDA style: uppercase, `h` suffix, and a
-/// leading zero when the first digit is a letter (`0FFFFFFFFFFFFFFFFh`).
-fn hex_value(bytes: &[u8]) -> String {
-    if bytes.iter().all(|byte| *byte == 0) {
-        return "0".to_owned();
-    }
-    let mut digits = String::with_capacity(bytes.len() * 2);
-    for byte in bytes.iter().rev() {
-        digits.push_str(&format!("{byte:02X}"));
-    }
-    let mut text = digits.trim_start_matches('0').to_owned();
-    if text.is_empty() {
-        text.push('0');
-    }
-    if text
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_alphabetic())
-    {
-        text.insert(0, '0');
-    }
-    text.push('h');
-    text
-}
-
-/// One undefined data byte the way IDA prints it: `0` or `0FFh`, right-aligned in the
-/// four-cell operand field (`db    0`, `db  54h`, `db 0FFh`).
-fn db_byte_operand(byte: u8) -> String {
-    let text = if byte == 0 {
-        "0".to_owned()
-    } else {
-        hex_byte(byte)
-    };
-    format!("{text:>4}")
-}
-
-/// `db …` operand text for a literal's bytes: always one escaped C string plus its NUL —
-/// `'Enter flag: ',0`, `'\r\n',0`, `'caf\xC3\xA9',0`.
-///
-/// IDA falls back to a `0Dh,0Ah,0` byte list when the text is not printable; the escaped
-/// literal keeps the string readable and one line.
-fn format_db_bytes(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len());
-    for byte in bytes {
-        match *byte {
-            b'\r' => text.push_str("\\r"),
-            b'\n' => text.push_str("\\n"),
-            b'\t' => text.push_str("\\t"),
-            b'\\' => text.push_str("\\\\"),
-            b'\'' => text.push_str("\\'"),
-            byte @ 0x20..=0x7e => text.push(byte as char),
-            byte => text.push_str(&format!("\\x{byte:02X}")),
-        }
-    }
-    format!("'{text}',0")
 }
 
 /// Strings in the PE `HEADER` segment.
@@ -1372,42 +1289,6 @@ fn pseudo_string_literal_at(text: &str, char_index: usize) -> Option<&str> {
             .checked_sub(1)
             .and_then(|previous| literal_at(text, previous))
     })
-}
-
-/// Bytes named by the inner text of a C string literal rendered by the decompiler.
-///
-/// `quote_c_string` escapes quotes, backslashes, control characters and `\xNN`; reversing
-/// those escapes gives the bytes a short literal points at, even when the string table does
-/// not cover the address.
-fn c_literal_bytes(text: &str) -> Option<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            let mut buffer = [0u8; 4];
-            bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
-            continue;
-        }
-        match chars.next()? {
-            'n' => bytes.push(b'\n'),
-            'r' => bytes.push(b'\r'),
-            't' => bytes.push(b'\t'),
-            '\\' => bytes.push(b'\\'),
-            '"' => bytes.push(b'"'),
-            'x' => {
-                let high = chars.next()?.to_digit(16)?;
-                let low = chars.next()?.to_digit(16)?;
-                bytes.push((high * 16 + low) as u8);
-            }
-            other => {
-                // The decompiler emits no other escapes; keep an unknown one verbatim.
-                bytes.push(b'\\');
-                let mut buffer = [0u8; 4];
-                bytes.extend_from_slice(other.encode_utf8(&mut buffer).as_bytes());
-            }
-        }
-    }
-    Some(bytes)
 }
 
 /// Address encoded in an IDA-style `sub_<hex>` auto name.
@@ -2446,59 +2327,166 @@ impl ReCraftApp {
     }
 
     fn run_data_op(&mut self, op: DataOp, addr: Address, len: usize) {
-        let range = AddressRange::new(addr, Address::new(addr.get() + len as u64));
+        if op == DataOp::Ascii {
+            // `A` creates or restores a string item; it is not a flag write.
+            self.create_string_item(addr);
+            return;
+        }
+        // The listing clips a row's length to 254 bytes; the item it stands for can be much
+        // longer (a stored string), so the range covers the whole item, terminator included.
+        let string_item = string_row_at(&self.strings, addr)
+            .filter(|(index, _)| self.strings[*index].addr == addr)
+            .map(|(index, _)| {
+                u64::from(self.strings[index].len) + string_terminator_len(self.strings[index].enc)
+            });
+        let len = string_item.unwrap_or(len as u64);
+        let range = AddressRange::new(addr, Address::new(addr.get() + len));
         let function_end = self.suggest_function_end(addr);
         let undefine_start = self
             .current_function()
             .map(|(start, _)| start)
             .unwrap_or(addr);
+        // IDA's `U` on a function entry takes the function with the item: the entry is no
+        // longer code, so the function has nothing to start at. Both writes go in one
+        // batch, so a single `Ctrl+Z` puts the function back.
+        let drops_function =
+            matches!(op, DataOp::Unknown) && self.functions.iter().any(|f| f.start == addr);
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        let result = match op {
-            DataOp::Code | DataOp::Data | DataOp::Ascii | DataOp::Unknown => {
-                let kind = match op {
-                    DataOp::Code => CodeData::Code,
-                    DataOp::Data | DataOp::Ascii => CodeData::Data,
-                    DataOp::Unknown => CodeData::Unknown,
-                    _ => CodeData::Unknown,
-                };
-                session.execute(Command::SetCodeData { range, kind })
-            }
-            DataOp::DefineFunction => session.execute(Command::DefineFunc {
+        let mut commands = Vec::with_capacity(3);
+        // A stored string is an item of its own: `C`/`D`/`U` replace it with the item they
+        // create, and it leaves the Strings window with it. The function commands do not
+        // touch items at all. The batch makes all of it one undo.
+        if string_item.is_some() && matches!(op, DataOp::Code | DataOp::Data | DataOp::Unknown) {
+            commands.push(Command::SetString {
+                addr,
+                text: None,
+                hidden: true,
+            });
+        }
+        commands.push(match op {
+            DataOp::Code => Command::SetCodeData {
+                range,
+                kind: CodeData::Code,
+            },
+            DataOp::Data | DataOp::Ascii => Command::SetCodeData {
+                range,
+                kind: CodeData::Data,
+            },
+            DataOp::Unknown => Command::SetCodeData {
+                range,
+                kind: CodeData::Undefined,
+            },
+            DataOp::DefineFunction => Command::DefineFunc {
                 start: addr,
                 end: function_end,
-            }),
-            DataOp::UndefineFunction => session.execute(Command::UndefineFunc {
+            },
+            DataOp::UndefineFunction => Command::UndefineFunc {
                 start: undefine_start,
-            }),
-        };
-        match result {
-            Ok(_) => {
-                self.disasm_dirty = true;
-                self.pseudo_dirty = true;
-                self.functions_dirty = true;
-                self.strings_dirty = true;
-                self.imports_dirty = true;
-                if let Some(dialog) = self.xref_dialog.as_mut() {
-                    dialog.dirty = true;
-                }
-                self.cfg_dirty = true;
-                let op_label = self.t(match op {
-                    DataOp::Code => "ui_op_code",
-                    DataOp::Data => "ui_op_data",
-                    DataOp::Ascii => "ui_op_ascii_data",
-                    DataOp::Unknown => "ui_op_undefined",
-                    DataOp::DefineFunction => "ui_op_function",
-                    DataOp::UndefineFunction => "ui_op_function_removed",
-                });
-                let addr_text = format!("{:#x}", addr.get());
-                self.set_status(
-                    self.t_args("ui_data_op_at", &[("op", &op_label), ("addr", &addr_text)]),
-                );
-            }
+            },
+        });
+        if drops_function {
+            commands.push(Command::UndefineFunc { start: addr });
+        }
+        match session.execute_batch(&commands) {
+            Ok(_) => self.data_op_done(op, addr),
             Err(error) => self.set_error(error),
         }
+    }
+
+    /// IDA's `A`: make the bytes at `addr` a string item.
+    ///
+    /// An item that is only hidden (the `U`, `C` and `D` paths hide strings) comes back as
+    /// it was — its text, length and encoding are still in the table — and the bytes go back
+    /// to being data, which is what makes the hidden item visible again. Otherwise the
+    /// printable run that starts at `addr` is measured and stored as a user string, which a
+    /// later re-analysis keeps.
+    fn create_string_item(&mut self, addr: Address) {
+        // An address inside an existing item is not a place for a new one (IDA does not
+        // create overlapping items either): the enclosing string is what the cursor is on.
+        if let Some((index, _)) = string_row_at(&self.strings, addr)
+            && self.strings[index].addr != addr
+        {
+            let start = self.strings[index].addr;
+            let addr_text = format!("{:#x}", start.get());
+            let status = self.t_args("ui_string_covers_addr", &[("addr", &addr_text)]);
+            self.set_status(status);
+            return;
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let existing = session.string_meta_at(addr).ok().flatten();
+        let (text_len, enc) = match existing {
+            Some((text_len, enc)) => (text_len, enc),
+            None => match infer_ascii_string(session, addr) {
+                Some(text_len) => (text_len, recraft_analysis::STRING_ENC_ASCII),
+                None => {
+                    self.set_status(self.t("ui_cannot_create_string_here").to_owned());
+                    return;
+                }
+            },
+        };
+        let item = AddressRange::new(
+            addr,
+            Address::new(addr.get() + u64::from(text_len) + string_terminator_len(enc)),
+        );
+        let mut commands = Vec::with_capacity(2);
+        if existing.is_some() {
+            // Undo the deletion marker only; a replacement text stays.
+            if let Some(hidden) = session
+                .string_override_at(addr)
+                .ok()
+                .flatten()
+                .filter(|edit| edit.hidden)
+            {
+                commands.push(Command::SetString {
+                    addr,
+                    text: hidden.text,
+                    hidden: false,
+                });
+            }
+        } else {
+            commands.push(Command::DefineString {
+                addr,
+                len: text_len,
+                enc,
+            });
+        }
+        commands.push(Command::SetCodeData {
+            range: item,
+            kind: CodeData::Data,
+        });
+        match session.execute_batch(&commands) {
+            Ok(_) => self.data_op_done(DataOp::Ascii, addr),
+            Err(error) => self.set_error(error),
+        }
+    }
+
+    /// Shared tail of the `C`/`D`/`A`/`U`/`P` keys: every view that can show the item
+    /// reloads on the next frame, and the status line names what happened.
+    fn data_op_done(&mut self, op: DataOp, addr: Address) {
+        self.disasm_dirty = true;
+        self.pseudo_dirty = true;
+        self.functions_dirty = true;
+        self.strings_dirty = true;
+        self.imports_dirty = true;
+        if let Some(dialog) = self.xref_dialog.as_mut() {
+            dialog.dirty = true;
+        }
+        self.cfg_dirty = true;
+        let op_label = self.t(match op {
+            DataOp::Code => "ui_op_code",
+            DataOp::Data => "ui_op_data",
+            DataOp::Ascii => "ui_op_ascii_data",
+            DataOp::Unknown => "ui_op_undefined",
+            DataOp::DefineFunction => "ui_op_function",
+            DataOp::UndefineFunction => "ui_op_function_removed",
+        });
+        let addr_text = format!("{:#x}", addr.get());
+        let status = self.t_args("ui_data_op_at", &[("op", &op_label), ("addr", &addr_text)]);
+        self.set_status(status);
     }
 
     /// Estimate the end of a new function: stop at the next known function start or at a
@@ -3766,476 +3754,48 @@ impl ReCraftApp {
         ctx.request_repaint();
     }
 
-    /// Data row for the stored string at `index`, starting at `addr`.
+    /// Build the listing from `start`: instructions, stored literals and raw bytes.
     ///
-    /// `addr` is usually the literal's own start; when a literal points inside a longer
-    /// run the row shows the tail from the requested address, like IDA's data view, not
-    /// the run's own (earlier) start.
-    fn string_data_row(&mut self, index: usize, addr: Address) -> Option<DisasmLine> {
-        let mut row = self.strings.get(index)?.clone();
-        let offset = addr.get().checked_sub(row.addr.get())?;
-        let session = self.session.as_mut()?;
-        let mut raw = [0u8; 15];
-        if offset > 0 {
-            let text = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
-                if offset % 2 != 0 {
-                    return None;
-                }
-                let skip = usize::try_from(offset / 2).ok()?;
-                row.text.chars().skip(skip).collect()
-            } else {
-                row.text.get(usize::try_from(offset).ok()?..)?.to_owned()
-            };
-            row.addr = addr;
-            row.len = row.len.saturating_sub(offset as u32);
-            row.text = text;
-            row.name = session.name_at(row.addr).ok().flatten();
-            session.read_at(row.addr, &mut raw).unwrap_or(0);
-        } else {
-            let copied = row.raw.len().min(15);
-            raw[..copied].copy_from_slice(&row.raw[..copied]);
-        }
-        let escaped = row.text.replace('\\', "\\\\").replace('\'', "\\'");
-        let (mnemonic, operands) = if row.enc == recraft_analysis::STRING_ENC_UTF16LE {
-            ("dw", format!("'{escaped}',0"))
-        } else {
-            ("db", format!("'{escaped}',0"))
-        };
-        Some(DisasmLine {
-            addr: row.addr,
-            len: row.len.min(254) as u8,
-            raw,
-            mnemonic: mnemonic.to_owned(),
-            operands,
-            name: row
-                .name
-                .clone()
-                .or_else(|| Some(ida_data_name(&row.text, row.addr))),
-            comment: None,
-            literal: None,
-            segment: session
-                .segment_containing(row.addr)
-                .map(|segment| segment.name.clone())
-                .unwrap_or_default(),
-            xrefs: Vec::new(),
-            flags: Flags::data(),
-        })
-    }
-
-    /// Quoted literal cached for `addr`, with the bytes the decompiler's escapes name.
-    fn literal_data_bytes(&self, addr: Address) -> Option<(&str, Vec<u8>)> {
-        let (_, literal) = self
-            .literal_data
-            .iter()
-            .rev()
-            .find(|(known, _)| *known == addr)?;
-        let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
-        let bytes = c_literal_bytes(inner)?;
-        (!bytes.is_empty()).then_some((literal.as_str(), bytes))
-    }
-
-    /// Data row for a short literal reached from the decompile view that no stored string
-    /// covers. Such literals (`"\r\n"`, `")"`) fall below the extraction minimum but still
-    /// name data, so their quoted text is enough to show the row.
-    fn literal_data_row(&self, addr: Address) -> Option<DisasmLine> {
-        let (literal, bytes) = self.literal_data_bytes(addr)?;
-        let session = self.session.as_ref()?;
-        let mut raw = [0u8; 15];
-        let copied = bytes.len().min(15);
-        raw[..copied].copy_from_slice(&bytes[..copied]);
-        Some(DisasmLine {
-            addr,
-            len: (bytes.len() + 1).min(254) as u8,
-            raw,
-            mnemonic: "db".to_owned(),
-            operands: format!("{literal},0"),
-            name: session.name_at(addr).ok().flatten(),
-            comment: None,
-            literal: None,
-            segment: session
-                .segment_containing(addr)
-                .map(|segment| segment.name.clone())
-                .unwrap_or_default(),
-            xrefs: Vec::new(),
-            flags: Flags::data(),
-        })
-    }
-
-    /// Next row boundary after `addr` in the listing's address walk.
-    ///
-    /// The walk is the one [`Self::data_rows`] renders: one row per stored literal, one row
-    /// per undefined data byte (or one `align` row for a padding run), and instructions in
-    /// executable segments. Reaching the end of a segment continues at the next mapped
-    /// address, so the listing can scroll across section boundaries.
-    /// Length (terminator included) of the *referenced* short literal at `addr`.
-    ///
-    /// IDA makes an item of a short literal only when something points at it; the same bytes
-    /// in unreferenced padding stay a raw byte row. The check keeps the listing's walk and
-    /// the rows it renders in agreement.
-    fn short_literal_len_at(&mut self, addr: Address) -> Option<usize> {
-        let session = self.session.as_mut()?;
-        let mut raw = [0u8; 8];
-        let read = session.read_at(addr, &mut raw).ok()?;
-        let len = short_literal_len(&raw[..read])?;
-        if session.xrefs_to(addr).ok()?.is_empty() {
-            return None;
-        }
-        Some(len)
-    }
-
-    /// End of the alignment padding that starts at `addr`.
-    ///
-    /// IDA draws a whole run of zero padding as one `align 4/8/10h` line; a zero *item* (a
-    /// null table entry) keeps its `db 0` rows. The two are told apart by what follows the
-    /// run: padding ends right where a named item (literal, short literal or named address)
-    /// begins on an aligned boundary.
-    fn padding_run(&mut self, addr: Address) -> Option<Address> {
-        let (segment_end, run) = {
-            let session = self.session.as_ref()?;
-            let segment = session.segment_containing(addr)?;
-            let mut raw = [0u8; 16];
-            let read = session.read_at(addr, &mut raw).ok()?;
-            if read == 0 || raw[0] != 0 {
-                return None;
-            }
-            let run = raw[..read].iter().take_while(|byte| **byte == 0).count();
-            (segment.range.end, run)
-        };
-        let next = Address::new(addr.get() + run as u64);
-        // Gaps shorter than three bytes are not the padding IDA draws (`db 0` rows there);
-        // the boundary must let a 4/8/16-byte item start.
-        if run < 3 || next >= segment_end || next.get() % 4 != 0 {
-            return None;
-        }
-        let item_here = string_row_at(&self.strings, next).is_some()
-            || self.literal_data_bytes(next).is_some()
-            || self.short_literal_len_at(next).is_some()
-            || self.wide_data_access(next).is_some()
-            || self
-                .session
-                .as_ref()?
-                .name_at(next)
-                .ok()
-                .flatten()
-                .is_some();
-        item_here.then_some(next)
-    }
-
-    fn next_row_start(&mut self, addr: Address) -> Option<Address> {
-        let segment = self.session.as_ref()?.segment_containing(addr)?.clone();
-        let end = segment.range.end;
-        if addr >= end {
-            return self.next_segment_start(addr);
-        }
-        let next = if let Some((index, _)) = string_row_at(&self.strings, addr) {
-            let row = self.strings.get(index)?;
-            row.addr.get() + u64::from(row.len) + string_terminator_len(row.enc)
-        } else if let Some((_, bytes)) = self.literal_data_bytes(addr) {
-            addr.get() + bytes.len() as u64 + 1
-        } else if segment.perm.is_executable() {
-            self.session
-                .as_mut()?
-                .insn_at(addr)
-                .ok()??
-                .next_addr()
-                .get()
-        } else if let Some(len) = self.short_literal_len_at(addr) {
-            // A referenced short literal (`"\r\n"`) is its own item; the bytes after its
-            // terminator are padding, not part of the same raw row.
-            addr.get() + len as u64
-        } else if let Some(size) = self.wide_data_access(addr) {
-            // A wide read types the data item: it covers `size` bytes as one row.
-            addr.get() + size as u64
-        } else if let Some(padding) = self.padding_run(addr) {
-            padding.get()
-        } else {
-            // Undefined data is one byte per row, as in IDA's listing.
-            addr.get() + 1
-        };
-        if next >= end.get() {
-            return self.next_segment_start(addr);
-        }
-        (next > addr.get()).then(|| Address::new(next))
-    }
-
-    /// First mapped address after `addr` (crossing the gap between two segments).
-    fn next_segment_start(&self, addr: Address) -> Option<Address> {
-        self.session
-            .as_ref()?
-            .segments()
-            .iter()
-            .map(|segment| segment.range.start)
-            .filter(|start| *start > addr)
-            .min()
-    }
-
-    /// Width of the widest direct access a cross reference makes to `addr`.
-    ///
-    /// IDA types a data item by how it is used: a 16-byte read becomes
-    /// `xmmword_1400184C0 xmmword 0FFFF…h`, an 8-byte read a `dq`, a 4-byte read a `dd`.
-    /// Returns `None` for `addr` that nothing reads as a 2/4/8/16-byte value.
-    fn wide_data_access(&mut self, addr: Address) -> Option<usize> {
-        let session = self.session.as_mut()?;
-        let mut width = None;
-        for xref in session.xrefs_to(addr).ok()? {
-            let Some(insn) = session.insn_at(xref.from).ok()? else {
-                continue;
-            };
-            // Direct operands name the address themselves; an indexed operand
-            // (`[table + index*scale]`) reaches the item through its table base.
-            let references = if insn.memory_is_direct() {
-                Address::new(insn.memory_displacement64()) == addr
-            } else if let Some((table, _)) = insn.memory_indexed_table() {
-                Address::new(table) == addr
-            } else {
-                false
-            };
-            if !references {
-                continue;
-            }
-            let size = insn.memory_size().size();
-            if matches!(size, 2 | 4 | 8 | 16) && width.is_none_or(|current| size > current) {
-                width = Some(size);
-            }
-        }
-        width
-    }
-
-    /// Raw `db` row covering the bytes at `addr` up to the next row boundary.
-    fn raw_data_row(&mut self, addr: Address) -> Option<DisasmLine> {
-        let literal_len = self.short_literal_len_at(addr);
-        let wide = self.wide_data_access(addr);
-        let end = self.session.as_ref()?.segment_containing(addr)?.range.end;
-        let next = self.next_row_start(addr)?.min(end);
-        let len = next
-            .get()
-            .saturating_sub(addr.get())
-            .min(u64::from(u8::MAX)) as u8;
-        let session = self.session.as_mut()?;
-        // Sixteen bytes: an `xmmword` item needs the whole row; `raw` keeps the first 15.
-        let mut bytes = [0u8; 16];
-        let read = session.read_at(addr, &mut bytes).unwrap_or(0);
-        let mut raw = [0u8; 15];
-        let copied = read.min(15);
-        raw[..copied].copy_from_slice(&bytes[..copied]);
-        let shown = read.min(usize::from(len));
-        // A referenced short literal (`"\r\n"`) is an item of its own; a wide read types the
-        // item (`xmmword_…`, `dq …`); a multi-byte run of zero padding becomes IDA's `align`
-        // line; everything else is one byte per row.
-        let (mnemonic, operands, name) = if let Some(len) = literal_len.filter(|len| *len <= shown)
-        {
-            let text: String = bytes[..len - 1].iter().map(|byte| *byte as char).collect();
-            (
-                "db".to_owned(),
-                format_db_bytes(&bytes[..len - 1]),
-                Some(ida_data_name(&text, addr)),
-            )
-        } else if let Some(size) = wide.filter(|size| *size <= shown) {
-            let (_, mut prefix) = typed_item_kind(size);
-            let value_bytes = &bytes[..size];
-            let operands = match (size, data_offset_target(value_bytes)) {
-                (4 | 8, Some(target)) if session.segment_containing(target).is_some() => {
-                    match session.name_at(target).ok().flatten() {
-                        Some(name) => {
-                            // IDA names an item holding an address `off_<hex>`.
-                            prefix = "off_";
-                            format!("offset {name}")
-                        }
-                        None => hex_value(value_bytes),
-                    }
-                }
-                _ => hex_value(value_bytes),
-            };
-            let name = session
-                .name_at(addr)
-                .ok()
-                .flatten()
-                .or_else(|| Some(format!("{prefix}{:x}", addr.get())));
-            (typed_item_kind(size).0.to_owned(), operands, name)
-        } else if len > 1 {
-            (
-                "align".to_owned(),
-                align_operand(next.get().saturating_sub(addr.get())),
-                None,
-            )
-        } else {
-            (
-                "db".to_owned(),
-                db_byte_operand(bytes.first().copied().unwrap_or(0)),
-                session.name_at(addr).ok().flatten(),
-            )
-        };
-        Some(DisasmLine {
-            addr,
-            len,
-            raw,
-            mnemonic,
-            operands,
-            name,
-            comment: None,
-            literal: None,
-            segment: session
-                .segment_containing(addr)
-                .map(|segment| segment.name.clone())
-                .unwrap_or_default(),
-            xrefs: Vec::new(),
-            flags: Flags::data(),
-        })
-    }
-
-    /// Build the listing from `start`: instructions in executable segments, stored literals
-    /// as `db '…',0` rows, and the bytes between them as raw `db` rows.
-    ///
-    /// The window follows the address space instead of listing only one kind of row, so
-    /// paging into the padding around a literal shows data rather than decoding the
-    /// literal's bytes as instructions (the report "scroll up from a string and the strings
-    /// vanish"), the first literal of a section still has its preceding bytes above it, and
-    /// the listing stays continuous when it crosses a section boundary.
+    /// The row walk lives in `recraft-core` ([`Session::listing_rows`]) so the GUI, the CLI
+    /// and the MCP tools draw the same rows; the GUI adds the two caches only it has (the
+    /// Strings view's text and the decompiler's short literals).
     fn data_rows(&mut self, start: Address, count: usize) -> Option<Vec<DisasmLine>> {
-        let mut rows = Vec::with_capacity(count.min(DISASM_ROWS));
-        let mut addr = start;
-        while rows.len() < count {
-            let Some(segment) = self.session.as_ref()?.segment_containing(addr).cloned() else {
-                // Between two segments: continue at the next mapped address, or stop. An
-                // unmapped start still shows nothing, as before.
-                if rows.is_empty() {
-                    break;
-                }
-                match self.next_segment_start(addr) {
-                    Some(next) => addr = next,
-                    None => break,
-                }
-                continue;
-            };
-            let end = segment.range.end;
-            if let Some((index, _)) = string_row_at(&self.strings, addr) {
-                let Some(row) = self.string_data_row(index, addr) else {
-                    break;
-                };
-                rows.push(row);
-            } else if let Some(row) = self.literal_data_row(addr) {
-                rows.push(row);
-            } else if segment.perm.is_executable() {
-                let remaining = count - rows.len();
-                let Ok(mut lines) = self.session.as_mut()?.disasm(addr, remaining) else {
-                    break;
-                };
-                lines.retain(|line| line.addr < end);
-                let Some(last) = lines.last() else { break };
-                addr = Address::new(last.addr.get() + u64::from(last.len));
-                rows.append(&mut lines);
-                continue;
-            } else {
-                let Some(row) = self.raw_data_row(addr) else {
-                    break;
-                };
-                rows.push(row);
-            }
-            match self.next_row_start(addr) {
-                Some(next) => addr = next,
-                None => break,
-            }
-        }
-        (!rows.is_empty()).then_some(rows)
+        let strings = self.listing_strings();
+        let hints = ListingHints {
+            strings: &strings,
+            literals: &self.literal_data,
+        };
+        self.session
+            .as_mut()?
+            .listing_rows(start, count, hints)
+            .ok()
     }
 
-    /// Step the listing by `rows` rows of its address walk, returning the new anchor.
-    ///
-    /// Forward steps follow [`Self::next_row_start`] from the current anchor. Backward
-    /// steps walk the row boundaries from the nearest function start (or section start),
-    /// so they land on the rows the view renders instead of on instruction boundaries
-    /// inside a literal's padding, and they keep going into the previous section.
+    /// Step the listing by `rows` rows, returning the new anchor.
     fn step_listing(&mut self, rows: i32) -> Option<Address> {
-        if rows == 0 {
-            return None;
-        }
-        if rows > 0 {
-            let mut addr = self.disasm_start;
-            let mut moved = false;
-            for _ in 0..rows {
-                match self.next_row_start(addr) {
-                    Some(next) if next > addr => {
-                        addr = next;
-                        moved = true;
-                    }
-                    _ => break,
-                }
-            }
-            return moved.then_some(addr);
-        }
-        let mut remaining = rows.unsigned_abs() as usize;
-        let mut cursor = self.disasm_start;
-        let mut result = None;
-        // Each pass covers one anchor..cursor span; crossing a section needs the next
-        // anchor, hence the (bounded) loop.
-        for _ in 0..64 {
-            let Some(anchor) = self.backward_anchor(cursor) else {
-                break;
-            };
-            if anchor >= cursor {
-                break;
-            }
-            let mut starts: VecDeque<Address> = VecDeque::with_capacity(remaining.min(64));
-            let mut probe = anchor;
-            let mut steps = 0usize;
-            while probe < cursor && steps < DATA_WALK_LIMIT {
-                starts.push_back(probe);
-                if starts.len() > remaining {
-                    starts.pop_front();
-                }
-                match self.next_row_start(probe) {
-                    Some(next) if next > probe => probe = next,
-                    _ => break,
-                }
-                steps += 1;
-            }
-            let Some(first) = starts.front().copied() else {
-                break;
-            };
-            remaining = remaining.saturating_sub(starts.len());
-            result = Some(first);
-            cursor = first;
-            if remaining == 0 {
-                break;
-            }
-        }
-        result
+        let strings = self.listing_strings();
+        let hints = ListingHints {
+            strings: &strings,
+            literals: &self.literal_data,
+        };
+        self.session
+            .as_mut()?
+            .step_listing(self.disasm_start, rows, hints)
+            .ok()
+            .flatten()
     }
 
-    /// Where a backward row walk starts: the nearest function start (or the section start)
-    /// before `addr`, or — when `addr` already sits on it — the last function of the
-    /// preceding section, so scrolling up can cross into earlier code the way IDA does.
-    fn backward_anchor(&mut self, addr: Address) -> Option<Address> {
-        let segments = self.session.as_ref()?.segments();
-        let index = segments
+    /// The strings the row walk needs, in the shape `recraft-core` reads them.
+    fn listing_strings(&self) -> Vec<ListingString> {
+        self.strings
             .iter()
-            .position(|segment| addr >= segment.range.start && addr < segment.range.end)?;
-        let current = segments.get(index)?;
-        if addr > current.range.start {
-            if !current.perm.is_executable() {
-                return Some(current.range.start);
-            }
-            let functions = self.session.as_ref()?.functions().ok()?;
-            return functions
-                .iter()
-                .filter(|function| function.start >= current.range.start && function.start < addr)
-                .map(|function| function.start)
-                .max()
-                .or(Some(current.range.start));
-        }
-        let previous = segments.get(index.checked_sub(1)?)?;
-        if !previous.perm.is_executable() {
-            return Some(previous.range.start);
-        }
-        let functions = self.session.as_ref()?.functions().ok()?;
-        functions
-            .iter()
-            .filter(|function| {
-                function.start >= previous.range.start && function.start < previous.range.end
+            .map(|row| ListingString {
+                addr: row.addr,
+                len: row.len,
+                enc: row.enc,
+                text: row.text.clone(),
             })
-            .map(|function| function.start)
-            .max()
-            .or(Some(previous.range.start))
+            .collect()
     }
 
     fn refresh_disasm(&mut self) {
@@ -4493,8 +4053,6 @@ impl ReCraftApp {
                         text: edit
                             .and_then(|edit| edit.text.clone())
                             .unwrap_or_else(|| decode_string(&bytes, row.enc)),
-                        raw: bytes.iter().take(15).copied().collect(),
-                        name: session.name_at(row.addr).ok().flatten(),
                         overridden: edit.is_some_and(|edit| edit.text.is_some()),
                     });
                 }
@@ -4680,7 +4238,7 @@ impl ReCraftApp {
     fn graph_item_available(&self) -> bool {
         self.disasm_rows
             .get(self.selected)
-            .is_some_and(|line| !line.flags.is_data())
+            .is_some_and(|line| !matches!(line.flags.kind, CodeData::Data | CodeData::Undefined))
             && self.current_function().is_some()
     }
 
@@ -8358,7 +7916,7 @@ impl ReCraftApp {
     /// builder concatenates them, so the painted row and the copied row cannot drift.
     fn disasm_prefix_parts(&self, line: &DisasmLine) -> (String, Option<String>, String) {
         let address = self.disasm_address(line);
-        if line.flags.is_data()
+        if matches!(line.flags.kind, CodeData::Data | CodeData::Undefined)
             && !self.show_bytes
             && let Some(name) = line.name.as_deref()
         {
@@ -8384,6 +7942,7 @@ impl ReCraftApp {
         text.push_str(&self.disasm_bytes(line));
         text.push_str(&self.disasm_mnemonic_field(line));
         text.push_str(line.operands.trim_end());
+        text.push_str(&byte_char_field(line));
         text.push_str(&self.disasm_literal_field(line));
         text
     }
@@ -8434,9 +7993,10 @@ impl ReCraftApp {
     /// when the user did not drag a text selection.
     fn disasm_line_copy_text(&self, line: &DisasmLine) -> String {
         let mut text = format!(
-            "{} {}{}",
+            "{} {}{}{}",
             line.mnemonic,
             line.operands,
+            byte_char_field(line),
             self.disasm_literal_field(line)
         );
         text.truncate(text.trim_end().len());
@@ -8626,6 +8186,12 @@ impl ReCraftApp {
                 append(&mut job, &bytes_field, pal.bytes, &mono);
                 append(&mut job, &mnemonic_field, pal.mnemonic, &mono);
                 append_operands(&mut job, &line.operands, pal, &mono);
+                // IDA spells the character of a raw `db` byte right after the operand
+                // (`db  3Dh ; =`), in the comment colour.
+                let byte_chars = byte_char_field(line);
+                if !byte_chars.is_empty() {
+                    append(&mut job, &byte_chars, pal.comment, &mono);
+                }
                 // The literal an operand points at rides on the instruction line, glued to
                 // the operands as IDA writes it (`aEnterFlag; "Enter flag: "`), and only a
                 // real comment takes the comment column.
@@ -8887,28 +8453,36 @@ impl ReCraftApp {
     /// Wrapper lines IDA draws around an instruction.
     fn disasm_chrome(&self, line: &DisasmLine) -> DisasmChrome {
         // Data items print their name inline (`aWrongFlagTryAg db '…',0`), code items put a
-        // label on its own line, as IDA does.
-        let label = if line.flags.is_data() {
+        // label on its own line, as IDA does. Undefined bytes count as data here: a name on
+        // them is written inline (`unk_1400183C0 db 3Dh`) rather than as a label.
+        let label = if matches!(line.flags.kind, CodeData::Data | CodeData::Undefined) {
             None
         } else {
             line.name.as_ref().map(|name| format!("{name}:"))
         };
-        // A named string item carries IDA's type comment above it; the address-named
-        // `asc_…` runs do not (`asc_140018448 db '\r\n',0` stays one line).
-        let leading = if line.flags.is_data()
-            && line.operands.starts_with('\'')
-            && line
-                .name
-                .as_deref()
-                .is_some_and(|name| !name.starts_with("asc_"))
-        {
-            line.name
-                .as_ref()
-                .map(|name| format!("; const char {name}[]"))
-                .into_iter()
-                .collect()
-        } else {
-            Vec::new()
+        // A named item carries IDA's type comment above it. A literal is a character array
+        // (`; const char aXxx[]`), and so is an undefined byte item — IDA prints the same
+        // line with the name it gave the item (`; const char unk_1400183C0[]`). The
+        // address-named `asc_…` runs do not (`asc_140018448 db '\r\n',0` stays one line).
+        let leading = match line.name.as_deref() {
+            Some(name)
+                if !name.starts_with("asc_")
+                    && matches!(line.flags.kind, CodeData::Data | CodeData::Undefined) =>
+            {
+                if line.operands.starts_with('\'') {
+                    let ty = if line.mnemonic == "dw" {
+                        "const wchar_t"
+                    } else {
+                        "const char"
+                    };
+                    vec![format!("; {ty} {name}[]")]
+                } else if line.mnemonic == "db" && line.len == 1 {
+                    vec![format!("; const char {name}[]")]
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
         };
         let function =
             function_at(&self.functions, line.addr).and_then(|index| self.functions.get(index));
@@ -11953,18 +11527,17 @@ fn site_text(session: &mut Session, strings: &[StringRow], addr: Address) -> Opt
     data_preview(session, addr)
 }
 
-/// Whether `addr` holds code. Analysis does not persist a code flag for every decoded
-/// instruction, so the containing segment's permission decides; an explicit data
-/// definition still wins over an executable segment.
+/// Whether `addr` holds code. A user decision (`C`/`D`/`U`) is the answer when there is one;
+/// otherwise the containing segment's permission decides, because analysis does not persist
+/// a code flag for every decoded instruction.
 fn is_code_at(session: &mut Session, addr: Address) -> bool {
-    let defined_data = session
-        .flags_at(addr)
-        .map(|flags| flags.is_data())
-        .unwrap_or(false);
-    !defined_data
-        && session
+    match session.flags_at(addr).map(|flags| flags.kind) {
+        Ok(CodeData::Code) => true,
+        Ok(CodeData::Data | CodeData::Undefined) => false,
+        _ => session
             .segment_containing(addr)
-            .is_some_and(|segment| segment.perm.is_executable())
+            .is_some_and(|segment| segment.perm.is_executable()),
+    }
 }
 
 /// `db 48 65 6c 6c 6f` preview of up to eight bytes at `addr`.
@@ -12200,6 +11773,13 @@ fn ui_fonts() -> Option<egui::FontDefinitions> {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    // Data-item formatting now lives in `recraft-core` with the row walk; the tests below
+    // still pin its IDA shapes.
+    use recraft_core::{
+        Flags, align_operand, c_literal_bytes, data_offset_target, db_byte_operand,
+        format_db_bytes, hex_value, short_literal_len, typed_item_kind,
+    };
 
     #[test]
     fn the_modern_theme_lands_the_documented_tokens() {
@@ -16428,7 +16008,317 @@ mod tests {
         assert_eq!(flags.kind, CodeData::Code, "C should mark code");
         app.apply_action(&ctx, Action::ApplyData(DataOp::Unknown));
         let flags = app.session.as_mut().unwrap().flags_at(line.addr).unwrap();
-        assert_eq!(flags.kind, CodeData::Unknown, "U should undefine");
+        assert_eq!(flags.kind, CodeData::Undefined, "U should undefine");
+        // The listing follows the flags immediately: the instruction is gone, replaced by
+        // one undefined byte row (IDA's `U`), and one undo brings it back.
+        app.tick();
+        let row = app
+            .disasm_rows
+            .iter()
+            .find(|row| row.addr == line.addr)
+            .expect("the address keeps a row");
+        assert_eq!(row.mnemonic, "db");
+        assert!(row.flags.is_undefined());
+        assert_eq!(row.len, 1);
+        app.apply_action(&ctx, Action::Undo);
+        app.tick();
+        let row = app
+            .disasm_rows
+            .iter()
+            .find(|row| row.addr == line.addr)
+            .expect("undo restores the row");
+        assert_eq!(row.mnemonic, line.mnemonic);
+    }
+
+    /// `U` on a stored string item removes it: the bytes become undefined one-byte rows
+    /// instead of the quoted literal, and `C` (a user decision) makes the listing decode a
+    /// data-section address the loader never marked executable.
+    #[test]
+    fn undefining_a_string_item_replaces_it_with_raw_bytes() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("items.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let Some(string) = app
+            .strings
+            .iter()
+            .find(|row| row.len >= 8 && row.text.starts_with(|c: char| c.is_ascii_graphic()))
+            .cloned()
+        else {
+            return;
+        };
+        let addr = string.addr;
+        let quoted = app
+            .data_rows(addr, 1)
+            .and_then(|rows| rows.into_iter().next())
+            .expect("a string row");
+        assert!(
+            quoted.operands.contains('\''),
+            "a stored string renders as a quoted literal: {quoted:?}"
+        );
+        assert!(!is_code_at(app.session.as_mut().unwrap(), addr));
+
+        // The key handler passes the selected row; the op itself works on any item.
+        app.run_data_op(DataOp::Unknown, addr, string.len as usize);
+        app.tick();
+        let rows = app.data_rows(addr, 2).expect("undefined rows");
+        assert!(rows[0].flags.is_undefined());
+        assert_eq!(rows[0].len, 1);
+        assert!(
+            !rows[0].operands.contains('\''),
+            "undefined bytes are not a literal: {rows:?}"
+        );
+        assert_eq!(rows[1].addr.get(), addr.get() + 1);
+        assert!(
+            !app.strings.iter().any(|row| row.addr == addr),
+            "the string item leaves the Strings window with the byte"
+        );
+        // IDA spells the character out next to the byte: `db  3Dh ; =`.
+        let text = app.disasm_line_text(&rows[0]);
+        let first = string.text.chars().next().expect("a string has text");
+        assert!(text.ends_with(&format!("; {first}")), "{text:?}");
+
+        // `D` gives plain bytes too, and `C` beats the section's execute permission.
+        app.run_data_op(DataOp::Data, addr, string.len as usize);
+        app.tick();
+        let rows = app.data_rows(addr, 1).expect("data rows");
+        assert!(rows[0].flags.is_data());
+        app.run_data_op(DataOp::Code, addr, string.len as usize);
+        app.tick();
+        assert!(
+            is_code_at(app.session.as_mut().unwrap(), addr),
+            "C must make a data-section address code"
+        );
+    }
+
+    /// IDA names referenced undefined data `unk_<addr>` (and `byte_<addr>` once the byte is
+    /// defined as data), and prints the item's type above it.
+    #[test]
+    fn referenced_data_bytes_take_ida_names() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("unk-item.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        // A byte in the first non-executable segment, with a data read pointing at it. The
+        // xref table is analysis output, so the fixture writes it directly.
+        let Some(segment) = session
+            .segments()
+            .iter()
+            .find(|segment| !segment.perm.is_executable() && segment.range.len() > 0x10)
+            .cloned()
+        else {
+            return;
+        };
+        let data_addr = Address::new(segment.range.start.get() + 8);
+        session
+            .replace_auto_xrefs(&[(session.entry_point(), data_addr, 1)])
+            .unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+
+        app.run_data_op(DataOp::Unknown, data_addr, 1);
+        app.tick();
+        let row = app
+            .data_rows(data_addr, 1)
+            .and_then(|rows| rows.into_iter().next())
+            .expect("undefined row");
+        let name = format!("unk_{:x}", data_addr.get());
+        assert_eq!(row.name.as_deref(), Some(name.as_str()), "row {row:?}");
+        assert_eq!(
+            app.disasm_chrome(&row).leading,
+            vec![format!("; const char {name}[]")]
+        );
+        let text = app.disasm_line_text(&row);
+        assert!(text.contains(&name), "{text:?}");
+
+        // `D` defines the byte, and IDA renames it `byte_<addr>`.
+        app.run_data_op(DataOp::Data, data_addr, 1);
+        app.tick();
+        let row = app
+            .data_rows(data_addr, 1)
+            .and_then(|rows| rows.into_iter().next())
+            .expect("data row");
+        assert_eq!(
+            row.name.as_deref(),
+            Some(format!("byte_{:x}", data_addr.get()).as_str())
+        );
+    }
+
+    /// IDA's `A`: a string item the `U`/`C`/`D` paths hid comes back exactly as it was, and a
+    /// printable run the extractor skipped becomes a new item of its own length.
+    #[test]
+    fn a_restores_and_creates_string_items() {
+        let Ok(bytes) = std::fs::read("C:/Windows/System32/notepad.exe") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("a-string.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+
+        // Restore: `U` hides the stored item, `A` brings back the same literal and length.
+        let Some(string) = app.strings.iter().find(|row| row.len >= 8).cloned() else {
+            return;
+        };
+        app.run_data_op(DataOp::Unknown, string.addr, 1);
+        app.tick();
+        assert!(!app.strings.iter().any(|row| row.addr == string.addr));
+        app.run_data_op(DataOp::Ascii, string.addr, 1);
+        app.tick();
+        let row = app
+            .data_rows(string.addr, 1)
+            .and_then(|rows| rows.into_iter().next())
+            .expect("restored row");
+        assert!(row.operands.contains('\''), "the literal is back: {row:?}");
+        assert!(
+            app.strings
+                .iter()
+                .any(|row| row.addr == string.addr && row.len == string.len),
+            "the stored item keeps its length"
+        );
+
+        // Inside an existing item there is no room for a new one.
+        let covered = Address::new(string.addr.get() + 1);
+        app.run_data_op(DataOp::Ascii, covered, 1);
+        app.tick();
+        assert!(!app.strings.iter().any(|row| row.addr == covered));
+        let expected = app.t_args(
+            "ui_string_covers_addr",
+            &[("addr", &format!("{:#x}", string.addr.get()))],
+        );
+        assert_eq!(app.status, expected);
+
+        // Create: a 2–3 byte NUL-terminated run the extractor skipped (its minimum is more
+        // characters) becomes an item of exactly that length.
+        let Some((addr, run)) = short_text_run(&mut app) else {
+            return;
+        };
+        app.run_data_op(DataOp::Ascii, addr, 1);
+        app.tick();
+        let row = app
+            .data_rows(addr, 1)
+            .and_then(|rows| rows.into_iter().next())
+            .expect("created row");
+        assert!(row.operands.contains('\''), "A created a literal: {row:?}");
+        assert!(
+            app.strings
+                .iter()
+                .any(|row| row.addr == addr && row.len as usize == run)
+        );
+
+        // The created item is user data: one undo removes it again.
+        app.apply_action(&egui::Context::default(), Action::Undo);
+        app.tick();
+        assert!(!app.strings.iter().any(|row| row.addr == addr));
+    }
+
+    /// First 2–3 byte NUL-terminated printable run in the image that no stored string
+    /// covers: the shape `A` is meant to create an item for.
+    fn short_text_run(app: &mut ReCraftApp) -> Option<(Address, usize)> {
+        let segments = app.session.as_ref()?.segments().to_vec();
+        for segment in segments {
+            let len = segment.range.len().min(1 << 16) as usize;
+            let mut bytes = vec![0u8; len];
+            let read = app
+                .session
+                .as_mut()?
+                .read_at(segment.range.start, &mut bytes)
+                .ok()?;
+            bytes.truncate(read);
+            for (offset, window) in bytes.windows(4).enumerate() {
+                let run = window
+                    .iter()
+                    .take_while(|byte| is_string_text_byte(**byte))
+                    .count();
+                if !(2..=3).contains(&run) || window[run] != 0 {
+                    continue;
+                }
+                let addr = Address::new(segment.range.start.get() + offset as u64);
+                if string_row_at(&app.strings, addr).is_some() {
+                    continue;
+                }
+                return Some((addr, run));
+            }
+        }
+        None
+    }
+
+    /// IDA turns `U` on a function entry into "the function is gone": the entry is no longer
+    /// code, so nothing can start a function there.
+    #[test]
+    fn undefining_a_function_entry_drops_the_function() {
+        let Some(bytes) = sample_pe() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("dropfn.rcraft");
+        let mut session = Session::create(&project, &bytes, &mut |_, _| {}, &|| false).unwrap();
+        let result = recraft_analysis::analyze(&mut session).unwrap();
+        recraft_analysis::persist(&mut session, &result).unwrap();
+        let mut app = ReCraftApp {
+            session: Some(session),
+            ..ReCraftApp::default()
+        };
+        app.after_open();
+        app.tick();
+        let Some(function) = app
+            .functions
+            .iter()
+            .find(|f| f.start == app.disasm_rows[0].addr)
+            .cloned()
+        else {
+            return;
+        };
+        let start = function.start;
+        let len = usize::from(app.disasm_rows[0].len).max(1);
+        let ctx = egui::Context::default();
+        app.run_data_op(DataOp::Unknown, start, len);
+        app.tick();
+        assert!(
+            app.session
+                .as_mut()
+                .unwrap()
+                .func_at(start)
+                .unwrap()
+                .is_none(),
+            "the function must be gone"
+        );
+        assert!(!app.functions.iter().any(|f| f.start == start));
+        // One undo is enough: both writes are batched under the same journal entry.
+        app.apply_action(&ctx, Action::Undo);
+        app.tick();
+        assert!(
+            app.session
+                .as_mut()
+                .unwrap()
+                .func_at(start)
+                .unwrap()
+                .is_some(),
+            "undo restores the function"
+        );
     }
 
     #[test]
@@ -16970,8 +16860,6 @@ mod tests {
             kind: 0,
             segment: segment.to_owned(),
             text: text.to_owned(),
-            raw: text.as_bytes().to_vec(),
-            name: None,
             overridden: false,
         }
     }
@@ -17604,8 +17492,6 @@ mod tests {
                 kind: 0,
                 segment: ".rdata".to_owned(),
                 text: text.to_owned(),
-                raw: text.as_bytes().to_vec(),
-                name: None,
                 overridden: false,
             }
         }
@@ -18970,6 +18856,52 @@ mod tests {
         Some((app, ctx, input))
     }
 
+    /// The painted row carries the character annotation and the inline `unk_` name, so what
+    /// the screen shows and what Ctrl+C copies cannot drift.
+    #[test]
+    fn the_painted_db_row_matches_the_copied_text() {
+        let Some((mut app, ctx, mut input)) = headless_disassembly() else {
+            return;
+        };
+        let mut frame = 0.0f64;
+        let mut step = |input: &mut egui::RawInput, app: &mut ReCraftApp| -> egui::FullOutput {
+            frame += 1.0;
+            input.time = Some(frame / 60.0);
+            let mut out = ctx.run_ui(input.clone(), |ui| app.update_inner(ui));
+            input.events.clear();
+            out.textures_delta.clear();
+            out
+        };
+        let _ = step(&mut input, &mut app);
+        let mut line = app.disasm_rows[0].clone();
+        line.mnemonic = "db".to_owned();
+        line.operands = " 3Dh".to_owned();
+        line.len = 1;
+        line.raw = [0x3d; 15];
+        line.flags = Flags::undefined();
+        line.name = Some("unk_1400183C0".to_owned());
+        line.xrefs.clear();
+        line.comment = None;
+        app.disasm_rows[0] = line.clone();
+        let output = step(&mut input, &mut app);
+        let painted = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .find(|text| text.contains("db  3Dh ; ="))
+            .expect("the byte row is painted");
+        assert!(painted.contains("unk_1400183C0"), "{painted:?}");
+        let copied = app.disasm_line_text(&line);
+        assert_eq!(
+            painted.trim_end(),
+            copied.trim_end(),
+            "the painted row drifted from the copied one"
+        );
+    }
+
     /// Wheel scrolling at the top edge used to stop dead because the view only holds a fixed
     /// window of instructions; it must now load code above the window instead.
     #[test]
@@ -19775,8 +19707,6 @@ mod tests {
                 kind: 0,
                 segment: ".rdata".to_owned(),
                 text: "hello".to_owned(),
-                raw: vec![b'h', b'e', b'l', b'l', b'o'],
-                name: None,
                 overridden: false,
             }],
             names: vec![(Address::new(0x140001000), "main".to_owned())],
@@ -20008,6 +19938,69 @@ mod tests {
         );
         assert_eq!(typed_item_kind(16), ("xmmword", "xmmword_"));
         assert_eq!(typed_item_kind(8), ("dq", "qword_"));
+    }
+
+    /// IDA spells out the character a raw `db` byte stands for (`db  3Dh ; =`); a space is
+    /// quoted, control bytes get nothing, and a defined literal is not annotated twice.
+    #[test]
+    fn printable_db_bytes_carry_a_character_comment() {
+        let app = ReCraftApp::default();
+        let mut line = synthetic_line(0x1400183C0, "db", " 3Dh");
+        line.len = 1;
+        line.raw = [0x3d; 15];
+        line.flags = Flags::undefined();
+        let text = app.disasm_line_text(&line);
+        assert!(text.ends_with("db  3Dh ; ="), "{text:?}");
+        assert!(
+            app.disasm_line_copy_text(&line).ends_with("db  3Dh ; ="),
+            "Ctrl+C copies the annotation too"
+        );
+
+        line.raw = [b' '; 15];
+        line.operands = "  20h".to_owned();
+        assert!(
+            app.disasm_line_text(&line).ends_with("; ' '"),
+            "a space is quoted"
+        );
+
+        line.raw = [0x00; 15];
+        line.operands = "   0".to_owned();
+        assert!(!app.disasm_line_text(&line).contains(';'));
+
+        // A stored literal (`db '=',0`) is its own text, not a raw byte row.
+        let mut literal = synthetic_line(0x1400183C0, "db", "'=',0");
+        literal.len = 1;
+        literal.raw = [0x3d; 15];
+        assert!(!app.disasm_line_text(&literal).contains(';'));
+    }
+
+    /// A referenced undefined byte is IDA's `unk_<addr>` item: the name rides inline on the
+    /// row and its type is printed above the item (`; const char unk_…[]`).
+    #[test]
+    fn undefined_bytes_take_ida_unk_names_and_type_comments() {
+        let app = ReCraftApp::default();
+        let mut line = synthetic_line(0x1400183C0, "db", " 3Dh");
+        line.len = 1;
+        line.raw = [0x3d; 15];
+        line.flags = Flags::undefined();
+        line.name = Some("unk_1400183C0".to_owned());
+
+        let (_, name, _) = app.disasm_prefix_parts(&line);
+        assert_eq!(name.as_deref(), Some("unk_1400183C0"));
+        assert_eq!(
+            app.disasm_chrome(&line).leading,
+            vec!["; const char unk_1400183C0[]".to_owned()]
+        );
+        // The whole row reads like IDA's: name, byte, character.
+        let text = app.disasm_line_text(&line);
+        assert!(
+            text.contains("unk_1400183C0   db  3Dh ; ="),
+            "unexpected row text: {text:?}"
+        );
+
+        // Without a name (nothing references the byte) there is no type line.
+        line.name = None;
+        assert!(app.disasm_chrome(&line).leading.is_empty());
     }
 
     /// The dialog must keep the size it opened with. egui's `Resize` grows a window to the

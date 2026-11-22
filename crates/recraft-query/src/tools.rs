@@ -414,7 +414,8 @@ pub fn search_bytes(
     }))
 }
 
-/// `get_disassembly`: linear sweep from an address.
+/// `get_disassembly`: the listing the GUI draws — instructions, stored strings, typed items
+/// and raw bytes — so the model reads the same rows the user sees.
 pub fn disassembly(session: &mut Session, arguments: &Value) -> Result<Value, String> {
     let start = resolve_address(session, arguments.get("addr")).map_err(|e| e.to_string())?;
     let count = arguments
@@ -422,7 +423,14 @@ pub fn disassembly(session: &mut Session, arguments: &Value) -> Result<Value, St
         .and_then(Value::as_u64)
         .map(|count| (count as usize).clamp(1, 4096))
         .unwrap_or(64);
-    let lines = session.disasm(start, count).map_err(|e| e.to_string())?;
+    let strings = listing_strings(session);
+    let hints = recraft_core::ListingHints {
+        strings: &strings,
+        literals: &[],
+    };
+    let lines = session
+        .listing_rows(start, count, hints)
+        .map_err(|e| e.to_string())?;
     let items: Vec<Value> = lines
         .iter()
         .map(|line| {
@@ -434,10 +442,47 @@ pub fn disassembly(session: &mut Session, arguments: &Value) -> Result<Value, St
                 "name": line.name,
                 "comment": line.comment,
                 "literal": line.literal,
+                "byte_char": line.byte_char().map(String::from),
+                "type_comment": line.type_comment(),
             })
         })
         .collect();
     Ok(json!({"start": hex(start), "lines": items, "count": items.len()}))
+}
+
+/// Stored strings in the shape the listing walk reads them (user edits applied).
+fn listing_strings(session: &mut Session) -> Vec<recraft_core::ListingString> {
+    let entries = session.strings().unwrap_or_default();
+    let overrides: std::collections::HashMap<u64, String> = session
+        .string_overrides()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(addr, entry)| entry.text.map(|text| (addr.get(), text)))
+        .collect();
+    let session = &*session;
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let text = overrides
+                .get(&entry.addr.get())
+                .cloned()
+                .unwrap_or_else(|| {
+                    session
+                        .read_bytes(entry.addr, (entry.len as usize).max(2))
+                        .map(|bytes| decode_string(&bytes, entry.enc))
+                        .unwrap_or_default()
+                });
+            if text.is_empty() {
+                return None;
+            }
+            Some(recraft_core::ListingString {
+                addr: entry.addr,
+                len: entry.len,
+                enc: entry.enc,
+                text,
+            })
+        })
+        .collect()
 }
 
 /// `get_pseudocode`: L0/L1/L2 pseudo-C, paged by line.

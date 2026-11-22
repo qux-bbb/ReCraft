@@ -9,6 +9,46 @@
 开发记录（每条修复、每次指标变化、每个负结果）归档在
 [docs/CHANGELOG-0.1.0.md](docs/CHANGELOG-0.1.0.md)。
 
+## [Unreleased]
+
+### 修复
+
+- **反汇编的 `C`/`D`/`U` 现在真的改列表（IDA 的 item 语义）。** 之前这三个键只往 `flags`
+  写字节分类，而列表的每一行是从字符串表、反编译字面量缓存、xref 宽度和段权限**派生**出来的，
+  从不读 `flags`，所以在字符串行上按 `U` 毫无反应。现在 `flags` 成为 item 表：`U` 把字节标成
+  新的 `Undefined`（flags nibble 的 kind=3，旧项目里不会出现，无需迁移），该字节从所有派生来源
+  里剔除，按 IDA 的样子显示成逐字节 `db 3Dh`；`C` 让数据段里的地址也反汇编（原来只有可执行段
+  才解码）；`D` 让字节变成纯字节、不再按 xref 猜类型。`U` 在字符串上同时删掉该字符串项
+  （Strings 窗口里一起消失），在函数入口上同时删掉函数——三项写进同一个命令批次，一次
+  `Ctrl+Z` 全部回来。CLI 的 `mark` 增加 `undefined` 取值（只写分类，字符串表由 GUI 的 `U` 一并处理）。
+
+- **`A` 现在真的创建/恢复字符串项（同一个 item 模型的另一半）。** 之前 `A` 只是把字节标成
+  data：字符串是分析派生的，所以它造不出用户字符串，也拿不回被 `U` 藏掉的串。现在 `A` 对已有
+  项只清掉"删除"标记（文本、长度、编码原样回来），对没有项的地址按 IDA 的规则量出从光标起的
+  可打印、NUL 结尾的串，写进 `string` 表并打上用户位（`kind & 1<<16`，重新分析只重写派生行，
+  所以用户串留着），同时把该范围标回 data——整批一次 `Ctrl+Z` 撤回。`DefineString` /
+  `DeleteString` 进命令日志，所以 CLI/MCP 看到的是同一张表。
+
+### 新增
+
+- **反汇编的 `db` 字节带上 IDA 的字符注释。** 单字节 `db` 行在操作数后面写出它代表的
+  字符（`db  3Dh ; =`），空格写成 `; ' '`（否则看不见），控制字节不加——和 IDA 一样，
+  一段未定义/原始数据不用切到 Hex 就能读。注释属于指令行的一部分，所以 `Ctrl+C` 复制那
+  一行时一并带上，注释列的对齐也照 IDA 的规则把超出的 xref 注释放到下一行。
+
+- **被引用的未定义数据按 IDA 起名并打印类型注释。** 有 DATA XREF 的未定义字节在列表里显示成
+  `unk_<addr>   db  3Dh ; =`，并像 IDA 一样在它上面打印一行 `; const char unk_<addr>[]`
+  （用户按 `D` 定义过的字节改叫 `byte_<addr>`）。名字与操作数、交叉引用文本里已有的 `unk_`
+  兜底一致；没人引用的字节仍然没有名字。屏幕上的行与 `Ctrl+C` 复制出的行是同一份文本。
+
+- **列表行走进 `recraft-core`，`recraft disasm` 现在输出和 GUI 相同的列表。** 之前行构建只在
+  `crates/recraft-ui` 里，CLI 只能线性反汇编，字符串、`db` 字节、`align`、`unk_` 名和类型注释
+  一概看不到。现在 `Session::listing_rows` / `next_listing_row` / `step_listing` 是唯一实现
+  （GUI 传入它解析好的字符串文本与反编译短字面量缓存，CLI/MCP 只传字符串表），CLI 与 MCP 的
+  `get_disassembly` 逐行输出同一份列表：`; const char unk_…[]`、`unk_… db  3Dh ; =`、
+  `; DATA XREF` 都对得上；CLI 的 `--count` 改为行数，JSON 增加
+  `byte_char`/`type_comment`/`undefined`。`scripts/e2e.ps1` 全过。
+
 ## [0.2.0] - 2026-11-15
 
 这一版把格式支持、反编译器、AI 与界面的主要缺口一起补上：新增 ELF32/ELF64 与 ARM64

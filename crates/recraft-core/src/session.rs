@@ -29,11 +29,13 @@ use crate::command::{
     self, Command, CommentKind, Effect, JournalRecord, NAME_KIND_AUTO, NAME_KIND_LOADER, StructDef,
     StructField,
 };
-use crate::flags::{Flags, FlagsStore};
+use crate::flags::{CodeData, Flags, FlagsStore};
 use crate::listing::{self, ListingSymbols, SharedSymbols};
 use crate::segments::{self, Segment};
 use crate::snapshot::SessionSnapshot;
-use crate::view::{DisasmLine, FunctionInfo, SessionView, StringEntry, StringOverride, XrefEntry};
+use crate::view::{
+    DisasmLine, FunctionInfo, STRING_KIND_USER, SessionView, StringEntry, StringOverride, XrefEntry,
+};
 
 const IMAGE_PAGE_BYTES: u64 = 0x1_0000;
 const IMAGE_CACHE_PAGES: usize = 512;
@@ -428,6 +430,11 @@ impl Session {
             let Some(segment) = self.segment_containing(addr).cloned() else {
                 break;
             };
+            // See `disasm`: an undefined byte ends the sweep.
+            let flags = self.flags_at(addr)?;
+            if flags.kind == CodeData::Undefined {
+                break;
+            }
             let Some(decoded) = self.decoded_at(addr)? else {
                 break;
             };
@@ -445,7 +452,6 @@ impl Session {
             }
             let name = self.name_at(addr)?;
             let comment = self.comment_at(addr, CommentKind::Regular)?;
-            let flags = self.flags_at(addr)?;
             lines.push(DisasmLine {
                 addr,
                 len: decoded.len,
@@ -1030,19 +1036,35 @@ impl Session {
         Ok(count as u64)
     }
 
-    /// Replace all extracted strings (analysis output).
+    /// Replace the extracted strings (analysis output).
+    ///
+    /// Rows the user created carry [`STRING_KIND_USER`] and are kept: the rewrite only
+    /// touches derived rows, and an extracted candidate at a user address does not
+    /// overwrite the user's item.
     pub fn replace_auto_strings(&mut self, strings: &[(Address, u32, i64, i64)]) -> Result<()> {
         let tx = self
             .project
             .conn_mut()
             .transaction()
             .map_err(command::db_err)?;
-        tx.execute("DELETE FROM string", [])
-            .map_err(command::db_err)?;
+        tx.execute(
+            "DELETE FROM string WHERE (kind & ?1) = 0",
+            [STRING_KIND_USER],
+        )
+        .map_err(command::db_err)?;
         for (addr, len, enc, kind) in strings {
             tx.execute(
-                "INSERT OR REPLACE INTO string(addr, len, enc, kind) VALUES (?1, ?2, ?3, ?4)",
-                params![addr.get() as i64, *len as i64, *enc, *kind],
+                "INSERT INTO string(addr, len, enc, kind) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(addr) DO UPDATE SET len = excluded.len, enc = excluded.enc,
+                                                kind = excluded.kind
+                 WHERE (string.kind & ?5) = 0",
+                params![
+                    addr.get() as i64,
+                    *len as i64,
+                    *enc,
+                    *kind,
+                    STRING_KIND_USER
+                ],
             )
             .map_err(command::db_err)?;
         }
@@ -1731,6 +1753,12 @@ impl Session {
             let Some(segment) = self.segment_containing(addr).cloned() else {
                 break;
             };
+            // A byte the user undefined belongs to no item (IDA's `U`), so the sweep stops
+            // there instead of decoding it: the listing then renders raw bytes.
+            let flags = self.flags_at(addr)?;
+            if flags.kind == CodeData::Undefined {
+                break;
+            }
             let Some(insn) = self.insn_at(addr)? else {
                 break;
             };
@@ -1746,7 +1774,6 @@ impl Session {
             let literal = listing::literal_comment(&symbols, &insn);
             let name = self.name_at(addr)?;
             let comment = self.comment_at(addr, CommentKind::Regular)?;
-            let flags = self.flags_at(addr)?;
             lines.push(DisasmLine {
                 addr,
                 len: insn.len(),
@@ -3044,6 +3071,130 @@ mod tests {
             .unwrap();
         assert!(reopened.string_override_at(start).unwrap().is_none());
         assert_eq!(reopened.strings().unwrap().len(), 2);
+    }
+
+    /// The listing walk every front end draws from: a stored literal, then the same bytes
+    /// after `U` (one-byte items with IDA's `unk_` name, type comment and character note).
+    #[test]
+    fn listing_rows_follow_the_string_and_item_model() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let entry = session.entry_point();
+        let Some(segment) = session
+            .segments()
+            .iter()
+            .find(|segment| !segment.perm.is_executable() && segment.range.len() > 0x40)
+            .cloned()
+        else {
+            return;
+        };
+        let addr = Address::new(segment.range.start.get() + 8);
+        session.replace_auto_strings(&[(addr, 4, 1, 0)]).unwrap();
+        session.replace_auto_xrefs(&[(entry, addr, 3)]).unwrap();
+        let strings = [crate::ListingString {
+            addr,
+            len: 4,
+            enc: 1,
+            text: "====".to_owned(),
+        }];
+        let hints = crate::ListingHints {
+            strings: &strings,
+            literals: &[],
+        };
+        let rows = session.listing_rows(addr, 1, hints).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].mnemonic, "db");
+        assert_eq!(rows[0].operands, "'====',0");
+        assert_eq!(
+            rows[0].name.as_deref(),
+            Some(format!("asc_{:x}", addr.get()).as_str())
+        );
+        // The row covers the text and its terminator.
+        assert_eq!(
+            session.next_listing_row(addr, hints).unwrap(),
+            Some(Address::new(addr.get() + 5))
+        );
+
+        // `U` removes the item: the bytes become IDA's undefined `unk_` items.
+        session
+            .execute(Command::SetCodeData {
+                range: AddressRange::new(addr, Address::new(addr.get() + 5)),
+                kind: CodeData::Undefined,
+            })
+            .unwrap();
+        let rows = session.listing_rows(addr, 2, hints).unwrap();
+        assert_eq!(rows[0].len, 1);
+        assert_eq!(
+            rows[0].name.as_deref(),
+            Some(format!("unk_{:x}", addr.get()).as_str())
+        );
+        assert_eq!(
+            rows[0].type_comment(),
+            Some(format!("; const char unk_{:x}[]", addr.get()))
+        );
+        let byte = rows[0].raw[0];
+        assert_eq!(
+            rows[0].byte_char(),
+            byte.is_ascii_graphic().then_some(byte as char)
+        );
+        assert_eq!(rows[1].addr, Address::new(addr.get() + 1));
+    }
+
+    /// IDA's `A`: the user's own string item. It is user data — a re-analysis rewrite keeps
+    /// it — it refuses to replace an extracted row, and one undo removes it.
+    #[test]
+    fn user_created_strings_survive_the_rewrite_and_undo() {
+        let dir = TempDir::new().unwrap();
+        let Some(mut session) = fixture(&dir) else {
+            return;
+        };
+        let start = Address::new(session.entry_point().get() + 0x40);
+        session
+            .execute(Command::DefineString {
+                addr: start,
+                len: 4,
+                enc: 1,
+            })
+            .unwrap();
+        assert_eq!(session.strings().unwrap().len(), 1);
+        assert_eq!(session.string_meta_at(start).unwrap(), Some((4, 1)));
+        session.undo().unwrap();
+        assert!(session.string_meta_at(start).unwrap().is_none());
+        session.redo().unwrap();
+        assert_eq!(session.string_meta_at(start).unwrap(), Some((4, 1)));
+
+        // A deletion marker is cleared: the user asked for the item to be there.
+        session
+            .execute(Command::SetString {
+                addr: start,
+                text: None,
+                hidden: true,
+            })
+            .unwrap();
+        assert!(session.strings().unwrap().is_empty());
+
+        // The analysis rewrite replaces derived rows only.
+        session
+            .replace_auto_strings(&[
+                (start, 9, 1, 0),
+                (Address::new(start.get() + 0x20), 6, 1, 0),
+            ])
+            .unwrap();
+        assert_eq!(session.string_meta_at(start).unwrap(), Some((4, 1)));
+        assert_eq!(session.strings().unwrap().len(), 1);
+
+        // An extracted row is not the user's to replace: `A` restores it instead.
+        let extracted = Address::new(start.get() + 0x20);
+        let error = session
+            .execute(Command::DefineString {
+                addr: extracted,
+                len: 2,
+                enc: 1,
+            })
+            .unwrap_err();
+        assert!(format!("{error}").contains("already defined"), "{error}");
     }
 
     #[test]

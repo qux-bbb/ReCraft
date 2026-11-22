@@ -135,7 +135,7 @@ pub fn specs(budget: &Budget) -> Vec<Value> {
         }),
         json!({
             "name": "get_disassembly",
-            "description": "Linear disassembly from an address.",
+            "description": "The disassembly listing from an address: instructions, stored strings, typed data items and raw bytes (what the GUI shows).",
             "inputSchema": {
                 "type": "object",
                 "properties": {

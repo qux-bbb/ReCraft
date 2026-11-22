@@ -184,6 +184,7 @@ flags_page  (page_no INTEGER PRIMARY KEY, data BLOB)           -- 64 KiB 字节 
 xref        (from_addr INTEGER, to_addr INTEGER, type INTEGER,
              PRIMARY KEY(from_addr, to_addr, type))
 string      (addr INTEGER PRIMARY KEY, len INTEGER, enc INTEGER, kind INTEGER)
+              -- kind 的 1<<16 位 = 用户用 `A` 建的项：重分析只重写派生行，这一行保留
 api_tag     (addr INTEGER, rule_id TEXT, category TEXT)
 pseudocode  (func_id INTEGER PRIMARY KEY, text BLOB, span_map BLOB, version TEXT)
 
@@ -192,7 +193,7 @@ CREATE INDEX func_start ON func(start);
 CREATE INDEX name_text ON name(text);
 ```
 
-- flags 编码：每字节 4 bit（code/data/head/tail/extra），64 KiB 字节页 → 32 KiB blob，LRU 常驻上限 256 页。
+- flags 编码：每字节 4 bit——kind 2 bit（0 未分类 / 1 代码 / 2 数据 / 3 已取消定义）+ head 1 bit + 备用 1 bit；64 KiB 字节页 → 32 KiB blob，LRU 常驻上限 256 页。kind=0（未分类）是默认值，表示"由分析派生"；kind=3 才是用户在 `U` 上做的决定，所以旧项目里的全零 pages 天然表示"没有用户决定"。
 - xref 规模预估：1 GB 样本 2–5 千万条；批量插入用单事务。若实测查询/写入不达标，退回"按目标地址分桶的 blob 链表"（ADR-003 已留后路）。
 - `pseudocode` 是缓存，带版本号；IR/反编译器升级后按版本失效。
 

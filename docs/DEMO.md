@@ -121,12 +121,14 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
    `j` jump、`o` offset、`r` read、`w` write 字母）；函数入口上方有 `public <名字>` 与
    `proc near`、`<名字>:` 标签行（都带地址），末尾有 `endp`。**字节列默认关闭**
    （`视图 → 显示字节` 打开，等价于 IDA 的 *Number of opcode bytes*），因此列表里不再有
-   列标题条。`recraft-cli disasm` 输出同一套排版。
+   列标题条。`recraft-cli disasm` 输出**同一份列表**（行走进 `recraft-core`，GUI/CLI/MCP
+   共用），`--count` 数的是行。
    数据区按项显示：字符串内联 `a<名字>`/`asc_<地址>` 并以转义字面量写出（`db '\r\n',0`），
    命名字符串上方有 `; const char <名字>[]` 类型注释；字符串之间的零填充合并成 `align <字节数>`；
    被 2/4/8/16 字节引用（含 `[table + index*scale]`）的数据项定型为 `dw`/`dd`/`dq`/`xmmword`
    （`xmmword_1400184c0 xmmword 0FFFF…h`、`off_1400184d0 dq offset sub_…`），其余未定义字节
-   一字节一行 `db 0`。
+   一字节一行 `db 0`。被引用的未定义字节拿 `unk_<地址>` 名并带 `; const char unk_…[]` 类型
+   注释，可打印字节后面还有字符注释（`unk_1400183c0 db  3Dh ; =`）。
    注：拖出的 tab 目前是**应用内浮动窗口**，不是独立 OS 窗口（评估与后续计划见
    [ADR-012](adr/ADR-012-multi-window.md)）。
 3. 点击函数（或按 **`F5`**）→ 中间 **Decompile** 页签，直接显示结构化反编译与签名（没有 L0/L1/L2 开关）；**Disassembly**
@@ -141,7 +143,11 @@ $ recraft-cli ai ask demo.rcraft "哪些函数在操作注册表？"
 4. 底部 **Hex** 面板跟随选中地址（可切 Bytes/Words、点击选字节、双击跳转、Follow
    selection 回到当前函数）；**Enter/双击地址**跟随操作数目标，`Esc` 回退。
    **数据/类型操作**：反汇编行按 `C`（代码）/`D`（数据）/`A`（字符串数据）/`U`（取消定义）/
-   `P`（建函数），或右键菜单选择；**右键 → Structures…** 打开结构体窗口，可定义
+   `P`（建函数），或右键菜单选择；`C`/`D`/`U` 按 IDA 的 item 语义**替换光标处的项**：`U` 把
+   字节变成逐字节 `db`（字符串项同时从 Strings 窗口消失，函数入口上同时删掉函数），`C` 让
+   数据段里的地址也反汇编，`D` 变成纯字节；`A` 是反过来的一步：已有项（含被 `U` 藏掉的）原样
+   恢复，没有项的地址则把从光标起的可打印 NUL 结尾串**建成**用户字符串项（重新分析不会丢）。
+   这些操作与随附的删除写进同一命令批次，一次 `Ctrl+Z` 撤回。**右键 → Structures…** 打开结构体窗口，可定义
    `0:tag:u32, 16:value:i32` 布局并绑定到当前函数参数槽；右键 **Edit prototype…** 编辑函数原型。
    左侧 **Functions** 有过滤框（名字/地址）。**所有列表窗口（Functions / Strings / Imports /
    Exports / Names / Segments）都按 IDA 的行光标规则工作**：单击行内任意位置只移动高亮、代码视图

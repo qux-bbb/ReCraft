@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::flags::{CodeData, Flags, FlagsStore};
 use crate::segments::Segment;
 use crate::session::Session;
+use crate::view::STRING_KIND_USER;
 
 /// Name records created by the loader (entry point, exports, imports, ...) — not user edits.
 pub const NAME_KIND_LOADER: i64 = 0;
@@ -319,7 +320,8 @@ pub enum Command {
         kind: CommentKind,
         text: Option<String>,
     },
-    /// Mark a range as code or data (also used to clear back to unknown).
+    /// Mark a range as code, data or undefined (IDA's `U`), or clear back to unknown so
+    /// analysis decides again.
     SetCodeData { range: AddressRange, kind: CodeData },
     /// Internal: restore a previously captured set of per-byte flags (undo support).
     RestoreFlags { start: Address, flags: Vec<Flags> },
@@ -340,6 +342,12 @@ pub enum Command {
         text: Option<String>,
         hidden: bool,
     },
+    /// Create a string item the user defined at `addr` (IDA's `A`). `len` is the text
+    /// length in bytes without the terminator, `enc` the stored encoding. The row is marked
+    /// as user data, so a re-analysis keeps it.
+    DefineString { addr: Address, len: u32, enc: i64 },
+    /// Internal: delete the user-created string at `addr` (undo support).
+    DeleteString { addr: Address },
     /// Name (or clear) the stack variable at `offset` in the function at `func`. The L2 view
     /// prints the name instead of `var_<offset>`; clearing restores the generated slot name.
     RenameVar {
@@ -366,6 +374,8 @@ impl Command {
             Command::UndefineFunc { .. } => "undefine_func",
             Command::SetPrototype { .. } => "prototype",
             Command::SetString { .. } => "string",
+            Command::DefineString { .. } => "define_string",
+            Command::DeleteString { .. } => "delete_string",
             Command::RenameVar { .. } => "var",
             Command::DefineStruct { .. } => "define_struct",
             Command::DeleteStruct { .. } => "delete_struct",
@@ -385,6 +395,17 @@ impl Command {
                 vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
             }
             Command::SetComment { addr, .. } => {
+                vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
+            }
+            Command::DefineString { addr, len, .. } => {
+                // The item is the text plus its terminator; the extra byte covers UTF-16's
+                // two-byte NUL without pulling the encoding vocabulary into this module.
+                vec![AddressRange::new(
+                    *addr,
+                    Address::new(addr.get() + u64::from(*len) + 2),
+                )]
+            }
+            Command::DeleteString { addr } => {
                 vec![AddressRange::new(*addr, Address::new(addr.get() + 1))]
             }
             Command::SetCodeData { range, .. } => vec![*range],
@@ -422,6 +443,15 @@ impl Command {
                     hidden: previous.is_some_and(|entry| entry.hidden),
                 })
             }
+            Command::DefineString { addr, .. } => Ok(Command::DeleteString { addr: *addr }),
+            Command::DeleteString { addr } => match session.string_meta_at(*addr)? {
+                Some((len, enc)) => Ok(Command::DefineString {
+                    addr: *addr,
+                    len,
+                    enc,
+                }),
+                None => Ok(Command::DeleteString { addr: *addr }),
+            },
             Command::RenameVar { func, offset, .. } => Ok(Command::RenameVar {
                 func: *func,
                 offset: *offset,
@@ -675,6 +705,50 @@ pub(crate) fn apply(
                 )
                 .map_err(db_err)?;
             }
+        }
+        Command::DefineString { addr, len, enc } => {
+            let size = i64::from(*len);
+            if size <= 0 || size > 64 * 1024 {
+                return Err(Error::internal(format!(
+                    "string length {size} is out of range"
+                )));
+            }
+            // An extracted row belongs to analysis; `A` restores it (by clearing the
+            // deletion marker) instead of replacing it with a user copy.
+            let existing: Option<i64> = conn
+                .query_row(
+                    "SELECT kind FROM string WHERE addr = ?1",
+                    [addr.get() as i64],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            if existing.is_some_and(|kind| kind & STRING_KIND_USER == 0) {
+                return Err(Error::internal(format!(
+                    "a string is already defined at {:#x}",
+                    addr.get()
+                )));
+            }
+            conn.execute(
+                "INSERT INTO string(addr, len, enc, kind) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(addr) DO UPDATE SET len = excluded.len, enc = excluded.enc,
+                                                kind = excluded.kind",
+                params![addr.get() as i64, size, *enc, STRING_KIND_USER],
+            )
+            .map_err(db_err)?;
+            // A deletion marker would keep the new item out of every list.
+            conn.execute(
+                "UPDATE string_override SET hidden = 0 WHERE addr = ?1",
+                [addr.get() as i64],
+            )
+            .map_err(db_err)?;
+        }
+        Command::DeleteString { addr } => {
+            conn.execute(
+                "DELETE FROM string WHERE addr = ?1 AND (kind & ?2) != 0",
+                params![addr.get() as i64, STRING_KIND_USER],
+            )
+            .map_err(db_err)?;
         }
         Command::RenameVar { func, offset, name } => {
             let function_id: Option<i64> = conn

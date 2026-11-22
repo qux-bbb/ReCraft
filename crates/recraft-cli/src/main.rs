@@ -12,7 +12,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use recraft_analysis::{analyze, extract_strings, persist, persist_strings};
 use recraft_common::{Address, AddressRange, Error, Result, demangle};
-use recraft_core::{CodeData, Command, CommentKind, Session, StructDef, StructField};
+use recraft_core::{
+    CodeData, Command, CommentKind, ListingHints, ListingString, Session, StructDef, StructField,
+};
 use recraft_decompile::pseudocode_l0;
 use serde_json::{Value, json};
 
@@ -110,12 +112,14 @@ enum Commands {
         #[arg(long, short = 'o')]
         out: PathBuf,
     },
-    /// Disassemble a project.
+    /// Disassemble a project: the same listing the GUI draws (instructions, stored strings,
+    /// typed items and raw bytes).
     Disasm {
         project: PathBuf,
         /// Address to start at: `0x...`, decimal, a symbol name, or `entry`.
         #[arg(long)]
         addr: Option<String>,
+        /// Number of listing rows (an instruction or a data item each counts as one).
         #[arg(long, default_value_t = 40)]
         count: usize,
         #[arg(long)]
@@ -359,7 +363,9 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CommentSlot::Regular)]
         kind: CommentSlot,
     },
-    /// Mark a range as code, data or unknown.
+    /// Mark a range as code, data, undefined or unknown (no user decision). Sets the
+    /// classification only; the GUI's `C`/`D`/`U` also replace the item itself (a stored
+    /// string, or the function at an undefined entry) and `A` creates or restores a string.
     Mark {
         project: PathBuf,
         #[arg(long)]
@@ -437,6 +443,9 @@ enum Commands {
 enum MarkKind {
     Code,
     Data,
+    /// IDA's `U`: the byte belongs to no item, so nothing derived claims it.
+    Undefined,
+    /// Drop the user decision and let analysis decide again.
     Unknown,
 }
 
@@ -445,6 +454,7 @@ impl MarkKind {
         match self {
             MarkKind::Code => CodeData::Code,
             MarkKind::Data => CodeData::Data,
+            MarkKind::Undefined => CodeData::Undefined,
             MarkKind::Unknown => CodeData::Unknown,
         }
     }
@@ -1364,7 +1374,17 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
         Some(raw) => resolve_address(&session, raw)?,
         None => session.entry_point(),
     };
-    let lines = session.disasm(start, count)?;
+    // The listing the GUI draws: instructions, stored strings, typed items and raw bytes.
+    // The CLI has no decompiler literals to add, so only the string table is passed in.
+    let strings = listing_strings(&mut session);
+    let hints = ListingHints {
+        strings: &strings,
+        literals: &[],
+    };
+    let lines = session.listing_rows(start, count, hints)?;
+    // `; CODE XREF:` / `; DATA XREF:` — the same decoration the GUI attaches to a window.
+    let mut lines = lines;
+    session.attach_xref_comments(&mut lines)?;
 
     if as_json {
         let lines: Vec<Value> = lines
@@ -1381,29 +1401,60 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
                     "literal": line.literal,
                     "segment": line.segment,
                     "xrefs": line.xrefs,
+                    "byte_char": line.byte_char().map(String::from),
+                    "type_comment": line.type_comment(),
                     "code": line.flags.is_code(),
                     "data": line.flags.is_data(),
+                    "undefined": line.flags.is_undefined(),
                 })
             })
             .collect();
         return json_result(&json!({ "start": format!("{:#x}", start.get()), "lines": lines }));
     }
 
-    // IDA's listing columns, text only: `segment:offset`, the mnemonic in its 8-cell field,
-    // then the operands with the `; comment` parked on the comment column.
-    const INSN_COL: usize = 39;
-    const COMMENT_COL: usize = 56;
+    // IDA's listing columns, text only: `segment:offset`, the name of a data item inline (a
+    // code label gets its own line), the mnemonic in its 8-cell field, the operands with the
+    // item's character annotation, and `; comments` parked on the comment column.
+    const INSN_GAP: usize = 17;
+    const COMMENT_GAP: usize = 24;
     for line in &lines {
         let address = format!("{}:{:016X}", line.segment, line.addr.get());
-        // IDA prints a label on its own line, with the address repeated.
-        if let Some(name) = &line.name {
+        let insn_col = address.chars().count() + INSN_GAP;
+        let comment_col = insn_col + COMMENT_GAP;
+        // IDA writes the item's type above a character array (`; const char unk_…[]`).
+        if let Some(comment) = line.type_comment() {
+            println!("{address:<insn_col$}{comment}");
+        }
+        let data = matches!(line.flags.kind, CodeData::Data | CodeData::Undefined);
+        if !data && let Some(name) = &line.name {
             println!("{address} {name}:");
         }
-        let mut text = format!(
-            "{address:<INSN_COL$}{:<7} {}",
-            line.mnemonic,
-            line.operands.trim_end()
-        );
+        let mut text = if data && let Some(name) = line.name.as_deref() {
+            // IDA writes a data item's name between the address and the `db`/`dw`.
+            let width = address.chars().count() + 1;
+            let mut head = format!("{address:<width$}");
+            head.push_str(name);
+            let pad = insn_col.saturating_sub(head.chars().count()).max(1);
+            head.push_str(&" ".repeat(pad));
+            head
+        } else {
+            format!("{address:<insn_col$}")
+        };
+        if matches!(line.mnemonic.as_str(), "db" | "dw" | "dd" | "dq" | "align") {
+            text.push_str(&line.mnemonic);
+            text.push(' ');
+        } else {
+            text.push_str(&format!("{:<7} ", line.mnemonic));
+        }
+        text.push_str(line.operands.trim_end());
+        // IDA spells the character a raw `db` byte stands for (`db  3Dh ; =`).
+        if let Some(byte_char) = line.byte_char() {
+            if byte_char == ' ' {
+                text.push_str(" ; ' '");
+            } else {
+                text.push_str(&format!(" ; {byte_char}"));
+            }
+        }
         // IDA glues the literal an operand points at to the operand: `aEnterFlag; "Enter flag: "`.
         if let Some(literal) = line.literal.as_deref() {
             text.push_str("; ");
@@ -1421,12 +1472,12 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
         }
         comments.extend(line.xrefs.iter().map(|xref| format!("; {xref}")));
         for (index, comment) in comments.iter().enumerate() {
-            if index == 0 && text.chars().count() + 2 <= COMMENT_COL {
-                let padding = COMMENT_COL - text.chars().count();
+            if index == 0 && text.chars().count() + 2 <= comment_col {
+                let padding = comment_col - text.chars().count();
                 text.push_str(&" ".repeat(padding));
             } else {
                 text.push('\n');
-                text.push_str(&" ".repeat(COMMENT_COL));
+                text.push_str(&" ".repeat(comment_col));
             }
             text.push_str(comment);
         }
@@ -1436,6 +1487,23 @@ fn cmd_disasm(project: &Path, addr: Option<&str>, count: usize, as_json: bool) -
         println!("{text}");
     }
     Ok(())
+}
+
+/// Stored strings in the shape the listing walk reads them.
+fn listing_strings(session: &mut Session) -> Vec<ListingString> {
+    let rows = session.strings().unwrap_or_default();
+    let session = &*session;
+    rows.into_iter()
+        .filter_map(|row| {
+            let text = session.string_at(row.addr).ok().flatten()?;
+            Some(ListingString {
+                addr: row.addr,
+                len: row.len,
+                enc: row.enc,
+                text,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- analysis ----
@@ -2900,16 +2968,30 @@ fn cmd_mark(project: &Path, addr: &str, len: u64, kind: MarkKind) -> Result<()> 
         range,
         kind: code_data,
     })?;
-    // DESIGN §6.4: a user code/data change triggers a range-scoped re-analysis.
-    let stats = recraft_analysis::reanalyze_range(&mut session, range)?;
-    println!(
-        "marked {:#x}..{:#x} as {:?} (incremental: {} function(s), {} instruction(s))",
-        range.start.get(),
-        range.end.get(),
-        code_data,
-        stats.functions.len(),
-        stats.instructions
-    );
+    // DESIGN §6.4: a user code/data change triggers a range-scoped re-analysis. Undefining
+    // is the exception: it removes items, and re-analysis would derive new ones (functions,
+    // strings) from exactly the bytes the user took out of every item.
+    let stats = if code_data == CodeData::Undefined {
+        None
+    } else {
+        Some(recraft_analysis::reanalyze_range(&mut session, range)?)
+    };
+    match stats {
+        Some(stats) => println!(
+            "marked {:#x}..{:#x} as {:?} (incremental: {} function(s), {} instruction(s))",
+            range.start.get(),
+            range.end.get(),
+            code_data,
+            stats.functions.len(),
+            stats.instructions
+        ),
+        None => println!(
+            "marked {:#x}..{:#x} as {:?}",
+            range.start.get(),
+            range.end.get(),
+            code_data
+        ),
+    }
     Ok(())
 }
 
