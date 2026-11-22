@@ -69,7 +69,9 @@ jobs:
       # "verify MSI" and "publish".
 
       - name: publish GitHub release
-        if: ${{ github.event_name == 'push' || inputs.publish }}
+        # Publishing is manual by decision: a tag push only builds. Keep this condition
+        # workflow_dispatch-only (it used to fire on `push`, so a tag push auto-published).
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
