@@ -54,6 +54,64 @@ IDA Pro, and does not use IDA's SDK, database format, or signature libraries.
 | 1 GiB sample gate | ✅ automated | ✅ | ✅ |
 | IDA plugin ecosystem | ❌ | ✅ | ❌ |
 
+## Installing (from a Release)
+
+The release page ships two packages (Windows x64, unsigned preview) plus a checksum file:
+**MSI installer** (recommended) and **portable zip**.
+
+1. **Open [Releases](https://github.com/qux-bbb/ReCraft/releases/latest)** and pick the newest
+   version (currently `v0.3.0`) from the Assets list.
+2. **Download what you need** (both packages contain the GUI and `recraft-cli.exe`; there is no
+   standalone exe asset):
+   - `recraft-v0.3.0-windows-x64.msi` (~15.5 MiB) — installs into `%ProgramFiles%\ReCraft` with
+     Start-menu/desktop shortcuts plus PATH and context-menu options;
+   - `recraft-v0.3.0-windows-x64.zip` (~17.5 MiB) — unzip and run; no registry writes, no admin;
+   - `SHA256SUMS.txt` — SHA-256 for both packages; verify before running anything.
+3. **Verify the download**:
+   ```powershell
+   Get-FileHash .\recraft-v0.3.0-windows-x64.msi -Algorithm SHA256
+   # compare with the matching line in SHA256SUMS.txt; if it differs, do not run it
+   ```
+4. **Install** (pick one):
+   - **MSI**: double-click → on the SmartScreen prompt **More info → Run anyway** → accept the one
+     UAC prompt → folder page → options page → install → the finish page can launch it.
+   - **zip**: unzip anywhere (e.g. `D:\Tools\ReCraft`) and run `recraft.exe`; the CLI is the
+     `recraft-cli.exe` next to it — add that folder to PATH yourself if you want it everywhere.
+5. **Verify the install**: after the MSI the Start menu shows **ReCraft** and **ReCraft CLI**;
+   check the version in a terminal:
+   ```powershell
+   recraft-cli --version   # only on PATH if you kept that option; otherwise use the full path
+   ```
+   The zip build just runs `recraft.exe` from the unzipped folder. Both accept a PE/ELF sample
+   dragged onto the window (the context menu only comes with the MSI).
+6. **Uninstall**: Settings → Apps → Installed apps → ReCraft → Uninstall (silent:
+   `msiexec /x <ProductCode> /qn`; for the zip, delete the folder). Uninstall removes the install
+   folder, Start-menu/desktop shortcuts, the PATH entry and the HKLM registrations, but **leaves**
+   `%LOCALAPPDATA%\ReCraft` (`layout.json` layout/theme and `recent.txt`); delete that folder by
+   hand for a clean slate.
+
+The wizard offers one options page after the folder page:
+
+- **Add to the system PATH** (checked by default) — makes `recraft-cli` runnable in any terminal;
+  clear it to leave the machine PATH alone (`ADDTOPATH=0` for silent installs).
+- **Desktop shortcut** (checked by default) — puts a ReCraft icon on the desktop; clear it to skip
+  it (`DESKTOPSHORTCUT=0` for silent installs). The Start-menu shortcut is always created.
+- **File context menu** (checked by default) — right-clicking any file in Explorer adds **Open with
+  ReCraft**, which opens the PE/ELF sample or `.rcraft` project straight away; clear it to skip the
+  entry (`CONTEXTMENU=0` for silent installs). On Windows 11 the classic entry is under **Show more
+  options** (Shift+F10).
+
+Without the PATH option the CLI is still reachable: the Start menu gains a **ReCraft CLI** entry
+that opens a prompt in the install folder, and `recraft-cli.exe` is registered under App Paths like
+the GUI, so `Win+R` → `recraft-cli` works. The MSI also registers ReCraft in Settings → Default
+apps (Capabilities/RegisteredApplications); the final `.rcraft` default is still the user's choice.
+
+Preview builds are **not code-signed** (a deliberate decision; see
+[`docs/RELEASE.md`](docs/RELEASE.md)), so SmartScreen shows "Unknown publisher" — bypass it as in
+step 4; `SHA256SUMS.txt` is the integrity reference. The installer wizard is Chinese (WixUI ships
+zh-cn; ReCraft's own strings are in `packaging/wix/zh-CN.wxl`); build an English one with
+`scripts/package.ps1 -Culture en-US`.
+
 ## Documents
 
 [`docs/README.md`](docs/README.md) indexes all design/milestone docs; start with
@@ -233,50 +291,10 @@ restore`); machines without dotnet/WiX pass `-NoMsi` and get the zip only. See
 [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist; CI uploads the zip
 (package job), the MSI (msi job) and checksums as artifacts.
 
-### Installing (unsigned preview builds)
+### Installing
 
-Preview binaries are **not code-signed** (a deliberate decision; see
-[`docs/RELEASE.md`](docs/RELEASE.md)). Windows SmartScreen will show "Unknown publisher"
-because signing is out of scope (dropped 2026-11-14):
-
-1. Download `recraft-v0.3.0-windows-x64.zip` or `recraft-v0.3.0-windows-x64.msi` together
-   with `SHA256SUMS.txt`.
-2. Verify the download before running:
-   ```powershell
-   Get-FileHash .\recraft-v0.3.0-windows-x64.msi -Algorithm SHA256
-   # compare with the matching line in SHA256SUMS.txt
-   ```
-3. If SmartScreen appears: **More info → Run anyway**. The MSI installs per-machine into
-   `%ProgramFiles%\ReCraft` and asks for administrator permission once; unzip the portable
-   zip instead if you would rather not install anything.
-
-The release wizard is Chinese (WixUI ships zh-cn; ReCraft's own strings are in
-`packaging/wix/zh-CN.wxl`). Build an English MSI with
-`scripts/package.ps1 -Culture en-US`. After the folder page the wizard offers:
-
-- **Add to the system PATH** (checked by default) — makes `recraft-cli` runnable in any
-  terminal; clear it to leave the machine PATH alone (`ADDTOPATH=0` for silent installs).
-- **Desktop shortcut** (checked by default) — puts a ReCraft icon on the desktop; clear it
-  to skip it (`DESKTOPSHORTCUT=0` for silent installs). The Start-menu shortcut is always
-  created.
-- **File context menu** (checked by default) — right-clicking any file in Explorer adds
-  **Open with ReCraft**, which opens the PE/ELF sample or `.rcraft` project straight away;
-  clear it to skip the entry (`CONTEXTMENU=0` for silent installs). On Windows 11 the
-  classic entry is under **Show more options** (Shift+F10).
-
-Without the PATH option the CLI is still reachable: the Start menu gains a **ReCraft CLI**
-entry that opens a prompt in the install folder, and `recraft-cli.exe` is registered under
-App Paths like the GUI, so `Win+R` → `recraft-cli` works. The MSI also registers ReCraft in
-Settings → Default apps (Capabilities/RegisteredApplications); the final `.rcraft` default
-is still the user's choice.
-
-Uninstall removes the install folder, Start-menu/desktop shortcuts, the PATH entry and the
-HKLM registrations, but **leaves** `%LOCALAPPDATA%\ReCraft` (`layout.json` layout/theme and
-`recent.txt`); delete that folder after uninstalling for a clean slate.
-
-Code signing is out of scope (dropped 2026-11-14): the builds stay unsigned, and the
-`SHA256SUMS.txt` checksums are the integrity reference; follow step 3 above to bypass the
-SmartScreen “unknown publisher” prompt.
+Which package to grab, verification, wizard options and uninstall are in
+[Installing (from a Release)](#installing-from-a-release) above.
 
 ### Demo
 

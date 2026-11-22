@@ -50,6 +50,59 @@ ARM64（AArch64），从第一天就内置 MCP 服务器和 LLM 辅助。
 | 1 GiB 样本门禁 | ✅ 自动化 | ✅ | ✅ |
 | IDA 插件生态 | ❌ | ✅ | ❌ |
 
+## 安装（从 Release 下载）
+
+发布页提供两个包（Windows x64，未签名预览版）和一个校验文件：**MSI 安装版**（推荐）与
+**便携 zip**。
+
+1. **打开 [Releases](https://github.com/qux-bbb/ReCraft/releases/latest)**，进最新一版
+   （当前 `v0.3.0`）的 Assets 列表。
+2. **按用途下载**（GUI 与命令行 `recraft-cli.exe` 两个包都含，没有单独的 exe 附件）：
+   - `recraft-v0.3.0-windows-x64.msi`（约 15.5 MiB）——安装到 `%ProgramFiles%\ReCraft`，
+     自带开始菜单/桌面快捷方式、PATH 与右键菜单选项；
+   - `recraft-v0.3.0-windows-x64.zip`（约 17.5 MiB）——解压即用，不写注册表、不需要管理员；
+   - `SHA256SUMS.txt`——上面两个包的 SHA-256，运行前先校验。
+3. **校验下载**：
+   ```powershell
+   Get-FileHash .\recraft-v0.3.0-windows-x64.msi -Algorithm SHA256
+   # 与 SHA256SUMS.txt 里对应行比较；不一致就不要运行
+   ```
+4. **安装**（二选一）：
+   - **MSI**：双击 → SmartScreen 提示时 **更多信息 → 仍要运行** → 同意一次 UAC → 目录页 →
+     选项页 → 安装 → 完成页可勾选立即启动。
+   - **zip**：解压到任意目录（例如 `D:\Tools\ReCraft`），运行其中的 `recraft.exe`；命令行用
+     同目录的 `recraft-cli.exe`，想随处调用就自己把该目录加进 PATH。
+5. **验证安装**：MSI 装完后开始菜单出现 **ReCraft** 与 **ReCraft 命令行**，终端里确认版本：
+   ```powershell
+   recraft-cli --version   # 勾了 PATH 才能在任意终端直接用，否则用完整路径
+   ```
+   zip 版直接运行解压目录里的 `recraft.exe`；两种装法都可以把 PE/ELF 样本拖进窗口打开
+   （右键菜单只有 MSI 版会加）。
+6. **卸载**：设置 → 应用 → 已安装的应用 → ReCraft → 卸载（静默：`msiexec /x <ProductCode> /qn`；
+   zip 版直接删目录）。卸载会删除安装目录、开始菜单/桌面快捷方式、PATH 条目和 HKLM 注册项，
+   但**不会删除** `%LOCALAPPDATA%\ReCraft`（`layout.json` 里的布局/主题和 `recent.txt` 最近
+   项目）；要彻底清理，卸载后手动删除该目录即可。
+
+向导在目录页之后有一页安装选项：
+
+- **加入系统 PATH**（默认勾选）：装完可以在任意终端直接运行 `recraft-cli`；不想改系统
+  PATH 就取消勾选（静默安装用 `ADDTOPATH=0`）。
+- **桌面快捷方式**（默认勾选）：在桌面建一个 ReCraft 图标；不想建就取消勾选（静默安装用
+  `DESKTOPSHORTCUT=0`）。开始菜单快捷方式始终会建。
+- **文件右键菜单**（默认勾选）：在资源管理器里右键任意文件多出 **用 ReCraft 打开**，直接
+  打开 PE/ELF 样本或 `.rcraft` 工程；不想加就取消勾选（静默安装用 `CONTEXTMENU=0`）。
+  Windows 11 的经典菜单项在 **显示更多选项**（Shift+F10）里。
+
+不勾 PATH 也能用：开始菜单多了一个 **ReCraft 命令行**，打开即位于安装目录；`recraft-cli.exe`
+和 GUI 一样注册了 App Paths，`Win+R` 输入 `recraft-cli` 也能启动。安装包还会把 ReCraft
+登记到“设置 → 默认应用”的列表里（Capabilities/RegisteredApplications），`.rcraft` 的最终
+默认项仍由用户和系统选择决定。
+
+预览二进制**没有代码签名**（刻意决定：2026-11-14 起签名不在计划内，见
+[`docs/RELEASE.md`](docs/RELEASE.md)），所以 SmartScreen 会提示“未知发布者”，按第 4 步
+绕过；完整性凭据就是 `SHA256SUMS.txt`。安装向导是中文的（WixUI 自带 zh-cn，自有字符串在
+`packaging/wix/zh-CN.wxl`；需要英文向导时用 `scripts/package.ps1 -Culture en-US` 重打）。
+
 ## 文档
 
 [`docs/README.md`](docs/README.md) 索引了全部设计与里程碑文档；建议从
@@ -220,44 +273,8 @@ MSI 需要 `dotnet tool restore` 还原仓库内固定的 WiX 5.0.2（见 `.conf
 没有 dotnet/WiX 的机器用 `-NoMsi` 只出 zip。发布清单见 [`docs/RELEASE.md`](docs/RELEASE.md)；
 CI 会上传 zip（package job）、MSI（msi job）和校验和作为构建产物。
 
-### 安装（未签名预览版）
-
-预览二进制**没有代码签名**（刻意决定：2026-11-14 起签名不在计划内，见
-[`docs/RELEASE.md`](docs/RELEASE.md)）。Windows SmartScreen 会显示“未知发布者”：
-
-1. 下载 `recraft-v0.3.0-windows-x64.zip` 或 `recraft-v0.3.0-windows-x64.msi`，以及
-   `SHA256SUMS.txt`。
-2. 运行前先校验下载：
-   ```powershell
-   Get-FileHash .\recraft-v0.3.0-windows-x64.msi -Algorithm SHA256
-   # 与 SHA256SUMS.txt 中对应行比较
-   ```
-3. 如果出现 SmartScreen：**更多信息 → 仍要运行**。MSI 安装到
-   `%ProgramFiles%\ReCraft`，会请求一次管理员权限；不想装就直接解压 zip 用，
-   无需提权、无需安装。
-
-安装向导是中文的（WixUI 自带 zh-cn，加上 `packaging/wix/zh-CN.wxl` 里的自有字符串；
-需要英文向导时用 `scripts/package.ps1 -Culture en-US` 重打）。目录页之后有一页安装选项：
-
-- **加入系统 PATH**（默认勾选）：装完可以在任意终端直接运行 `recraft-cli`；不想改系统
-  PATH 就取消勾选（静默安装用 `ADDTOPATH=0`）。
-- **桌面快捷方式**（默认勾选）：在桌面建一个 ReCraft 图标；不想建就取消勾选（静默安装用
-  `DESKTOPSHORTCUT=0`）。开始菜单快捷方式始终会建。
-- **文件右键菜单**（默认勾选）：在资源管理器里右键任意文件多出 **用 ReCraft 打开**，直接
-  打开 PE/ELF 样本或 `.rcraft` 工程；不想加就取消勾选（静默安装用 `CONTEXTMENU=0`）。
-  Windows 11 的经典菜单项在 **显示更多选项**（Shift+F10）里。
-
-不勾 PATH 也能用：开始菜单多了一个 **ReCraft 命令行**，打开即位于安装目录；`recraft-cli.exe`
-和 GUI 一样注册了 App Paths，`Win+R` 输入 `recraft-cli` 也能启动。安装包还会把 ReCraft 登记到
-“设置 → 默认应用”的列表里（Capabilities/RegisteredApplications），`.rcraft` 的最终默认项仍由
-用户和系统选择决定。
-
-卸载会删除安装目录、开始菜单/桌面快捷方式、PATH 条目和 HKLM 注册项，但**不会删除**
-`%LOCALAPPDATA%\ReCraft`（`layout.json` 里的布局/主题和 `recent.txt` 最近项目）；要彻底清理，
-卸载后手动删除该目录即可。
-
-代码签名不在项目计划内（2026-11-14 决定废弃）：发布包保持未签名，`SHA256SUMS.txt`
-的校验和就是完整性依据；SmartScreen 的“未知发布者”提示按上面第 3 步绕过。
+安装（下载哪个包、校验、向导选项、卸载）见上面的
+[安装（从 Release 下载）](#安装从-release-下载) 一节。
 
 ### 演示
 
